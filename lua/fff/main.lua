@@ -11,8 +11,11 @@ function M.setup(config)
   local default_config = {
     base_path = vim.fn.getcwd(),
     max_results = 100,
+    width = 0.8,
+    height = 0.8,
     preview = {
       enabled = true,
+      width = 0.5,
       max_lines = 100,
       max_size = 1024 * 1024, -- 1MB
     },
@@ -24,6 +27,17 @@ function M.setup(config)
       close = '<Esc>',
       preview_up = '<C-u>',
       preview_down = '<C-d>',
+    },
+    hl = {
+      border = 'FloatBorder',
+      normal = 'Normal',
+      cursor = 'CursorLine',
+      matched = 'IncSearch',
+      title = 'Title',
+      prompt = 'Question',
+      active_file = 'Visual',
+      frecency = 'Number',
+      debug = 'Comment',
     },
     layout = {
       prompt_position = 'top',
