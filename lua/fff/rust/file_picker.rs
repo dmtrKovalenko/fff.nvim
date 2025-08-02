@@ -121,8 +121,8 @@ impl FileItem {
                     .modified()
                     .ok()
                     .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+                    .map_or(0, |d| d.as_secs());
+
                 (size, modified)
             }
             Err(_) => (0, 0),
@@ -180,7 +180,7 @@ impl std::fmt::Debug for FilePicker {
         f.debug_struct("FilePicker")
             .field("base_path", &self.base_path)
             .field("git_workdir", &self.git_workdir)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -195,7 +195,7 @@ impl FilePicker {
 
         let git_workdir = Repository::discover(&path)
             .ok()
-            .and_then(|repo| repo.workdir().map(|p| p.to_path_buf()));
+            .and_then(|repo| repo.workdir().map(Path::to_path_buf));
 
         if let Some(ref git_dir) = git_workdir {
             debug!("Git repository found at: {}", git_dir.display());
@@ -230,8 +230,8 @@ impl FilePicker {
         query: &str,
         max_results: usize,
         max_threads: usize,
-        current_file: Option<String>,
-    ) -> Result<SearchResult, Error> {
+        current_file: Option<&String>,
+    ) -> SearchResult {
         let max_threads = max_threads.max(1); // Ensure at least 1 to avoid neo_frizbee division by zero
 
         debug!(
@@ -249,7 +249,7 @@ impl FilePicker {
             query,
             max_typos,
             max_threads,
-            current_file: current_file.as_deref(),
+            current_file,
         };
 
         let scored_indices = match_and_score_files(&sync_data.files, &context);
@@ -280,12 +280,12 @@ impl FilePicker {
         );
 
         debug!("Total search time: {:?}", time.elapsed());
-        Ok(SearchResult {
+        SearchResult {
             items,
             scores,
             total_matched,
             total_files,
-        })
+        }
     }
 
     pub fn get_cached_files(&self) -> Vec<FileItem> {
@@ -302,9 +302,9 @@ impl FilePicker {
         }
     }
 
-    pub fn refresh_git_status(&self) -> Result<Vec<FileItem>, Error> {
+    pub fn refresh_git_status(&self) -> Vec<FileItem> {
         let sync_data: &Arc<RwLock<FileSync>> = &self.sync_data;
-        let git_workdir: &Option<PathBuf> = &self.git_workdir;
+        let git_workdir = self.git_workdir.as_deref();
         let new_git_status_cache = GitStatusCache::read_git_status(git_workdir);
 
         if let Ok(mut sync_data_write) = sync_data.write() {
@@ -317,9 +317,9 @@ impl FilePicker {
 
                 file.update_frecency_scores();
             }
-        };
+        }
 
-        Ok(self.get_cached_files())
+        self.get_cached_files()
     }
 
     pub fn trigger_rescan(&self) -> Result<(), Error> {
@@ -338,7 +338,7 @@ impl FilePicker {
 
         thread::spawn(move || {
             debug!("Background scan thread started");
-            if let Ok((files, git_cache)) = scan_filesystem(&base_path, &git_workdir) {
+            if let Ok((files, git_cache)) = scan_filesystem(&base_path, git_workdir.as_ref()) {
                 info!("Filesystem scan completed: found {} files", files.len());
                 if let Ok(mut data) = sync_data.write() {
                     data.update_files(files, git_cache);
@@ -364,6 +364,7 @@ impl FilePicker {
     }
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct ScanProgress {
     pub total_files: usize,
@@ -382,7 +383,7 @@ fn spawn_background_watcher(
         scan_signal.store(true, Ordering::Relaxed);
         info!("starting background watcher thread");
 
-        match scan_filesystem(&base_path, &git_workdir) {
+        match scan_filesystem(&base_path, git_workdir.as_ref()) {
             Ok((files, git_cache)) => {
                 info!(
                     "Initial parallel filesystem scan completed: found {} files",
@@ -445,9 +446,7 @@ fn handle_debounced_events(
             .paths
             .iter()
             .filter_map(|path| {
-                let Some(relative_path) = pathdiff::diff_paths(path, base_path) else {
-                    return None;
-                };
+                let relative_path = pathdiff::diff_paths(path, base_path)?;
 
                 let Ok(sync_read) = sync_data.read() else {
                     return None;
@@ -461,7 +460,7 @@ fn handle_debounced_events(
 
                 match event.event.kind {
                     EventKind::Create(_) => {
-                        if should_add_new_file(path, git_workdir) {
+                        if should_add_new_file(path, git_workdir.as_ref()) {
                             Some(path.clone())
                         } else {
                             None
@@ -479,7 +478,7 @@ fn handle_debounced_events(
         debug!(?event, "File watcher event");
         match event.event.kind {
             EventKind::Create(_) => {
-                handle_create_events(&relevant_paths, sync_data, base_path, git_workdir);
+                handle_create_events(&relevant_paths, sync_data, base_path, git_workdir.as_ref());
                 affected_paths.extend(relevant_paths);
             }
             EventKind::Modify(_) => {
@@ -499,7 +498,7 @@ fn handle_debounced_events(
     }
 }
 
-fn should_add_new_file(path: &Path, git_workdir: &Option<PathBuf>) -> bool {
+fn should_add_new_file(path: &Path, git_workdir: Option<&PathBuf>) -> bool {
     if is_git_file(path) {
         return false;
     }
@@ -523,24 +522,21 @@ fn handle_create_events(
     paths: &[PathBuf],
     sync_data: &Arc<RwLock<FileSync>>,
     base_path: &Path,
-    git_workdir: &Option<PathBuf>,
+    git_workdir: Option<&PathBuf>,
 ) {
     let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
     if let Ok(mut sync_write) = sync_data.write() {
         for path in paths {
             if repo
                 .as_ref()
-                .is_some_and(|repo| repo.is_path_ignored(&path).unwrap_or(false))
+                .is_some_and(|repo| repo.is_path_ignored(path).unwrap_or(false))
             {
                 debug!("Ignoring file {} due to gitignore rules", path.display());
                 continue;
             }
 
-            // we will update the path for every
-            let mut file_item = FileItem::new(path.to_path_buf(), base_path, None);
-
+            let mut file_item = FileItem::new(path.clone(), base_path, None);
             file_item.update_frecency_scores();
-
             sync_write.insert_file_sorted(file_item);
         }
     }
@@ -563,80 +559,85 @@ fn remove_paths_from_index(
 
 fn scan_filesystem(
     base_path: &Path,
-    git_workdir: &Option<PathBuf>,
+    git_workdir: Option<&PathBuf>,
 ) -> Result<(Vec<FileItem>, Option<GitStatusCache>), Error> {
     let scan_start = std::time::Instant::now();
+    let git_workdir = git_workdir.map(|p| p.as_path());
     info!("SCAN: Starting parallel filesystem scan and git status");
 
-    let git_handle = GitStatusCache::read_git_status_parallel(git_workdir.clone());
+    // run separate thread for git status because it effectively does another separate file
+    // traversal which could be pretty slow on large repos (in general 300-500ms)
+    thread::scope(|s| {
+        let git_handle = s.spawn(|| GitStatusCache::read_git_status(git_workdir));
 
-    let walker = WalkBuilder::new(base_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .ignore(true)
-        .follow_links(false)
-        .sort_by_file_name(std::cmp::Ord::cmp)
-        .build_parallel();
+        let walker = WalkBuilder::new(base_path)
+            .hidden(false)
+            .git_ignore(true)
+            .git_exclude(true)
+            .git_global(true)
+            .ignore(true)
+            .follow_links(false)
+            .sort_by_file_name(std::cmp::Ord::cmp)
+            .build_parallel();
 
-    let walker_start = std::time::Instant::now();
-    info!("SCAN: Starting file walker");
+        let walker_start = std::time::Instant::now();
+        info!("SCAN: Starting file walker");
 
-    let files = Arc::new(std::sync::Mutex::new(Vec::new()));
-    walker.run(|| {
-        let files = Arc::clone(&files);
-        let base_path = base_path.to_path_buf();
+        let files = Arc::new(std::sync::Mutex::new(Vec::new()));
+        walker.run(|| {
+            let files = Arc::clone(&files);
+            let base_path = base_path.to_path_buf();
 
-        Box::new(move |result| {
-            if let Ok(entry) = result {
-                if let Some(file_type) = entry.file_type() {
-                    if file_type.is_file() {
-                        let path = entry.path();
+            Box::new(move |result| {
+                if let Ok(entry) = result {
+                    if let Some(file_type) = entry.file_type() {
+                        if file_type.is_file() {
+                            let path = entry.path();
 
-                        if is_git_file(path) {
-                            return WalkState::Continue;
-                        }
+                            if is_git_file(path) {
+                                return WalkState::Continue;
+                            }
 
-                        let file_item = FileItem::new(
-                            path.to_path_buf(),
-                            &base_path,
-                            None, // Git status will be added after join
-                        );
+                            let file_item = FileItem::new(
+                                path.to_path_buf(),
+                                &base_path,
+                                None, // Git status will be added after join
+                            );
 
-                        if let Ok(mut files_vec) = files.lock() {
-                            files_vec.push(file_item);
+                            if let Ok(mut files_vec) = files.lock() {
+                                files_vec.push(file_item);
+                            }
                         }
                     }
                 }
-            }
-            WalkState::Continue
-        })
-    });
-
-    let mut files = Arc::try_unwrap(files).unwrap().into_inner().unwrap();
-    let walker_time = walker_start.elapsed();
-    info!("SCAN: File walking completed in {:?}", walker_time);
-
-    let git_cache = git_handle
-        .join()
-        .map_err(|_| Error::InvalidPath("Git status thread panicked".to_string()))?;
-
-    if let Some(git_cache) = &git_cache {
-        files.par_iter_mut().for_each(|file| {
-            file.git_status = git_cache.lookup_status(&file.path);
-            file.update_frecency_scores();
+                WalkState::Continue
+            })
         });
-    }
 
-    let total_time = scan_start.elapsed();
-    info!(
-        "SCAN: Total scan time {:?} for {} files",
-        total_time,
-        files.len()
-    );
+        let mut files = Arc::try_unwrap(files).unwrap().into_inner().unwrap();
+        let walker_time = walker_start.elapsed();
+        info!("SCAN: File walking completed in {:?}", walker_time);
 
-    Ok((files, git_cache))
+        let git_cache = git_handle
+            .join()
+            .map_err(|_| Error::InvalidPath("Git status thread panicked".to_string()))?;
+
+        if let Some(git_cache) = &git_cache {
+            files.par_iter_mut().for_each(|file| {
+                file.git_status = git_cache.lookup_status(&file.path);
+                file.update_frecency_scores();
+            });
+        }
+
+        let total_time = scan_start.elapsed();
+        info!(
+            "SCAN: Total scan time {:?} for {} files",
+            total_time,
+            files.len()
+        );
+
+        Ok((files, git_cache))
+    })
 }
 
 fn update_git_status_for_paths(
@@ -688,9 +689,7 @@ fn update_git_status_for_paths(
 
 #[inline]
 fn is_git_file(path: &Path) -> bool {
-    path.to_str()
-        .map(|path| path.contains("/.git/"))
-        .unwrap_or(false)
+    path.to_str().is_some_and(|path| path.contains("/.git/"))
 }
 
 impl Drop for FilePicker {

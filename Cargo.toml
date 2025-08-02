@@ -11,20 +11,20 @@ crate-type = ["cdylib", "rlib"]
 name = "test_watcher"
 path = "src/bin/test_watcher.rs"
 
+
 [dependencies]
-neo_frizbee = { version = "0.6.0" }
-heed = "0.22.0"
-rayon = "1.8.0"
-mlua = { version = "0.11.1", features = ["module", "luajit"] }
-thiserror = "2.0.10"
 blake3 = "1.8.2"
-ignore = "0.4.22"
-pathdiff = "0.2.1"
+chrono = { version = "0.4", features = ["serde"] }
 git2 = "0.20.2"
+heed = "0.22.0"
+ignore = "0.4.22"
+mlua = { version = "0.11.1", features = ["module", "luajit"] }
+neo_frizbee = { version = "0.6.0" }
 notify = "8.1.0"
 notify-debouncer-full = "0.5"
-tokio = { version = "1.0", features = ["time", "sync"] }
-chrono = { version = "0.4", features = ["serde"] }
+pathdiff = "0.2.1"
+rayon = "1.8.0"
+thiserror = "2.0.10"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

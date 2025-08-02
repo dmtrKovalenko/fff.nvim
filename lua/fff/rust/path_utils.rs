@@ -1,4 +1,4 @@
-pub fn calculate_distance_penalty(current_file: &Option<String>, candidate_path: &str) -> i32 {
+pub fn calculate_distance_penalty(current_file: Option<&str>, candidate_path: &str) -> i32 {
     let Some(ref current_path) = current_file else {
         return 0; // No penalty if no current file
     };
@@ -46,27 +46,24 @@ mod tests {
     use super::*;
     #[test]
     fn test_calculate_distance_penalty() {
-        assert_eq!(calculate_distance_penalty(&None, "/path/to/file.txt"), 0);
+        assert_eq!(calculate_distance_penalty(None, "/path/to/file.txt"), 0);
 
         assert_eq!(
             calculate_distance_penalty(
-                &Some("/path/to/current/file.txt".to_string()),
+                Some("/path/to/current/file.txt"),
                 "/path/to/current/other.txt"
             ),
             0
         );
 
         assert_eq!(
-            calculate_distance_penalty(
-                &Some("/path/to/current/file.txt".to_string()),
-                "/path/to/file.txt"
-            ),
+            calculate_distance_penalty(Some("/path/to/current/file.txt"), "/path/to/file.txt"),
             -2
         );
 
         assert_eq!(
             calculate_distance_penalty(
-                &Some("/path/to/current/file.txt".to_string()),
+                Some("/path/to/current/file.txt"),
                 "/path/to/other/file.txt"
             ),
             -4
@@ -74,19 +71,19 @@ mod tests {
 
         assert_eq!(
             calculate_distance_penalty(
-                &Some("/path/to/current/file.txt".to_string()),
+                Some("/path/to/current/file.txt"),
                 "/path/to/another/dir/file.txt"
             ),
             -6
         );
 
         assert_eq!(
-            calculate_distance_penalty(&Some("/a/b/c/d/file.txt".to_string()), "/x/y/z/w/file.txt"),
+            calculate_distance_penalty(Some("/a/b/c/d/file.txt"), "/x/y/z/w/file.txt"),
             -16
         );
 
         assert_eq!(
-            calculate_distance_penalty(&Some("/file1.txt".to_string()), "/file2.txt"),
+            calculate_distance_penalty(Some("/file1.txt"), "/file2.txt"),
             0
         );
     }

@@ -18,7 +18,6 @@ pub fn match_and_score_files(files: &[FileItem], context: &ScoringContext) -> Ve
         prefilter: true,
         max_typos: Some(context.max_typos),
         sort: false,
-        ..Default::default()
     };
 
     let haystack: Vec<&str> = files.iter().map(|f| f.relative_path.as_str()).collect();
@@ -66,7 +65,7 @@ pub fn match_and_score_files(files: &[FileItem], context: &ScoringContext) -> Ve
             let base_score = neo_frizbee_match.score as i32;
             let frecency_boost = base_score.saturating_mul(file.total_frecency_score as i32) / 100;
             let distance_penalty = calculate_distance_penalty(
-                &context.current_file.map(|s| s.to_string()),
+                context.current_file.map(|s| s.as_str()),
                 &file.relative_path,
             );
 
@@ -89,10 +88,11 @@ pub fn match_and_score_files(files: &[FileItem], context: &ScoringContext) -> Ve
                     base_score / 5 * 2 // 40% bonus for exact filename match
                 }
                 Some(_) => base_score / 5, // 20% bonus for fuzzy filename match
-                // if the file is special directory give it an extra bonus
                 None if is_special_entry_point_file(&file.file_name) => {
+                    // 18% bonus special filename just as much as exact path
+                    // but a little bit less to give preference to the actual file if present
                     has_special_filename_bonus = true;
-                    base_score / 5
+                    base_score * 18 / 100
                 }
                 None => 0,
             };
@@ -132,18 +132,26 @@ pub fn match_and_score_files(files: &[FileItem], context: &ScoringContext) -> Ve
 /// Check if a filename is a special entry point file that deserves bonus scoring
 /// These are typically files that serve as module exports or entry points
 fn is_special_entry_point_file(filename: &str) -> bool {
-    match filename {
-        "mod.rs" | "lib.rs" | "main.rs" => true,
-        "index.js" | "index.jsx" | "index.ts" | "index.tsx" => true,
-        "index.mjs" | "index.cjs" => true,
-        "index.vue" => true,
-        "__init__.py" | "__main__.py" => true,
-        "main.go" => true,
-        "main.c" => true,
-        "index.php" => true,
-        "main.rb" | "index.rb" => true,
-        _ => false,
-    }
+    matches!(
+        filename,
+        "mod.rs"
+            | "lib.rs"
+            | "main.rs"
+            | "index.js"
+            | "index.jsx"
+            | "index.ts"
+            | "index.tsx"
+            | "index.mjs"
+            | "index.cjs"
+            | "index.vue"
+            | "__init__.py"
+            | "__main__.py"
+            | "main.go"
+            | "main.c"
+            | "index.php"
+            | "main.rb"
+            | "index.rb"
+    )
 }
 
 fn score_all_by_frecency(files: &[FileItem], context: &ScoringContext) -> Vec<(usize, Score)> {
@@ -155,11 +163,14 @@ fn score_all_by_frecency(files: &[FileItem], context: &ScoringContext) -> Vec<(u
                 + (file.modification_frecency_score as i32).saturating_mul(4);
 
             let distance_penalty = calculate_distance_penalty(
-                &context.current_file.map(|s| s.to_string()),
+                context.current_file.map(|x| x.as_str()),
                 &file.relative_path,
             );
 
-            let total = total_frecency_score.saturating_add(distance_penalty);
+            let total = total_frecency_score
+                .saturating_add(distance_penalty)
+                .saturating_add(calculate_file_bonus(file, context));
+
             let score = Score {
                 total,
                 base_score: 0,
@@ -176,14 +187,11 @@ fn score_all_by_frecency(files: &[FileItem], context: &ScoringContext) -> Vec<(u
 }
 
 #[inline]
-#[allow(dead_code)]
 fn calculate_file_bonus(file: &FileItem, context: &ScoringContext) -> i32 {
     let mut bonus = 0i32;
 
     if let Some(current) = context.current_file {
-        let is_current = file.relative_path == current || file.relative_path == current;
-
-        if is_current {
+        if file.relative_path == *current {
             bonus -= match file.git_status {
                 Some(status) if is_modified_status(status) => 150,
                 _ => 300,

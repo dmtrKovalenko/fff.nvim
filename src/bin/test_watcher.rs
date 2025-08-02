@@ -1,3 +1,6 @@
+#![allow(clippy::all)]
+#![allow(dead_code)]
+
 #[path = "../../lua/fff/rust/error.rs"]
 mod error;
 #[path = "../../lua/fff/rust/file_key.rs"]
@@ -22,7 +25,6 @@ use std::io::{self, Write};
 use std::sync::{LazyLock, RwLock};
 use std::thread;
 use std::time::Duration;
-use types::FileItem;
 
 use crate::git::format_git_status;
 
@@ -47,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let initial_files = picker.get_cached_files();
     println!("Initial file count: {}", initial_files.len());
 
-    if initial_files.len() > 0 {
+    if !initial_files.is_empty() {
         println!("Sample files:");
         for (i, file) in initial_files.iter().take(5).enumerate() {
             println!(
@@ -135,24 +137,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             println!("   🔄 Testing git status refresh...");
-            if let Ok(refreshed_files) = picker.refresh_git_status() {
-                let mut new_git_stats = std::collections::HashMap::new();
-                for file in &refreshed_files {
-                    let status = format_git_status(file.git_status);
-                    *new_git_stats.entry(status).or_insert(0) += 1;
+            let refreshed_files = picker.refresh_git_status();
+            let mut new_git_stats = std::collections::HashMap::new();
+            for file in &refreshed_files {
+                let status = format_git_status(file.git_status);
+                *new_git_stats.entry(status).or_insert(0) += 1;
+            }
+            if new_git_stats != git_stats_copy {
+                print!("   ✨ Git status changed after refresh: ");
+                for (status, count) in &new_git_stats {
+                    print!("{}:{} ", status, count);
                 }
-                if new_git_stats != git_stats_copy {
-                    print!("   ✨ Git status changed after refresh: ");
-                    for (status, count) in &new_git_stats {
-                        print!("{}:{} ", status, count);
-                    }
-                    println!();
-                }
+                println!();
             }
         }
 
         if iteration % 40 == 0 {
-            let search_results = picker.fuzzy_search("rs", 5, 2, None).unwrap_or_default();
+            let search_results = picker.fuzzy_search("rs", 5, 2, None);
             let timestamp = chrono::Local::now().format("%H:%M:%S");
             println!(
                 "🔍 [{}] Search test 'rs': {} matches",
