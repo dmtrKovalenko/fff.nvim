@@ -971,6 +971,7 @@ function M.select(action)
   local relative_path = vim.fn.fnamemodify(item.path, ':.')
   file_picker.access_file(relative_path)
 
+  vim.cmd('stopinsert')
   M.close()
 
   local file_path = item.path
@@ -989,6 +990,7 @@ end
 function M.close()
   if not M.state.active then return end
 
+  vim.cmd('stopinsert')
   M.state.active = false
 
   local windows = {
@@ -1001,6 +1003,20 @@ function M.close()
 
   for _, win in ipairs(windows) do
     if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+  end
+
+  -- Delete all buffers to prevent E37 error when quitting
+  local buffers = {
+    M.state.input_buf,
+    M.state.list_buf,
+    M.state.preview_buf,
+    M.state.file_info_buf,
+  }
+  
+  for _, buf in ipairs(buffers) do
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end
   end
 
   M.state.input_win = nil
