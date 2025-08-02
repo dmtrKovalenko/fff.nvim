@@ -152,7 +152,7 @@ function M.setup_commands()
     end
   end, {
     nargs = '?',
-    omplete = function(arg_lead, cmd_line, cursor_pos)
+    complete = function(arg_lead, cmd_line, cursor_pos)
       local dirs = vim.fn.glob(arg_lead .. '*', false, true)
       local results = {}
       for _, dir in ipairs(dirs) do
