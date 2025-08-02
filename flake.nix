@@ -55,6 +55,15 @@
 
           }
         );
+        # Create a script that copies the build result
+        release-script = pkgs.writeShellScriptBin "release" ''
+          set -euo pipefail
+          nix build
+          mkdir -p target/release
+          cp -vf result/lib/libfff_nvim.so target/release/libfff_nvim.so
+          rm result
+          echo "Library copied to target/release/"
+        '';
       in
       {
         checks = {
@@ -65,6 +74,11 @@
 
         apps.default = flake-utils.lib.mkApp {
           drv = my-crate;
+        };
+
+        # Add the release command
+        apps.release = flake-utils.lib.mkApp {
+          drv = release-script;
         };
 
         devShells.default = craneLib.devShell {
