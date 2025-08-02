@@ -1,4 +1,5 @@
 local fuzzy = require('fff.fuzzy')
+local git_utils = require('fff.git_utils')
 if not fuzzy then error('Failed to load fff.fuzzy module. Ensure the Rust backend is compiled and available.') end
 
 local M = {}
@@ -77,17 +78,12 @@ function M.setup(config)
 
   M.state.initialized = true
   M.config = merged_config
-  
-  if merged_config.keymaps.use_default_open then M.setup_default_keymaps() end
+
   M.setup_commands()
-
   if merged_config.frecency.enabled then M.setup_global_file_tracking() end
-
-  local git_utils = require('fff.git_utils')
   git_utils.setup_highlights()
 
   if merged_config.logging.enabled then
-    local fuzzy = require('fff.fuzzy')
     local log_success, log_error =
       pcall(fuzzy.init_tracing, merged_config.logging.log_file, merged_config.logging.log_level)
     if log_success then
@@ -98,14 +94,6 @@ function M.setup(config)
   end
 
   return true
-end
-
---- Setup default keymaps
-function M.setup_default_keymaps()
-  vim.keymap.set('n', '<leader>ff', function() M.find_files() end, { desc = 'Find files' })
-  vim.keymap.set('n', '<leader>ft', function() M.toggle() end, { desc = 'Toggle file picker' })
-  vim.keymap.set('n', '<leader>fg', function() M.find_in_git_root() end, { desc = 'Find files in git root' })
-  vim.keymap.set('n', '<leader>fr', function() M.find_recent() end, { desc = 'Find recent files' })
 end
 
 function M.setup_global_file_tracking()
@@ -148,7 +136,6 @@ function M.setup_commands()
   end, {
     nargs = '?',
     complete = function(arg_lead, cmd_line, cursor_pos)
-      -- Complete with directories and common search terms
       local dirs = vim.fn.glob(arg_lead .. '*', false, true)
       local results = {}
       for _, dir in ipairs(dirs) do
@@ -169,7 +156,7 @@ function M.setup_commands()
 
   vim.api.nvim_create_user_command('FFFClearCache', function(opts) M.clear_cache(opts.args) end, {
     nargs = '?',
-    complete = function(arg_lead, cmd_line, cursor_pos) return { 'all', 'frecency', 'files' } end,
+    complete = function() return { 'all', 'frecency', 'files' } end,
     desc = 'Clear FFF caches (all|frecency|files)',
   })
 
