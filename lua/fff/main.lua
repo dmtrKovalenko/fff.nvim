@@ -22,13 +22,15 @@ function M.setup(config)
       max_size = 1024 * 1024, -- 1MB
     },
     keymaps = {
-      select = '<CR>',
-      vsplit = '<C-v>',
-      split = '<C-s>',
-      tab = '<C-t>',
       close = '<Esc>',
-      preview_up = '<C-u>',
-      preview_down = '<C-d>',
+      select = '<CR>',
+      select_split = '<C-s>',
+      select_vsplit = '<C-v>',
+      select_tab = '<C-t>',
+      move_up = { '<Up>', '<C-p>' },
+      move_down = { '<Down>', '<C-n>' },
+      preview_scroll_up = '<C-u>',
+      preview_scroll_down = '<C-d>',
     },
     hl = {
       border = 'FloatBorder',
