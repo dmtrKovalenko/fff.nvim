@@ -1,6 +1,9 @@
 use crate::error::Error;
 use crate::file_key::FileKey;
-use heed::{types::*, EnvFlags};
+use heed::{
+    types::{Bytes, SerdeBincode},
+    EnvFlags,
+};
 use heed::{Database, Env, EnvOpenOptions};
 use std::collections::VecDeque;
 use std::fs;

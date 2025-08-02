@@ -132,18 +132,26 @@ pub fn match_and_score_files(files: &[FileItem], context: &ScoringContext) -> Ve
 /// Check if a filename is a special entry point file that deserves bonus scoring
 /// These are typically files that serve as module exports or entry points
 fn is_special_entry_point_file(filename: &str) -> bool {
-    match filename {
-        "mod.rs" | "lib.rs" | "main.rs" => true,
-        "index.js" | "index.jsx" | "index.ts" | "index.tsx" => true,
-        "index.mjs" | "index.cjs" => true,
-        "index.vue" => true,
-        "__init__.py" | "__main__.py" => true,
-        "main.go" => true,
-        "main.c" => true,
-        "index.php" => true,
-        "main.rb" | "index.rb" => true,
-        _ => false,
-    }
+    matches!(
+        filename,
+        "mod.rs"
+            | "lib.rs"
+            | "main.rs"
+            | "index.js"
+            | "index.jsx"
+            | "index.ts"
+            | "index.tsx"
+            | "index.mjs"
+            | "index.cjs"
+            | "index.vue"
+            | "__init__.py"
+            | "__main__.py"
+            | "main.go"
+            | "main.c"
+            | "index.php"
+            | "main.rb"
+            | "index.rb"
+    )
 }
 
 fn score_all_by_frecency(files: &[FileItem], context: &ScoringContext) -> Vec<(usize, Score)> {

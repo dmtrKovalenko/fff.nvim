@@ -75,8 +75,7 @@ pub fn fuzzy_search_files(
         .as_ref()
         .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
 
-    let results = picker.fuzzy_search(&query, max_results, max_threads, current_file)?;
-
+    let results = picker.fuzzy_search(&query, max_results, max_threads, current_file);
     Ok(results)
 }
 
