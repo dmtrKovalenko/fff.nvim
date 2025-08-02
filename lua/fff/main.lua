@@ -136,6 +136,19 @@ function M.setup_global_file_tracking()
     end,
     desc = 'Track file access for FFF frecency',
   })
+
+  -- Auto-sync directory changes with FFF file picker
+  vim.api.nvim_create_autocmd('DirChanged', {
+    group = group,
+    callback = function()
+      -- Use v:event.cwd to get the new current working directory
+      local new_cwd = vim.v.event.cwd
+      if M.is_initialized() and new_cwd and new_cwd ~= M.config.base_path then
+        vim.schedule(function() M.changed_indexing_directory(new_cwd) end)
+      end
+    end,
+    desc = 'Automatically sync FFF directory changes',
+  })
 end
 
 function M.setup_commands()
@@ -331,76 +344,6 @@ function M.get_preview(file_path)
   return table.concat(lines, '\n')
 end
 
-function M.debug_file_ordering()
-  print('FFF Debug File Ordering')
-  print('=======================')
-
-  if not M.is_initialized() then
-    print('File picker not initialized. Run :FFFScan first.')
-    return
-  end
-
-  local picker = M.picker or M.core
-  print('Getting top 10 files with debug info...')
-
-  -- Enable debug mode temporarily
-  local old_debug = M.config.debug.show_scores
-  M.config.debug.show_scores = true
-
-  -- Search with empty query to get default ordering
-  local files = picker.search_files('', 10)
-
-  print('🏆 TOP FILES (in order they appear):')
-  print('=' .. string.rep('=', 70))
-
-  for i, file in ipairs(files) do
-    local frecency_stars = ''
-    if file.frecency_score > 0 then frecency_stars = ' ⭐' .. file.frecency_score end
-
-    -- Extract directory information
-    local dir = vim.fn.fnamemodify(file.relative_path, ':h')
-    local filename = vim.fn.fnamemodify(file.relative_path, ':t')
-    local dir_display = (dir == '.' or dir == '') and 'root' or dir
-
-    -- Get score information for this file
-    local score = picker.get_file_score(i)
-
-    print(string.format('%2d. %s%s', i, filename, frecency_stars))
-    print(string.format('    Path: %s/', dir_display))
-    print(string.format('    Debug: %s', score and score.match_type or 'no debug info'))
-    if score then
-      print(
-        string.format(
-          '    Total Score: %d (base=%d, name_bonus=%d, special_bonus=%d, frec=%d, dist=%d)',
-          score.total,
-          score.base_score,
-          score.filename_bonus,
-          score.special_filename_bonus,
-          score.frecency_boost,
-          score.distance_penalty
-        )
-      )
-    else
-      print('    Total Score: N/A (no score data)')
-    end
-
-    local now = os.time()
-    local age_hours = math.floor((now - file.modified) / 3600)
-    local age_days = math.floor(age_hours / 24)
-    print(string.format('    Age: %d hours (%d days) since last modified', age_hours, age_days))
-    print('')
-  end
-
-  print('💡 EXPLANATION:')
-  print('• Files are sorted by FRECENCY first (⭐ score), then by modification time')
-  print('• Frecency combines how often AND how recently you accessed files')
-  print('• The file at #1 has either:')
-  print('  - Highest frecency score, OR')
-  print('  - Same frecency as others but most recent modification')
-
-  M.config.debug.show_scores = old_debug
-end
-
 function M.health_check()
   local health = {
     ok = true,
@@ -459,5 +402,49 @@ function M.get_status()
 end
 
 function M.is_initialized() return M.state and M.state.initialized or false end
+
+--- Find files in a specific directory
+--- @param directory string Directory path to search in
+function M.find_files_in_dir(directory)
+  if not directory then
+    vim.notify('Directory path required for find_files_in_dir', vim.log.levels.ERROR)
+    return
+  end
+
+  M.changed_indexing_directory(directory)
+
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  if picker_ok then
+    picker_ui.open({ title = 'Files in ' .. vim.fn.fnamemodify(directory, ':t') })
+  else
+    vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
+  end
+end
+
+--- Change the base directory for the file picker
+--- @param new_path string New directory path to use as base
+--- @return boolean `true` if successful, `false` otherwise
+function M.changed_indexing_directory(new_path)
+  if not new_path or new_path == '' then
+    vim.notify('Directory path is required', vim.log.levels.ERROR)
+    return false
+  end
+
+  local expanded_path = vim.fn.expand(new_path)
+
+  if vim.fn.isdirectory(expanded_path) ~= 1 then
+    vim.notify('Directory does not exist: ' .. expanded_path, vim.log.levels.ERROR)
+    return false
+  end
+
+  local ok, result = pcall(fuzzy.restart_index_in_path, expanded_path)
+  if not ok then
+    vim.notify('Failed to change directory: ' .. result, vim.log.levels.ERROR)
+    return false
+  end
+
+  M.config.base_path = expanded_path
+  return true
+end
 
 return M

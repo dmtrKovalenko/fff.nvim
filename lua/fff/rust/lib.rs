@@ -46,6 +46,37 @@ pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
     Ok(true)
 }
 
+fn reinit_file_picker_internal(path: std::path::PathBuf) -> Result<(), Error> {
+    let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
+
+    // drop should clean it anyway but just to be extra sure
+    if let Some(picker) = file_picker.take() {
+        picker.stop_background_monitor();
+    }
+
+    let new_picker = FilePicker::new(path.to_string_lossy().to_string())?;
+    *file_picker = Some(new_picker);
+
+    Ok(())
+}
+
+pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<bool> {
+    let path = std::path::PathBuf::from(&new_path);
+    if !path.exists() {
+        return Err(LuaError::RuntimeError(format!(
+            "Path does not exist: {}",
+            new_path
+        )));
+    }
+
+    let canonical_path = path.canonicalize().map_err(|e| {
+        LuaError::RuntimeError(format!("Failed to canonicalize path '{}': {}", new_path, e))
+    })?;
+
+    reinit_file_picker_internal(canonical_path)?;
+    Ok(true)
+}
+
 pub fn scan_files(_: &Lua, _: ()) -> LuaResult<()> {
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
@@ -163,6 +194,10 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set("init_db", lua.create_function(init_db)?)?;
     exports.set("destroy_db", lua.create_function(destroy_db)?)?;
     exports.set("init_file_picker", lua.create_function(init_file_picker)?)?;
+    exports.set(
+        "restart_index_in_path",
+        lua.create_function(restart_index_in_path)?,
+    )?;
     exports.set("scan_files", lua.create_function(scan_files)?)?;
     exports.set("get_cached_files", lua.create_function(get_cached_files)?)?;
     exports.set(

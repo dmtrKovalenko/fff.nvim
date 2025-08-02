@@ -15,6 +15,7 @@ M.get_keyword_range = rust_module.get_keyword_range
 M.guess_edit_range = rust_module.guess_edit_range
 M.get_words = rust_module.get_words
 M.init_file_picker = rust_module.init_file_picker
+M.restart_index_in_path = rust_module.restart_index_in_path
 M.scan_files = rust_module.scan_files
 M.get_cached_files = rust_module.get_cached_files
 M.fuzzy_search_files = rust_module.fuzzy_search_files
