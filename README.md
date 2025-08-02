@@ -49,6 +49,8 @@ FFF.nvim requires:
 {
   "dmtrKovalenko/fff.nvim",
   build = "cargo build --release",
+  -- or if you are using nixos
+  -- build = "nix run .#release",
   opts = {
     -- pass here all the options
   },
