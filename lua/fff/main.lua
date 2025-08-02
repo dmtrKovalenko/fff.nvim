@@ -95,7 +95,6 @@ function M.setup(config)
   M.state.initialized = true
   M.config = merged_config
 
-  M.setup_default_keymaps()
   M.setup_commands()
 
   if merged_config.frecency.enabled then M.setup_global_file_tracking() end
@@ -104,7 +103,6 @@ function M.setup(config)
   git_utils.setup_highlights()
 
   if merged_config.logging.enabled then
-    local fuzzy = require('fff.fuzzy')
     local log_success, log_error =
       pcall(fuzzy.init_tracing, merged_config.logging.log_file, merged_config.logging.log_level)
     if log_success then
@@ -115,14 +113,6 @@ function M.setup(config)
   end
 
   return true
-end
-
---- Setup default keymaps
-function M.setup_default_keymaps()
-  vim.keymap.set('n', '<leader>ff', function() M.find_files() end, { desc = 'Find files' })
-  vim.keymap.set('n', '<leader>ft', function() M.toggle() end, { desc = 'Toggle file picker' })
-  vim.keymap.set('n', '<leader>fg', function() M.find_in_git_root() end, { desc = 'Find files in git root' })
-  vim.keymap.set('n', '<leader>fr', function() M.find_recent() end, { desc = 'Find recent files' })
 end
 
 function M.setup_global_file_tracking()
@@ -138,7 +128,6 @@ function M.setup_global_file_tracking()
         vim.schedule(function()
           local stat = vim.loop.fs_stat(file_path)
           if stat and stat.type == 'file' then
-            local fuzzy = require('fff.fuzzy')
             local relative_path = vim.fn.fnamemodify(file_path, ':.')
             pcall(fuzzy.access_file, relative_path)
           end
@@ -164,7 +153,7 @@ function M.setup_commands()
     end
   end, {
     nargs = '?',
-    complete = function(arg_lead, cmd_line, cursor_pos)
+    complete = function(arg_lead)
       -- Complete with directories and common search terms
       local dirs = vim.fn.glob(arg_lead .. '*', false, true)
       local results = {}
@@ -186,7 +175,7 @@ function M.setup_commands()
 
   vim.api.nvim_create_user_command('FFFClearCache', function(opts) M.clear_cache(opts.args) end, {
     nargs = '?',
-    complete = function(arg_lead, cmd_line, cursor_pos) return { 'all', 'frecency', 'files' } end,
+    complete = function() return { 'all', 'frecency', 'files' } end,
     desc = 'Clear FFF caches (all|frecency|files)',
   })
 
@@ -238,20 +227,7 @@ function M.find_files()
   end
 end
 
---- Find files in specific directory
---- @param dir string Directory path
-function M.find_files_in_dir(dir)
-  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
-  if picker_ok then
-    picker_ui.open({ cwd = dir })
-  else
-    vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
-  end
-end
-
---- Find files in git repository root
 function M.find_in_git_root()
-  -- Check if we're in a git repo first
   local git_root = vim.fn.system('git rev-parse --show-toplevel 2>/dev/null'):gsub('\n', '')
   if vim.v.shell_error ~= 0 then
     vim.notify('Not in a git repository', vim.log.levels.WARN)
@@ -266,22 +242,8 @@ function M.find_in_git_root()
   end
 end
 
---- Find recent files (frecency based)
-function M.find_recent()
-  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
-  if picker_ok then
-    picker_ui.open({ title = 'Recent Files' })
-  else
-    vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
-  end
-end
-
---- Toggle file picker
-function M.toggle() M.find_files() end
-
---- Scan files
+--- Trigger rescan of files in the current directory
 function M.scan_files()
-  local fuzzy = require('fff.fuzzy')
   local ok = pcall(fuzzy.scan_files)
   if ok then
     local cached_files = pcall(fuzzy.get_cached_files) and fuzzy.get_cached_files() or {}
@@ -291,9 +253,8 @@ function M.scan_files()
   end
 end
 
---- Refresh git status for all cached files
+--- Refresh git status for the active file lock
 function M.refresh_git_status()
-  local fuzzy = require('fff.fuzzy')
   local ok, files = pcall(fuzzy.refresh_git_status)
   if ok then
     print('Refreshed git status for ' .. #files .. ' files')
@@ -307,7 +268,6 @@ end
 --- @param max_results number Maximum number of results
 --- @return table List of matching files
 function M.search(query, max_results)
-  local fuzzy = require('fff.fuzzy')
   max_results = max_results or M.config.max_results
   local ok, search_result = pcall(fuzzy.fuzzy_search_files, query, max_results, nil, nil)
   if ok and search_result.items then return search_result.items end
@@ -447,21 +407,6 @@ function M.health_check()
     messages = {},
   }
 
-  local errors = check_dependencies()
-  if #errors > 0 then
-    health.ok = false
-    for _, error in ipairs(errors) do
-      table.insert(health.messages, error)
-    end
-  end
-
-  local ui_errors = check_ui_dependencies()
-  if #ui_errors > 0 then
-    table.insert(health.messages, 'UI not available: ' .. table.concat(ui_errors, ', '))
-  else
-    table.insert(health.messages, '✓ UI available')
-  end
-
   if not M.is_initialized() then
     health.ok = false
     table.insert(health.messages, 'File picker not initialized')
@@ -503,7 +448,6 @@ end
 function M.get_status()
   local status = 'No files indexed'
 
-  local fuzzy = require('fff.fuzzy')
   local ok, cached_files = pcall(fuzzy.get_cached_files)
   if ok and cached_files and #cached_files > 0 then status = string.format('%d files indexed', #cached_files) end
 

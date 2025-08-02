@@ -1021,7 +1021,6 @@ function M.close()
   end
 end
 
---- Open the picker
 function M.open(opts)
   if M.state.active then return end
 
