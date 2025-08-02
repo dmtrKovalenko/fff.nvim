@@ -127,7 +127,7 @@ end
 function M.display_image_info(file_path, bufnr, reason)
   local info = {}
 
-  local stat = vim.loop.fs_stat(file_path)
+  local stat = vim.uv.fs_stat(file_path)
   if stat then
     table.insert(info, string.format('📁 File: %s', vim.fn.fnamemodify(file_path, ':t')))
     table.insert(info, string.format('📏 Size: %d bytes', stat.size))

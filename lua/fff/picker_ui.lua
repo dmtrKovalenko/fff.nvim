@@ -930,7 +930,6 @@ function M.scroll_preview_down()
   preview.scroll(scroll_lines)
 end
 
---- Select current item
 function M.select(action)
   if not M.state.active then return end
 
@@ -960,7 +959,6 @@ function M.select(action)
   end
 end
 
---- Close picker
 function M.close()
   if not M.state.active then return end
 

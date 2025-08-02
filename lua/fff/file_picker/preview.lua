@@ -157,7 +157,7 @@ end
 --- @param file_path string Path to the file
 --- @return table File information
 function M.get_file_info(file_path)
-  local stat = vim.loop.fs_stat(file_path)
+  local stat = vim.uv.fs_stat(file_path)
   if not stat then return nil end
 
   local info = {
@@ -554,7 +554,7 @@ function M.preview(file_path, bufnr, file)
   M.state.current_file = file_path
   M.state.bufnr = bufnr
 
-  local stat = vim.loop.fs_stat(file_path)
+  local stat = vim.uv.fs_stat(file_path)
   if not stat then
     M.clear_buffer_completely(bufnr)
     safe_set_buffer_lines(bufnr, 0, -1, false, {
