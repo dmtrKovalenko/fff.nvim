@@ -1,3 +1,6 @@
+#![allow(clippy::all)]
+#![allow(dead_code)]
+
 #[path = "../../lua/fff/rust/error.rs"]
 mod error;
 #[path = "../../lua/fff/rust/file_key.rs"]

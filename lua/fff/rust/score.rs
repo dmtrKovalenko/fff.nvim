@@ -65,7 +65,7 @@ pub fn match_and_score_files(files: &[FileItem], context: &ScoringContext) -> Ve
             let base_score = neo_frizbee_match.score as i32;
             let frecency_boost = base_score.saturating_mul(file.total_frecency_score as i32) / 100;
             let distance_penalty = calculate_distance_penalty(
-                &context.current_file.map(|s| s.to_string()),
+                context.current_file.map(|s| s.as_str()),
                 &file.relative_path,
             );
 
@@ -88,10 +88,11 @@ pub fn match_and_score_files(files: &[FileItem], context: &ScoringContext) -> Ve
                     base_score / 5 * 2 // 40% bonus for exact filename match
                 }
                 Some(_) => base_score / 5, // 20% bonus for fuzzy filename match
-                // if the file is special directory give it an extra bonus
                 None if is_special_entry_point_file(&file.file_name) => {
+                    // 18% bonus special filename just as much as exact path
+                    // but a little bit less to give preference to the actual file if present
                     has_special_filename_bonus = true;
-                    base_score / 5
+                    base_score * 18 / 100
                 }
                 None => 0,
             };
@@ -162,11 +163,14 @@ fn score_all_by_frecency(files: &[FileItem], context: &ScoringContext) -> Vec<(u
                 + (file.modification_frecency_score as i32).saturating_mul(4);
 
             let distance_penalty = calculate_distance_penalty(
-                &context.current_file.map(ToString::to_string),
+                context.current_file.map(|x| x.as_str()),
                 &file.relative_path,
             );
 
-            let total = total_frecency_score.saturating_add(distance_penalty);
+            let total = total_frecency_score
+                .saturating_add(distance_penalty)
+                .saturating_add(calculate_file_bonus(file, context));
+
             let score = Score {
                 total,
                 base_score: 0,
@@ -183,7 +187,6 @@ fn score_all_by_frecency(files: &[FileItem], context: &ScoringContext) -> Vec<(u
 }
 
 #[inline]
-#[allow(dead_code)]
 fn calculate_file_bonus(file: &FileItem, context: &ScoringContext) -> i32 {
     let mut bonus = 0i32;
 

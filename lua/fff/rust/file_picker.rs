@@ -292,7 +292,6 @@ impl FilePicker {
         self.sync_data.read().unwrap().files.clone()
     }
 
-    #[allow(unused)]
     pub fn get_scan_progress(&self) -> ScanProgress {
         let sync_data = self.sync_data.read().unwrap();
         let is_scanning = self.is_scanning.load(Ordering::Relaxed);
@@ -305,8 +304,8 @@ impl FilePicker {
 
     pub fn refresh_git_status(&self) -> Vec<FileItem> {
         let sync_data: &Arc<RwLock<FileSync>> = &self.sync_data;
-        let git_workdir: &Option<PathBuf> = &self.git_workdir;
-        let new_git_status_cache = GitStatusCache::read_git_status(git_workdir.as_ref());
+        let git_workdir = self.git_workdir.as_deref();
+        let new_git_status_cache = GitStatusCache::read_git_status(git_workdir);
 
         if let Ok(mut sync_data_write) = sync_data.write() {
             sync_data_write.git_status_cache = new_git_status_cache.clone();
@@ -323,7 +322,6 @@ impl FilePicker {
         self.get_cached_files()
     }
 
-    #[allow(unused)]
     pub fn trigger_rescan(&self) -> Result<(), Error> {
         if self.is_scanning.load(Ordering::Relaxed) {
             debug!("Scan already in progress, skipping trigger_rescan");
@@ -357,12 +355,10 @@ impl FilePicker {
         Ok(())
     }
 
-    #[allow(unused)]
     pub fn is_scan_active(&self) -> bool {
         self.is_scanning.load(Ordering::Relaxed)
     }
 
-    #[allow(unused)]
     pub fn stop_background_monitor(&self) {
         self.shutdown_signal.store(true, Ordering::Relaxed);
     }
@@ -539,11 +535,8 @@ fn handle_create_events(
                 continue;
             }
 
-            // We will update the path for every
             let mut file_item = FileItem::new(path.clone(), base_path, None);
-
             file_item.update_frecency_scores();
-
             sync_write.insert_file_sorted(file_item);
         }
     }
@@ -569,77 +562,82 @@ fn scan_filesystem(
     git_workdir: Option<&PathBuf>,
 ) -> Result<(Vec<FileItem>, Option<GitStatusCache>), Error> {
     let scan_start = std::time::Instant::now();
+    let git_workdir = git_workdir.map(|p| p.as_path());
     info!("SCAN: Starting parallel filesystem scan and git status");
 
-    let git_handle = GitStatusCache::read_git_status_parallel(git_workdir.cloned());
+    // run separate thread for git status because it effectively does another separate file
+    // traversal which could be pretty slow on large repos (in general 300-500ms)
+    thread::scope(|s| {
+        let git_handle = s.spawn(|| GitStatusCache::read_git_status(git_workdir));
 
-    let walker = WalkBuilder::new(base_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .ignore(true)
-        .follow_links(false)
-        .sort_by_file_name(std::cmp::Ord::cmp)
-        .build_parallel();
+        let walker = WalkBuilder::new(base_path)
+            .hidden(false)
+            .git_ignore(true)
+            .git_exclude(true)
+            .git_global(true)
+            .ignore(true)
+            .follow_links(false)
+            .sort_by_file_name(std::cmp::Ord::cmp)
+            .build_parallel();
 
-    let walker_start = std::time::Instant::now();
-    info!("SCAN: Starting file walker");
+        let walker_start = std::time::Instant::now();
+        info!("SCAN: Starting file walker");
 
-    let files = Arc::new(std::sync::Mutex::new(Vec::new()));
-    walker.run(|| {
-        let files = Arc::clone(&files);
-        let base_path = base_path.to_path_buf();
+        let files = Arc::new(std::sync::Mutex::new(Vec::new()));
+        walker.run(|| {
+            let files = Arc::clone(&files);
+            let base_path = base_path.to_path_buf();
 
-        Box::new(move |result| {
-            if let Ok(entry) = result {
-                if let Some(file_type) = entry.file_type() {
-                    if file_type.is_file() {
-                        let path = entry.path();
+            Box::new(move |result| {
+                if let Ok(entry) = result {
+                    if let Some(file_type) = entry.file_type() {
+                        if file_type.is_file() {
+                            let path = entry.path();
 
-                        if is_git_file(path) {
-                            return WalkState::Continue;
-                        }
+                            if is_git_file(path) {
+                                return WalkState::Continue;
+                            }
 
-                        let file_item = FileItem::new(
-                            path.to_path_buf(),
-                            &base_path,
-                            None, // Git status will be added after join
-                        );
+                            let file_item = FileItem::new(
+                                path.to_path_buf(),
+                                &base_path,
+                                None, // Git status will be added after join
+                            );
 
-                        if let Ok(mut files_vec) = files.lock() {
-                            files_vec.push(file_item);
+                            if let Ok(mut files_vec) = files.lock() {
+                                files_vec.push(file_item);
+                            }
                         }
                     }
                 }
-            }
-            WalkState::Continue
-        })
-    });
-
-    let mut files = Arc::try_unwrap(files).unwrap().into_inner().unwrap();
-    let walker_time = walker_start.elapsed();
-    info!("SCAN: File walking completed in {:?}", walker_time);
-
-    let git_cache = git_handle
-        .join()
-        .map_err(|_| Error::InvalidPath("Git status thread panicked".to_string()))?;
-
-    if let Some(git_cache) = &git_cache {
-        files.par_iter_mut().for_each(|file| {
-            file.git_status = git_cache.lookup_status(&file.path);
-            file.update_frecency_scores();
+                WalkState::Continue
+            })
         });
-    }
 
-    let total_time = scan_start.elapsed();
-    info!(
-        "SCAN: Total scan time {:?} for {} files",
-        total_time,
-        files.len()
-    );
+        let mut files = Arc::try_unwrap(files).unwrap().into_inner().unwrap();
+        let walker_time = walker_start.elapsed();
+        info!("SCAN: File walking completed in {:?}", walker_time);
 
-    Ok((files, git_cache))
+        let git_cache = git_handle
+            .join()
+            .map_err(|_| Error::InvalidPath("Git status thread panicked".to_string()))?;
+
+        if let Some(git_cache) = &git_cache {
+            files.par_iter_mut().for_each(|file| {
+                file.git_status = git_cache.lookup_status(&file.path);
+                file.update_frecency_scores();
+            });
+        }
+
+        let total_time = scan_start.elapsed();
+        info!(
+            "SCAN: Total scan time {:?} for {} files",
+            total_time,
+            files.len()
+        );
+
+        Ok((files, git_cache))
+    })
 }
 
 fn update_git_status_for_paths(

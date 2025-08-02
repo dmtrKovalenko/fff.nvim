@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 name = "test_watcher"
 path = "src/bin/test_watcher.rs"
 
+
 [dependencies]
 blake3 = "1.8.2"
 chrono = { version = "0.4", features = ["serde"] }

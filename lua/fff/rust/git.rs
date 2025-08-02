@@ -1,6 +1,5 @@
 use git2::{Repository, Status, StatusOptions};
 use std::path::{Path, PathBuf};
-use std::thread::{self, JoinHandle};
 use tracing::{error, info};
 
 #[derive(Debug, Clone)]
@@ -10,14 +9,6 @@ pub struct GitStatusCache {
 }
 
 impl GitStatusCache {
-    #[allow(dead_code)]
-    fn new() -> Self {
-        Self {
-            paths: Vec::new(),
-            statuses: Vec::new(),
-        }
-    }
-
     fn from_git_entries(mut entries: Vec<(PathBuf, Status)>) -> Self {
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -35,7 +26,7 @@ impl GitStatusCache {
         }
     }
 
-    pub fn read_git_status(git_workdir: Option<&PathBuf>) -> Option<Self> {
+    pub fn read_git_status(git_workdir: Option<&Path>) -> Option<Self> {
         let git_start = std::time::Instant::now();
         info!("GIT: Starting git status read");
 
@@ -72,14 +63,9 @@ impl GitStatusCache {
 
         Some(Self::from_git_entries(entries))
     }
-
-    pub fn read_git_status_parallel(git_workdir: Option<PathBuf>) -> JoinHandle<Option<Self>> {
-        thread::spawn(move || Self::read_git_status(git_workdir.as_ref()))
-    }
 }
 
 #[inline]
-#[allow(dead_code)]
 pub fn is_modified_status(status: Status) -> bool {
     status.intersects(
         Status::WT_MODIFIED
