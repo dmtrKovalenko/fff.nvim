@@ -58,9 +58,9 @@ FFF.nvim requires:
     {
       "<leader>ff", -- try it if you didn't it is a banger keybinding for a picker
       function()
-        require("fff").toggle()
+        require("fff").find_files() -- or find_in_git_root() if you only want git files
       end,
-      desc = "Toggle FFF",
+      desc = "Open file picker",
     },
   },
 }
@@ -120,6 +120,17 @@ require("fff").setup({
 ```
 
 ### Key Features
+
+#### Available methods
+
+```lua
+require("fff").find_files() -- Find files in current directory
+require("fff").find_in_git_root() -- Find files in the current git repository
+require("fff").scan_files() -- Trigger rescan of files in the current directory
+require("fff").refresh_git_status() -- Refresh git status for the active file lock
+require("fff").find_files_in_dir(path) -- Find files in a specific directory
+require("fff").change_indexing_directory(new_path) -- Change the base directory for the file picker
+```
 
 #### Multiple Key Bindings
 
