@@ -490,7 +490,6 @@ end
 function M.get_status()
   local status = 'No files indexed'
 
-  local fuzzy = require('fff.fuzzy')
   local ok, cached_files = pcall(fuzzy.get_cached_files)
   if ok and cached_files and #cached_files > 0 then status = string.format('%d files indexed', #cached_files) end
 
