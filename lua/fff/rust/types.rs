@@ -33,7 +33,7 @@ pub struct Score {
 #[derive(Debug, Clone)]
 pub struct ScoringContext<'a> {
     pub query: &'a str,
-    pub current_file: Option<&'a str>,
+    pub current_file: Option<&'a String>,
     pub max_typos: u16,
     pub max_threads: usize,
 }

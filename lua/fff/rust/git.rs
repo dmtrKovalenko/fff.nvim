@@ -35,7 +35,7 @@ impl GitStatusCache {
         }
     }
 
-    pub fn read_git_status(git_workdir: &Option<PathBuf>) -> Option<Self> {
+    pub fn read_git_status(git_workdir: Option<&PathBuf>) -> Option<Self> {
         let git_start = std::time::Instant::now();
         info!("GIT: Starting git status read");
 
@@ -74,7 +74,7 @@ impl GitStatusCache {
     }
 
     pub fn read_git_status_parallel(git_workdir: Option<PathBuf>) -> JoinHandle<Option<Self>> {
-        thread::spawn(move || Self::read_git_status(&git_workdir))
+        thread::spawn(move || Self::read_git_status(git_workdir.as_ref()))
     }
 }
 

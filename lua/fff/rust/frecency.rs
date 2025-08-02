@@ -28,6 +28,7 @@ const ACCESS_THRESHOLDS: [(i64, u64); 5] = [
 ];
 
 impl FrecencyTracker {
+    #[allow(unused)]
     pub fn new(db_path: &str, use_unsafe_no_lock: bool) -> Result<Self, Error> {
         fs::create_dir_all(db_path).map_err(Error::CreateDir)?;
         let env = unsafe {
@@ -69,6 +70,7 @@ impl FrecencyTracker {
         *blake3::hash(path.as_bytes()).as_bytes()
     }
 
+    #[allow(unused)]
     pub fn track_access(&self, file_key: &FileKey) -> Result<(), Error> {
         let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
 

@@ -18,7 +18,6 @@ pub fn match_and_score_files(files: &[FileItem], context: &ScoringContext) -> Ve
         prefilter: true,
         max_typos: Some(context.max_typos),
         sort: false,
-        ..Default::default()
     };
 
     let haystack: Vec<&str> = files.iter().map(|f| f.relative_path.as_str()).collect();
@@ -163,7 +162,7 @@ fn score_all_by_frecency(files: &[FileItem], context: &ScoringContext) -> Vec<(u
                 + (file.modification_frecency_score as i32).saturating_mul(4);
 
             let distance_penalty = calculate_distance_penalty(
-                &context.current_file.map(|s| s.to_string()),
+                &context.current_file.map(ToString::to_string),
                 &file.relative_path,
             );
 
@@ -189,7 +188,7 @@ fn calculate_file_bonus(file: &FileItem, context: &ScoringContext) -> i32 {
     let mut bonus = 0i32;
 
     if let Some(current) = context.current_file {
-        if file.relative_path == current {
+        if file.relative_path == *current {
             bonus -= match file.git_status {
                 Some(status) if is_modified_status(status) => 150,
                 _ => 300,

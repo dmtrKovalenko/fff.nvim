@@ -51,9 +51,10 @@ pub fn scan_files(_: &Lua, _: ()) -> LuaResult<()> {
     let picker = file_picker
         .as_ref()
         .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
-    let result = picker.trigger_rescan()?;
+
+    picker.trigger_rescan()?;
     ::tracing::info!("scan_files trigger_rescan completed");
-    Ok(result)
+    Ok(())
 }
 
 pub fn get_cached_files(_: &Lua, _: ()) -> LuaResult<Vec<FileItem>> {
@@ -75,7 +76,7 @@ pub fn fuzzy_search_files(
         .as_ref()
         .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
 
-    let results = picker.fuzzy_search(&query, max_results, max_threads, current_file);
+    let results = picker.fuzzy_search(&query, max_results, max_threads, current_file.as_ref());
     Ok(results)
 }
 
@@ -115,7 +116,8 @@ pub fn refresh_git_status(_: &Lua, _: ()) -> LuaResult<Vec<FileItem>> {
     let picker = file_picker
         .as_ref()
         .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
-    Ok(picker.refresh_git_status()?)
+
+    Ok(picker.refresh_git_status())
 }
 
 pub fn stop_background_monitor(_: &Lua, _: ()) -> LuaResult<bool> {
