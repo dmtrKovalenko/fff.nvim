@@ -24,6 +24,7 @@ function M.setup(config)
       close = '<Esc>',
       preview_up = '<C-u>',
       preview_down = '<C-d>',
+      use_default_open = true,
     },
     layout = {
       prompt_position = 'top',
@@ -76,8 +77,8 @@ function M.setup(config)
 
   M.state.initialized = true
   M.config = merged_config
-
-  M.setup_default_keymaps()
+  
+  if merged_config.keymaps.use_default_open then M.setup_default_keymaps() end
   M.setup_commands()
 
   if merged_config.frecency.enabled then M.setup_global_file_tracking() end
