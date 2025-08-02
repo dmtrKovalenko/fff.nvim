@@ -189,9 +189,7 @@ fn calculate_file_bonus(file: &FileItem, context: &ScoringContext) -> i32 {
     let mut bonus = 0i32;
 
     if let Some(current) = context.current_file {
-        let is_current = file.relative_path == current || file.relative_path == current;
-
-        if is_current {
+        if file.relative_path == current {
             bonus -= match file.git_status {
                 Some(status) if is_modified_status(status) => 150,
                 _ => 300,
