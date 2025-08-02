@@ -11,6 +11,8 @@ function M.setup(config)
   local default_config = {
     base_path = vim.fn.getcwd(),
     max_results = 100,
+    prompt = '🪿 ', -- Input prompt symbol
+    title = 'FFF Files', -- Window title
     width = 0.8,
     height = 0.8,
     preview = {
