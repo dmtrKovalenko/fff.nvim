@@ -180,7 +180,7 @@ impl std::fmt::Debug for FilePicker {
         f.debug_struct("FilePicker")
             .field("base_path", &self.base_path)
             .field("git_workdir", &self.git_workdir)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -231,7 +231,7 @@ impl FilePicker {
         max_results: usize,
         max_threads: usize,
         current_file: Option<String>,
-    ) -> Result<SearchResult, Error> {
+    ) -> SearchResult {
         let max_threads = max_threads.max(1); // Ensure at least 1 to avoid neo_frizbee division by zero
 
         debug!(
@@ -280,12 +280,12 @@ impl FilePicker {
         );
 
         debug!("Total search time: {:?}", time.elapsed());
-        Ok(SearchResult {
+        SearchResult {
             items,
             scores,
             total_matched,
             total_files,
-        })
+        }
     }
 
     pub fn get_cached_files(&self) -> Vec<FileItem> {
@@ -445,9 +445,7 @@ fn handle_debounced_events(
             .paths
             .iter()
             .filter_map(|path| {
-                let Some(relative_path) = pathdiff::diff_paths(path, base_path) else {
-                    return None;
-                };
+                let relative_path = pathdiff::diff_paths(path, base_path)?;
 
                 let Ok(sync_read) = sync_data.read() else {
                     return None;
@@ -536,8 +534,8 @@ fn handle_create_events(
                 continue;
             }
 
-            // we will update the path for every
-            let mut file_item = FileItem::new(path.to_path_buf(), base_path, None);
+            // We will update the path for every
+            let mut file_item = FileItem::new(path.clone(), base_path, None);
 
             file_item.update_frecency_scores();
 
@@ -688,9 +686,7 @@ fn update_git_status_for_paths(
 
 #[inline]
 fn is_git_file(path: &Path) -> bool {
-    path.to_str()
-        .map(|path| path.contains("/.git/"))
-        .unwrap_or(false)
+    path.to_str().is_some_and(|path| path.contains("/.git/"))
 }
 
 impl Drop for FilePicker {
