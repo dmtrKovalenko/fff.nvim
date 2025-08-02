@@ -40,40 +40,6 @@ M.state = {
   render_debounce_ms = 5, -- Faster rendering for better responsiveness
 }
 
-local default_config = {
-  width = 0.8,
-  height = 0.8,
-  preview_width = 0.5,
-  prompt = '🪿 ',
-  title = 'FFF Files',
-  max_results = 60, -- Maximum number of search results
-  max_threads = 4, -- Maximum threads for fuzzy search
-
-  keymaps = {
-    close = '<Esc>',
-    select = '<CR>',
-    select_split = '<C-s>',
-    select_vsplit = '<C-v>',
-    select_tab = '<C-t>',
-    move_up = { '<Up>', '<C-p>' },
-    move_down = { '<Down>', '<C-n>' },
-    preview_scroll_up = '<C-u>',
-    preview_scroll_down = '<C-d>',
-  },
-
-  hl = {
-    border = 'FloatBorder',
-    normal = 'Normal',
-    cursor = 'CursorLine',
-    matched = 'IncSearch',
-    title = 'Title',
-    prompt = 'Question',
-    active_file = 'Visual',
-    frecency = 'Number',
-    debug = 'Comment',
-  },
-}
-
 --- Create the picker UI
 function M.create_ui()
   local config = M.state.config
@@ -87,7 +53,7 @@ function M.create_ui()
   local col = math.floor((vim.o.columns - width) / 2)
   local row = math.floor((vim.o.lines - height) / 2)
 
-  local preview_width = math.floor(width * config.preview_width) -- Full preview width
+  local preview_width = M.enabled_preview() and math.floor(width * config.preview.width) or 0
   local list_width = width - preview_width - 3 -- Account for separators
   local list_height = height - 4 -- Same as list window height
 
@@ -101,7 +67,7 @@ function M.create_ui()
   local buf_opts = { false, true } -- nofile, scratch buffer
   M.state.input_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2])
   M.state.list_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2])
-  M.state.preview_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2])
+  if M.enabled_preview() then M.state.preview_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2]) end
 
   if debug_enabled then
     M.state.file_info_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2])
@@ -140,17 +106,19 @@ function M.create_ui()
   local preview_row = debug_enabled and (row + file_info_height + 3) or (row + 1)
   local preview_height_adj = debug_enabled and preview_height or (list_height + 2)
 
-  M.state.preview_win = vim.api.nvim_open_win(M.state.preview_buf, false, {
-    relative = 'editor',
-    width = preview_width,
-    height = preview_height_adj,
-    col = col + list_width + 3,
-    row = preview_row,
-    border = 'single',
-    style = 'minimal',
-    title = ' PREVIEW TEST TITLE ',
-    title_pos = 'left',
-  })
+  if M.enabled_preview() then
+    M.state.preview_win = vim.api.nvim_open_win(M.state.preview_buf, false, {
+      relative = 'editor',
+      width = preview_width,
+      height = preview_height_adj,
+      col = col + list_width + 3,
+      row = preview_row,
+      border = 'single',
+      style = 'minimal',
+      title = ' PREVIEW TEST TITLE ',
+      title_pos = 'left',
+    })
+  end
 
   M.state.input_win = vim.api.nvim_open_win(M.state.input_buf, false, {
     relative = 'editor',
@@ -194,9 +162,11 @@ function M.setup_buffers()
     vim.api.nvim_buf_set_option(M.state.file_info_buf, 'modifiable', false)
   end
 
-  vim.api.nvim_buf_set_option(M.state.preview_buf, 'buftype', 'nofile')
-  vim.api.nvim_buf_set_option(M.state.preview_buf, 'filetype', 'fff_preview')
-  vim.api.nvim_buf_set_option(M.state.preview_buf, 'modifiable', false)
+  if M.enabled_preview() then
+    vim.api.nvim_buf_set_option(M.state.preview_buf, 'buftype', 'nofile')
+    vim.api.nvim_buf_set_option(M.state.preview_buf, 'filetype', 'fff_preview')
+    vim.api.nvim_buf_set_option(M.state.preview_buf, 'modifiable', false)
+  end
 end
 
 --- Setup window options
@@ -217,12 +187,14 @@ function M.setup_windows()
   vim.api.nvim_win_set_option(M.state.list_win, 'signcolumn', 'yes:1') -- Enable signcolumn for git status borders
   vim.api.nvim_win_set_option(M.state.list_win, 'foldcolumn', '0')
 
-  vim.api.nvim_win_set_option(M.state.preview_win, 'wrap', false)
-  vim.api.nvim_win_set_option(M.state.preview_win, 'cursorline', false)
-  vim.api.nvim_win_set_option(M.state.preview_win, 'number', false)
-  vim.api.nvim_win_set_option(M.state.preview_win, 'relativenumber', false)
-  vim.api.nvim_win_set_option(M.state.preview_win, 'signcolumn', 'no')
-  vim.api.nvim_win_set_option(M.state.preview_win, 'foldcolumn', '0')
+  if M.enabled_preview() then
+    vim.api.nvim_win_set_option(M.state.preview_win, 'wrap', false)
+    vim.api.nvim_win_set_option(M.state.preview_win, 'cursorline', false)
+    vim.api.nvim_win_set_option(M.state.preview_win, 'number', false)
+    vim.api.nvim_win_set_option(M.state.preview_win, 'relativenumber', false)
+    vim.api.nvim_win_set_option(M.state.preview_win, 'signcolumn', 'no')
+    vim.api.nvim_win_set_option(M.state.preview_win, 'foldcolumn', '0')
+  end
 end
 
 local function normalize_keys(keys)
@@ -794,6 +766,7 @@ function M.render_list()
 end
 
 function M.update_preview()
+  if not M.enabled_preview() then return end
   if not M.state.active then return end
 
   local items = M.state.filtered_items
@@ -852,6 +825,7 @@ end
 --- Clear preview
 function M.clear_preview()
   if not M.state.active then return end
+  if not M.enabled_preview() then return end
 
   vim.api.nvim_win_set_config(M.state.preview_win, {
     title = ' Preview ',
@@ -1009,14 +983,12 @@ function M.close()
   local buffers = {
     M.state.input_buf,
     M.state.list_buf,
-    M.state.preview_buf,
     M.state.file_info_buf,
   }
-  
+  if M.enabled_preview() then buffers[#buffers + 1] = M.state.preview_buf end
+
   for _, buf in ipairs(buffers) do
-    if buf and vim.api.nvim_buf_is_valid(buf) then
-      vim.api.nvim_buf_delete(buf, { force = true })
-    end
+    if buf and vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_delete(buf, { force = true }) end
   end
 
   M.state.input_win = nil
@@ -1069,7 +1041,7 @@ function M.open(opts)
     end
   end
 
-  M.state.config = vim.tbl_deep_extend('force', default_config, opts or {})
+  M.state.config = main.config
 
   if not M.create_ui() then
     vim.notify('Failed to create picker UI', vim.log.levels.ERROR)
@@ -1104,6 +1076,15 @@ function M.monitor_scan_progress()
       if refreshed and #refreshed > 0 then M.update_results() end
     end, 500) -- Wait 500ms for git status to complete
   end
+end
+
+M.enabled_preview = function()
+  local preview = nil
+  if M and M.state and M.state.config then preview = M.state.config.preview end
+
+  if not preview then return true end
+
+  return preview.enabled
 end
 
 return M

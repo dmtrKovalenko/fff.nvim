@@ -12,20 +12,37 @@ function M.setup(config)
   local default_config = {
     base_path = vim.fn.getcwd(),
     max_results = 100,
+    prompt = '🪿 ', -- Input prompt symbol
+    title = 'FFF Files', -- Window title
+    width = 0.8,
+    height = 0.8,
     preview = {
       enabled = true,
+      width = 0.5,
       max_lines = 100,
       max_size = 1024 * 1024, -- 1MB
     },
     keymaps = {
-      select = '<CR>',
-      vsplit = '<C-v>',
-      split = '<C-s>',
-      tab = '<C-t>',
       close = '<Esc>',
-      preview_up = '<C-u>',
-      preview_down = '<C-d>',
-      use_default_open = true,
+      select = '<CR>',
+      select_split = '<C-s>',
+      select_vsplit = '<C-v>',
+      select_tab = '<C-t>',
+      move_up = { '<Up>', '<C-p>' },
+      move_down = { '<Down>', '<C-n>' },
+      preview_scroll_up = '<C-u>',
+      preview_scroll_down = '<C-d>',
+    },
+    hl = {
+      border = 'FloatBorder',
+      normal = 'Normal',
+      cursor = 'CursorLine',
+      matched = 'IncSearch',
+      title = 'Title',
+      prompt = 'Question',
+      active_file = 'Visual',
+      frecency = 'Number',
+      debug = 'Comment',
     },
     layout = {
       prompt_position = 'top',
@@ -135,7 +152,7 @@ function M.setup_commands()
     end
   end, {
     nargs = '?',
-    complete = function(arg_lead, cmd_line, cursor_pos)
+    omplete = function(arg_lead, cmd_line, cursor_pos)
       local dirs = vim.fn.glob(arg_lead .. '*', false, true)
       local results = {}
       for _, dir in ipairs(dirs) do

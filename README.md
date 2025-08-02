@@ -74,8 +74,13 @@ require("fff").setup({
   -- UI dimensions and appearance
   width = 0.8,          -- Window width as fraction of screen
   height = 0.8,         -- Window height as fraction of screen
-  preview_width = 0.5,  -- Preview pane width as fraction of picker
   prompt = '🪿 ',       -- Input prompt symbol
+  preview = {
+      enabled = true,
+      width = 0.5,
+      max_lines = 100,
+      max_size = 1024 * 1024, -- 1MB
+  },
   title = 'FFF Files',  -- Window title
   max_results = 60,     -- Maximum search results to display
   max_threads = 4,      -- Maximum threads for fuzzy search
