@@ -61,8 +61,11 @@
           nix build
           mkdir -p target/release
           ext=so
-          if [ "$(uname)" = "Darwin" ]; then ext=dylib; fi
-          cp -vf result/lib/libfff_nvim.$ext target/release/libfff_nvim.so
+          if [ "$(uname)" = "Darwin" ]; then
+            cp -vf result/lib/libfff_nvim.dylib target/release/libfff_nvim.dylib
+          else
+            cp -vf result/lib/libfff_nvim.so    target/release/libfff_nvim.so
+          fi
           rm result
           echo "Library copied to target/release/"
         '';
