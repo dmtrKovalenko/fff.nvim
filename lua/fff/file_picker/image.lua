@@ -41,7 +41,6 @@ local IMAGE_EXTENSIONS = {
   '.avif',
 }
 
---- Check if file is an image
 --- @param file_path string Path to the file
 --- @return boolean True if file is an image
 function M.is_image(file_path)
@@ -54,10 +53,6 @@ function M.is_image(file_path)
 
   return false
 end
-
---- Check if we're in Kitty terminal
---- @return boolean True if in Kitty
-function M.is_kitty() return vim.env.KITTY_PID ~= nil end
 
 --- Clear any existing image attachments from buffer
 --- @param bufnr number Buffer number
@@ -86,11 +81,6 @@ end
 function M.display_image(file_path, bufnr, max_width, max_height)
   max_width = max_width or 80
   max_height = max_height or 24
-
-  if not M.is_kitty() then
-    M.display_image_info(file_path, bufnr, 'Not in Kitty terminal')
-    return
-  end
 
   -- Try Snacks.nvim first (most reliable)
   local ok, snacks = pcall(require, 'snacks')
@@ -134,6 +124,9 @@ function M.display_image_info(file_path, bufnr, reason)
     table.insert(info, string.format('🕒 Modified: %s', os.date('%Y-%m-%d %H:%M:%S', stat.mtime.sec)))
   end
 
+  local ok, snacks = pcall(require, 'snacks.image')
+  local term_supported = ok and snacks and snacks.supports_terminal()
+
   local width, height = M.get_image_dimensions(file_path)
   if width and height then table.insert(info, string.format('🖼️  Dimensions: %dx%d pixels', width, height)) end
 
@@ -142,8 +135,7 @@ function M.display_image_info(file_path, bufnr, reason)
 
   table.insert(info, '')
   table.insert(info, '┌─ Image Preview Debug ─┐')
-  table.insert(info, string.format('│ Kitty: %s          │', M.is_kitty() and 'Yes' or 'No'))
-  table.insert(info, string.format('│ KITTY_PID: %s      │', vim.env.KITTY_PID or 'nil'))
+  table.insert(info, string.format('│ Supported: %s          │', term_supported and 'Yes' or 'No'))
   if reason then
     table.insert(info, string.format('│ Issue: %s', reason:sub(1, 16)))
     if #reason > 16 then table.insert(info, string.format('│        %s', reason:sub(17, 32))) end
