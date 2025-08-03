@@ -60,7 +60,9 @@
           set -euo pipefail
           nix build
           mkdir -p target/release
-          cp -vf result/lib/libfff_nvim.so target/release/libfff_nvim.so
+          ext=so
+          if [ "$(uname)" = "Darwin" ]; then ext=dylib; fi
+          cp -vf result/lib/libfff_nvim.$ext target/release/libfff_nvim.so
           rm result
           echo "Library copied to target/release/"
         '';
