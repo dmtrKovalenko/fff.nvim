@@ -60,7 +60,6 @@
           set -euo pipefail
           nix build
           mkdir -p target/release
-          ext=so
           if [ "$(uname)" = "Darwin" ]; then
             cp -vf result/lib/libfff_nvim.dylib target/release/libfff_nvim.dylib
           else
