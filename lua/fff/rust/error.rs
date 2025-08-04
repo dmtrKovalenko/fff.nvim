@@ -1,22 +1,18 @@
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("Thread panicked")]
+    ThreadPanic,
+    #[error("Invalid path {0}")]
+    InvalidPath(std::path::PathBuf),
+    #[error("File picker not initialized")]
+    FilePickerMissing,
     #[error("Failed to acquire lock for frecency")]
     AcquireFrecencyLock,
-
     #[error("Failed to acquire lock for items by provider")]
     AcquireItemLock,
-
-    #[error("Attempted to use frecency before initialization")]
-    UseFrecencyBeforeInit,
-
-    #[error(
-        "Attempted to fuzzy match for provider {provider_id} before setting the provider's items"
-    )]
-    FuzzyBeforeSetItems { provider_id: String },
-
     #[error("Failed to create frecency database directory: {0}")]
-    CreateDir(#[source] std::io::Error),
+    CreateDir(#[from] std::io::Error),
     #[error("Failed to open frecency database env: {0}")]
     EnvOpen(#[source] heed::Error),
     #[error("Failed to create frecency database: {0}")]
@@ -35,16 +31,15 @@ pub enum Error {
     DbWrite(#[source] heed::Error),
     #[error("Failed to commit write transaction to frecency database: {0}")]
     DbCommit(#[source] heed::Error),
-
-    #[error("Invalid file path: {0}")]
-    InvalidPath(String),
-
-    #[error("Failed to scan directory: {0}")]
-    DirectoryScan(String),
+    #[error("Failed to start file system watcher: {0}")]
+    FileSystemWatch(#[from] notify::Error),
 }
 
 impl From<Error> for mlua::Error {
     fn from(value: Error) -> Self {
-        mlua::Error::RuntimeError(value.to_string())
+        let string_value = value.to_string();
+
+        ::tracing::error!(string_value);
+        mlua::Error::RuntimeError(string_value)
     }
 }

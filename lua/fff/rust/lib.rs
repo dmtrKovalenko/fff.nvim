@@ -51,7 +51,7 @@ fn reinit_file_picker_internal(path: std::path::PathBuf) -> Result<(), Error> {
 
     // drop should clean it anyway but just to be extra sure
     if let Some(picker) = file_picker.take() {
-        picker.stop_background_monitor();
+        picker.stop_background_monitor()?;
     }
 
     let new_picker = FilePicker::new(path.to_string_lossy().to_string())?;
@@ -81,7 +81,7 @@ pub fn scan_files(_: &Lua, _: ()) -> LuaResult<()> {
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
         .as_ref()
-        .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
+        .ok_or_else(|| Error::FilePickerMissing)?;
 
     picker.trigger_rescan()?;
     ::tracing::info!("scan_files trigger_rescan completed");
@@ -92,7 +92,7 @@ pub fn get_cached_files(_: &Lua, _: ()) -> LuaResult<Vec<FileItem>> {
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
         .as_ref()
-        .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
+        .ok_or_else(|| Error::FilePickerMissing)?;
     Ok(picker.get_cached_files())
 }
 
@@ -105,7 +105,7 @@ pub fn fuzzy_search_files(
     ::tracing::debug!("Fuzzy search started: {:?}", time.elapsed());
     let picker = file_picker
         .as_ref()
-        .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
+        .ok_or_else(|| Error::FilePickerMissing)?;
 
     let results = picker.fuzzy_search(&query, max_results, max_threads, current_file.as_ref());
     Ok(results)
@@ -124,7 +124,7 @@ pub fn get_scan_progress(lua: &Lua, _: ()) -> LuaResult<LuaValue> {
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
         .as_ref()
-        .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
+        .ok_or_else(|| Error::FilePickerMissing)?;
     let progress = picker.get_scan_progress();
 
     let table = lua.create_table()?;
@@ -138,7 +138,7 @@ pub fn is_scanning(_: &Lua, _: ()) -> LuaResult<bool> {
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
         .as_ref()
-        .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
+        .ok_or_else(|| Error::FilePickerMissing)?;
     Ok(picker.is_scan_active())
 }
 
@@ -146,18 +146,31 @@ pub fn refresh_git_status(_: &Lua, _: ()) -> LuaResult<Vec<FileItem>> {
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
         .as_ref()
-        .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
+        .ok_or_else(|| Error::FilePickerMissing)?;
 
     Ok(picker.refresh_git_status())
 }
 
 pub fn stop_background_monitor(_: &Lua, _: ()) -> LuaResult<bool> {
-    let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
+    let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
-        .as_ref()
-        .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
-    picker.stop_background_monitor();
+        .as_mut()
+        .ok_or_else(|| Error::FilePickerMissing)?;
+    picker.stop_background_monitor()?;
+
     Ok(true)
+}
+
+pub fn cleanup_file_picker(_: &Lua, _: ()) -> LuaResult<bool> {
+    let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
+    if let Some(picker) = file_picker.take() {
+        drop(picker);
+        ::tracing::info!("FilePicker cleanup completed");
+
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 pub fn cancel_scan(_: &Lua, _: ()) -> LuaResult<bool> {
@@ -168,7 +181,7 @@ pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
         .as_ref()
-        .ok_or_else(|| Error::InvalidPath("File picker not initialized".to_string()))?;
+        .ok_or_else(|| Error::FilePickerMissing)?;
 
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(5000)); // Default 5s timeout
     let start_time = std::time::Instant::now();
@@ -219,6 +232,10 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "wait_for_initial_scan",
         lua.create_function(wait_for_initial_scan)?,
+    )?;
+    exports.set(
+        "cleanup_file_picker",
+        lua.create_function(cleanup_file_picker)?,
     )?;
     Ok(exports)
 }

@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, RwLock,
+    Arc, Mutex, RwLock,
 };
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -26,6 +26,11 @@ struct FileSync {
     git_status_cache: Option<GitStatusCache>,
     scan_generation: u64,
 }
+
+type Debouncer = notify_debouncer_full::Debouncer<
+    notify::RecommendedWatcher,
+    notify_debouncer_full::RecommendedCache,
+>;
 
 impl FileSync {
     fn new() -> Self {
@@ -170,9 +175,8 @@ pub struct FilePicker {
     base_path: PathBuf,
     git_workdir: Option<PathBuf>,
     sync_data: Arc<RwLock<FileSync>>,
-    shutdown_signal: Arc<AtomicBool>,
     is_scanning: Arc<AtomicBool>,
-    _background_handle: Option<thread::JoinHandle<()>>,
+    _debouncer: Arc<Mutex<Option<Debouncer>>>,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -190,7 +194,7 @@ impl FilePicker {
         let path = PathBuf::from(&base_path);
         if !path.exists() {
             error!("Base path does not exist: {}", base_path);
-            return Err(Error::InvalidPath(path.to_string_lossy().into_owned()));
+            return Err(Error::InvalidPath(path));
         }
 
         let git_workdir = Repository::discover(&path)
@@ -204,25 +208,20 @@ impl FilePicker {
         }
 
         let sync_data = Arc::new(RwLock::new(FileSync::new()));
-        let shutdown = Arc::new(AtomicBool::new(false));
         let scan_signal = Arc::new(AtomicBool::new(false));
+        let debouncer_holder = Arc::new(Mutex::new(None));
 
-        let background_handle = spawn_background_watcher(
-            path.clone(),
-            git_workdir.clone(),
-            Arc::clone(&sync_data),
-            Arc::clone(&shutdown),
-            Arc::clone(&scan_signal),
-        );
+        let picker = Self {
+            base_path: path.clone(),
+            git_workdir: git_workdir.clone(),
+            sync_data: Arc::clone(&sync_data),
+            is_scanning: Arc::clone(&scan_signal),
+            _debouncer: Arc::clone(&debouncer_holder),
+        };
 
-        Ok(Self {
-            base_path: path,
-            git_workdir,
-            sync_data,
-            shutdown_signal: shutdown,
-            is_scanning: scan_signal,
-            _background_handle: Some(background_handle),
-        })
+        spawn_async_initialization(path, git_workdir, sync_data, scan_signal, debouncer_holder);
+
+        Ok(picker)
     }
 
     pub fn fuzzy_search(
@@ -322,6 +321,16 @@ impl FilePicker {
         self.get_cached_files()
     }
 
+    pub fn stop_background_monitor(&self) -> Result<(), Error> {
+        if let Ok(mut debouncer_guard) = self._debouncer.lock() {
+            if let Some(debouncer) = debouncer_guard.take() {
+                debouncer.stop_nonblocking();
+                info!("File watcher stopped successfully");
+            }
+        }
+        Ok(())
+    }
+
     pub fn trigger_rescan(&self) -> Result<(), Error> {
         if self.is_scanning.load(Ordering::Relaxed) {
             debug!("Scan already in progress, skipping trigger_rescan");
@@ -358,10 +367,6 @@ impl FilePicker {
     pub fn is_scan_active(&self) -> bool {
         self.is_scanning.load(Ordering::Relaxed)
     }
-
-    pub fn stop_background_monitor(&self) {
-        self.shutdown_signal.store(true, Ordering::Relaxed);
-    }
 }
 
 #[allow(unused)]
@@ -372,21 +377,21 @@ pub struct ScanProgress {
     pub is_scanning: bool,
 }
 
-fn spawn_background_watcher(
+fn spawn_async_initialization(
     base_path: PathBuf,
     git_workdir: Option<PathBuf>,
     sync_data: Arc<RwLock<FileSync>>,
-    shutdown: Arc<AtomicBool>,
     scan_signal: Arc<AtomicBool>,
-) -> thread::JoinHandle<()> {
+    debouncer_holder: Arc<Mutex<Option<Debouncer>>>,
+) {
     thread::spawn(move || {
         scan_signal.store(true, Ordering::Relaxed);
-        info!("starting background watcher thread");
+        info!("Starting async initialization for file picker");
 
         match scan_filesystem(&base_path, git_workdir.as_ref()) {
             Ok((files, git_cache)) => {
                 info!(
-                    "Initial parallel filesystem scan completed: found {} files",
+                    "Initial filesystem scan completed: found {} files",
                     files.len()
                 );
                 if let Ok(mut data) = sync_data.write() {
@@ -395,43 +400,57 @@ fn spawn_background_watcher(
                 }
             }
             Err(e) => {
-                error!("Failed to scan filesystem: {:?}", e);
+                error!("Initial scan failed: {:?}", e);
             }
         }
-
         scan_signal.store(false, Ordering::Relaxed);
-        error!("is_scanning = FALSE (initial scan completed)");
 
-        let mut debouncer = match new_debouncer(Duration::from_millis(500), None, {
-            let sync_data = Arc::clone(&sync_data);
-            let base_path = base_path.clone();
-            let git_workdir = git_workdir.clone();
-
-            move |result: DebounceEventResult| match result {
-                Ok(events) => {
-                    handle_debounced_events(events, &sync_data, &base_path, &git_workdir);
-                }
-                Err(errors) => {
-                    error!("File watcher errors: {:?}", errors);
+        match create_file_watcher_sync(base_path, git_workdir, Arc::clone(&sync_data)) {
+            Ok(debouncer) => {
+                if let Ok(mut holder) = debouncer_holder.lock() {
+                    *holder = Some(debouncer);
+                    info!("File watcher setup completed successfully");
+                } else {
+                    error!("Failed to store debouncer - mutex poisoned");
                 }
             }
-        }) {
-            Ok(debouncer) => debouncer,
             Err(e) => {
-                error!("Failed to create debouncer: {:?}", e);
-                return;
+                error!("Failed to create file watcher: {:?}", e);
             }
-        };
-
-        if let Err(e) = debouncer.watch(&base_path, RecursiveMode::Recursive) {
-            error!("Failed to start watching: {:?}", e);
-            return;
         }
+    });
+}
 
-        while !shutdown.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(100));
+fn create_file_watcher_sync(
+    base_path: PathBuf,
+    git_workdir: Option<PathBuf>,
+    sync_data: Arc<RwLock<FileSync>>,
+) -> Result<Debouncer, Error> {
+    let mut debouncer = new_debouncer(Duration::from_millis(500), None, {
+        let sync_data = Arc::clone(&sync_data);
+        let base_path = base_path.clone();
+        let git_workdir = git_workdir.clone();
+
+        move |result: DebounceEventResult| match result {
+            Ok(events) => {
+                handle_debounced_events(events, &sync_data, &base_path, &git_workdir);
+            }
+            Err(errors) => {
+                error!("File watcher errors: {:?}", errors);
+            }
         }
-    })
+    })?;
+
+    if let Err(e) = debouncer.watch(&base_path, RecursiveMode::Recursive) {
+        error!(
+            "Failed to start watching path: {}, error {e:?}",
+            base_path.display(),
+        );
+        return Err(e.into());
+    }
+
+    info!("File watcher started for path: {}", base_path.display());
+    Ok(debouncer)
 }
 
 fn handle_debounced_events(
@@ -616,9 +635,10 @@ fn scan_filesystem(
         let walker_time = walker_start.elapsed();
         info!("SCAN: File walking completed in {:?}", walker_time);
 
-        let git_cache = git_handle
-            .join()
-            .map_err(|_| Error::InvalidPath("Git status thread panicked".to_string()))?;
+        let git_cache = git_handle.join().map_err(|_| {
+            error!("Failed to join git status thread");
+            Error::ThreadPanic
+        })?;
 
         if let Some(git_cache) = &git_cache {
             files.par_iter_mut().for_each(|file| {
@@ -698,6 +718,15 @@ fn is_git_file(path: &Path) -> bool {
 
 impl Drop for FilePicker {
     fn drop(&mut self) {
-        self.shutdown_signal.store(true, Ordering::Relaxed);
+        info!("FilePicker is being dropped, stopping file watcher");
+
+        if let Ok(mut debouncer_guard) = self._debouncer.lock() {
+            if let Some(debouncer) = debouncer_guard.take() {
+                debouncer.stop();
+                info!("File watcher stopped successfully");
+            }
+        } else {
+            error!("Failed to acquire debouncer lock during drop");
+        }
     }
 }

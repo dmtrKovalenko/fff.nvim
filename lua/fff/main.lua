@@ -107,8 +107,7 @@ function M.setup(config)
   M.config = merged_config
 
   M.setup_commands()
-
-  if merged_config.frecency.enabled then M.setup_global_file_tracking() end
+  M.setup_global_autocmds()
 
   local git_utils = require('fff.git_utils')
   git_utils.setup_highlights()
@@ -126,27 +125,29 @@ function M.setup(config)
   return true
 end
 
-function M.setup_global_file_tracking()
+function M.setup_global_autocmds()
   local group = vim.api.nvim_create_augroup('fff_file_tracking', { clear = true })
 
-  vim.api.nvim_create_autocmd({ 'BufRead', 'BufNewFile' }, {
-    group = group,
-    callback = function(args)
-      local file_path = args.file
+  if M.config.frecency.enabled then
+    vim.api.nvim_create_autocmd({ 'BufRead', 'BufNewFile' }, {
+      group = group,
+      callback = function(args)
+        local file_path = args.file
 
-      if file_path and file_path ~= '' and not vim.startswith(file_path, 'term://') then
-        -- never block the UI
-        vim.schedule(function()
-          local stat = vim.uv.fs_stat(file_path)
-          if stat and stat.type == 'file' then
-            local relative_path = vim.fn.fnamemodify(file_path, ':.')
-            pcall(fuzzy.access_file, relative_path)
-          end
-        end)
-      end
-    end,
-    desc = 'Track file access for FFF frecency',
-  })
+        if file_path and file_path ~= '' and not vim.startswith(file_path, 'term://') then
+          -- never block the UI
+          vim.schedule(function()
+            local stat = vim.uv.fs_stat(file_path)
+            if stat and stat.type == 'file' then
+              local relative_path = vim.fn.fnamemodify(file_path, ':.')
+              pcall(fuzzy.access_file, relative_path)
+            end
+          end)
+        end
+      end,
+      desc = 'Track file access for FFF frecency',
+    })
+  end
 
   -- make sure that this won't work correctly if autochdir plugins are enabled
   -- using a pure :cd command but will work using lua api or :e command
@@ -166,6 +167,12 @@ function M.setup_global_file_tracking()
       end
     end,
     desc = 'Automatically sync FFF directory changes',
+  })
+
+  vim.api.nvim_create_autocmd('VimLeavePre', {
+    group = group,
+    callback = function() pcall(fuzzy.cleanup_file_picker) end,
+    desc = 'Cleanup FFF background threads on Neovim exit',
   })
 end
 

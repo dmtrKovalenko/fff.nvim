@@ -1,5 +1,6 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
+#![allow(clippy::enum_variant_names)]
 
 #[path = "../../lua/fff/rust/error.rs"]
 mod error;

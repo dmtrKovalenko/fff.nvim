@@ -17,13 +17,7 @@ pub fn init_tracing(log_file_path: &str, log_level: &str) -> Result<String, Erro
     let log_path = Path::new(log_file_path);
 
     if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::InvalidPath(format!(
-                "Failed to create log directory {}: {}",
-                parent.display(),
-                e
-            ))
-        })?;
+        std::fs::create_dir_all(parent)?;
     }
 
     let log_file_path_clone = log_file_path.to_string();
