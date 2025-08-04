@@ -41,7 +41,7 @@
           src = craneLib.cleanCargoSource ./.;
           strictDeps = true;
 
-          nativeBuildInputs = [ pkgs.pkg-config ];
+          nativeBuildInputs = with pkgs [ pkg-config perl ];
           buildInputs = with pkgs; [
             # Add additional build inputs here
             openssl
