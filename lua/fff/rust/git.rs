@@ -30,7 +30,6 @@ impl GitStatusCache {
         let git_start = std::time::Instant::now();
         info!("GIT: Starting git status read");
 
-        let mut entries = Vec::new();
         let git_workdir = git_workdir.as_ref()?;
         let repository = Repository::open(git_workdir).ok()?;
 
@@ -51,6 +50,7 @@ impl GitStatusCache {
             git_workdir.display()
         );
 
+        let mut entries = Vec::with_capacity(statuses.len());
         for entry in &statuses {
             if let Some(entry_path) = entry.path() {
                 let full_path = git_workdir.join(entry_path);
