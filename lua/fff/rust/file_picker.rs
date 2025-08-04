@@ -590,23 +590,21 @@ fn scan_filesystem(
 
             Box::new(move |result| {
                 if let Ok(entry) = result {
-                    if let Some(file_type) = entry.file_type() {
-                        if file_type.is_file() {
-                            let path = entry.path();
+                    if entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        let path = entry.path();
 
-                            if is_git_file(path) {
-                                return WalkState::Continue;
-                            }
+                        if is_git_file(path) {
+                            return WalkState::Continue;
+                        }
 
-                            let file_item = FileItem::new(
-                                path.to_path_buf(),
-                                &base_path,
-                                None, // Git status will be added after join
-                            );
+                        let file_item = FileItem::new(
+                            path.to_path_buf(),
+                            &base_path,
+                            None, // Git status will be added after join
+                        );
 
-                            if let Ok(mut files_vec) = files.lock() {
-                                files_vec.push(file_item);
-                            }
+                        if let Ok(mut files_vec) = files.lock() {
+                            files_vec.push(file_item);
                         }
                     }
                 }
