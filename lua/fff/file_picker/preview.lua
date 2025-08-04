@@ -1,20 +1,12 @@
---- Advanced file preview module inspired by Snacks.nvim and Telescope
---- Provides sophisticated file content rendering with syntax highlighting
+local utils = require('fff.utils')
+local file_picker = require('fff.file_picker')
 
 local M = {}
 
--- Lazy load heavy modules only when needed
 local image = nil
-local icons = nil
-
 local function get_image()
   if not image then image = require('fff.file_picker.image') end
   return image
-end
-
-local function get_icons()
-  if not icons then icons = require('fff.file_picker.icons') end
-  return icons
 end
 
 -- Helper function to safely set buffer lines
@@ -39,25 +31,9 @@ local function safe_set_buffer_lines(bufnr, start, end_line, strict_indexing, li
   return true
 end
 
--- Configuration
-M.config = {
-  max_lines = 1000,
-  max_file_size = 10 * 1024 * 1024, -- 10MB
-  line_numbers = false,
-  wrap_lines = false,
-  show_file_info = false,
-  binary_file_threshold = 1024, -- bytes to check for binary content
+-- Config will be set from main.lua
+M.config = nil
 
-  -- File type specific configurations
-  previews = {
-    ['*.md'] = { wrap_lines = true },
-    ['*.txt'] = { wrap_lines = true },
-    ['*.log'] = { tail_lines = 100 },
-    ['*.json'] = { format = true },
-  },
-}
-
--- State for preview window
 M.state = {
   bufnr = nil,
   winid = nil,
@@ -68,16 +44,14 @@ M.state = {
 
 --- Setup preview configuration
 --- @param config table Configuration options
-function M.setup(config) M.config = vim.tbl_deep_extend('force', M.config, config or {}) end
+function M.setup(config) M.config = config or {} end
 
 --- Check if file is binary
 --- @param file_path string Path to the file
 --- @return boolean True if file appears to be binary
 function M.is_binary_file(file_path)
-  -- First check file extension for known binary types
   local ext = string.lower(vim.fn.fnamemodify(file_path, ':e'))
   local binary_extensions = {
-    -- Images (svg excluded for text preview)
     'jpg',
     'jpeg',
     'png',
@@ -133,11 +107,8 @@ function M.is_binary_file(file_path)
   file:close()
 
   if not chunk then return false end
-
-  -- Check for null bytes (common indicator of binary files)
   if chunk:find('\0') then return true end
 
-  -- Check for high ratio of non-printable characters (more aggressive)
   local printable_count = 0
   local total_count = #chunk
 
@@ -155,7 +126,7 @@ end
 
 --- Get file information
 --- @param file_path string Path to the file
---- @return table File information
+--- @return table | nil File information
 function M.get_file_info(file_path)
   local stat = vim.uv.fs_stat(file_path)
   if not stat then return nil end
@@ -167,28 +138,12 @@ function M.get_file_info(file_path)
     modified = stat.mtime.sec,
     accessed = stat.atime.sec,
     type = stat.type,
-    permissions = stat.mode,
   }
 
-  -- Get file extension and mime type
   info.extension = vim.fn.fnamemodify(file_path, ':e'):lower()
   info.filetype = vim.filetype.match({ filename = file_path }) or 'text'
-
-  -- Format file size
-  if info.size < 1024 then
-    info.size_formatted = info.size .. 'B'
-  elseif info.size < 1024 * 1024 then
-    info.size_formatted = string.format('%.1fKB', info.size / 1024)
-  elseif info.size < 1024 * 1024 * 1024 then
-    info.size_formatted = string.format('%.1fMB', info.size / 1024 / 1024)
-  else
-    info.size_formatted = string.format('%.1fGB', info.size / 1024 / 1024 / 1024)
-  end
-
-  -- Format modification time
+  info.size_formatted = utils.format_file_size(info.size)
   info.modified_formatted = os.date('%Y-%m-%d %H:%M:%S', info.modified)
-
-  -- Format access time
   info.accessed_formatted = os.date('%Y-%m-%d %H:%M:%S', info.accessed)
 
   return info
@@ -202,15 +157,7 @@ end
 function M.create_file_info_content(file, info, file_index)
   local lines = {}
 
-  -- Always show comprehensive file info with timings and scores
-  local file_picker = require('fff.file_picker')
-  local config = file_picker.get_config()
-  local debug_mode = config.debug and config.debug.show_scores
-
-  -- Get score information for this file
   local score = file_index and file_picker.get_file_score(file_index) or nil
-
-  -- Metadata and scores (no header)
   table.insert(
     lines,
     string.format('Size: %-8s │ Total Score: %d', info.size_formatted or 'N/A', score and score.total or 0)
@@ -229,7 +176,6 @@ function M.create_file_info_content(file, info, file_index)
     )
   )
 
-  -- Add detailed score breakdown (always show when available)
   if score then
     table.insert(
       lines,
@@ -256,15 +202,6 @@ function M.create_file_info_content(file, info, file_index)
   table.insert(lines, string.format('Last Access: %s', info.accessed_formatted or 'N/A'))
 
   return lines
-end
-
---- Legacy function for backward compatibility
---- @param file table File information from search results
---- @param info table File system information
---- @return table Lines for the debug card (empty now)
-function M.create_debug_card(file, info)
-  -- Debug info is now handled separately, return empty for preview
-  return {}
 end
 
 --- Create file info header
@@ -322,77 +259,32 @@ end
 --- @param tail_lines number Number of lines from the end
 --- @return table|nil Lines of content, nil if failed
 function M.read_file_tail(file_path, tail_lines)
-  -- Use system tail command for efficiency
   local cmd = string.format('tail -n %d %s 2>/dev/null', tail_lines, vim.fn.shellescape(file_path))
   local result = vim.fn.system(cmd)
 
-  if vim.v.shell_error ~= 0 then
-    -- Fallback to reading entire file
-    return M.read_file_content(file_path, tail_lines)
-  end
+  if vim.v.shell_error ~= 0 then return M.read_file_content(file_path, tail_lines) end
 
   local lines = vim.split(result, '\n')
-  -- Remove empty last line if present
   if lines[#lines] == '' then table.remove(lines) end
 
   return lines
 end
 
---- Format JSON content
---- @param content string JSON content
---- @return string Formatted JSON
-function M.format_json(content)
-  local ok, result = pcall(vim.fn.json_decode, content)
-  if not ok then return content end
-
-  local formatted_ok, formatted = pcall(vim.fn.json_encode, result)
-  if not formatted_ok then return content end
-
-  -- Pretty print JSON with proper indentation
-  local pretty_json =
-    formatted:gsub('([{[]),', '%1,\n  '):gsub('([}]]),', '%1,\n'):gsub(':",', '": '):gsub('([^{[]){', '%1{\n  ')
-
-  return pretty_json
-end
-
---- Add line numbers to content
---- @param lines table Content lines
---- @param start_line number Starting line number (default: 1)
---- @return table Lines with line numbers
-function M.add_line_numbers(lines, start_line)
-  if not M.config.line_numbers then return lines end
-
-  start_line = start_line or 1
-  local numbered_lines = {}
-  local max_line_num = start_line + #lines - 1
-  local line_num_width = string.len(tostring(max_line_num))
-
-  for i, line in ipairs(lines) do
-    local line_num = start_line + i - 1
-    local formatted_num = string.format('%' .. line_num_width .. 'd', line_num)
-    table.insert(numbered_lines, formatted_num .. ' │ ' .. line)
-  end
-
-  return numbered_lines
-end
-
 --- Preview a regular file
 --- @param file_path string Path to the file
 --- @param bufnr number Buffer number for preview
---- @param file table Optional file information from search results for debug info
 --- @return boolean Success status
-function M.preview_file(file_path, bufnr, file)
+function M.preview_file(file_path, bufnr)
   local info = M.get_file_info(file_path)
   if not info then return false end
 
-  -- Check file size
-  if info.size > M.config.max_file_size then
+  if info.size > M.config.max_size then
     local lines = {
       'File too large for preview',
       string.format(
         'Size: %s (max: %s)',
         info.size_formatted,
-        string.format('%.1fMB', M.config.max_file_size / 1024 / 1024)
+        string.format('%.1fMB', M.config.max_size / 1024 / 1024)
       ),
       '',
       'Use a text editor to view this file.',
@@ -401,69 +293,29 @@ function M.preview_file(file_path, bufnr, file)
     return true
   end
 
-  -- Binary files should be handled at the main level, not here
-
-  -- Get file-specific configuration
   local file_config = M.get_file_config(file_path)
 
-  -- Create debug card (only shown when debug mode is enabled)
-  local debug_card = M.create_debug_card(file or {}, info)
-
-  -- Create header
-  local header = M.create_file_info_header(info)
-
-  -- Read content
   local content
   if file_config.tail_lines then
     content = M.read_file_tail(file_path, file_config.tail_lines)
     if content then
-      table.insert(header, string.format('Showing last %d lines:', file_config.tail_lines))
-      table.insert(header, '')
+      -- Add virtual text showing tail lines are showed
     end
   else
     content = M.read_file_content(file_path, M.config.max_lines)
   end
 
-  if not content then
-    local lines = vim.list_extend(
-      debug_card,
-      vim.list_extend(header, {
-        'Failed to read file content',
-        'File may be locked or inaccessible.',
-      })
-    )
-    safe_set_buffer_lines(bufnr, 0, -1, false, lines)
-    return false
-  end
+  if not content then return false end
 
-  -- Format content if needed
-  if file_config.format and info.filetype == 'json' then
-    local full_content = table.concat(content, '\n')
-    local formatted = M.format_json(full_content)
-    content = vim.split(formatted, '\n')
-  end
+  safe_set_buffer_lines(bufnr, 0, -1, false, content)
 
-  -- Add line numbers
-  local start_line = file_config.tail_lines and math.max(1, info.size - file_config.tail_lines + 1) or 1
-  content = M.add_line_numbers(content, start_line)
-
-  -- Combine debug card, header and content
-  local all_lines = vim.list_extend(debug_card, vim.list_extend(header, content))
-
-  -- Set buffer content safely
-  safe_set_buffer_lines(bufnr, 0, -1, false, all_lines)
-
-  -- Set filetype for syntax highlighting
   vim.api.nvim_buf_set_option(bufnr, 'filetype', info.filetype)
-
-  -- Set buffer options (make non-modifiable after content is set)
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
   vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
   vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
   vim.api.nvim_buf_set_option(bufnr, 'wrap', file_config.wrap_lines or M.config.wrap_lines)
 
-  -- Store content info for scrolling
-  M.state.content_height = #all_lines
+  M.state.content_height = content
   M.state.scroll_offset = 0
 
   return true
@@ -473,13 +325,10 @@ end
 --- @param file_path string Path to the file
 --- @param bufnr number Buffer number for preview
 --- @param info table File information
---- @param file table Optional file information from search results for debug info
+--- @param file table | nil Optional file information from search results for debug info
 --- @return boolean Success status
 function M.preview_binary_file(file_path, bufnr, info, file)
-  -- Create debug card (only shown when debug mode is enabled)
-  local debug_card = M.create_debug_card(file or {}, info)
-
-  local lines = vim.list_extend(debug_card, M.create_file_info_header(info))
+  local lines = {}
 
   table.insert(lines, '⚠ Binary File Detected')
   table.insert(lines, '')
@@ -526,17 +375,13 @@ end
 --- @param file_path string Path to the file
 --- @return table Configuration for the file
 function M.get_file_config(file_path)
-  local filename = vim.fn.fnamemodify(file_path, ':t')
-  local extension = '*.' .. vim.fn.fnamemodify(file_path, ':e'):lower()
+  if not M.config or not M.config.filetypes then return {} end
 
-  -- Check for exact filename match first
-  if M.config.previews[filename] then return M.config.previews[filename] end
+  -- Get filetype using Neovim's built-in filetype detection
+  local filetype = vim.filetype.match({ filename = file_path }) or 'text'
 
-  -- Check for extension match
-  if M.config.previews[extension] then return M.config.previews[extension] end
-
-  -- Return default configuration
-  return {}
+  -- Return filetype-specific configuration
+  return M.config.filetypes[filetype] or {}
 end
 
 --- Main preview function
@@ -597,7 +442,7 @@ function M.preview(file_path, bufnr, file)
     local info = M.get_file_info(file_path)
     return M.preview_binary_file(file_path, bufnr, info, file)
   else
-    return M.preview_file(file_path, bufnr, file)
+    return M.preview_file(file_path, bufnr)
   end
 end
 
@@ -666,7 +511,6 @@ function M.update_file_info_buffer(file, bufnr, file_index)
   local file_info_lines = M.create_file_info_content(file, info, file_index)
   safe_set_buffer_lines(bufnr, 0, -1, false, file_info_lines)
 
-  -- Set buffer options
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
   vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
   vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')

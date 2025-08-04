@@ -6,6 +6,11 @@ local icons = require('fff.file_picker.icons')
 local git_utils = require('fff.git_utils')
 local main = require('fff.main')
 
+-- Initialize preview with main config
+if main.config and main.config.preview then
+  preview.setup(main.config.preview)
+end
+
 M.state = {
   active = false,
   layout = nil,

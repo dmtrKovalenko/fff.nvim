@@ -1,29 +1,56 @@
---- Image handling module for file picker
---- Simple implementation that delegates to Snacks.nvim
+local utils = require('fff.utils')
 
 local M = {}
 
--- Track active image placements per buffer
+local function get_main_config()
+  local main = require('fff.main')
+  return main.config
+end
+
 local active_placements = {} ---@type table<number, any>
 
--- Helper function to safely set buffer lines
-local function safe_set_buffer_lines(bufnr, start, end_line, strict_indexing, lines)
-  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return false end
+local function identify_image_lines(file_path)
+  local stat = vim.uv.fs_stat(file_path)
+  local size_str = stat and utils.format_file_size(stat.size) or 'Unknown'
 
-  -- Make buffer modifiable temporarily
+  local info_lines = {}
+  table.insert(info_lines, ' Size: ' .. size_str)
+
+  local config = get_main_config()
+  local format_str = config and config.preview and config.preview.imagemagick_info_format_str
+    or '%m: %wx%h, %[colorspace], %q-bit'
+  local cmd = string.format('identify -format "%s" "%s" 2>/dev/null', format_str, file_path)
+  local magick_info = vim.fn.system(cmd)
+
+  if vim.v.shell_error == 0 and magick_info and magick_info ~= '' then
+    magick_info = ' ' .. magick_info:gsub('\n', '')
+    table.insert(info_lines, magick_info)
+  end
+
+  return info_lines
+end
+
+-- This is a required function for snacks nvim to fill the buffer with enough space
+local function fill_buffer_space_for_image_preview(bufnr, info_lines)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
+
+  local win = vim.fn.bufwinid(bufnr)
+  local buffer_height = win ~= -1 and vim.api.nvim_win_get_height(win) or 24
+  local lines_for_image = math.max(buffer_height - #info_lines - 2, 5)
+
+  local buffer_lines = vim.list_extend({}, info_lines)
+  for _ = 1, lines_for_image do
+    table.insert(buffer_lines, '')
+  end
+
   local was_modifiable = vim.api.nvim_buf_get_option(bufnr, 'modifiable')
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
 
-  -- Set the lines
-  local ok, err = pcall(vim.api.nvim_buf_set_lines, bufnr, start, end_line, strict_indexing, lines)
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, buffer_lines)
 
-  -- Restore modifiable state
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', was_modifiable)
-
-  return ok
 end
 
--- Common image extensions (SVG excluded for text preview)
 local IMAGE_EXTENSIONS = {
   '.jpg',
   '.jpeg',
@@ -59,18 +86,13 @@ end
 function M.clear_buffer_images(bufnr)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
-  -- Close any tracked placement for this buffer
   if active_placements[bufnr] then
     pcall(active_placements[bufnr].close, active_placements[bufnr])
     active_placements[bufnr] = nil
   end
 
   local ok, snacks = pcall(require, 'snacks')
-  if ok and snacks.image and snacks.image.placement then
-    -- Use the proper Snacks.nvim placement cleanup API
-    -- This removes all image placements for the specified buffer
-    pcall(snacks.image.placement.clean, bufnr)
-  end
+  if ok and snacks.image and snacks.image.placement then pcall(snacks.image.placement.clean, bufnr) end
 end
 
 --- Display image using the simplest approach that works
@@ -82,29 +104,28 @@ function M.display_image(file_path, bufnr, max_width, max_height)
   max_width = max_width or 80
   max_height = max_height or 24
 
-  -- Try Snacks.nvim first (most reliable)
   local ok, snacks = pcall(require, 'snacks')
   if ok and snacks.image and snacks.image.buf then
-    -- Clear any existing image attachments first
     M.clear_buffer_images(bufnr)
 
-    -- Clear buffer content to prevent text/image overlap
-    safe_set_buffer_lines(bufnr, 0, -1, false, {})
+    local info_lines = identify_image_lines(file_path)
 
-    -- Configure Snacks image to prevent repetition
-    local success, placement = pcall(snacks.image.buf.attach, bufnr, {
-      src = file_path,
-      fit = 'contain', -- Fit image within bounds without repetition
-    })
+    fill_buffer_space_for_image_preview(bufnr, info_lines)
+    vim.schedule(function()
+      local success, placement = pcall(snacks.image.placement.new, bufnr, file_path, {
+        pos = { #info_lines + 1, 1 },
+        inline = true,
+        fit = 'contain',
+        auto_resize = true,
+      })
 
-    if success and placement then
-      -- Track the placement so we can clean it up later
-      active_placements[bufnr] = placement
-      return -- Successfully attached image, we're done
-    else
-      M.display_image_info(file_path, bufnr, 'Snacks.nvim failed: ' .. tostring(placement or 'unknown error'))
-      return
-    end
+      if success and placement then
+        active_placements[bufnr] = placement
+      else
+        M.display_image_info(file_path, bufnr, 'Snacks.nvim failed: ' .. tostring(placement or 'unknown error'))
+      end
+    end)
+    return
   end
 
   M.display_image_info(file_path, bufnr, 'Snacks.nvim not available')
@@ -115,59 +136,17 @@ end
 --- @param bufnr number Buffer number to display in
 --- @param reason string|nil Reason for failure
 function M.display_image_info(file_path, bufnr, reason)
-  local info = {}
+  local info_lines = identify_image_lines(file_path)
 
-  local stat = vim.uv.fs_stat(file_path)
-  if stat then
-    table.insert(info, string.format('📁 File: %s', vim.fn.fnamemodify(file_path, ':t')))
-    table.insert(info, string.format('📏 Size: %d bytes', stat.size))
-    table.insert(info, string.format('🕒 Modified: %s', os.date('%Y-%m-%d %H:%M:%S', stat.mtime.sec)))
-  end
-
-  local ok, snacks = pcall(require, 'snacks.image')
-  local term_supported = ok and snacks and snacks.supports_terminal()
-
-  local width, height = M.get_image_dimensions(file_path)
-  if width and height then table.insert(info, string.format('🖼️  Dimensions: %dx%d pixels', width, height)) end
-
-  local ext = string.lower(vim.fn.fnamemodify(file_path, ':e'))
-  if ext ~= '' then table.insert(info, string.format('🎨 Format: %s', ext:upper())) end
-
-  table.insert(info, '')
-  table.insert(info, '┌─ Image Preview Debug ─┐')
-  table.insert(info, string.format('│ Supported: %s          │', term_supported and 'Yes' or 'No'))
   if reason then
-    table.insert(info, string.format('│ Issue: %s', reason:sub(1, 16)))
-    if #reason > 16 then table.insert(info, string.format('│        %s', reason:sub(17, 32))) end
-  end
-  table.insert(info, '└─────────────────────────┘')
+    table.insert(info_lines, '')
+    table.insert(info_lines, string.rep('─', 50))
 
-  safe_set_buffer_lines(bufnr, 0, -1, false, info)
-end
-
---- Get image dimensions using file command
---- @param file_path string Path to the image file
---- @return number|nil, number|nil Width and height in pixels
-function M.get_image_dimensions(file_path)
-  -- Try file command first
-  local cmd = string.format('file %s', vim.fn.shellescape(file_path))
-  local result = vim.fn.system(cmd)
-
-  if vim.v.shell_error == 0 then
-    local width, height = result:match('(%d+)%s*x%s*(%d+)')
-    if width and height then return tonumber(width), tonumber(height) end
+    table.insert(info_lines, ' Preview is not available')
+    table.insert(info_lines, ' Reason: ' .. reason)
   end
 
-  -- Fallback to identify command (ImageMagick)
-  cmd = string.format('identify -format "%%w %%h" %s 2>/dev/null', vim.fn.shellescape(file_path))
-  result = vim.fn.system(cmd)
-
-  if vim.v.shell_error == 0 then
-    local width, height = result:match('(%d+)%s+(%d+)')
-    if width and height then return tonumber(width), tonumber(height) end
-  end
-
-  return nil, nil
+  fill_buffer_space_for_image_preview(bufnr, info_lines)
 end
 
 return M
