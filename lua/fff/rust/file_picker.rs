@@ -687,7 +687,13 @@ fn update_git_status_for_paths(
 
 #[inline]
 fn is_git_file(path: &Path) -> bool {
-    path.to_str().is_some_and(|path| path.contains("/.git/"))
+    path.to_str().is_some_and(|path| {
+        if cfg!(target_family = "windows") {
+            path.contains("\\.git\\")
+        } else {
+            path.contains("/.git/")
+        }
+    })
 }
 
 impl Drop for FilePicker {
