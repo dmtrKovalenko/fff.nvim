@@ -478,7 +478,6 @@ function M.scroll(lines)
   if not M.state.winid or not vim.api.nvim_win_is_valid(M.state.winid) then return end
 
   local win_height = vim.api.nvim_win_get_height(M.state.winid)
-  vim.notify(tostring(win_height))
   local content_height = M.state.content_height or 0
 
   -- allows scrolling for a full content + half window
