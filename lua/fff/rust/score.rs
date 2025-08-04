@@ -52,17 +52,17 @@ pub fn match_and_score_files(files: &[FileItem], context: &ScoringContext) -> Ve
         options,
         context.max_threads,
     );
-
     filename_matches.par_sort_by_key(|m| m.index_in_haystack);
+
     let mut next_filename_match_index = 0;
     let mut results: Vec<_> = path_matches
         .into_iter()
         .enumerate()
-        .map(|(index, neo_frizbee_match)| {
-            let file_idx = neo_frizbee_match.index_in_haystack as usize;
+        .map(|(index, path_match)| {
+            let file_idx = path_match.index_in_haystack as usize;
             let file = &files[file_idx];
 
-            let base_score = neo_frizbee_match.score as i32;
+            let mut base_score = path_match.score as i32;
             let frecency_boost = base_score.saturating_mul(file.total_frecency_score as i32) / 100;
             let distance_penalty = calculate_distance_penalty(
                 context.current_file.map(|s| s.as_str()),
@@ -80,21 +80,26 @@ pub fn match_and_score_files(files: &[FileItem], context: &ScoringContext) -> Ve
                     }
                 });
 
-            tracing::debug!(filename_match = ?filename_match, "Filename match for file {}", index);
-
             let mut has_special_filename_bonus = false;
             let filename_bonus = match filename_match {
                 Some(filename_match) if filename_match.exact => {
-                    base_score / 5 * 2 // 40% bonus for exact filename match
+                    filename_match.score as i32 / 5 * 2 // 40% bonus for exact filename match
                 }
-                Some(_) => base_score / 5, // 20% bonus for fuzzy filename match
+                // 20% bonus for fuzzy filename match but only if the score of matched path is
+                // equal or greater than the score of matched filename, thus we are not allowing
+                // typoed filename to score higher than the path match
+                Some(filename_match) if filename_match.score >= path_match.score => {
+                    base_score = filename_match.score as i32;
+
+                    base_score / 5
+                }
+                // 5% bonus for special file but not as much as file name to avoid sitatuions
+                // when you have /user_service/server.rs and /user_service/server/mod.rs
                 None if is_special_entry_point_file(&file.file_name) => {
-                    // 18% bonus special filename just as much as exact path
-                    // but a little bit less to give preference to the actual file if present
                     has_special_filename_bonus = true;
-                    base_score * 18 / 100
+                    base_score * 5 / 100
                 }
-                None => 0,
+                _ => 0,
             };
 
             let total = base_score
