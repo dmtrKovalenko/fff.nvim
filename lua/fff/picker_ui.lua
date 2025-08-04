@@ -943,6 +943,7 @@ function M.select(action)
 
   local relative_path = vim.fn.fnamemodify(item.path, ':.')
   file_picker.access_file(relative_path)
+  file_picker.refresh_git_status()
 
   vim.cmd('stopinsert')
   M.close()

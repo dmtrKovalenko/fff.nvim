@@ -141,6 +141,7 @@ function M.setup_global_autocmds()
             if stat and stat.type == 'file' then
               local relative_path = vim.fn.fnamemodify(file_path, ':.')
               pcall(fuzzy.access_file, relative_path)
+              pcall(fuzzy.refresh_git_status)
             end
           end)
         end

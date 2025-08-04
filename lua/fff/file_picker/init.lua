@@ -154,7 +154,11 @@ function M.access_file(file_path)
   if not M.state.initialized then return end
 
   local ok, result = pcall(fuzzy.access_file, file_path)
-  if not ok then vim.notify('Failed to record file access: ' .. result, vim.log.levels.WARN) end
+  if not ok then
+    vim.notify('Failed to record file access: ' .. result, vim.log.levels.WARN)
+  else
+    pcall(fuzzy.refresh_git_status)
+  end
 end
 
 --- Get file content for preview
