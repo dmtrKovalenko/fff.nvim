@@ -41,7 +41,11 @@
           src = craneLib.cleanCargoSource ./.;
           strictDeps = true;
 
-          nativeBuildInputs = [ pkgs.pkg-config ];
+          nativeBuildInputs = [
+            pkgs.pkg-config
+            pkgs.perl
+          ];
+
           buildInputs = with pkgs; [
             # Add additional build inputs here
             openssl
@@ -52,9 +56,9 @@
           commonArgs
           // {
             cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
           }
         );
+
         # Create a script that copies the build result
         release-script = pkgs.writeShellScriptBin "release" ''
           set -euo pipefail
