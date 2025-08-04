@@ -384,7 +384,10 @@ impl FilePicker {
             sleep_duration = std::cmp::min(sleep_duration * 2, Duration::from_millis(50));
         }
 
-        debug!("wait_for_complete_scan completed in {:?}", start_time.elapsed());
+        debug!(
+            "wait_for_complete_scan completed in {:?}",
+            start_time.elapsed()
+        );
         true
     }
 }
