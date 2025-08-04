@@ -18,8 +18,19 @@ function M.setup(config)
     preview = {
       enabled = true,
       width = 0.5,
-      max_lines = 100,
-      max_size = 1024 * 1024, -- 1MB
+      max_lines = 5000,
+      max_size = 10 * 1024 * 1024, -- 10MB
+      imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
+      line_numbers = false,
+      wrap_lines = false,
+      show_file_info = true,
+      binary_file_threshold = 1024,
+      filetypes = {
+        svg = { wrap_lines = true },
+        markdown = { wrap_lines = true },
+        text = { wrap_lines = true },
+        log = { tail_lines = 100 },
+      },
     },
     keymaps = {
       close = '<Esc>',

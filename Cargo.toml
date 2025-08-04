@@ -22,6 +22,7 @@ mlua = { version = "0.11.1", features = ["module", "luajit"] }
 neo_frizbee = { version = "0.6.0" }
 notify = "8.1.0"
 notify-debouncer-full = "0.5"
+openssl = { version = "0.10", features = ["vendored"] }
 pathdiff = "0.2.1"
 rayon = "1.8.0"
 thiserror = "2.0.10"
