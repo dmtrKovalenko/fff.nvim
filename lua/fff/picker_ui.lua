@@ -49,7 +49,10 @@ function M.create_ui()
 
   if not M.state.ns_id then M.state.ns_id = vim.api.nvim_create_namespace('fff_picker_status') end
 
-  local debug_enabled = main.config and main.config.debug and main.config.debug.show_scores
+  local debug_enabled_in_preview = M.enabled_preview()
+    and main.config
+    and main.config.debug
+    and main.config.debug.show_scores
 
   local width = math.floor(vim.o.columns * config.width)
   local height = math.floor(vim.o.lines * config.height)
@@ -62,7 +65,7 @@ function M.create_ui()
 
   local file_info_height = 0
   local preview_height = list_height
-  if debug_enabled then
+  if debug_enabled_in_preview then
     file_info_height = 10 -- Fixed height of 10 lines for file info
     preview_height = list_height - file_info_height -- No subtraction needed - borders are handled by window positioning
   end
@@ -72,7 +75,7 @@ function M.create_ui()
   M.state.list_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2])
   if M.enabled_preview() then M.state.preview_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2]) end
 
-  if debug_enabled then
+  if debug_enabled_in_preview then
     M.state.file_info_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2])
   else
     M.state.file_info_buf = nil
@@ -90,7 +93,7 @@ function M.create_ui()
     title_pos = 'left',
   })
 
-  if debug_enabled then
+  if debug_enabled_in_preview then
     M.state.file_info_win = vim.api.nvim_open_win(M.state.file_info_buf, false, {
       relative = 'editor',
       width = preview_width,
@@ -106,8 +109,8 @@ function M.create_ui()
     M.state.file_info_win = nil
   end
 
-  local preview_row = debug_enabled and (row + file_info_height + 3) or (row + 1)
-  local preview_height_adj = debug_enabled and preview_height or (list_height + 2)
+  local preview_row = debug_enabled_in_preview and (row + file_info_height + 3) or (row + 1)
+  local preview_height_adj = debug_enabled_in_preview and preview_height or (list_height + 2)
 
   if M.enabled_preview() then
     M.state.preview_win = vim.api.nvim_open_win(M.state.preview_buf, false, {
