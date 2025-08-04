@@ -449,4 +449,8 @@ function M.change_indexing_directory(new_path)
   return true
 end
 
+function M.stop_background_monitor()
+  pcall(fuzzy.stop_background_monitor)
+end
+
 return M

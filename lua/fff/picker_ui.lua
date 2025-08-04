@@ -989,6 +989,8 @@ function M.close()
     if buf and vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_delete(buf, { force = true }) end
   end
 
+  main.stop_background_monitor()
+
   M.state.input_win = nil
   M.state.list_win = nil
   M.state.file_info_win = nil
