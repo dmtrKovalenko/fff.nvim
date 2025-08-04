@@ -18,4 +18,3 @@ function M.format_file_size(size)
 end
 
 return M
-

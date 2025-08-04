@@ -9,24 +9,64 @@ local function get_image()
   return image
 end
 
--- Helper function to safely set buffer lines
-local function safe_set_buffer_lines(bufnr, start, end_line, strict_indexing, lines)
-  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return false end
+-- Set lines in preview buffer (simpler approach)
+local function set_buffer_lines(bufnr, lines)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
-  -- Make buffer modifiable temporarily
-  local was_modifiable = vim.api.nvim_buf_get_option(bufnr, 'modifiable')
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+end
 
-  -- Set lines
-  local ok, err = pcall(vim.api.nvim_buf_set_lines, bufnr, start, end_line, strict_indexing, lines)
+-- Check if file is already loaded in a buffer
+local function find_existing_buffer(file_path)
+  local abs_path = vim.fn.resolve(vim.fn.fnamemodify(file_path, ':p'))
 
-  -- Restore modifiable state
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', was_modifiable)
-
-  if not ok then
-    vim.notify('Error setting buffer lines: ' .. err, vim.log.levels.WARN)
-    return false
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(bufnr) then
+      local buf_name = vim.api.nvim_buf_get_name(bufnr)
+      if buf_name ~= '' then
+        local buf_path = vim.fn.resolve(vim.fn.fnamemodify(buf_name, ':p'))
+        if buf_path == abs_path then return bufnr end
+      end
+    end
   end
+  return nil
+end
+
+local function read_file_fast(file_path, max_lines)
+  local fd = vim.uv.fs_open(file_path, 'r', 0x666)
+  if not fd then return nil end
+
+  local stat = vim.uv.fs_fstat(fd)
+  if not stat then
+    vim.uv.fs_close(fd)
+    return nil
+  end
+
+  local data = vim.uv.fs_read(fd, stat.size, 0)
+  vim.uv.fs_close(fd)
+
+  if not data then return nil end
+
+  local lines = vim.split(data, '\n', { plain = true })
+  if max_lines and #lines > max_lines then
+    local limited_lines = {}
+    for i = 1, max_lines do
+      table.insert(limited_lines, lines[i])
+    end
+    lines = limited_lines
+  end
+
+  return lines
+end
+
+local function copy_buffer_content(source_bufnr, target_bufnr)
+  local lines = vim.api.nvim_buf_get_lines(source_bufnr, 0, -1, false)
+  set_buffer_lines(target_bufnr, lines)
+
+  local source_ft = vim.api.nvim_buf_get_option(source_bufnr, 'filetype')
+  if source_ft ~= '' then vim.api.nvim_buf_set_option(target_bufnr, 'filetype', source_ft) end
 
   return true
 end
@@ -289,33 +329,55 @@ function M.preview_file(file_path, bufnr)
       '',
       'Use a text editor to view this file.',
     }
-    safe_set_buffer_lines(bufnr, 0, -1, false, lines)
+    set_buffer_lines(bufnr, lines)
     return true
   end
 
+  -- if the buffer is already opened for this file we reuse the buffer directly
+  local existing_bufnr = find_existing_buffer(file_path)
+
+  if existing_bufnr then
+    local success = copy_buffer_content(existing_bufnr, bufnr)
+    if success then
+      local file_config = M.get_file_config(file_path)
+
+      vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+      vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
+      vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
+      vim.api.nvim_buf_set_option(bufnr, 'wrap', file_config.wrap_lines or M.config.wrap_lines)
+      vim.api.nvim_buf_set_option(bufnr, 'number', M.config.line_numbers)
+
+      local content = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+      M.state.content_height = #content
+      M.state.scroll_offset = 0
+
+      return true
+    end
+  end
+
+  -- Fallback: Manual file reading with fast UV operations
   local file_config = M.get_file_config(file_path)
 
   local content
   if file_config.tail_lines then
     content = M.read_file_tail(file_path, file_config.tail_lines)
-    if content then
-      -- Add virtual text showing tail lines are showed
-    end
   else
-    content = M.read_file_content(file_path, M.config.max_lines)
+    content = read_file_fast(file_path, M.config.max_lines)
+    if not content then content = M.read_file_content(file_path, M.config.max_lines) end
   end
 
   if not content then return false end
 
-  safe_set_buffer_lines(bufnr, 0, -1, false, content)
+  set_buffer_lines(bufnr, content)
 
   vim.api.nvim_buf_set_option(bufnr, 'filetype', info.filetype)
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
   vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
   vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
   vim.api.nvim_buf_set_option(bufnr, 'wrap', file_config.wrap_lines or M.config.wrap_lines)
+  vim.api.nvim_buf_set_option(bufnr, 'number', M.config.line_numbers)
 
-  M.state.content_height = content
+  M.state.content_height = #content
   M.state.scroll_offset = 0
 
   return true
@@ -324,12 +386,10 @@ end
 --- Preview a binary file
 --- @param file_path string Path to the file
 --- @param bufnr number Buffer number for preview
---- @param info table File information
---- @param file table | nil Optional file information from search results for debug info
 --- @return boolean Success status
-function M.preview_binary_file(file_path, bufnr, info, file)
+function M.preview_binary_file(file_path, bufnr)
   local lines = {}
-
+  local info = M.get_file_info(file_path)
   table.insert(lines, '⚠ Binary File Detected')
   table.insert(lines, '')
   table.insert(lines, 'This file contains binary data and cannot be displayed as text.')
@@ -363,7 +423,7 @@ function M.preview_binary_file(file_path, bufnr, info, file)
     table.insert(lines, 'Use a hex editor or appropriate application to view this file.')
   end
 
-  safe_set_buffer_lines(bufnr, 0, -1, false, lines)
+  set_buffer_lines(bufnr, lines)
   vim.api.nvim_buf_set_option(bufnr, 'filetype', 'text')
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
   vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
@@ -377,95 +437,67 @@ end
 function M.get_file_config(file_path)
   if not M.config or not M.config.filetypes then return {} end
 
-  -- Get filetype using Neovim's built-in filetype detection
   local filetype = vim.filetype.match({ filename = file_path }) or 'text'
-
-  -- Return filetype-specific configuration
   return M.config.filetypes[filetype] or {}
 end
 
---- Main preview function
 --- @param file_path string Path to the file or directory
 --- @param bufnr number Buffer number for preview
---- @param file table Optional file information from search results for debug info
---- @return boolean Success status
-function M.preview(file_path, bufnr, file)
+--- @return boolean if the preview was successful
+function M.preview(file_path, bufnr)
   if not file_path or file_path == '' then
-    M.clear_buffer_completely(bufnr)
-    safe_set_buffer_lines(bufnr, 0, -1, false, { 'No file selected' })
+    M.clear_buffer(bufnr)
+    set_buffer_lines(bufnr, { 'No file selected' })
     return false
   end
 
   M.state.current_file = file_path
   M.state.bufnr = bufnr
 
-  local stat = vim.uv.fs_stat(file_path)
-  if not stat then
-    M.clear_buffer_completely(bufnr)
-    safe_set_buffer_lines(bufnr, 0, -1, false, {
-      'File not found or inaccessible:',
-      file_path,
-    })
-    return false
-  end
+  M.clear_buffer(bufnr)
 
-  -- Clear buffer completely before switching content types
-  M.clear_buffer_completely(bufnr)
-
-  -- Handle different file types
-  if stat.type == 'directory' then
-    -- This is a file search tool, directories shouldn't be previewed
-    safe_set_buffer_lines(bufnr, 0, -1, false, {
-      'Directory Preview Not Available',
-      '',
-      'This is a file search tool.',
-      'Directories are not meant to be previewed.',
-      '',
-      'Path: ' .. file_path,
-    })
-    return false
-  elseif get_image().is_image(file_path) then
-    -- Delegate to image preview
+  if get_image().is_image(file_path) then
     local win_width = 80
     local win_height = 24
 
-    -- Try to get actual window dimensions if available
     if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
       win_width = vim.api.nvim_win_get_width(M.state.winid) - 2
       win_height = vim.api.nvim_win_get_height(M.state.winid) - 2
     end
 
-    get_image().display_image(file_path, bufnr, win_width, win_height)
-    return true
+    return get_image().display_image(file_path, bufnr, win_width, win_height)
   elseif M.is_binary_file(file_path) then
-    -- Handle binary files before attempting to read as text
-    local info = M.get_file_info(file_path)
-    return M.preview_binary_file(file_path, bufnr, info, file)
+    return M.preview_binary_file(file_path, bufnr)
   else
     return M.preview_file(file_path, bufnr)
   end
 end
 
---- Scroll preview content
---- @param lines number Number of lines to scroll (positive = down, negative = up)
 function M.scroll(lines)
   if not M.state.bufnr or not vim.api.nvim_buf_is_valid(M.state.bufnr) then return end
-
   if not M.state.winid or not vim.api.nvim_win_is_valid(M.state.winid) then return end
 
-  -- Get current cursor position
-  local cursor = vim.api.nvim_win_get_cursor(M.state.winid)
-  local current_line = cursor[1]
   local win_height = vim.api.nvim_win_get_height(M.state.winid)
+  vim.notify(win_height)
+  local content_height = M.state.content_height or 0
 
-  -- Calculate new position
-  local new_line = math.max(1, math.min(M.state.content_height, current_line + lines))
+  -- allows scrolling for a full content + half window
+  local half_screen = math.floor(win_height / 2)
+  local max_scroll = math.max(0, content_height + half_screen - win_height)
 
-  -- Set new cursor position
-  vim.api.nvim_win_set_cursor(M.state.winid, { new_line, 0 })
+  local current_offset = M.state.scroll_offset or 0
+  local new_offset = math.max(0, math.min(max_scroll, current_offset + lines))
 
-  -- Update scroll offset
-  M.state.scroll_offset = new_line
+  if new_offset ~= current_offset then
+    M.state.scroll_offset = new_offset
+
+    local target_line = math.min(content_height, math.max(1, new_offset + 1))
+
+    vim.api.nvim_win_call(M.state.winid, function()
+      vim.api.nvim_win_set_cursor(M.state.winid, { target_line, 0 })
+      vim.cmd('normal! zt')
+    end)
+  end
 end
 
 --- Set preview window
@@ -498,18 +530,18 @@ end
 --- @return boolean Success status
 function M.update_file_info_buffer(file, bufnr, file_index)
   if not file then
-    safe_set_buffer_lines(bufnr, 0, -1, false, { 'No file selected' })
+    set_buffer_lines(bufnr, { 'No file selected' })
     return false
   end
 
   local info = M.get_file_info(file.path)
   if not info then
-    safe_set_buffer_lines(bufnr, 0, -1, false, { 'File info unavailable' })
+    set_buffer_lines(bufnr, { 'File info unavailable' })
     return false
   end
 
   local file_info_lines = M.create_file_info_content(file, info, file_index)
-  safe_set_buffer_lines(bufnr, 0, -1, false, file_info_lines)
+  set_buffer_lines(bufnr, file_info_lines)
 
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
   vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
@@ -521,24 +553,19 @@ end
 
 --- Clear buffer completely including any image attachments
 --- @param bufnr number Buffer number to clear
-function M.clear_buffer_completely(bufnr)
+function M.clear_buffer(bufnr)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
-  -- Clear any image attachments first
   get_image().clear_buffer_images(bufnr)
-
-  -- Clear text content
-  safe_set_buffer_lines(bufnr, 0, -1, false, {})
-
-  -- Reset filetype to prevent syntax highlighting issues
+  set_buffer_lines(bufnr, {})
   vim.api.nvim_buf_set_option(bufnr, 'filetype', '')
 end
 
 --- Clear preview
 function M.clear()
   if M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) then
-    M.clear_buffer_completely(M.state.bufnr)
-    safe_set_buffer_lines(M.state.bufnr, 0, -1, false, { 'No preview available' })
+    M.clear_buffer(M.state.bufnr)
+    set_buffer_lines(M.state.bufnr, { 'No preview available' })
   end
 
   M.state.current_file = nil

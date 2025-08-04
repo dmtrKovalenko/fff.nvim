@@ -18,7 +18,7 @@ function M.setup(config)
     preview = {
       enabled = true,
       width = 0.5,
-      max_lines = 1000,
+      max_lines = 5000,
       max_size = 10 * 1024 * 1024, -- 10MB
       imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
       line_numbers = false,

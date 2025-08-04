@@ -100,9 +100,11 @@ end
 --- @param bufnr number Buffer number to display in
 --- @param max_width number Maximum width in characters
 --- @param max_height number Maximum height in characters
+--- @return boolean
 function M.display_image(file_path, bufnr, max_width, max_height)
   max_width = max_width or 80
   max_height = max_height or 24
+  vim.api.nvim_buf_set_option(bufnr, 'number', false)
 
   local ok, snacks = pcall(require, 'snacks')
   if ok and snacks.image and snacks.image.buf then
@@ -125,10 +127,11 @@ function M.display_image(file_path, bufnr, max_width, max_height)
         M.display_image_info(file_path, bufnr, 'Snacks.nvim failed: ' .. tostring(placement or 'unknown error'))
       end
     end)
-    return
+    return true
   end
 
   M.display_image_info(file_path, bufnr, 'Snacks.nvim not available')
+  return false
 end
 
 --- Display image information when image display fails

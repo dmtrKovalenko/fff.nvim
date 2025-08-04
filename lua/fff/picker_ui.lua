@@ -7,9 +7,7 @@ local git_utils = require('fff.git_utils')
 local main = require('fff.main')
 
 -- Initialize preview with main config
-if main.config and main.config.preview then
-  preview.setup(main.config.preview)
-end
+if main.config and main.config.preview then preview.setup(main.config.preview) end
 
 M.state = {
   active = false,
@@ -823,8 +821,7 @@ function M.update_preview()
   if M.state.file_info_buf then preview.update_file_info_buffer(item, M.state.file_info_buf, M.state.cursor) end
 
   preview.set_preview_window(M.state.preview_win)
-
-  preview.preview(item.path, M.state.preview_buf, item)
+  preview.preview(item.path, M.state.preview_buf)
 end
 
 --- Clear preview
