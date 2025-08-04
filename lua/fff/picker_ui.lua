@@ -1040,6 +1040,10 @@ function M.open(opts)
 
   M.state.config = vim.tbl_deep_extend('force', main.config or {}, opts or {})
 
+  -- Wait for complete scan before showing UI.
+  local scan_completed = file_picker.wait_for_initial_scan(500)
+  if not scan_completed then vim.notify('File scan timeout - showing partial results', vim.log.levels.WARN) end
+
   if not M.create_ui() then
     vim.notify('Failed to create picker UI', vim.log.levels.ERROR)
     return
@@ -1048,31 +1052,6 @@ function M.open(opts)
   M.state.active = true
 
   vim.cmd('startinsert!')
-
-  local progress = file_picker.get_scan_progress()
-  if not progress.is_scanning then file_picker.scan_files() end
-
-  vim.defer_fn(function() M.monitor_scan_progress() end, 0)
-end
-
---- Monitor scan progress and auto-refresh when complete
-function M.monitor_scan_progress()
-  if not M.state.active then return end
-
-  local progress = file_picker.get_scan_progress()
-
-  if progress.is_scanning then
-    M.update_status()
-
-    vim.defer_fn(function() M.monitor_scan_progress() end, 500)
-  else
-    M.update_results()
-
-    vim.defer_fn(function()
-      local refreshed = file_picker.refresh_git_status()
-      if refreshed and #refreshed > 0 then M.update_results() end
-    end, 500) -- Wait 500ms for git status to complete
-  end
 end
 
 M.enabled_preview = function()

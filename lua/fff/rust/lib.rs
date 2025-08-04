@@ -5,7 +5,6 @@ use crate::frecency::FrecencyTracker;
 use crate::types::{FileItem, SearchResult};
 use mlua::prelude::*;
 use std::sync::{LazyLock, RwLock};
-use std::time::Duration;
 
 mod error;
 mod file_key;
@@ -183,14 +182,7 @@ pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool
         .as_ref()
         .ok_or_else(|| Error::FilePickerMissing)?;
 
-    let timeout = Duration::from_millis(timeout_ms.unwrap_or(5000)); // Default 5s timeout
-    let start_time = std::time::Instant::now();
-
-    while picker.is_scan_active() && start_time.elapsed() < timeout {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    Ok(!picker.is_scan_active())
+    Ok(picker.wait_for_complete_scan(timeout_ms))
 }
 
 pub fn init_tracing(

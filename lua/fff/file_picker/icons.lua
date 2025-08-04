@@ -7,6 +7,8 @@ local icon_providers = {
 
 M.provider = nil
 M.provider_name = nil
+M.setup_attempted = false
+M.setup_failed = false
 
 local directory_configs = {
   ['nvim-web-devicons'] = {
@@ -50,6 +52,9 @@ M.highlight_cache = {}
 
 function M.setup()
   if M.provider_name then return true end
+  if M.setup_failed then return false end
+
+  M.setup_attempted = true
 
   for _, provider_name in ipairs(icon_providers) do
     local ok, provider = pcall(require, provider_name)
@@ -60,6 +65,7 @@ function M.setup()
     end
   end
 
+  M.setup_failed = true
   vim.notify('FFF Icons: No icon provider found. Please install nvim-web-devicons or mini.icons', vim.log.levels.WARN)
   return false
 end

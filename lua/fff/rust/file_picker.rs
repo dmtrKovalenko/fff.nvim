@@ -367,6 +367,26 @@ impl FilePicker {
     pub fn is_scan_active(&self) -> bool {
         self.is_scanning.load(Ordering::Relaxed)
     }
+
+    pub fn wait_for_complete_scan(&self, timeout_ms: Option<u64>) -> bool {
+        let timeout_ms = timeout_ms.unwrap_or(500);
+        let timeout_duration = Duration::from_millis(timeout_ms);
+        let start_time = std::time::Instant::now();
+        let mut sleep_duration = Duration::from_millis(1);
+
+        while self.is_scanning.load(Ordering::Relaxed) {
+            if start_time.elapsed() >= timeout_duration {
+                warn!("wait_for_complete_scan timed out after {}ms", timeout_ms);
+                return false;
+            }
+
+            thread::sleep(sleep_duration);
+            sleep_duration = std::cmp::min(sleep_duration * 2, Duration::from_millis(50));
+        }
+
+        debug!("wait_for_complete_scan completed in {:?}", start_time.elapsed());
+        true
+    }
 }
 
 #[allow(unused)]
