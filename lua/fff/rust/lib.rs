@@ -113,9 +113,15 @@ pub fn fuzzy_search_files(
 pub fn access_file(_: &Lua, file_path: String) -> LuaResult<bool> {
     let frecency = FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)?;
     if let Some(ref tracker) = *frecency {
-        let file_key = FileKey { path: file_path };
+        let file_key = FileKey { path: file_path.clone() };
         tracker.track_access(&file_key)?;
     }
+
+    let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
+    if let Some(ref picker) = *file_picker {
+        picker.update_single_file_frecency(&file_path)?;
+    }
+
     Ok(true)
 }
 
@@ -187,12 +193,35 @@ pub fn cancel_scan(_: &Lua, _: ()) -> LuaResult<bool> {
 }
 
 pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool> {
+    use std::time::Duration;
+    use std::sync::atomic::Ordering;
+    use std::thread;
+
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
         .as_ref()
         .ok_or_else(|| Error::FilePickerMissing)?;
 
-    Ok(picker.wait_for_complete_scan(timeout_ms))
+    let timeout_ms = timeout_ms.unwrap_or(500);
+    let timeout_duration = Duration::from_millis(timeout_ms);
+    let start_time = std::time::Instant::now();
+    let mut sleep_duration = Duration::from_millis(1);
+
+    while picker.is_scanning.load(Ordering::Relaxed) {
+        if start_time.elapsed() >= timeout_duration {
+            ::tracing::warn!("wait_for_initial_scan timed out after {}ms", timeout_ms);
+            return Ok(false);
+        }
+
+        thread::sleep(sleep_duration);
+        sleep_duration = std::cmp::min(sleep_duration * 2, Duration::from_millis(50));
+    }
+
+    ::tracing::debug!(
+        "wait_for_initial_scan completed in {:?}",
+        start_time.elapsed()
+    );
+    Ok(true)
 }
 
 pub fn init_tracing(
