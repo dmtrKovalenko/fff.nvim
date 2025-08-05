@@ -321,6 +321,17 @@ impl FilePicker {
         self.get_cached_files()
     }
 
+    pub fn update_single_file_frecency(&self, file_path: &str) -> Result<(), Error> {
+        if let Ok(mut sync_data) = self.sync_data.write() {
+            if let Ok(index) = sync_data.find_file_index(file_path) {
+                if let Some(file) = sync_data.files.get_mut(index) {
+                    file.update_frecency_scores();
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn stop_background_monitor(&self) -> Result<(), Error> {
         if let Ok(mut debouncer_guard) = self._debouncer.lock() {
             if let Some(debouncer) = debouncer_guard.take() {

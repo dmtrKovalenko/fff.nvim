@@ -26,6 +26,7 @@ M.cancel_scan = rust_module.cancel_scan
 M.get_scan_progress = rust_module.get_scan_progress
 M.is_scanning = rust_module.is_scanning
 M.refresh_git_status = rust_module.refresh_git_status
+M.update_single_file_frecency = rust_module.update_single_file_frecency
 M.stop_background_monitor = rust_module.stop_background_monitor
 M.cleanup_file_picker = rust_module.cleanup_file_picker
 M.init_tracing = rust_module.init_tracing

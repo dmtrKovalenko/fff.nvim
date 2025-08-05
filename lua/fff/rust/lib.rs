@@ -150,6 +150,16 @@ pub fn refresh_git_status(_: &Lua, _: ()) -> LuaResult<Vec<FileItem>> {
     Ok(picker.refresh_git_status())
 }
 
+pub fn update_single_file_frecency(_: &Lua, file_path: String) -> LuaResult<bool> {
+    let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
+    let picker = file_picker
+        .as_ref()
+        .ok_or_else(|| Error::FilePickerMissing)?;
+
+    picker.update_single_file_frecency(&file_path)?;
+    Ok(true)
+}
+
 pub fn stop_background_monitor(_: &Lua, _: ()) -> LuaResult<bool> {
     let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
@@ -215,6 +225,10 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "refresh_git_status",
         lua.create_function(refresh_git_status)?,
+    )?;
+    exports.set(
+        "update_single_file_frecency",
+        lua.create_function(update_single_file_frecency)?,
     )?;
     exports.set(
         "stop_background_monitor",
