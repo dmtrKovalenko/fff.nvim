@@ -591,7 +591,7 @@ function M.render_list()
     table.insert(reversed_items, items_to_show[i])
   end
 
-  local icon_highlights = {}
+  local line_data = {}
 
   for i, item in ipairs(reversed_items) do
     local icon, icon_hl_group = icons.get_icon_display(item.name, item.extension, false)
@@ -631,10 +631,14 @@ function M.render_list()
     if item.is_current_file then line = string.format('\027[90m%s\027[0m', line) end
 
     table.insert(lines, line)
-    icon_highlights[i] = {
-      hl_group = icon_hl_group,
-      icon_length = vim.fn.strdisplaywidth(icon),
-      git_status = item.git_status,
+    line_data[i] = {
+      filename_len = #filename,
+      dir_path_len = #dir_path,
+      icon_highlight = {
+        hl_group = icon_hl_group,
+        icon_length = vim.fn.strdisplaywidth(icon),
+        git_status = item.git_status,
+      },
     }
   end
 
@@ -685,7 +689,7 @@ function M.render_list()
       if line_content ~= '' then -- Skip empty lines
         local content_line_idx = line_idx - empty_lines_needed
 
-        local icon_info = icon_highlights[content_line_idx]
+        local icon_info = line_data[content_line_idx].icon_highlight
         if icon_info and icon_info.hl_group and icon_info.icon_length > 0 then
           vim.api.nvim_buf_add_highlight(
             M.state.list_buf,
@@ -725,29 +729,20 @@ function M.render_list()
 
         local icon_match = line_content:match('^%S+') -- First non-space sequence (icon)
         if icon_match then
-          local after_icon = line_content:sub(#icon_match + 1)
-          local filename_match = after_icon:match('^%s+(%S+)') -- First word after icon
-          if filename_match then
-            local prefix_len = #icon_match + 1 + #filename_match + 1 -- icon + space + filename + space
-            local remaining = line_content:sub(prefix_len + 1)
+          local filename_len = line_data[content_line_idx].filename_len
+          local dir_path_len = line_data[content_line_idx].dir_path_len
 
-            local dir_end = remaining:find('⭐')
-              or remaining:find('🔥')
-              or remaining:find('✨')
-              or remaining:find('•')
-              or #remaining
-            if remaining:find('%s') then dir_end = math.min(dir_end, remaining:find('%s')) end
+          if filename_len > 0 and dir_path_len > 0 then
+            local prefix_len = #icon_match + 1 + filename_len + 1 -- icon + space + filename + space
 
-            if dir_end > 1 then
-              vim.api.nvim_buf_add_highlight(
-                M.state.list_buf,
-                M.state.ns_id,
-                'Comment',
-                line_idx - 1,
-                prefix_len,
-                prefix_len + dir_end
-              )
-            end
+            vim.api.nvim_buf_add_highlight(
+              M.state.list_buf,
+              M.state.ns_id,
+              'Comment',
+              line_idx - 1,
+              prefix_len,
+              prefix_len + dir_path_len
+            )
           end
         end
 
