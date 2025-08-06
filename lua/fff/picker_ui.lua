@@ -935,15 +935,14 @@ function M.select(action)
   vim.cmd('stopinsert')
   M.close()
 
-  local file_path = item.path
   if action == 'edit' then
-    vim.cmd('edit ' .. vim.fn.fnameescape(file_path))
+    vim.cmd('edit ' .. vim.fn.fnameescape(relative_path))
   elseif action == 'split' then
-    vim.cmd('split ' .. vim.fn.fnameescape(file_path))
+    vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
   elseif action == 'vsplit' then
-    vim.cmd('vsplit ' .. vim.fn.fnameescape(file_path))
+    vim.cmd('vsplit ' .. vim.fn.fnameescape(relative_path))
   elseif action == 'tab' then
-    vim.cmd('tabedit ' .. vim.fn.fnameescape(file_path))
+    vim.cmd('tabedit ' .. vim.fn.fnameescape(relative_path))
   end
 end
 
