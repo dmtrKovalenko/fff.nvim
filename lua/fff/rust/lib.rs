@@ -113,7 +113,9 @@ pub fn fuzzy_search_files(
 pub fn access_file(_: &Lua, file_path: String) -> LuaResult<bool> {
     let frecency = FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)?;
     if let Some(ref tracker) = *frecency {
-        let file_key = FileKey { path: file_path.clone() };
+        let file_key = FileKey {
+            path: file_path.clone(),
+        };
         tracker.track_access(&file_key)?;
     }
 
@@ -193,9 +195,9 @@ pub fn cancel_scan(_: &Lua, _: ()) -> LuaResult<bool> {
 }
 
 pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool> {
-    use std::time::Duration;
     use std::sync::atomic::Ordering;
     use std::thread;
+    use std::time::Duration;
 
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
@@ -254,10 +256,6 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "refresh_git_status",
         lua.create_function(refresh_git_status)?,
-    )?;
-    exports.set(
-        "update_single_file_frecency",
-        lua.create_function(update_single_file_frecency)?,
     )?;
     exports.set(
         "stop_background_monitor",
