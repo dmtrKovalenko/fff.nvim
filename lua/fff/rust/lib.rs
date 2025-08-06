@@ -209,7 +209,7 @@ pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool
     let start_time = std::time::Instant::now();
     let mut sleep_duration = Duration::from_millis(1);
 
-    while picker.is_scanning.load(Ordering::Relaxed) {
+    while picker.is_scan_active() {
         if start_time.elapsed() >= timeout_duration {
             ::tracing::warn!("wait_for_initial_scan timed out after {}ms", timeout_ms);
             return Ok(false);
