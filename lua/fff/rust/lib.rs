@@ -5,6 +5,7 @@ use crate::frecency::FrecencyTracker;
 use crate::types::{FileItem, SearchResult};
 use mlua::prelude::*;
 use std::sync::{LazyLock, RwLock};
+use std::time::Duration;
 
 mod error;
 mod file_key;
@@ -135,8 +136,7 @@ pub fn get_scan_progress(lua: &Lua, _: ()) -> LuaResult<LuaValue> {
     let progress = picker.get_scan_progress();
 
     let table = lua.create_table()?;
-    table.set("total_files", progress.total_files)?;
-    table.set("scanned_files", progress.scanned_files)?;
+    table.set("scanned_files_count", progress.scanned_files_count)?;
     table.set("is_scanning", progress.is_scanning)?;
     Ok(LuaValue::Table(table))
 }
@@ -195,9 +195,6 @@ pub fn cancel_scan(_: &Lua, _: ()) -> LuaResult<bool> {
 }
 
 pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool> {
-    use std::thread;
-    use std::time::Duration;
-
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
         .as_ref()
@@ -214,7 +211,7 @@ pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool
             return Ok(false);
         }
 
-        thread::sleep(sleep_duration);
+        std::thread::sleep(sleep_duration);
         sleep_duration = std::cmp::min(sleep_duration * 2, Duration::from_millis(50));
     }
 

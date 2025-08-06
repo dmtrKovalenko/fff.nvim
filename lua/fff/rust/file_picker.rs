@@ -10,7 +10,7 @@ use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex, RwLock,
 };
 use std::thread;
@@ -176,6 +176,7 @@ pub struct FilePicker {
     git_workdir: Option<PathBuf>,
     sync_data: Arc<RwLock<FileSync>>,
     is_scanning: Arc<AtomicBool>,
+    scanned_files_count: Arc<AtomicUsize>,
     _debouncer: Arc<Mutex<Option<Debouncer>>>,
 }
 
@@ -209,6 +210,7 @@ impl FilePicker {
 
         let sync_data = Arc::new(RwLock::new(FileSync::new()));
         let scan_signal = Arc::new(AtomicBool::new(false));
+        let synced_files_count = Arc::new(AtomicUsize::new(0));
         let debouncer_holder = Arc::new(Mutex::new(None));
 
         let picker = Self {
@@ -216,10 +218,18 @@ impl FilePicker {
             git_workdir: git_workdir.clone(),
             sync_data: Arc::clone(&sync_data),
             is_scanning: Arc::clone(&scan_signal),
+            scanned_files_count: Arc::clone(&synced_files_count),
             _debouncer: Arc::clone(&debouncer_holder),
         };
 
-        spawn_async_initialization(path, git_workdir, sync_data, scan_signal, debouncer_holder);
+        spawn_async_initialization(
+            path,
+            git_workdir,
+            sync_data,
+            scan_signal,
+            synced_files_count,
+            debouncer_holder,
+        );
 
         Ok(picker)
     }
@@ -292,11 +302,10 @@ impl FilePicker {
     }
 
     pub fn get_scan_progress(&self) -> ScanProgress {
-        let sync_data = self.sync_data.read().unwrap();
+        let scanned_count = self.scanned_files_count.load(Ordering::Relaxed);
         let is_scanning = self.is_scanning.load(Ordering::Relaxed);
         ScanProgress {
-            total_files: sync_data.files.len(),
-            scanned_files: sync_data.files.len(),
+            scanned_files_count: scanned_count,
             is_scanning,
         }
     }
@@ -355,10 +364,15 @@ impl FilePicker {
         let git_workdir = self.git_workdir.clone();
         let sync_data = Arc::clone(&self.sync_data);
         let scan_signal = Arc::clone(&self.is_scanning);
+        let scanned_files_count = Arc::clone(&self.scanned_files_count);
 
         thread::spawn(move || {
             debug!("Background scan thread started");
-            if let Ok((files, git_cache)) = scan_filesystem(&base_path, git_workdir.as_ref()) {
+            scanned_files_count.store(0, Ordering::Relaxed);
+
+            if let Ok((files, git_cache)) =
+                scan_filesystem(&base_path, git_workdir.as_ref(), &scanned_files_count)
+            {
                 info!("Filesystem scan completed: found {} files", files.len());
                 if let Ok(mut data) = sync_data.write() {
                     data.update_files(files, git_cache);
@@ -383,8 +397,7 @@ impl FilePicker {
 #[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct ScanProgress {
-    pub total_files: usize,
-    pub scanned_files: usize,
+    pub scanned_files_count: usize,
     pub is_scanning: bool,
 }
 
@@ -393,13 +406,15 @@ fn spawn_async_initialization(
     git_workdir: Option<PathBuf>,
     sync_data: Arc<RwLock<FileSync>>,
     scan_signal: Arc<AtomicBool>,
+    synced_files_count: Arc<AtomicUsize>,
     debouncer_holder: Arc<Mutex<Option<Debouncer>>>,
 ) {
     thread::spawn(move || {
         scan_signal.store(true, Ordering::Relaxed);
+        synced_files_count.store(0, Ordering::Relaxed);
         info!("Starting async initialization for file picker");
 
-        match scan_filesystem(&base_path, git_workdir.as_ref()) {
+        match scan_filesystem(&base_path, git_workdir.as_ref(), &synced_files_count) {
             Ok((files, git_cache)) => {
                 info!(
                     "Initial filesystem scan completed: found {} files",
@@ -590,6 +605,7 @@ fn remove_paths_from_index(
 fn scan_filesystem(
     base_path: &Path,
     git_workdir: Option<&PathBuf>,
+    synced_files_count: &Arc<AtomicUsize>,
 ) -> Result<(Vec<FileItem>, Option<GitStatusCache>), Error> {
     let scan_start = std::time::Instant::now();
     let git_workdir = git_workdir.map(|p| p.as_path());
@@ -616,6 +632,7 @@ fn scan_filesystem(
         let files = Arc::new(std::sync::Mutex::new(Vec::new()));
         walker.run(|| {
             let files = Arc::clone(&files);
+            let counter = Arc::clone(synced_files_count);
             let base_path = base_path.to_path_buf();
 
             Box::new(move |result| {
@@ -635,6 +652,7 @@ fn scan_filesystem(
 
                         if let Ok(mut files_vec) = files.lock() {
                             files_vec.push(file_item);
+                            counter.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                 }
