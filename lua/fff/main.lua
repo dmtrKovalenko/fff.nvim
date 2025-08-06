@@ -42,6 +42,7 @@ function M.setup(config)
       move_down = { '<Down>', '<C-n>' },
       preview_scroll_up = '<C-u>',
       preview_scroll_down = '<C-d>',
+      toggle_debug = '<F2>',
     },
     hl = {
       border = 'FloatBorder',
