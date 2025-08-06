@@ -19,8 +19,14 @@ pub fn calculate_distance_penalty(current_file: Option<&str>, candidate_path: &s
         return 0; // Same directory, no penalty
     }
 
-    let current_parts: Vec<&str> = current_dir.split('/').filter(|s| !s.is_empty()).collect();
-    let candidate_parts: Vec<&str> = candidate_dir.split('/').filter(|s| !s.is_empty()).collect();
+    let current_parts: Vec<&str> = current_dir
+        .split(std::path::MAIN_SEPARATOR)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let candidate_parts: Vec<&str> = candidate_dir
+        .split(std::path::MAIN_SEPARATOR)
+        .filter(|s| !s.is_empty())
+        .collect();
 
     let common_len = current_parts
         .iter()
@@ -44,47 +50,90 @@ pub fn calculate_distance_penalty(current_file: Option<&str>, candidate_path: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     #[test]
     fn test_calculate_distance_penalty() {
-        assert_eq!(calculate_distance_penalty(None, "/path/to/file.txt"), 0);
-
-        assert_eq!(
-            calculate_distance_penalty(
-                Some("/path/to/current/file.txt"),
-                "/path/to/current/other.txt"
-            ),
-            0
-        );
-
-        assert_eq!(
-            calculate_distance_penalty(Some("/path/to/current/file.txt"), "/path/to/file.txt"),
-            -2
-        );
-
-        assert_eq!(
-            calculate_distance_penalty(
-                Some("/path/to/current/file.txt"),
-                "/path/to/other/file.txt"
-            ),
-            -4
-        );
-
-        assert_eq!(
-            calculate_distance_penalty(
-                Some("/path/to/current/file.txt"),
-                "/path/to/another/dir/file.txt"
-            ),
-            -6
-        );
-
-        assert_eq!(
-            calculate_distance_penalty(Some("/a/b/c/d/file.txt"), "/x/y/z/w/file.txt"),
-            -16
-        );
-
-        assert_eq!(
-            calculate_distance_penalty(Some("/file1.txt"), "/file2.txt"),
-            0
-        );
+        {
+            let other_path = Path::new("path").join("to").join("file.txt");
+            assert_eq!(
+                calculate_distance_penalty(None, other_path.to_str().unwrap()),
+                0
+            );
+        }
+        {
+            let base_path = Path::new("path").join("to").join("current");
+            let current_path = base_path.join("file.txt");
+            let other_path = base_path.join("other.txt");
+            assert_eq!(
+                calculate_distance_penalty(
+                    Some(current_path.to_str().unwrap()),
+                    other_path.to_str().unwrap()
+                ),
+                0
+            );
+        }
+        {
+            let base_path = Path::new("path").join("to");
+            let current_path = base_path.join("current").join("file.txt");
+            let other_path = base_path.join("file.txt");
+            assert_eq!(
+                calculate_distance_penalty(
+                    Some(current_path.to_str().unwrap()),
+                    other_path.to_str().unwrap()
+                ),
+                -2
+            );
+        }
+        {
+            let base_path = Path::new("path").join("to");
+            let current_path = base_path.join("current").join("file.txt");
+            let other_path = base_path.join("other").join("file.txt");
+            assert_eq!(
+                calculate_distance_penalty(
+                    Some(current_path.to_str().unwrap()),
+                    other_path.to_str().unwrap()
+                ),
+                -4
+            );
+        }
+        {
+            let base_path = Path::new("path").join("to");
+            let current_path = base_path.join("current").join("file.txt");
+            let other_path = base_path.join("another").join("dir").join("file.txt");
+            assert_eq!(
+                calculate_distance_penalty(
+                    Some(current_path.to_str().unwrap()),
+                    other_path.to_str().unwrap()
+                ),
+                -6
+            );
+        }
+        {
+            let current_path = Path::new("a")
+                .join("b")
+                .join("c")
+                .join("d")
+                .join("file.txt");
+            let other_path = Path::new("x")
+                .join("y")
+                .join("z")
+                .join("w")
+                .join("file.txt");
+            assert_eq!(
+                calculate_distance_penalty(
+                    Some(current_path.to_str().unwrap()),
+                    other_path.to_str().unwrap()
+                ),
+                -16
+            );
+        }
+        {
+            let current_path = Path::new("file1.txt").to_str().unwrap();
+            let other_path = Path::new("file2.txt").to_str().unwrap();
+            assert_eq!(
+                calculate_distance_penalty(Some(current_path), other_path),
+                0
+            );
+        }
     }
 }
