@@ -195,7 +195,6 @@ pub fn cancel_scan(_: &Lua, _: ()) -> LuaResult<bool> {
 }
 
 pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool> {
-    use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
 
