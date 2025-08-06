@@ -198,129 +198,59 @@ function M.setup_windows()
   end
 end
 
-local function normalize_keys(keys)
+local function set_keymap(mode, keys, handler, opts)
+  local normalized_keys
+
   if type(keys) == 'string' then
-    return { keys }
+    normalized_keys = { keys }
   elseif type(keys) == 'table' then
-    return keys
+    normalized_keys = keys
   else
-    return {}
+    normalized_keys = {}
+  end
+
+  for _, key in ipairs(normalized_keys) do
+    vim.keymap.set(mode, key, handler, opts)
   end
 end
 
---- Setup keymaps
 function M.setup_keymaps()
   local keymaps = M.state.config.keymaps
 
   local input_opts = { buffer = M.state.input_buf, noremap = true, silent = true }
 
-  for _, key in ipairs(normalize_keys(keymaps.close)) do
-    vim.keymap.set('i', key, M.close, input_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select)) do
-    vim.keymap.set('i', key, M.select, input_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select_split)) do
-    vim.keymap.set('i', key, function() M.select('split') end, input_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select_vsplit)) do
-    vim.keymap.set('i', key, function() M.select('vsplit') end, input_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select_tab)) do
-    vim.keymap.set('i', key, function() M.select('tab') end, input_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.move_up)) do
-    vim.keymap.set('i', key, M.move_up, input_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.move_down)) do
-    vim.keymap.set('i', key, M.move_down, input_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.preview_scroll_up)) do
-    vim.keymap.set('i', key, M.scroll_preview_up, input_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.preview_scroll_down)) do
-    vim.keymap.set('i', key, M.scroll_preview_down, input_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.toggle_debug)) do
-    vim.keymap.set('i', key, M.toggle_debug, input_opts)
-  end
+  set_keymap('i', keymaps.close, M.close, input_opts)
+  set_keymap('i', keymaps.select, M.select, input_opts)
+  set_keymap('i', keymaps.select_split, function() M.select('split') end, input_opts)
+  set_keymap('i', keymaps.select_vsplit, function() M.select('vsplit') end, input_opts)
+  set_keymap('i', keymaps.select_tab, function() M.select('tab') end, input_opts)
+  set_keymap('i', keymaps.move_up, M.move_up, input_opts)
+  set_keymap('i', keymaps.move_down, M.move_down, input_opts)
+  set_keymap('i', keymaps.preview_scroll_up, M.scroll_preview_up, input_opts)
+  set_keymap('i', keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
+  set_keymap('i', keymaps.toggle_debug, M.toggle_debug, input_opts)
 
   local list_opts = { buffer = M.state.list_buf, noremap = true, silent = true }
 
-  for _, key in ipairs(normalize_keys(keymaps.close)) do
-    vim.keymap.set('n', key, M.focus_input_win, list_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select)) do
-    vim.keymap.set('n', key, M.select, list_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select_split)) do
-    vim.keymap.set('n', key, function() M.select('split') end, list_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select_vsplit)) do
-    vim.keymap.set('n', key, function() M.select('vsplit') end, list_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select_tab)) do
-    vim.keymap.set('n', key, function() M.select('tab') end, list_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.move_up)) do
-    vim.keymap.set('n', key, M.move_up, list_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.move_down)) do
-    vim.keymap.set('n', key, M.move_down, list_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.preview_scroll_up)) do
-    vim.keymap.set('n', key, M.scroll_preview_up, list_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.preview_scroll_down)) do
-    vim.keymap.set('n', key, M.scroll_preview_down, list_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.toggle_debug)) do
-    vim.keymap.set('n', key, M.toggle_debug, list_opts)
-  end
+  set_keymap('n', keymaps.close, M.focus_input_win, list_opts)
+  set_keymap('n', keymaps.select, M.select, list_opts)
+  set_keymap('n', keymaps.select_split, function() M.select('split') end, list_opts)
+  set_keymap('n', keymaps.select_vsplit, function() M.select('vsplit') end, list_opts)
+  set_keymap('n', keymaps.select_tab, function() M.select('tab') end, list_opts)
+  set_keymap('n', keymaps.move_up, M.move_up, list_opts)
+  set_keymap('n', keymaps.move_down, M.move_down, list_opts)
+  set_keymap('n', keymaps.preview_scroll_up, M.scroll_preview_up, list_opts)
+  set_keymap('n', keymaps.preview_scroll_down, M.scroll_preview_down, list_opts)
+  set_keymap('n', keymaps.toggle_debug, M.toggle_debug, list_opts)
 
   local preview_opts = { buffer = M.state.preview_buf, noremap = true, silent = true }
 
-  for _, key in ipairs(normalize_keys(keymaps.close)) do
-    vim.keymap.set('n', key, M.focus_input_win, preview_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select)) do
-    vim.keymap.set('n', key, M.select, preview_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select_split)) do
-    vim.keymap.set('n', key, function() M.select('split') end, preview_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select_vsplit)) do
-    vim.keymap.set('n', key, function() M.select('vsplit') end, preview_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.select_tab)) do
-    vim.keymap.set('n', key, function() M.select('tab') end, preview_opts)
-  end
-
-  for _, key in ipairs(normalize_keys(keymaps.toggle_debug)) do
-    vim.keymap.set('n', key, M.toggle_debug, preview_opts)
-  end
+  set_keymap('n', keymaps.close, M.focus_input_win, preview_opts)
+  set_keymap('n', keymaps.select, M.select, preview_opts)
+  set_keymap('n', keymaps.select_split, function() M.select('split') end, preview_opts)
+  set_keymap('n', keymaps.select_vsplit, function() M.select('vsplit') end, preview_opts)
+  set_keymap('n', keymaps.select_tab, function() M.select('tab') end, preview_opts)
+  set_keymap('n', keymaps.toggle_debug, M.toggle_debug, preview_opts)
 
   vim.keymap.set('i', '<C-w>', function()
     local col = vim.fn.col('.') - 1
