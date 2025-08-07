@@ -41,9 +41,9 @@ function M.setup(config)
       preview_down = '<C-d>',
     },
     layout = {
-      prompt_position = 'top',
+      prompt_position = 'bottom',
       preview_position = 'right',
-      preview_width = 0.4,
+      preview_size = 0.4,
       height = 0.8,
       width = 0.8,
     },

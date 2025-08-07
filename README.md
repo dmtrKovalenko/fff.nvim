@@ -30,7 +30,7 @@ It comes with a dedicated rust backend runtime that keep tracks of the file inde
 
 ## Installation
 
-> [!NOTE]  
+> [!NOTE]
 > Although we'll try to make sure to keep 100% backward compatibiility, by using you should understand that silly bugs and breaking changes may happen.
 > And also we hope for your contributions and feedback to make this plugin ideal for everyone.
 
@@ -71,21 +71,40 @@ FFF.nvim requires:
 FFF.nvim comes with sensible defaults. Here's the complete default configuration:
 
 ```lua
-require("fff").setup({
-  -- UI dimensions and appearance
-  width = 0.8,          -- Window width as fraction of screen
-  height = 0.8,         -- Window height as fraction of screen
-  prompt = '🪿 ',       -- Input prompt symbol
-  preview = {
-      enabled = true,
-      width = 0.5,
-      max_lines = 100,
-      max_size = 1024 * 1024, -- 1MB
-  },
-  title = 'FFF Files',  -- Window title
-  max_results = 60,     -- Maximum search results to display
-  max_threads = 4,      -- Maximum threads for fuzzy search
+require('fff').setup({
+  prompt = '🪿 ',                                     -- Input prompt symbol
+  title = 'FFF Files',                                -- Window title
+  max_results = 100,                                  -- Maximum search results to display
+  max_threads = 4,                                    -- Maximum threads for fuzzy search
 
+  -- Preview configuration
+  preview = {
+    enabled = true,
+    max_lines = 5000,                                 -- Maximum lines to show in preview
+    max_size = 10 * 1024 * 1024,                      -- 10MB max file size for preview
+    imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
+    line_numbers = false,                             -- Show line numbers in preview
+    wrap_lines = false,                               -- Wrap long lines
+    show_file_info = true,                            -- Show file information
+    binary_file_threshold = 1024,                     -- Files larger than this are treated as binary
+    filetypes = {
+      svg = { wrap_lines = true },
+      markdown = { wrap_lines = true },
+      text = { wrap_lines = true },
+      log = { tail_lines = 100 },                     -- Show last 100 lines for logs
+    },
+  },
+
+  -- Layout configuration - supports functions for dynamic sizing
+  layout = {
+    height = 0.8,                                     -- Window height as fraction of screen (or function)
+    width = 0.8,                                      -- Window width as fraction of screen (or function)
+    prompt_position = 'bottom',                       -- 'top' or 'bottom' (or function)
+    preview_position = 'right',                       -- 'left', 'right', 'top', 'bottom' (or function)
+    preview_size = 0.4,                               -- Preview size as fraction (or function)
+  },
+
+  -- Key mappings
   keymaps = {
     close = '<Esc>',
     select = '<CR>',
@@ -112,9 +131,42 @@ require("fff").setup({
     debug = 'Comment',
   },
 
+  -- Frecency scoring
+  frecency = {
+    enabled = true,
+    db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
+  },
+
   -- Debug options
   debug = {
+    enabled = false,
     show_scores = false,  -- Toggle with F2 or :FFFDebug
+  },
+
+  -- Logging configuration
+  logging = {
+    enabled = true,
+    log_file = vim.fn.stdpath('log') .. '/fff.log',
+    log_level = 'info',
+  },
+
+  -- UI configuration
+  ui = {
+    wrap_paths = true,
+    wrap_indent = 2,
+    max_path_width = 80,
+  },
+
+  -- Image preview settings
+  image_preview = {
+    enabled = true,
+    max_width = 80,
+    max_height = 24,
+  },
+
+  -- Icon display
+  icons = {
+    enabled = true,
   },
 })
 ```
@@ -124,12 +176,12 @@ require("fff").setup({
 #### Available methods
 
 ```lua
-require("fff").find_files() -- Find files in current directory
-require("fff").find_in_git_root() -- Find files in the current git repository
-require("fff").scan_files() -- Trigger rescan of files in the current directory
-require("fff").refresh_git_status() -- Refresh git status for the active file lock
-require("fff").find_files_in_dir(path) -- Find files in a specific directory
-require("fff").change_indexing_directory(new_path) -- Change the base directory for the file picker
+require('fff').find_files()                        -- Find files in current directory
+require('fff').find_in_git_root()                  -- Find files in the current git repository
+require('fff').scan_files()                        -- Trigger rescan of files in the current directory
+require('fff').refresh_git_status()                -- Refresh git status for the active file lock
+require('fff').find_files_in_dir(path)             -- Find files in a specific directory
+require('fff').change_indexing_directory(new_path) -- Change the base directory for the file picker
 ```
 
 #### Multiple Key Bindings
@@ -138,9 +190,9 @@ You can assign multiple key combinations to the same action:
 
 ```lua
 keymaps = {
-  move_up = { '<Up>', '<C-p>', '<C-k>' },    -- Three ways to move up
-  close = { '<Esc>', '<C-c>' },              -- Two ways to close
-  select = '<CR>',                           -- Single binding still works
+  move_up = { '<Up>', '<C-p>', '<C-k>' },          -- Three ways to move up
+  close = { '<Esc>', '<C-c>' },                    -- Two ways to close
+  select = '<CR>',                                 -- Single binding still works
 }
 ```
 
