@@ -93,6 +93,16 @@ function M.setup(config)
   local merged_config = vim.tbl_deep_extend('force', default_config, config or {})
   M.config = merged_config
 
+  if merged_config.logging.enabled then
+    local log_success, log_error =
+      pcall(fuzzy.init_tracing, merged_config.logging.log_file, merged_config.logging.log_level)
+    if log_success then
+      M.log_file_path = log_error
+    else
+      vim.notify('Failed to initialize logging: ' .. (tostring(log_error) or 'unknown error'), vim.log.levels.WARN)
+    end
+  end
+
   local db_path = merged_config.frecency.db_path or (vim.fn.stdpath('cache') .. '/fff_nvim')
   local ok, result = pcall(fuzzy.init_db, db_path, true)
   if not ok then vim.notify('Failed to initialize frecency database: ' .. result, vim.log.levels.WARN) end
@@ -111,16 +121,6 @@ function M.setup(config)
 
   local git_utils = require('fff.git_utils')
   git_utils.setup_highlights()
-
-  if merged_config.logging.enabled then
-    local log_success, log_error =
-      pcall(fuzzy.init_tracing, merged_config.logging.log_file, merged_config.logging.log_level)
-    if log_success then
-      M.log_file_path = log_error
-    else
-      vim.notify('Failed to initialize logging: ' .. (tostring(log_error) or 'unknown error'), vim.log.levels.WARN)
-    end
-  end
 
   return true
 end
@@ -278,12 +278,7 @@ end
 --- Trigger rescan of files in the current directory
 function M.scan_files()
   local ok = pcall(fuzzy.scan_files)
-  if ok then
-    local cached_files = pcall(fuzzy.get_cached_files) and fuzzy.get_cached_files() or {}
-    print('Triggered file scan (currently ' .. #cached_files .. ' files cached)')
-  else
-    vim.notify('Failed to scan files', vim.log.levels.ERROR)
-  end
+  if not ok then vim.notify('Failed to scan files', vim.log.levels.ERROR) end
 end
 
 --- Refresh git status for the active file lock
@@ -406,19 +401,6 @@ function M.health_check()
   end
 
   return health
-end
-
-function M.get_status()
-  local status = 'No files indexed'
-
-  local ok, cached_files = pcall(fuzzy.get_cached_files)
-  if ok and cached_files and #cached_files > 0 then status = string.format('%d files indexed', #cached_files) end
-
-  if M.config and M.config.frecency and M.config.frecency.enabled then
-    status = status .. ' • Frecency tracking enabled'
-  end
-
-  return status
 end
 
 function M.is_initialized() return M.state and M.state.initialized or false end
