@@ -8,15 +8,12 @@ pub struct FileItem {
     pub path: PathBuf,
     pub relative_path: String,
     pub file_name: String,
-    pub extension: String,
-    pub directory: String,
     pub size: u64,
     pub modified: u64,
     pub access_frecency_score: i64,
     pub modification_frecency_score: i64,
     pub total_frecency_score: i64,
     pub git_status: Option<git2::Status>,
-    pub is_current_file: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -33,27 +30,26 @@ pub struct Score {
 #[derive(Debug, Clone)]
 pub struct ScoringContext<'a> {
     pub query: &'a str,
-    pub current_file: Option<&'a String>,
+    pub current_file: Option<&'a str>,
+    pub max_results: usize,
     pub max_typos: u16,
     pub max_threads: usize,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct SearchResult {
-    pub items: Vec<FileItem>,
+pub struct SearchResult<'a> {
+    pub items: Vec<&'a FileItem>,
     pub scores: Vec<Score>,
     pub total_matched: usize,
     pub total_files: usize,
 }
 
-impl IntoLua for FileItem {
+impl IntoLua for &FileItem {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let table = lua.create_table()?;
         table.set("path", self.path.to_string_lossy().to_string())?;
-        table.set("relative_path", self.relative_path)?;
-        table.set("name", self.file_name)?;
-        table.set("extension", self.extension)?;
-        table.set("directory", self.directory)?;
+        table.set("relative_path", self.relative_path.clone())?;
+        table.set("name", self.file_name.clone())?;
         table.set("size", self.size)?;
         table.set("modified", self.modified)?;
         table.set("access_frecency_score", self.access_frecency_score)?;
@@ -63,7 +59,6 @@ impl IntoLua for FileItem {
         )?;
         table.set("total_frecency_score", self.total_frecency_score)?;
         table.set("git_status", format_git_status(self.git_status))?;
-        table.set("is_current_file", self.is_current_file)?;
         Ok(LuaValue::Table(table))
     }
 }
@@ -82,7 +77,7 @@ impl IntoLua for Score {
     }
 }
 
-impl IntoLua for SearchResult {
+impl IntoLua for SearchResult<'_> {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let table = lua.create_table()?;
         table.set("items", self.items)?;

@@ -3,7 +3,8 @@ use std::path::Path;
 use tracing_appender::non_blocking;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-static TRACING_INITIALIZED: std::sync::Once = std::sync::Once::new();
+static TRACING_INITIALIZED: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
+    std::sync::OnceLock::new();
 
 /// Initialize tracing with single log file
 ///
@@ -13,31 +14,33 @@ static TRACING_INITIALIZED: std::sync::Once = std::sync::Once::new();
 ///
 /// # Returns
 /// * `Result<String, Error>` - Full path to the log file on success
-pub fn init_tracing(log_file_path: &str, log_level: &str) -> Result<String, Error> {
+pub fn init_tracing(log_file_path: &str, log_level: Option<&str>) -> Result<String, Error> {
     let log_path = Path::new(log_file_path);
-
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let log_file_path_clone = log_file_path.to_string();
+    let file_appender = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true) // creates a new file on every setup
+        .open(log_path)?;
 
-    // Parse log level, default to INFO if invalid
-    let level = match log_level.to_lowercase().as_str() {
-        "trace" => tracing::Level::TRACE,
-        "debug" => tracing::Level::DEBUG,
-        "info" => tracing::Level::INFO,
-        "warn" => tracing::Level::WARN,
-        "error" => tracing::Level::ERROR,
-        _ => {
-            eprintln!("Invalid log level '{}', defaulting to 'info'", log_level);
-            tracing::Level::INFO
-        }
+    let level = match log_level
+        .as_ref()
+        .map(|s| s.trim().to_lowercase())
+        .as_deref()
+    {
+        Some("trace") => tracing::Level::TRACE,
+        Some("debug") => tracing::Level::DEBUG,
+        Some("info") => tracing::Level::INFO,
+        Some("warn") => tracing::Level::WARN,
+        Some("error") => tracing::Level::ERROR,
+        _ => tracing::Level::INFO,
     };
 
-    TRACING_INITIALIZED.call_once(|| {
-        let file_appender = std::fs::File::create(&log_file_path_clone).unwrap();
-        let (non_blocking_appender, _guard) = non_blocking(file_appender);
+    TRACING_INITIALIZED.get_or_init(|| {
+        let (non_blocking_appender, guard) = non_blocking(file_appender);
 
         let subscriber = tracing_subscriber::registry()
             .with(
@@ -48,7 +51,7 @@ pub fn init_tracing(log_file_path: &str, log_level: &str) -> Result<String, Erro
                     .with_thread_names(false)
                     .with_file(true)
                     .with_line_number(true)
-                    .with_ansi(false), // No ANSI colors in log files
+                    .with_ansi(false),
             )
             .with(
                 EnvFilter::builder()
@@ -61,7 +64,7 @@ pub fn init_tracing(log_file_path: &str, log_level: &str) -> Result<String, Erro
         } else {
             tracing::info!(
                 "FFF.nvim tracing initialized with log file: {}",
-                log_file_path_clone
+                log_path.display()
             );
         }
 
@@ -95,8 +98,7 @@ pub fn init_tracing(log_file_path: &str, log_level: &str) -> Result<String, Erro
             eprintln!("FFF.nvim PANIC: {} at {}", message, location);
         }));
 
-        // keep the guard alive by leaking it's okaaaaaaaaaaaay
-        std::mem::forget(_guard);
+        guard
     });
 
     Ok(log_file_path.to_string())
