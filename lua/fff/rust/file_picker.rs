@@ -1,36 +1,29 @@
+use crate::background_watcher::BackgroundWatcher;
 use crate::error::Error;
 use crate::file_key::FileKey;
+use crate::frecency::FrecencyTracker;
 use crate::git::{format_git_status, GitStatusCache};
 use crate::score::match_and_score_files;
-use crate::types::{FileItem, Score, ScoringContext, SearchResult};
-use git2::{Repository, Status, StatusOptions};
-use ignore::{WalkBuilder, WalkState};
-use notify::{EventKind, RecursiveMode};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent};
+use crate::types::{FileItem, ScoringContext, SearchResult};
+use git2::{Repository, Status};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex, RwLock,
+    Arc,
 };
-use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use tracing::{debug, error, info, warn};
 
-use crate::FRECENCY;
+use crate::{FILE_PICKER, FRECENCY};
 
 #[derive(Debug, Clone)]
 struct FileSync {
-    files: Vec<FileItem>,
+    pub files: Vec<FileItem>,
     last_update: SystemTime,
     git_status_cache: Option<GitStatusCache>,
     scan_generation: u64,
 }
-
-type Debouncer = notify_debouncer_full::Debouncer<
-    notify::RecommendedWatcher,
-    notify_debouncer_full::RecommendedCache,
->;
 
 impl FileSync {
     fn new() -> Self {
@@ -51,50 +44,14 @@ impl FileSync {
         self.scan_generation = self.scan_generation.wrapping_add(1);
     }
 
-    fn contains_path(&self, path: &str) -> bool {
+    fn find_file_index(&self, path: &Path) -> Result<usize, usize> {
         self.files
-            .binary_search_by(|file| file.relative_path.as_str().cmp(path))
-            .is_ok()
-    }
-
-    fn find_file_index(&self, path: &str) -> Result<usize, usize> {
-        self.files
-            .binary_search_by(|file| file.relative_path.as_str().cmp(path))
-    }
-
-    fn insert_file_sorted(&mut self, file: FileItem) {
-        match self
-            .files
-            .binary_search_by(|f| f.relative_path.cmp(&file.relative_path))
-        {
-            Ok(_) => {
-                warn!(
-                    "Trying to insert a file that already exists: {}",
-                    file.relative_path
-                );
-            }
-            Err(pos) => {
-                self.files.insert(pos, file);
-                self.scan_generation = self.scan_generation.wrapping_add(1);
-            }
-        }
-    }
-
-    /// Remove file by path using binary search
-    fn remove_file_by_path(&mut self, path: &str) -> bool {
-        match self.find_file_index(path) {
-            Ok(index) => {
-                self.files.remove(index);
-                self.scan_generation = self.scan_generation.wrapping_add(1);
-                true
-            }
-            Err(_) => false,
-        }
+            .binary_search_by(|file| file.path.as_path().cmp(path))
     }
 }
 
 impl FileItem {
-    fn new(path: PathBuf, base_path: &Path, git_status: Option<Status>) -> Self {
+    pub fn new(path: PathBuf, base_path: &Path, git_status: Option<Status>) -> Self {
         let relative_path = pathdiff::diff_paths(&path, base_path)
             .unwrap_or_else(|| path.clone())
             .to_string_lossy()
@@ -105,19 +62,6 @@ impl FileItem {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-
-        let extension = path
-            .extension()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-
-        let directory = match Path::new(&relative_path).parent() {
-            Some(parent) if parent != Path::new(".") && !parent.as_os_str().is_empty() => {
-                parent.to_string_lossy().into_owned()
-            }
-            _ => String::new(),
-        };
 
         let (size, modified) = match std::fs::metadata(&path) {
             Ok(metadata) => {
@@ -137,29 +81,33 @@ impl FileItem {
             path,
             relative_path,
             file_name: name,
-            extension,
-            directory,
             size,
             modified,
             access_frecency_score: 0,
             modification_frecency_score: 0,
             total_frecency_score: 0,
             git_status,
-            is_current_file: false,
         }
     }
 
-    fn update_frecency_scores(&mut self) {
-        if let Ok(frecency) = FRECENCY.read() {
-            if let Some(ref tracker) = *frecency {
-                let file_key = FileKey::from(&*self);
-                self.access_frecency_score = tracker.get_access_score(&file_key);
-                self.modification_frecency_score = tracker
-                    .get_modification_score(self.modified, format_git_status(self.git_status));
-                self.total_frecency_score =
-                    self.access_frecency_score + self.modification_frecency_score;
-            }
-        }
+    pub fn update_frecency_scores(&mut self, tracker: &FrecencyTracker) -> Result<(), Error> {
+        let file_key = FileKey::from(&*self);
+        self.access_frecency_score = tracker.get_access_score(&file_key);
+        self.modification_frecency_score =
+            tracker.get_modification_score(self.modified, format_git_status(self.git_status));
+        self.total_frecency_score = self.access_frecency_score + self.modification_frecency_score;
+
+        Ok(())
+    }
+
+    /// Locks the tracker and updates frecensy score for one file. If need multiple files updates
+    /// use `update_frecency_scores` instead.
+    pub fn update_frecency_scores_global(&mut self) -> Result<(), Error> {
+        let Some(ref frecency) = *FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)? else {
+            return Ok(());
+        };
+
+        self.update_frecency_scores(frecency)
     }
 }
 
@@ -174,10 +122,10 @@ impl From<&FileItem> for FileKey {
 pub struct FilePicker {
     base_path: PathBuf,
     git_workdir: Option<PathBuf>,
-    sync_data: Arc<RwLock<FileSync>>,
+    sync_data: FileSync,
     is_scanning: Arc<AtomicBool>,
     scanned_files_count: Arc<AtomicUsize>,
-    _debouncer: Arc<Mutex<Option<Debouncer>>>,
+    background_watcher: Option<BackgroundWatcher>,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -190,6 +138,14 @@ impl std::fmt::Debug for FilePicker {
 }
 
 impl FilePicker {
+    pub fn git_root(&self) -> Option<&Path> {
+        self.git_workdir.as_deref()
+    }
+
+    pub fn get_files(&self) -> &[FileItem] {
+        &self.sync_data.files
+    }
+
     pub fn new(base_path: String) -> Result<Self, Error> {
         info!("Initializing FilePicker with base_path: {}", base_path);
         let path = PathBuf::from(&base_path);
@@ -208,49 +164,42 @@ impl FilePicker {
             debug!("No git repository found for path: {}", base_path);
         }
 
-        let sync_data = Arc::new(RwLock::new(FileSync::new()));
         let scan_signal = Arc::new(AtomicBool::new(false));
         let synced_files_count = Arc::new(AtomicUsize::new(0));
-        let debouncer_holder = Arc::new(Mutex::new(None));
 
         let picker = Self {
             base_path: path.clone(),
             git_workdir: git_workdir.clone(),
-            sync_data: Arc::clone(&sync_data),
+            sync_data: FileSync::new(),
             is_scanning: Arc::clone(&scan_signal),
             scanned_files_count: Arc::clone(&synced_files_count),
-            _debouncer: Arc::clone(&debouncer_holder),
+            background_watcher: None,
         };
 
-        spawn_async_initialization(
-            path,
-            git_workdir,
-            sync_data,
-            scan_signal,
-            synced_files_count,
-            debouncer_holder,
+        spawn_scan_and_watcher(
+            path.clone(),
+            git_workdir.clone(),
+            Arc::clone(&scan_signal),
+            Arc::clone(&synced_files_count),
         );
 
         Ok(picker)
     }
 
-    pub fn fuzzy_search(
-        &self,
-        query: &str,
+    pub fn fuzzy_search<'a>(
+        files: &'a [FileItem],
+        query: &'a str,
         max_results: usize,
         max_threads: usize,
-        current_file: Option<&String>,
-    ) -> SearchResult {
-        let max_threads = max_threads.max(1); // Ensure at least 1 to avoid neo_frizbee division by zero
-
+        current_file: Option<&'a str>,
+    ) -> SearchResult<'a> {
+        let max_threads = max_threads.max(1);
         debug!(
             "Fuzzy search: query='{}', max_results={}, max_threads={}, current_file={:?}",
             query, max_results, max_threads, current_file
         );
 
-        let time = std::time::Instant::now();
-        let sync_data = self.sync_data.read().unwrap();
-        let total_files = sync_data.files.len();
+        let total_files = files.len();
 
         // small queries with a large number of results can match absolutely everything
         let max_typos = (query.len() as u16 / 4).clamp(2, 6);
@@ -261,44 +210,27 @@ impl FilePicker {
             current_file,
         };
 
-        let scored_indices = match_and_score_files(&sync_data.files, &context);
-        let total_matched = scored_indices.len();
-
-        let mut scored_files: Vec<(FileItem, Score)> = scored_indices
-            .into_par_iter()
-            .map(|(idx, score)| (sync_data.files[idx].clone(), score))
-            .collect();
-
-        scored_files.par_sort_unstable_by(|a, b| {
-            b.1.total
-                .cmp(&a.1.total)
-                .then_with(|| b.0.modified.cmp(&a.0.modified))
-        });
-
-        scored_files.truncate(max_results);
-
-        let (items, scores): (Vec<FileItem>, Vec<Score>) = scored_files.into_iter().unzip();
-
+        let time = std::time::Instant::now();
+        let (mut items, mut scores) = match_and_score_files(files, &context);
         debug!(
-            "Fuzzy search completed: found {} results for query '{}', total_matched={}, total_files={}, top result {:?}",
+            "Fuzzy search completed in {:?}: found {} results for query '{}', top result {:?}",
+            time.elapsed(),
             items.len(),
             query,
-            total_matched,
-            total_files,
-            items.first()
+            items.first(),
         );
 
-        debug!("Total search time: {:?}", time.elapsed());
+        let total_matched = items.len();
+
+        items.truncate(max_results);
+        scores.truncate(max_results);
+
         SearchResult {
             items,
             scores,
             total_matched,
             total_files,
         }
-    }
-
-    pub fn get_cached_files(&self) -> Vec<FileItem> {
-        self.sync_data.read().unwrap().files.clone()
     }
 
     pub fn get_scan_progress(&self) -> ScanProgress {
@@ -310,81 +242,191 @@ impl FilePicker {
         }
     }
 
-    pub fn refresh_git_status(&self) -> Vec<FileItem> {
-        let sync_data: &Arc<RwLock<FileSync>> = &self.sync_data;
-        let git_workdir = self.git_workdir.as_deref();
-        let new_git_status_cache = GitStatusCache::read_git_status(git_workdir);
+    pub fn update_git_statuses(
+        &mut self,
+        status_cache: Option<GitStatusCache>,
+    ) -> Result<(), Error> {
+        for file in &mut self.sync_data.files {
+            file.git_status = status_cache
+                .as_ref()
+                .and_then(|git| git.lookup_status(&file.path));
 
-        if let Ok(mut sync_data_write) = sync_data.write() {
-            sync_data_write.git_status_cache = new_git_status_cache.clone();
+            file.update_frecency_scores_global()?;
+        }
 
-            for file in &mut sync_data_write.files {
-                file.git_status = new_git_status_cache
-                    .as_ref()
-                    .and_then(|git| git.lookup_status(&file.path));
+        self.sync_data.git_status_cache = status_cache;
 
-                file.update_frecency_scores();
+        Ok(())
+    }
+
+    /// Fetches all the git statuses first and updates the global FILE_PICKER
+    /// with the new statuses with the smallest possible lock time.
+    pub fn refresh_git_status_global() -> Result<(), Error> {
+        let git_status = {
+            let Some(ref picker) = *FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)? else {
+                return Err(Error::FilePickerMissing)?;
+            };
+
+            // we keep here readonly lock but allowing querying the index while it scan lasts
+            GitStatusCache::read_git_status(picker.git_root())
+        };
+
+        let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
+        let picker = file_picker
+            .as_mut()
+            .ok_or_else(|| Error::FilePickerMissing)?;
+
+        picker.update_git_statuses(git_status)?;
+        Ok(())
+    }
+
+    pub fn update_single_file_frecency(
+        &mut self,
+        file_path: impl AsRef<Path>,
+        frecency_tracker: &FrecencyTracker,
+    ) -> Result<(), Error> {
+        if let Ok(index) = self.sync_data.find_file_index(file_path.as_ref()) {
+            if let Some(file) = self.sync_data.files.get_mut(index) {
+                file.update_frecency_scores(frecency_tracker)?;
             }
         }
 
-        self.get_cached_files()
+        Ok(())
     }
 
-    pub fn update_single_file_frecency(&self, file_path: &str) -> Result<(), Error> {
-        if let Ok(mut sync_data) = self.sync_data.write() {
-            if let Ok(index) = sync_data.find_file_index(file_path) {
-                if let Some(file) = sync_data.files.get_mut(index) {
-                    file.update_frecency_scores();
+    pub fn get_file_by_path(&self, path: impl AsRef<Path>) -> Option<&FileItem> {
+        self.sync_data
+            .find_file_index(path.as_ref())
+            .ok()
+            .and_then(|index| self.sync_data.files.get(index))
+    }
+
+    pub fn get_mut_file_by_path(&mut self, path: impl AsRef<Path>) -> Option<&mut FileItem> {
+        self.sync_data
+            .find_file_index(path.as_ref())
+            .ok()
+            .and_then(|index| self.sync_data.files.get_mut(index))
+    }
+
+    /// Add a file to the picker's files in sorted order (used by background watcher)
+    pub fn add_file_sorted(&mut self, file: FileItem) -> Option<&FileItem> {
+        match self
+            .sync_data
+            .files
+            .binary_search_by(|f| f.relative_path.cmp(&file.relative_path))
+        {
+            Ok(position) => {
+                warn!(
+                    "Trying to insert a file that already exists: {}",
+                    file.relative_path
+                );
+
+                self.sync_data.files.get(position)
+            }
+            Err(position) => {
+                self.sync_data.files.insert(position, file);
+                self.sync_data.scan_generation = self.sync_data.scan_generation.wrapping_add(1);
+
+                self.sync_data.files.get(position)
+            }
+        }
+    }
+
+    pub fn on_create_or_modify(&mut self, path: impl AsRef<Path>) -> Option<&FileItem> {
+        let path = path.as_ref();
+        match self.sync_data.find_file_index(path) {
+            Ok(pos) => {
+                // safe to read because we are in lock and binary search returned valid position
+                let file = &mut self.sync_data.files[pos];
+
+                let modified = match std::fs::metadata(path) {
+                    Ok(metadata) => metadata
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()),
+                    Err(e) => {
+                        error!("Failed to get metadata for {}: {}", path.display(), e);
+                        None
+                    }
+                };
+
+                if let Some(modified) = modified {
+                    let modified = modified.as_secs();
+                    if file.modified < modified {
+                        file.modified = modified;
+                    }
                 }
+
+                Some(file)
+            }
+            Err(pos) => {
+                let file_item = FileItem::new(path.to_path_buf(), &self.base_path, None);
+                self.sync_data.files.insert(pos, file_item);
+
+                self.sync_data.files.get(pos)
             }
         }
-        Ok(())
     }
 
-    pub fn stop_background_monitor(&self) -> Result<(), Error> {
-        if let Ok(mut debouncer_guard) = self._debouncer.lock() {
-            if let Some(debouncer) = debouncer_guard.take() {
-                debouncer.stop_nonblocking();
-                info!("File watcher stopped successfully");
+    pub fn remove_file_by_path(&mut self, path: impl AsRef<Path>) -> bool {
+        match self.sync_data.find_file_index(path.as_ref()) {
+            Ok(index) => {
+                self.sync_data.files.remove(index);
+                self.sync_data.scan_generation = self.sync_data.scan_generation.wrapping_add(1);
+                true
             }
+            Err(_) => false,
         }
-        Ok(())
     }
 
-    pub fn trigger_rescan(&self) -> Result<(), Error> {
+    // TODO make this O(n)
+    pub fn remove_all_files_in_dir(&mut self, dir: impl AsRef<Path>) -> usize {
+        let dir_path = dir.as_ref();
+        let initial_len = self.sync_data.files.len();
+
+        self.sync_data
+            .files
+            .retain(|file| !file.path.starts_with(dir_path));
+
+        let removed_count = initial_len - self.sync_data.files.len();
+        if removed_count > 0 {
+            self.sync_data.scan_generation = self.sync_data.scan_generation.wrapping_add(1);
+        }
+
+        removed_count
+    }
+
+    pub fn stop_background_monitor(&mut self) {
+        if let Some(watcher) = self.background_watcher.take() {
+            watcher.stop();
+        }
+    }
+
+    pub fn trigger_rescan(&mut self) -> Result<(), Error> {
         if self.is_scanning.load(Ordering::Relaxed) {
             debug!("Scan already in progress, skipping trigger_rescan");
             return Ok(());
         }
 
-        info!("is_scanning = TRUE (manual rescan starting)");
+        debug!("is_scanning = TRUE (manual rescan starting)");
         self.is_scanning.store(true, Ordering::Relaxed);
+        self.scanned_files_count.store(0, Ordering::Relaxed);
 
-        let base_path = self.base_path.clone();
-        let git_workdir = self.git_workdir.clone();
-        let sync_data = Arc::clone(&self.sync_data);
-        let scan_signal = Arc::clone(&self.is_scanning);
-        let scanned_files_count = Arc::clone(&self.scanned_files_count);
+        debug!("Starting synchronous rescan");
 
-        thread::spawn(move || {
-            debug!("Background scan thread started");
-            scanned_files_count.store(0, Ordering::Relaxed);
+        if let Ok((files, git_cache)) = scan_filesystem(
+            &self.base_path,
+            self.git_workdir.as_ref(),
+            &self.scanned_files_count,
+        ) {
+            info!("Filesystem scan completed: found {} files", files.len());
+            self.sync_data.update_files(files, git_cache);
+        } else {
+            warn!("Filesystem scan failed");
+        }
 
-            if let Ok((files, git_cache)) =
-                scan_filesystem(&base_path, git_workdir.as_ref(), &scanned_files_count)
-            {
-                info!("Filesystem scan completed: found {} files", files.len());
-                if let Ok(mut data) = sync_data.write() {
-                    data.update_files(files, git_cache);
-                    debug!("File cache updated successfully");
-                }
-            } else {
-                warn!("Filesystem scan failed");
-            }
-
-            scan_signal.store(false, Ordering::Relaxed);
-            info!("is_scanning = FALSE (manual rescan completed)");
-        });
+        self.is_scanning.store(false, Ordering::Relaxed);
+        debug!("is_scanning = FALSE (manual rescan completed)");
 
         Ok(())
     }
@@ -401,18 +443,16 @@ pub struct ScanProgress {
     pub is_scanning: bool,
 }
 
-fn spawn_async_initialization(
+fn spawn_scan_and_watcher(
     base_path: PathBuf,
     git_workdir: Option<PathBuf>,
-    sync_data: Arc<RwLock<FileSync>>,
     scan_signal: Arc<AtomicBool>,
     synced_files_count: Arc<AtomicUsize>,
-    debouncer_holder: Arc<Mutex<Option<Debouncer>>>,
 ) {
-    thread::spawn(move || {
+    std::thread::spawn(move || {
+        // First: Run the filesystem scan
         scan_signal.store(true, Ordering::Relaxed);
-        synced_files_count.store(0, Ordering::Relaxed);
-        info!("Starting async initialization for file picker");
+        info!("Starting initial file scan");
 
         match scan_filesystem(&base_path, git_workdir.as_ref(), &synced_files_count) {
             Ok((files, git_cache)) => {
@@ -420,9 +460,11 @@ fn spawn_async_initialization(
                     "Initial filesystem scan completed: found {} files",
                     files.len()
                 );
-                if let Ok(mut data) = sync_data.write() {
-                    data.update_files(files, git_cache);
-                    debug!("Initial file cache updated successfully");
+
+                if let Ok(mut file_picker_guard) = crate::FILE_PICKER.write() {
+                    if let Some(ref mut picker) = *file_picker_guard {
+                        picker.sync_data.update_files(files, git_cache);
+                    }
                 }
             }
             Err(e) => {
@@ -431,175 +473,23 @@ fn spawn_async_initialization(
         }
         scan_signal.store(false, Ordering::Relaxed);
 
-        match create_file_watcher_sync(base_path, git_workdir, Arc::clone(&sync_data)) {
-            Ok(debouncer) => {
-                if let Ok(mut holder) = debouncer_holder.lock() {
-                    *holder = Some(debouncer);
-                    info!("File watcher setup completed successfully");
-                } else {
-                    error!("Failed to store debouncer - mutex poisoned");
+        match BackgroundWatcher::new(base_path, git_workdir) {
+            Ok(watcher) => {
+                info!("Background file watcher initialized successfully");
+
+                if let Ok(mut file_picker_guard) = crate::FILE_PICKER.write() {
+                    if let Some(ref mut picker) = *file_picker_guard {
+                        picker.background_watcher = Some(watcher);
+                    }
                 }
             }
             Err(e) => {
-                error!("Failed to create file watcher: {:?}", e);
+                error!("Failed to initialize background file watcher: {:?}", e);
             }
         }
+
+        // the debouncer keeps running in its own thread
     });
-}
-
-fn create_file_watcher_sync(
-    base_path: PathBuf,
-    git_workdir: Option<PathBuf>,
-    sync_data: Arc<RwLock<FileSync>>,
-) -> Result<Debouncer, Error> {
-    let mut debouncer = new_debouncer(Duration::from_millis(500), None, {
-        let sync_data = Arc::clone(&sync_data);
-        let base_path = base_path.clone();
-        let git_workdir = git_workdir.clone();
-
-        move |result: DebounceEventResult| match result {
-            Ok(events) => {
-                handle_debounced_events(events, &sync_data, &base_path, &git_workdir);
-            }
-            Err(errors) => {
-                error!("File watcher errors: {:?}", errors);
-            }
-        }
-    })?;
-
-    if let Err(e) = debouncer.watch(&base_path, RecursiveMode::Recursive) {
-        error!(
-            "Failed to start watching path: {}, error {e:?}",
-            base_path.display(),
-        );
-        return Err(e.into());
-    }
-
-    info!("File watcher started for path: {}", base_path.display());
-    Ok(debouncer)
-}
-
-fn handle_debounced_events(
-    events: Vec<DebouncedEvent>,
-    sync_data: &Arc<RwLock<FileSync>>,
-    base_path: &Path,
-    git_workdir: &Option<PathBuf>,
-) {
-    let mut affected_paths = Vec::new();
-    for event in events {
-        let relevant_paths: Vec<_> = event
-            .paths
-            .iter()
-            .filter_map(|path| {
-                let relative_path = pathdiff::diff_paths(path, base_path)?;
-
-                let Ok(sync_read) = sync_data.read() else {
-                    return None;
-                };
-
-                let relative_str = relative_path.to_string_lossy();
-
-                if sync_read.contains_path(&relative_str) {
-                    return Some(path.clone());
-                }
-
-                match event.event.kind {
-                    EventKind::Create(_) => {
-                        if should_add_new_file(path, git_workdir.as_ref()) {
-                            Some(path.clone())
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
-            })
-            .collect();
-
-        if relevant_paths.is_empty() {
-            continue; // No relevant paths to process
-        }
-
-        debug!(?event, "File watcher event");
-        match event.event.kind {
-            EventKind::Create(_) => {
-                handle_create_events(&relevant_paths, sync_data, base_path, git_workdir.as_ref());
-                affected_paths.extend(relevant_paths);
-            }
-            EventKind::Modify(_) => {
-                affected_paths.extend(relevant_paths);
-            }
-            EventKind::Remove(_) => {
-                remove_paths_from_index(relevant_paths, sync_data, base_path);
-            }
-            _ => {
-                affected_paths.extend(relevant_paths);
-            }
-        }
-    }
-
-    if !affected_paths.is_empty() {
-        update_git_status_for_paths(sync_data, git_workdir, base_path, &affected_paths);
-    }
-}
-
-fn should_add_new_file(path: &Path, git_workdir: Option<&PathBuf>) -> bool {
-    if is_git_file(path) {
-        return false;
-    }
-
-    if !path.is_file() {
-        return false;
-    }
-
-    if let Some(git_workdir) = git_workdir {
-        if let Ok(repo) = Repository::open(git_workdir) {
-            if repo.is_path_ignored(path).unwrap_or(false) {
-                return false;
-            }
-        }
-    }
-
-    true
-}
-
-fn handle_create_events(
-    paths: &[PathBuf],
-    sync_data: &Arc<RwLock<FileSync>>,
-    base_path: &Path,
-    git_workdir: Option<&PathBuf>,
-) {
-    let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
-    if let Ok(mut sync_write) = sync_data.write() {
-        for path in paths {
-            if repo
-                .as_ref()
-                .is_some_and(|repo| repo.is_path_ignored(path).unwrap_or(false))
-            {
-                debug!("Ignoring file {} due to gitignore rules", path.display());
-                continue;
-            }
-
-            let mut file_item = FileItem::new(path.clone(), base_path, None);
-            file_item.update_frecency_scores();
-            sync_write.insert_file_sorted(file_item);
-        }
-    }
-}
-
-fn remove_paths_from_index(
-    paths: Vec<PathBuf>,
-    sync_data: &Arc<RwLock<FileSync>>,
-    base_path: &Path,
-) {
-    if let Ok(mut sync_write) = sync_data.write() {
-        for path in paths {
-            if let Some(relative_path) = pathdiff::diff_paths(path, base_path) {
-                let relative_str = relative_path.to_string_lossy();
-                sync_write.remove_file_by_path(&relative_str);
-            }
-        }
-    }
 }
 
 fn scan_filesystem(
@@ -607,6 +497,9 @@ fn scan_filesystem(
     git_workdir: Option<&PathBuf>,
     synced_files_count: &Arc<AtomicUsize>,
 ) -> Result<(Vec<FileItem>, Option<GitStatusCache>), Error> {
+    use ignore::{WalkBuilder, WalkState};
+    use std::thread;
+
     let scan_start = std::time::Instant::now();
     let git_workdir = git_workdir.map(|p| p.as_path());
     info!("SCAN: Starting parallel filesystem scan and git status");
@@ -669,11 +562,19 @@ fn scan_filesystem(
             Error::ThreadPanic
         })?;
 
+        let frecency = FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)?;
         if let Some(git_cache) = &git_cache {
-            files.par_iter_mut().for_each(|file| {
-                file.git_status = git_cache.lookup_status(&file.path);
-                file.update_frecency_scores();
-            });
+            files
+                .par_iter_mut()
+                .try_for_each(|file| -> Result<(), Error> {
+                    file.git_status = git_cache.lookup_status(&file.path);
+
+                    if let Some(frecency) = frecency.as_ref() {
+                        file.update_frecency_scores(frecency)?;
+                    }
+
+                    Ok(())
+                })?;
         }
 
         let total_time = scan_start.elapsed();
@@ -687,53 +588,6 @@ fn scan_filesystem(
     })
 }
 
-fn update_git_status_for_paths(
-    sync_data: &Arc<RwLock<FileSync>>,
-    git_workdir: &Option<PathBuf>,
-    base_path: &Path,
-    affected_paths: &[PathBuf],
-) {
-    let Some(git_workdir) = git_workdir else {
-        return;
-    };
-
-    let Ok(repo) = Repository::open(git_workdir) else {
-        return;
-    };
-
-    let mut status_options = StatusOptions::new();
-    status_options.include_untracked(true);
-    status_options.include_ignored(false);
-
-    for path in affected_paths {
-        if let Some(relative_path) = pathdiff::diff_paths(path, base_path) {
-            let path_str = relative_path.to_string_lossy();
-            status_options.pathspec(&*path_str);
-        }
-    }
-
-    let Ok(statuses) = repo.statuses(Some(&mut status_options)) else {
-        error!(
-            "Failed to get git statuses for affected paths: {:?}",
-            affected_paths
-        );
-        return;
-    };
-
-    if let Ok(mut sync_write) = sync_data.write() {
-        for status_entry in statuses.iter() {
-            let Some(file_path) = status_entry.path() else {
-                continue;
-            };
-
-            if let Ok(index) = sync_write.find_file_index(file_path) {
-                sync_write.files[index].git_status = Some(status_entry.status());
-                sync_write.files[index].update_frecency_scores();
-            }
-        }
-    }
-}
-
 #[inline]
 fn is_git_file(path: &Path) -> bool {
     path.to_str().is_some_and(|path| {
@@ -743,19 +597,4 @@ fn is_git_file(path: &Path) -> bool {
             path.contains("/.git/")
         }
     })
-}
-
-impl Drop for FilePicker {
-    fn drop(&mut self) {
-        info!("FilePicker is being dropped, stopping file watcher");
-
-        if let Ok(mut debouncer_guard) = self._debouncer.lock() {
-            if let Some(debouncer) = debouncer_guard.take() {
-                debouncer.stop();
-                info!("File watcher stopped successfully");
-            }
-        } else {
-            error!("Failed to acquire debouncer lock during drop");
-        }
-    }
 }

@@ -2,34 +2,32 @@
 #![allow(dead_code)]
 #![allow(clippy::enum_variant_names)]
 
-#[path = "../../lua/fff/rust/error.rs"]
-mod error;
-#[path = "../../lua/fff/rust/file_key.rs"]
-mod file_key;
-#[path = "../../lua/fff/rust/file_picker.rs"]
-mod file_picker;
-#[path = "../../lua/fff/rust/frecency.rs"]
-mod frecency;
-#[path = "../../lua/fff/rust/git.rs"]
-mod git;
-#[path = "../../lua/fff/rust/path_utils.rs"]
-mod path_utils;
-#[path = "../../lua/fff/rust/score.rs"]
-mod score;
-#[path = "../../lua/fff/rust/types.rs"]
-mod types;
-
-use file_picker::FilePicker;
-use frecency::FrecencyTracker;
+use fff_nvim::{file_picker::FilePicker, git::format_git_status, FILE_PICKER, FRECENCY};
 use std::env;
 use std::io::{self, Write};
-use std::sync::{LazyLock, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::git::format_git_status;
+fn cleanup_global_state() {
+    // Clean up file picker
+    {
+        let mut file_picker = FILE_PICKER.write().unwrap();
+        if let Some(mut picker) = file_picker.take() {
+            let _ = picker.stop_background_monitor();
+            drop(picker);
+            println!("🧹 FilePicker cleaned up");
+        }
+    }
 
-static FRECENCY: LazyLock<RwLock<Option<FrecencyTracker>>> = LazyLock::new(|| RwLock::new(None));
+    // Clean up frecency tracker
+    {
+        let mut frecency = FRECENCY.write().unwrap();
+        *frecency = None;
+        println!("🧹 Frecency tracker cleaned up");
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -39,45 +37,66 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         env::current_dir()?.to_str().unwrap_or(".").to_string()
     };
 
-    let picker = match FilePicker::new(base_path.clone()) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("❌ Failed to create FilePicker: {:?}", e);
+    // Set up signal handler for graceful shutdown
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+
+    ctrlc::set_handler(move || {
+        println!("\n🛑 Received interrupt signal, shutting down...");
+        cleanup_global_state();
+        r.store(false, Ordering::SeqCst);
+        std::process::exit(0);
+    })?;
+
+    let mut git_stats = std::collections::HashMap::new();
+    // Initialize the global file picker using lib.rs function
+    {
+        let mut file_picker = FILE_PICKER.write().unwrap();
+        if file_picker.is_some() {
+            eprintln!("❌ FilePicker already initialized");
             std::process::exit(1);
         }
-    };
-
-    let initial_files = picker.get_cached_files();
-    println!("Initial file count: {}", initial_files.len());
-
-    if !initial_files.is_empty() {
-        println!("Sample files:");
-        for (i, file) in initial_files.iter().take(5).enumerate() {
-            println!(
-                "  {}. {} ({})",
-                i + 1,
-                file.relative_path,
-                format_git_status(file.git_status)
-            );
-        }
-        if initial_files.len() > 5 {
-            println!("  ... and {} more files", initial_files.len() - 5);
-        }
+        *file_picker = Some(FilePicker::new(base_path.clone())?);
     }
+
+    // Get initial file count from global state
+    let initial_count = {
+        let file_picker = FILE_PICKER.read().unwrap();
+        let files = file_picker.as_ref().unwrap().get_files();
+        println!("Initial file count: {}", files.len());
+
+        if !files.is_empty() {
+            println!("Sample files:");
+            for (i, file) in files.iter().take(5).enumerate() {
+                println!(
+                    "  {}. {} ({})",
+                    i + 1,
+                    file.relative_path,
+                    format_git_status(file.git_status)
+                );
+            }
+            if files.len() > 5 {
+                println!("  ... and {} more files", files.len() - 5);
+            }
+        }
+        files.len()
+    };
 
     println!("{:=<60}", "");
     println!("🔴 LIVE FILE MONITORING - Press Ctrl+C to stop");
     println!("{:=<60}", "");
 
-    let mut last_count = initial_files.len();
+    let mut last_count = initial_count;
     let mut iteration = 0;
 
-    loop {
+    while running.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(500));
         iteration += 1;
 
-        let current_files = picker.get_cached_files();
-        let current_count = current_files.len();
+        let current_count = {
+            let file_picker = FILE_PICKER.read().unwrap();
+            file_picker.as_ref().unwrap().get_files().len()
+        };
 
         if current_count != last_count {
             let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
@@ -89,20 +108,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     timestamp, added, current_count
                 );
 
-                if let Some(newest_files) = current_files
-                    .iter()
-                    .rev()
-                    .take(added)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .get(0..added.min(3))
-                {
-                    for file in newest_files {
-                        println!("   ➕ {}", file.relative_path);
-                    }
+                // Show some recently added files
+                let file_picker = FILE_PICKER.read().unwrap();
+                let files = file_picker.as_ref().unwrap().get_files();
+                let newest_files = files.iter().rev().take(added.min(3));
+                for file in newest_files {
+                    println!("   ➕ {}", file.relative_path);
                 }
+                drop(file_picker);
             } else {
                 let removed = last_count - current_count;
                 println!(
@@ -121,13 +134,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 timestamp, current_count
             );
 
-            let mut git_stats = std::collections::HashMap::new();
-            for file in &current_files {
+            let file_picker = FILE_PICKER.read().unwrap();
+            let current_files = file_picker.as_ref().unwrap().get_files();
+
+            git_stats.clear();
+            for file in current_files {
                 let status = format_git_status(file.git_status);
                 *git_stats.entry(status).or_insert(0) += 1;
             }
-
-            let git_stats_copy = git_stats.clone();
 
             if !git_stats.is_empty() {
                 print!("   📊 Git status: ");
@@ -136,26 +150,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 println!();
             }
-
-            println!("   🔄 Testing git status refresh...");
-            let refreshed_files = picker.refresh_git_status();
-            let mut new_git_stats = std::collections::HashMap::new();
-            for file in &refreshed_files {
-                let status = format_git_status(file.git_status);
-                *new_git_stats.entry(status).or_insert(0) += 1;
-            }
-            if new_git_stats != git_stats_copy {
-                print!("   ✨ Git status changed after refresh: ");
-                for (status, count) in &new_git_stats {
-                    print!("{}:{} ", status, count);
-                }
-                println!();
-            }
         }
 
         if iteration % 40 == 0 {
-            let search_results = picker.fuzzy_search("rs", 5, 2, None);
             let timestamp = chrono::Local::now().format("%H:%M:%S");
+            let file_picker = FILE_PICKER.read().unwrap();
+            let files = file_picker.as_ref().unwrap().get_files();
+            let search_results = FilePicker::fuzzy_search(files, "rs", 5, 2, None);
+
             println!(
                 "🔍 [{}] Search test 'rs': {} matches",
                 timestamp,
@@ -175,8 +177,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     score.total
                 );
             }
+            drop(file_picker);
         }
 
         io::stdout().flush().unwrap();
     }
+
+    // Clean up before exit
+    cleanup_global_state();
+    Ok(())
 }

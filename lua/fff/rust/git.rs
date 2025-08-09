@@ -1,6 +1,9 @@
 use git2::{Repository, Status, StatusOptions};
-use std::path::{Path, PathBuf};
-use tracing::{error, info};
+use std::{
+    fmt::Debug,
+    path::{Path, PathBuf},
+};
+use tracing::{debug, error, info};
 
 #[derive(Debug, Clone)]
 pub struct GitStatusCache {
@@ -17,51 +20,65 @@ impl GitStatusCache {
     }
 
     pub fn lookup_status(&self, full_path: &Path) -> Option<Status> {
-        match self
-            .paths
+        self.paths
             .binary_search_by(|probe| probe.as_path().cmp(full_path))
-        {
-            Ok(idx) => self.statuses.get(idx).copied(),
-            Err(_) => None,
-        }
+            .ok()
+            .and_then(|idx| self.statuses.get(idx).copied())
     }
 
-    pub fn read_git_status(git_workdir: Option<&Path>) -> Option<Self> {
-        let git_start = std::time::Instant::now();
-        info!("GIT: Starting git status read");
-
-        let git_workdir = git_workdir.as_ref()?;
-        let repository = Repository::open(git_workdir).ok()?;
-
+    fn read_status_impl(repo: &Repository, status_options: &mut StatusOptions) -> Option<Self> {
         let status_start = std::time::Instant::now();
-        let statuses = repository
-            .statuses(Some(&mut StatusOptions::new().include_untracked(true)))
+        info!("GIT: Reading git status");
+        let statuses = repo
+            .statuses(Some(status_options))
             .map_err(|e| {
                 error!("Failed to get git statuses: {}", e);
                 e
             })
             .ok()?;
         let status_time = status_start.elapsed();
+        let repo_path = repo.path().parent()?;
         info!("GIT: Status query completed in {:?}", status_time);
-
-        info!(
-            "GIT STATUS: {} git entries in {}",
-            statuses.len(),
-            git_workdir.display()
-        );
 
         let mut entries = Vec::with_capacity(statuses.len());
         for entry in &statuses {
             if let Some(entry_path) = entry.path() {
-                let full_path = git_workdir.join(entry_path);
+                let full_path = repo_path.join(entry_path);
                 entries.push((full_path, entry.status()));
             }
         }
 
-        let total_time = git_start.elapsed();
-        info!("GIT: Total git status read time {:?}", total_time);
-
         Some(Self::from_git_entries(entries))
+    }
+
+    pub fn read_git_status(git_workdir: Option<&Path>) -> Option<Self> {
+        let git_workdir = git_workdir.as_ref()?;
+        let repository = Repository::open(git_workdir).ok()?;
+
+        Self::read_status_impl(
+            &repository,
+            StatusOptions::new()
+                .include_untracked(true)
+                .recurse_untracked_dirs(true),
+        )
+    }
+
+    pub fn git_status_for_paths<TPath: AsRef<Path> + Debug>(
+        repo: &Repository,
+        paths: &[TPath],
+    ) -> Option<Self> {
+        let mut status_options = StatusOptions::new();
+        debug!(?paths, "Git partial git status for paths");
+
+        status_options
+            .include_untracked(true)
+            .recurse_untracked_dirs(true);
+
+        for path in paths {
+            status_options.pathspec(path.as_ref());
+        }
+
+        Self::read_status_impl(repo, &mut status_options)
     }
 }
 
