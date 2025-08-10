@@ -1,4 +1,4 @@
-*fff.nvim.txt*         For Neovim >= 0.8.0         Last change: 2025 August 05
+*fff.nvim.txt*         For Neovim >= 0.8.0         Last change: 2025 August 10
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -23,8 +23,8 @@ FEATURES                                                   *fff.nvim-features*
 
 - Works out of the box with no additional configuration
 - Typo resistant fuzzy search <https://github.com/saghen/frizbee>
-- Git status integration allowing to take adavantage of last modified times within a worktree
-- Separate file index maintained by a dedicaged backend allows <10 milliseconds search time for 50k files codebase
+- Git status integration allowing to take advantage of last modified times within a worktree
+- Separate file index maintained by a dedicated backend allows <10 milliseconds search time for 50k files codebase
 - Display images in previews (for now requires snacks.nvim)
 - Smart in a plenty of different ways hopefully helpful for your workflow
 
@@ -32,7 +32,7 @@ FEATURES                                                   *fff.nvim-features*
 INSTALLATION                                           *fff.nvim-installation*
 
 
-  [!NOTE] Although we’ll try to make sure to keep 100% backward compatibiility,
+  [!NOTE] Although we’ll try to make sure to keep 100% backward compatibility,
   by using you should understand that silly bugs and breaking changes may happen.
   And also we hope for your contributions and feedback to make this plugin ideal
   for everyone.
@@ -72,38 +72,65 @@ LAZY.NVIM
 <
 
 
-DEFAULT CONFIGURATION ~
+CONFIGURATION ~
 
-FFF.nvim comes with sensible defaults. Here’s the complete default
-configuration:
+FFF.nvim comes with sensible defaults. Here’s the complete configuration with
+all available options:
 
 >lua
-    require("fff").setup({
-      -- UI dimensions and appearance
-      width = 0.8,          -- Window width as fraction of screen
-      height = 0.8,         -- Window height as fraction of screen
-      prompt = '🪿 ',       -- Input prompt symbol
-      preview = {
-          enabled = true,
-          width = 0.5,
-          max_lines = 100,
-          max_size = 1024 * 1024, -- 1MB
-      },
-      title = 'FFF Files',  -- Window title
-      max_results = 60,     -- Maximum search results to display
-      max_threads = 4,      -- Maximum threads for fuzzy search
+    require('fff').setup({
+      -- Core settings
+      base_path = vim.fn.getcwd(),           -- Base directory for file indexing
+      max_results = 100,                     -- Maximum search results to display
+      max_threads = 4,                       -- Maximum threads for fuzzy search
+      prompt = '🪿 ',                        -- Input prompt symbol
+      title = 'FFF Files',                   -- Window title
+      ui_enabled = true,                     -- Enable UI (default: true)
     
+      -- Window dimensions
+      width = 0.8,                           -- Window width as fraction of screen
+      height = 0.8,                          -- Window height as fraction of screen
+    
+      -- Preview configuration
+      preview = {
+        enabled = true,                                                    -- Enable preview pane
+        width = 0.5,                                                       -- Preview width as fraction of window
+        max_lines = 5000,                                                  -- Maximum lines to load
+        max_size = 10 * 1024 * 1024,                                       -- Maximum file size (10MB)
+        imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',  -- ImageMagick info format
+        line_numbers = false,                                              -- Show line numbers in preview
+        wrap_lines = false,                                                -- Wrap long lines
+        show_file_info = true,                                             -- Show file info header
+        binary_file_threshold = 1024,                                      -- Bytes to check for binary detection
+        filetypes = {                                                      -- Per-filetype settings
+          svg = { wrap_lines = true },
+          markdown = { wrap_lines = true },
+          text = { wrap_lines = true },
+          log = { tail_lines = 100 },
+        },
+      },
+    
+      -- Layout configuration (alternative to width/height)
+      layout = {
+        prompt_position = 'top',              -- Position of prompt ('top' or 'bottom')
+        preview_position = 'right',           -- Position of preview ('right' or 'left')
+        preview_width = 0.4,                  -- Width of preview pane
+        height = 0.8,                         -- Window height
+        width = 0.8,                          -- Window width
+      },
+    
+      -- Keymaps
       keymaps = {
         close = '<Esc>',
         select = '<CR>',
         select_split = '<C-s>',
         select_vsplit = '<C-v>',
         select_tab = '<C-t>',
-        -- Multiple bindings supported
-        move_up = { '<Up>', '<C-p>' },
+        move_up = { '<Up>', '<C-p>' },        -- Multiple bindings supported
         move_down = { '<Down>', '<C-n>' },
         preview_scroll_up = '<C-u>',
         preview_scroll_down = '<C-d>',
+        toggle_debug = '<F2>',                -- Toggle debug scores display
       },
     
       -- Highlight groups
@@ -119,9 +146,42 @@ configuration:
         debug = 'Comment',
       },
     
+      -- Frecency tracking (track file access patterns)
+      frecency = {
+        enabled = true,                                     -- Enable frecency tracking
+        db_path = vim.fn.stdpath('cache') .. '/fff_nvim',   -- Database location
+      },
+    
+      -- Logging configuration
+      logging = {
+        enabled = true,                                   -- Enable logging
+        log_file = vim.fn.stdpath('log') .. '/fff.log',   -- Log file location
+        log_level = 'info',                               -- Log level (debug, info, warn, error)
+      },
+    
+      -- UI appearance
+      ui = {
+        wrap_paths = true,                    -- Wrap long file paths in list
+        wrap_indent = 2,                      -- Indentation for wrapped paths
+        max_path_width = 80,                  -- Maximum path width before wrapping
+      },
+    
+      -- Image preview (requires terminal with image support)
+      image_preview = {
+        enabled = true,                       -- Enable image previews
+        max_width = 80,                       -- Maximum image width in columns
+        max_height = 24,                      -- Maximum image height in lines
+      },
+    
+      -- Icons
+      icons = {
+        enabled = true,                       -- Enable file icons
+      },
+    
       -- Debug options
       debug = {
-        show_scores = false,  -- Toggle with F2 or :FFFDebug
+        enabled = false,                      -- Enable debug mode
+        show_scores = false,                  -- Show scoring information (toggle with F2)
       },
     })
 <
@@ -133,13 +193,26 @@ KEY FEATURES ~
 AVAILABLE METHODS
 
 >lua
-    require("fff").find_files() -- Find files in current directory
-    require("fff").find_in_git_root() -- Find files in the current git repository
-    require("fff").scan_files() -- Trigger rescan of files in the current directory
-    require("fff").refresh_git_status() -- Refresh git status for the active file lock
-    require("fff").find_files_in_dir(path) -- Find files in a specific directory
-    require("fff").change_indexing_directory(new_path) -- Change the base directory for the file picker
+    require('fff').find_files()                         -- Find files in current directory
+    require('fff').find_in_git_root()                   -- Find files in the current git repository
+    require('fff').scan_files()                         -- Trigger rescan of files in the current directory
+    require('fff').refresh_git_status()                 -- Refresh git status for the active file lock
+    require('fff').find_files_in_dir(path)              -- Find files in a specific directory
+    require('fff').change_indexing_directory(new_path)  -- Change the base directory for the file picker
 <
+
+
+COMMANDS
+
+FFF.nvim provides several commands for interacting with the file picker:
+
+- `:FFFFind [path|query]` - Open file picker. Optional: provide directory path or search query
+- `:FFFScan` - Manually trigger a rescan of files in the current directory
+- `:FFFRefreshGit` - Manually refresh git status for all files
+- `:FFFClearCache [all|frecency|files]` - Clear various caches
+- `:FFFHealth` - Check FFF health status and dependencies
+- `:FFFDebug [on|off|toggle]` - Toggle debug scores display
+- `:FFFOpenLog` - Open the FFF log file in a new tab
 
 
 MULTIPLE KEY BINDINGS
@@ -148,9 +221,9 @@ You can assign multiple key combinations to the same action:
 
 >lua
     keymaps = {
-      move_up = { '<Up>', '<C-p>', '<C-k>' },    -- Three ways to move up
-      close = { '<Esc>', '<C-c>' },              -- Two ways to close
-      select = '<CR>',                           -- Single binding still works
+      move_up = { '<Up>', '<C-p>', '<C-k>' },  -- Three ways to move up
+      close = { '<Esc>', '<C-c>' },            -- Two ways to close
+      select = '<CR>',                         -- Single binding still works
     }
 <
 
@@ -170,14 +243,65 @@ Toggle scoring information display:
 - Use `:FFFDebug` command
 - Enable by default with `debug.show_scores = true`
 
->
-    
-    #### vim-plug
-    
-    ```vim
-    Plug 'MunifTanjim/nui.nvim'
-    Plug 'dmtrKovalenko/fff.nvim', { 'do': 'cargo build --release' }
+
+TROUBLESHOOTING ~
+
+
+HEALTH CHECK
+
+Run `:FFFHealth` to check the status of FFF.nvim and its dependencies. This
+will verify:
+
+- File picker initialization status
+- Optional dependencies (git, image preview tools)
+- Database connectivity
+
+
+VIEWING LOGS
+
+If you encounter issues, check the log file:
+
+>vim
+    :FFFOpenLog
 <
+
+Or manually open the log file at `~/.local/state/nvim/log/fff.log` (default
+location).
+
+
+COMMON ISSUES
+
+**File picker not initializing:**
+
+- Ensure the Rust backend is compiled: `cargo build --release` in the plugin directory
+- Check that your Neovim version is 0.10.0 or higher
+
+**Image previews not working:**
+
+- Verify your terminal supports images (kitty, iTerm2, WezTerm, etc.)
+- For terminals without native image support, install one of: `chafa`, `viu`, or `img2txt`
+- If using snacks.nvim, ensure it’s properly configured
+
+**Performance issues:**
+
+- Adjust `max_threads` in configuration based on your system
+- Reduce `preview.max_lines` and `preview.max_size` for large files
+- Clear cache if it becomes too large: `:FFFClearCache all`
+
+**Files not being indexed:**
+
+- Run `:FFFScan` to manually trigger a file scan
+- Check that the `base_path` is correctly set
+- Verify you have read permissions for the directory
+
+
+DEBUG MODE
+
+Enable debug mode to see scoring information and troubleshoot search results:
+
+- Press `F2` while in the picker
+- Run `:FFFDebug on` to enable permanently
+- Set `debug.show_scores = true` in configuration
 
 Generated by panvimdoc <https://github.com/kdheepak/panvimdoc>
 

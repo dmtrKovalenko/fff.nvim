@@ -1,3 +1,5 @@
+use std::path::MAIN_SEPARATOR;
+
 use crate::{
     git::is_modified_status,
     path_utils::calculate_distance_penalty,
@@ -23,6 +25,7 @@ pub fn match_and_score_files<'a>(
         sort: false,
     };
 
+    let query_contains_path_separator = context.query.contains(MAIN_SEPARATOR);
     let haystack: Vec<&str> = files.iter().map(|f| f.relative_path.as_str()).collect();
     tracing::debug!(
         "Starting fuzzy search for query '{}' in {} files",
@@ -48,9 +51,21 @@ pub fn match_and_score_files<'a>(
         })
         .collect::<Vec<_>>();
 
-    let mut filename_matches =
-        neo_frizbee::match_list(context.query, &haystack_of_filenames, options);
-    filename_matches.par_sort_unstable_by_key(|m| m.index_in_haystack);
+    // if there is a / in the query we don't even match filenames
+    let filename_matches = if query_contains_path_separator {
+        vec![]
+    } else {
+        let mut list = neo_frizbee::match_list_parallel(
+            context.query,
+            &haystack_of_filenames,
+            options,
+            context.max_threads,
+        );
+
+        list.par_sort_unstable_by_key(|m| m.index_in_haystack);
+
+        list
+    };
 
     let mut next_filename_match_index = 0;
     let mut results: Vec<_> = path_matches
@@ -81,13 +96,21 @@ pub fn match_and_score_files<'a>(
                 Some(filename_match) if filename_match.exact => {
                     filename_match.score as i32 / 5 * 2 // 40% bonus for exact filename match
                 }
-                // 20% bonus for fuzzy filename match but only if the score of matched path is
+                // 16% bonus for fuzzy filename match but only if the score of matched path is
                 // equal or greater than the score of matched filename, thus we are not allowing
                 // typoed filename to score higher than the path match
-                Some(filename_match) if filename_match.score >= path_match.score => {
+                Some(filename_match)
+                    if filename_match.score >= path_match.score
+                        && !query_contains_path_separator =>
+                {
                     base_score = filename_match.score as i32;
 
-                    base_score / 5
+                    (base_score / 6)
+                        // for large queries around ~300 score the bonus is too big
+                        // it might lead to situations when much more fitting path with a larger
+                        // base score getting filtered out by combination of score + filename bonus
+                        // so we cap it at 10% of the roughly largest score you can get
+                        .min(30)
                 }
                 // 5% bonus for special file but not as much as file name to avoid sitatuions
                 // when you have /user_service/server.rs and /user_service/server/mod.rs
