@@ -22,4 +22,9 @@ end
 
 package.cpath = package.cpath .. ';' .. table.concat(paths, ';')
 
-return require('fff_nvim')
+local ok, backend = pcall(require, 'fff_nvim')
+if not ok then
+  error('Failed to load fff rust backend. Make sure that it has been built with `cargo build --release`')
+end
+
+return backend
