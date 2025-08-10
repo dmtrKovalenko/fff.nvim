@@ -284,9 +284,9 @@ end
 
 --- Refresh git status for the active file lock
 function M.refresh_git_status()
-  local ok, files = pcall(fuzzy.refresh_git_status)
+  local ok, updated_files_count = pcall(fuzzy.refresh_git_status)
   if ok then
-    print('Refreshed git status for ' .. #files .. ' files')
+    vim.notify('Refreshed git status for ' .. tostring(updated_files_count) .. ' files', vim.log.levels.INFO)
   else
     vim.notify('Failed to refresh git status', vim.log.levels.ERROR)
   end

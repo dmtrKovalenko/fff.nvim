@@ -150,9 +150,8 @@ pub fn is_scanning(_: &Lua, _: ()) -> LuaResult<bool> {
     Ok(picker.is_scan_active())
 }
 
-pub fn refresh_git_status(_: &Lua, _: ()) -> LuaResult<()> {
-    FilePicker::refresh_git_status_global()?;
-    Ok(())
+pub fn refresh_git_status(_: &Lua, _: ()) -> LuaResult<usize> {
+    FilePicker::refresh_git_status_global().map_err(Into::into)
 }
 
 pub fn update_single_file_frecency(_: &Lua, file_path: String) -> LuaResult<bool> {

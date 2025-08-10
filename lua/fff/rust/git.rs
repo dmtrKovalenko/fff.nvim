@@ -57,16 +57,14 @@ impl GitStatusCache {
         Some(Self(entries))
     }
 
-    pub fn read_git_status(git_workdir: Option<&Path>) -> Option<Self> {
+    pub fn read_git_status(
+        git_workdir: Option<&Path>,
+        status_options: &mut StatusOptions,
+    ) -> Option<Self> {
         let git_workdir = git_workdir.as_ref()?;
         let repository = Repository::open(git_workdir).ok()?;
 
-        Self::read_status_impl(
-            &repository,
-            StatusOptions::new()
-                .include_untracked(true)
-                .recurse_untracked_dirs(true),
-        )
+        Self::read_status_impl(&repository, status_options)
     }
 
     pub fn git_status_for_paths<TPath: AsRef<Path> + Debug>(

@@ -111,7 +111,7 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
             return trigger_full_rescan(picker);
         }
 
-        if is_git_status_change(path, git_workdir.as_ref()) {
+        if is_dotgit_change_affecting_status(path, &repo) {
             need_full_git_rescan = true;
         }
 
@@ -178,36 +178,35 @@ fn is_git_file(path: &Path) -> bool {
         .any(|component| component.as_os_str() == ".git")
 }
 
-fn is_git_status_change(path: &Path, git_workdir: Option<&PathBuf>) -> bool {
-    let Some(git_workdir) = git_workdir else {
+pub fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) -> bool {
+    let Some(repo) = repo.as_ref() else {
         return false;
     };
 
-    if let Ok(relative) = path.strip_prefix(git_workdir) {
-        let components: Vec<_> = relative.components().collect();
-        if components.is_empty() || components[0].as_os_str() != ".git" {
+    let git_dir = repo.path();
+
+    if let Ok(rel) = changed.strip_prefix(git_dir) {
+        if rel.starts_with("objects") || rel.starts_with("logs") || rel.starts_with("hooks") {
             return false;
         }
+        if rel == Path::new("index") || rel == Path::new("index.lock") {
+            return true;
+        }
+        if rel == Path::new("HEAD") {
+            return true;
+        }
+        if rel.starts_with("refs") || rel == Path::new("packed-refs") {
+            return true;
+        }
+        if rel == Path::new("info/exclude") || rel == Path::new("info/sparse-checkout") {
+            return true;
+        }
 
-        let file_name = relative.file_name().and_then(|f| f.to_str());
-        let is_critical_file = matches!(
-            file_name,
-            Some(
-                "index"
-                    | "HEAD"
-                    | "COMMIT_EDITMSG"
-                    | "MERGE_HEAD"
-                    | "CHERRY_PICK_HEAD"
-                    | "index.lock"
-            )
-        );
-
-        let is_refs_change = components.len() >= 2 && components[1].as_os_str() == "refs";
-        let is_branch_ref = components.len() >= 3
-            && components[1].as_os_str() == "refs"
-            && components[2].as_os_str() == "heads";
-
-        return is_critical_file || is_refs_change || is_branch_ref;
+        if let Some(fname) = rel.file_name().and_then(|f| f.to_str()) {
+            if matches!(fname, "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD") {
+                return true;
+            }
+        }
     }
 
     false

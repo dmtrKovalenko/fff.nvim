@@ -5,7 +5,7 @@ use crate::frecency::FrecencyTracker;
 use crate::git::{format_git_status, GitStatusCache};
 use crate::score::match_and_score_files;
 use crate::types::{FileItem, ScoringContext, SearchResult};
-use git2::{Repository, Status};
+use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -108,7 +108,6 @@ impl From<&FileItem> for FileKey {
 
 pub struct FilePicker {
     base_path: PathBuf,
-    git_workdir: Option<PathBuf>,
     sync_data: FileSync,
     is_scanning: Arc<AtomicBool>,
     scanned_files_count: Arc<AtomicUsize>,
@@ -119,14 +118,19 @@ impl std::fmt::Debug for FilePicker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FilePicker")
             .field("base_path", &self.base_path)
-            .field("git_workdir", &self.git_workdir)
+            .field("sync_data", &self.sync_data)
+            .field("is_scanning", &self.is_scanning.load(Ordering::Relaxed))
+            .field(
+                "scanned_files_count",
+                &self.scanned_files_count.load(Ordering::Relaxed),
+            )
             .finish_non_exhaustive()
     }
 }
 
 impl FilePicker {
     pub fn git_root(&self) -> Option<&Path> {
-        self.git_workdir.as_deref()
+        self.sync_data.git_workdir.as_deref()
     }
 
     pub fn get_files(&self) -> &[FileItem] {
@@ -146,7 +150,6 @@ impl FilePicker {
 
         let picker = Self {
             base_path: path.clone(),
-            git_workdir: None,
             sync_data: FileSync::new(),
             is_scanning: Arc::clone(&scan_signal),
             scanned_files_count: Arc::clone(&synced_files_count),
@@ -225,15 +228,13 @@ impl FilePicker {
 
         debug!(
             statuses_count = status_cache.statuses_len(),
-            "GIT STATUS UPDATE WHAT THE"
+            "Updating git status",
         );
 
         let frecency = FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)?;
         status_cache
             .into_iter()
             .try_for_each(|(path, status)| -> Result<(), Error> {
-                debug!(?path, ?status, "Updating git status for file");
-
                 if let Some(file) = self.get_mut_file_by_path(&path) {
                     file.git_status = Some(status);
 
@@ -250,14 +251,29 @@ impl FilePicker {
 
     /// Fetches all the git statuses first and updates the global FILE_PICKER
     /// with the new statuses with the smallest possible lock time.
-    pub fn refresh_git_status_global() -> Result<(), Error> {
+    pub fn refresh_git_status_global() -> Result<usize, Error> {
         let git_status = {
             let Some(ref picker) = *FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)? else {
                 return Err(Error::FilePickerMissing)?;
             };
 
+            debug!(
+                "Refreshing git statuses for picker: {:?}",
+                picker.git_root()
+            );
+
             // we keep here readonly lock but allowing querying the index while it scan lasts
-            GitStatusCache::read_git_status(picker.git_root())
+            GitStatusCache::read_git_status(
+                picker.git_root(),
+                StatusOptions::new()
+                    .include_untracked(true)
+                    .recurse_untracked_dirs(true)
+                    // when manually refreshing git status we want to include all unmodified file
+                    // to make sure that their status is correctly updated when user
+                    // commited/stashed/removed changes
+                    .include_unmodified(true)
+                    .exclude_submodules(true),
+            )
         };
 
         let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
@@ -265,8 +281,10 @@ impl FilePicker {
             .as_mut()
             .ok_or_else(|| Error::FilePickerMissing)?;
 
+        let statuses_count = git_status.as_ref().map_or(0, |cache| cache.statuses_len());
         picker.update_git_statuses(git_status)?;
-        Ok(())
+
+        Ok(statuses_count)
     }
 
     pub fn update_single_file_frecency(
@@ -491,7 +509,15 @@ fn scan_filesystem(
                 debug!("No git repository found for path: {}", base_path.display());
             }
 
-            let status_cache = GitStatusCache::read_git_status(git_workdir.as_deref());
+            let status_cache = GitStatusCache::read_git_status(
+                git_workdir.as_deref(),
+                // do not include unmodified here to avoid extra cost
+                // we are treating all missing files as unmodified
+                StatusOptions::new()
+                    .include_untracked(true)
+                    .recurse_untracked_dirs(true)
+                    .exclude_submodules(true),
+            );
             (git_workdir, status_cache)
         });
 
