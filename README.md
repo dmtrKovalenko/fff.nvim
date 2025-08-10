@@ -228,13 +228,6 @@ Toggle scoring information display:
 - Use `:FFFDebug` command
 - Enable by default with `debug.show_scores = true`
 
-#### vim-plug
-
-```vim
-Plug 'MunifTanjim/nui.nvim'
-Plug 'dmtrKovalenko/fff.nvim', { 'do': 'cargo build --release' }
-```
-
 ### Troubleshooting
 
 #### Health Check
