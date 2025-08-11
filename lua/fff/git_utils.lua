@@ -100,7 +100,7 @@ function M.setup_highlights()
     highlight default link FFFGitSignUntracked GitSignsAdd
   ]])
 
-  -- Create selected highlights that preserve foreground colors with Visual background
+  -- Highlighes for git signs both for selected and normal states
   local git_highlights = {
     { 'FFFGitSignStaged', 'FFFGitSignStagedSelected', '#10B981', 2 },
     { 'FFFGitSignModified', 'FFFGitSignModifiedSelected', '#F59E0B', 3 },
@@ -111,13 +111,11 @@ function M.setup_highlights()
   }
 
   for _, hl in ipairs(git_highlights) do
-    local base_hl, selected_hl, gui_fg, cterm_fg = hl[1], hl[2], hl[3], hl[4]
+    local _, selected_hl, gui_fg, cterm_fg = hl[1], hl[2], hl[3], hl[4]
 
-    -- Get Visual background colors
     local visual_bg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'gui')
     local visual_bg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'cterm')
 
-    -- Create the selected highlight with original foreground and Visual background
     local gui_bg = visual_bg_gui ~= '' and visual_bg_gui or 'NONE'
     local cterm_bg = visual_bg_cterm ~= '' and visual_bg_cterm or 'NONE'
 

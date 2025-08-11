@@ -140,7 +140,8 @@ function M.clear_buffer_images(bufnr)
   pcall(vim.api.nvim_buf_clear_namespace, bufnr, -1, 0, -1)
 end
 
---- Display image with parallel metadata loading (immediate image display)
+--- Load metadat of the image, displays it and display image in paralallel
+--- Fully asynchronous
 --- @param file_path string Path to the image file
 --- @param bufnr number Buffer number to display in
 --- @param max_width number Maximum width in characters
@@ -151,45 +152,37 @@ function M.display_image(file_path, bufnr, max_width, max_height)
   max_height = max_height or 24
   vim.api.nvim_buf_set_option(bufnr, 'number', false)
 
+  local reserved_metadata_lines = reserve_image_buffer_space(bufnr, 2)
+  local image_content_starts_at_line = reserved_metadata_lines + 1
+  identify_image_lines_async(
+    file_path,
+    bufnr,
+    function(final_info_lines) update_metadata_lines(bufnr, final_info_lines, reserved_metadata_lines) end
+  )
+
   local ok, snacks = pcall(require, 'snacks')
   if not ok then
     local error_lines = {
       '⚠ Image Preview Unavailable',
       '',
       'snacks.nvim plugin is not installed or not available.',
-      'Please install snacks.nvim to enable image preview.',
-      '',
-      'File: ' .. vim.fn.fnamemodify(file_path, ':t'),
     }
     vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, error_lines)
+    vim.api.nvim_buf_set_lines(bufnr, image_content_starts_at_line, -1, false, error_lines)
     vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
     return false
   end
 
-  if not (snacks.image and snacks.image.placement and snacks.image.supports_terminal) then
+  if not snacks.image.supports_terminal() then
     local error_lines = {
       '⚠ Image Preview Unavailable',
       '',
-      'snacks.nvim image module is not properly configured.',
-      'Please update snacks.nvim to the latest version.',
-      '',
-      'File: ' .. vim.fn.fnamemodify(file_path, ':t'),
+      'Terminal does not support image preview.',
+      'Please use a terminal that supports images, such as Kitty, Wezterm or Alacritty.',
     }
     vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, error_lines)
+    vim.api.nvim_buf_set_lines(bufnr, image_content_starts_at_line, -1, false, error_lines)
     vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
-    return false
-  end
-
-  local reserved_metadata_lines = reserve_image_buffer_space(bufnr, 2)
-  if not snacks.image.supports_terminal() then
-    identify_image_lines_async(
-      file_path,
-      bufnr,
-      function(final_info_lines) update_metadata_lines(bufnr, final_info_lines, reserved_metadata_lines) end
-    )
-
     return false
   end
 
@@ -198,12 +191,10 @@ function M.display_image(file_path, bufnr, max_width, max_height)
       '⚠ Unsupported Image Format',
       '',
       'File format is not supported for image preview.',
-      'Supported formats: png, jpg, jpeg, gif, bmp, webp, tiff, heic, avif, pdf, mp4, mov',
-      '',
       'File: ' .. vim.fn.fnamemodify(file_path, ':t'),
     }
     vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, error_lines)
+    vim.api.nvim_buf_set_lines(bufnr, image_content_starts_at_line, -1, false, error_lines)
     vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
     return false
   end
@@ -213,7 +204,7 @@ function M.display_image(file_path, bufnr, max_width, max_height)
 
     vim.schedule(function()
       local success, placement = pcall(snacks.image.placement.new, bufnr, file_path, {
-        pos = { reserved_metadata_lines + 1, 1 },
+        pos = { image_content_starts_at_line, 1 },
         inline = true,
         fit = 'contain',
         auto_resize = true,

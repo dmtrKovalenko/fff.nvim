@@ -554,12 +554,8 @@ end
 --- @param bufnr number Buffer number for preview
 --- @return boolean Success status
 function M.preview_binary_file(file_path, bufnr)
-  local lines = {}
   local info = M.get_file_info(file_path)
-  table.insert(lines, '⚠ Binary File Detected')
-  table.insert(lines, '')
-  table.insert(lines, 'This file contains binary data and cannot be displayed as text.')
-  table.insert(lines, '')
+  local lines = {}
 
   set_buffer_lines(bufnr, lines)
   vim.api.nvim_buf_set_option(bufnr, 'filetype', 'text')
@@ -574,15 +570,14 @@ function M.preview_binary_file(file_path, bufnr)
 
         if result.code == 0 and result.stdout then
           local file_type = result.stdout:gsub('\n', '')
-          table.insert(lines, 'File type: ' .. file_type)
-          table.insert(lines, '')
+          table.insert(lines, 'Binary file: ' .. file_type)
+          if info and info.size_formatted then table.insert(lines, 'Size: ' .. info.size_formatted) end
 
-          if info and info.size <= 1024 and vim.fn.executable('xxd') == 1 then
-            table.insert(lines, 'Hex dump (first 1KB):')
+          if vim.fn.executable('xxd') == 1 then
             table.insert(lines, '')
             set_buffer_lines(bufnr, lines)
 
-            local hex_cmd = { 'xxd', '-l', '1024', file_path }
+            local hex_cmd = { 'xxd', '-l', '8192', file_path }
             vim.system(hex_cmd, { text = true }, function(hex_result)
               vim.schedule(function()
                 if not vim.api.nvim_buf_is_valid(bufnr) then return end
@@ -593,7 +588,7 @@ function M.preview_binary_file(file_path, bufnr)
                     if line:match('%S') then table.insert(lines, line) end
                   end
                 else
-                  table.insert(lines, 'Hex dump failed')
+                  table.insert(lines, 'Use a hex editor or appropriate application to view this file.')
                 end
                 set_buffer_lines(bufnr, lines)
               end)
