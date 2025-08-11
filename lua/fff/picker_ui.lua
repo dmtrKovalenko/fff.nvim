@@ -66,13 +66,20 @@ function M.create_ui()
     preview_height = list_height - file_info_height -- No subtraction needed - borders are handled by window positioning
   end
 
-  local buf_opts = { false, true } -- nofile, scratch buffer
-  M.state.input_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2])
-  M.state.list_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2])
-  if M.enabled_preview() then M.state.preview_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2]) end
+  M.state.input_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(M.state.input_buf, 'bufhidden', 'wipe')
+
+  M.state.list_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(M.state.list_buf, 'bufhidden', 'wipe')
+
+  if M.enabled_preview() then
+    M.state.preview_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_option(M.state.preview_buf, 'bufhidden', 'wipe')
+  end
 
   if debug_enabled_in_preview then
-    M.state.file_info_buf = vim.api.nvim_create_buf(buf_opts[1], buf_opts[2])
+    M.state.file_info_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_option(M.state.file_info_buf, 'bufhidden', 'wipe')
   else
     M.state.file_info_buf = nil
   end
@@ -680,9 +687,10 @@ function M.update_preview()
     return
   end
 
-  if M.state.last_preview_file == item.path then
-    return -- Skip re-rendering if same file
-  end
+  if M.state.last_preview_file == item.path then return end
+
+  local preview = require('fff.file_picker.preview')
+  preview.clear()
 
   M.state.last_preview_file = item.path
 
@@ -870,7 +878,6 @@ function M.close()
     if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
   end
 
-  -- Delete all buffers to prevent E37 error when quitting
   local buffers = {
     M.state.input_buf,
     M.state.list_buf,
@@ -879,7 +886,17 @@ function M.close()
   if M.enabled_preview() then buffers[#buffers + 1] = M.state.preview_buf end
 
   for _, buf in ipairs(buffers) do
-    if buf and vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_delete(buf, { force = true }) end
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_clear_namespace(buf, -1, 0, -1)
+      pcall(vim.treesitter.stop, buf)
+
+      if buf == M.state.preview_buf then
+        local preview = require('fff.file_picker.preview')
+        preview.clear_buffer_resources(buf)
+      end
+
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end
   end
 
   M.state.input_win = nil

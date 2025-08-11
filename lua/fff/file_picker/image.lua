@@ -81,8 +81,6 @@ function M.is_image(file_path)
   return false
 end
 
---- Clear any existing image attachments from buffer
---- @param bufnr number Buffer number
 function M.clear_buffer_images(bufnr)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
@@ -93,6 +91,8 @@ function M.clear_buffer_images(bufnr)
 
   local ok, snacks = pcall(require, 'snacks')
   if ok and snacks.image and snacks.image.placement then pcall(snacks.image.placement.clean, bufnr) end
+
+  pcall(vim.api.nvim_buf_clear_namespace, bufnr, -1, 0, -1)
 end
 
 --- Display image using the simplest approach that works

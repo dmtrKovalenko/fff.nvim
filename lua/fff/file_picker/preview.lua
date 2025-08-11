@@ -9,7 +9,6 @@ local function get_image()
   return image
 end
 
--- Set lines in preview buffer (simpler approach)
 local function set_buffer_lines(bufnr, lines)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
@@ -18,7 +17,16 @@ local function set_buffer_lines(bufnr, lines)
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
 end
 
--- Check if file is already loaded in a buffer
+local function append_buffer_lines(bufnr, lines)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
+  if not lines or #lines == 0 then return end
+
+  vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+  local current_lines = vim.api.nvim_buf_line_count(bufnr)
+  vim.api.nvim_buf_set_lines(bufnr, current_lines, current_lines, false, lines)
+  vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+end
+
 local function find_existing_buffer(file_path)
   local abs_path = vim.fn.resolve(vim.fn.fnamemodify(file_path, ':p'))
 
@@ -34,43 +42,127 @@ local function find_existing_buffer(file_path)
   return nil
 end
 
-local function read_file_fast(file_path, max_lines)
-  local fd = vim.uv.fs_open(file_path, 'r', 0x666)
-  if not fd then return nil end
-
-  local stat = vim.uv.fs_fstat(fd)
-  if not stat then
-    vim.uv.fs_close(fd)
-    return nil
+local function init_dynamic_loading(file_path)
+  if M.state.file_handle then
+    M.state.file_handle:close()
+    M.state.file_handle = nil
   end
 
-  local data = vim.uv.fs_read(fd, stat.size, 0)
-  vim.uv.fs_close(fd)
+  M.state.loaded_lines = 0
+  M.state.total_file_lines = nil
+  M.state.has_more_content = true
+  M.state.is_loading = false
 
-  if not data then return nil end
+  M.state.file_handle = io.open(file_path, 'r')
+  if not M.state.file_handle then return false end
 
-  local lines = vim.split(data, '\n', { plain = true })
-  if max_lines and #lines > max_lines then
-    local limited_lines = {}
-    for i = 1, max_lines do
-      table.insert(limited_lines, lines[i])
+  return true
+end
+
+local function load_forward_chunk(target_lines)
+  M.state.is_loading = true
+  local lines = {}
+  local line_count = 0
+  local max_line_length = M.config.max_line_length
+  local chunk_size = target_lines or (M.config.chunk_size or M.state.loading_chunk_size)
+
+  for line in M.state.file_handle:lines() do
+    line_count = line_count + 1
+    M.state.loaded_lines = M.state.loaded_lines + 1
+    if #line > max_line_length then line = line:sub(1, max_line_length) .. '...' end
+
+    table.insert(lines, line)
+
+    if line_count >= chunk_size then break end
+  end
+
+  if line_count < chunk_size then
+    M.state.has_more_content = false
+    M.state.total_file_lines = M.state.loaded_lines
+    if M.state.file_handle then
+      M.state.file_handle:close()
+      M.state.file_handle = nil
     end
-    lines = limited_lines
   end
+
+  M.state.is_loading = false
+  return lines
+end
+
+local function load_next_chunk(target_lines)
+  if not M.state.file_handle or not M.state.has_more_content or M.state.is_loading then return {} end
+  return load_forward_chunk(target_lines)
+end
+
+local function read_file_streaming(file_path, config)
+  local initial_lines = type(config) == 'number' and config or nil
+
+  if not init_dynamic_loading(file_path) then return nil end
+
+  local initial_chunk_size = initial_lines or (M.config.chunk_size or M.state.loading_chunk_size)
+  local lines = load_next_chunk(initial_chunk_size)
 
   return lines
 end
 
-local function copy_buffer_content(source_bufnr, target_bufnr)
+local function ensure_content_loaded(target_line)
+  if not M.state.bufnr or not vim.api.nvim_buf_is_valid(M.state.bufnr) then return false end
+  if not M.state.has_more_content or M.state.is_loading then return false end
+
+  local current_buffer_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
+  local buffer_needed = target_line + 50
+
+  if current_buffer_lines >= buffer_needed then return true end
+  if current_buffer_lines < buffer_needed then
+    local loading_line = string.format('Loading more content... (%d lines loaded)', M.state.loaded_lines)
+    append_buffer_lines(M.state.bufnr, { '', loading_line })
+  end
+
+  local lines_needed = buffer_needed - current_buffer_lines
+  local chunk_lines = load_next_chunk(lines_needed)
+
+  if chunk_lines and #chunk_lines > 0 then
+    -- remove loading indicator by replacing the last 2 lines (empty + loading message)
+    local total_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
+
+    if total_lines >= 2 then
+      local existing_lines = vim.api.nvim_buf_get_lines(M.state.bufnr, 0, total_lines - 2, false)
+      local new_content = vim.list_extend(existing_lines, chunk_lines)
+      set_buffer_lines(M.state.bufnr, new_content)
+    else
+      append_buffer_lines(M.state.bufnr, chunk_lines)
+    end
+
+    M.state.content_height = vim.api.nvim_buf_line_count(M.state.bufnr)
+
+    -- Add final status if we've reached the end
+    if not M.state.has_more_content and M.state.total_file_lines then
+      local status_line = string.format('— End of file (%d lines total) —', M.state.total_file_lines)
+      append_buffer_lines(M.state.bufnr, { '', status_line })
+      M.state.content_height = vim.api.nvim_buf_line_count(M.state.bufnr)
+    end
+
+    return true
+  end
+
+  return false
+end
+
+local function link_buffer_content(source_bufnr, target_bufnr)
   local lines = vim.api.nvim_buf_get_lines(source_bufnr, 0, -1, false)
   set_buffer_lines(target_bufnr, lines)
 
   local source_ft = vim.api.nvim_buf_get_option(source_bufnr, 'filetype')
   if source_ft ~= '' then vim.api.nvim_buf_set_option(target_bufnr, 'filetype', source_ft) end
 
+  -- need to prevent chunking on buffer previews
+  M.state.has_more_content = false
+  M.state.total_file_lines = #lines
+  M.state.loaded_lines = #lines
+  M.state.content_height = #lines
+
   return true
 end
-
 -- Config will be set from main.lua
 M.config = nil
 
@@ -80,17 +172,35 @@ M.state = {
   current_file = nil,
   scroll_offset = 0,
   content_height = 0,
+  loaded_lines = 0,
+  total_file_lines = nil,
+  loading_chunk_size = 1000,
+  is_loading = false,
+  has_more_content = true,
+  file_handle = nil,
 }
 
 --- Setup preview configuration
 --- @param config table Configuration options
 function M.setup(config) M.config = config or {} end
 
+--- Check if file is too big for initial preview (inspired by snacks.nvim)
+--- @param file_path string Path to the file
+--- @param bufnr number|nil Buffer number to check (unused with dynamic loading)
+--- @return boolean True if file is too big for initial preview
+function M.is_big_file(file_path, bufnr)
+  -- Only check file size for early detection - no line limits with dynamic loading
+  local stat = vim.uv.fs_stat(file_path)
+  if stat and stat.size > M.config.max_size then return true end
+
+  return false
+end
+
 --- Check if file is binary
 --- @param file_path string Path to the file
 --- @return boolean True if file appears to be binary
 function M.is_binary_file(file_path)
-  local ext = string.lower(vim.fn.fnamemodify(file_path, ':e'))
+  local ext = vim.fn.fnamemodify(file_path, ':e')
   local binary_extensions = {
     'jpg',
     'jpeg',
@@ -244,86 +354,19 @@ function M.create_file_info_content(file, info, file_index)
   return lines
 end
 
---- Create file info header
---- @param info table File information
---- @return table Lines for the header
-function M.create_file_info_header(info)
-  if not M.config.show_file_info or not info then return {} end
-
-  local header = {}
-  table.insert(header, string.format('File: %s', info.name))
-  table.insert(header, string.format('Size: %s', info.size_formatted))
-  table.insert(header, string.format('Modified: %s', info.modified_formatted))
-  table.insert(header, string.format('Type: %s', info.filetype))
-
-  if info.extension ~= '' then table.insert(header, string.format('Extension: .%s', info.extension)) end
-
-  table.insert(header, string.rep('─', 50))
-  table.insert(header, '')
-
-  return header
-end
-
---- Read file content with proper handling
---- @param file_path string Path to the file
---- @param max_lines number Maximum lines to read
---- @return table|nil Lines of content, nil if failed
-function M.read_file_content(file_path, max_lines)
-  local file = io.open(file_path, 'r')
-  if not file then return nil end
-
-  local lines = {}
-  local line_count = 0
-
-  for line in file:lines() do
-    line_count = line_count + 1
-
-    -- Handle very long lines by truncating them
-    if #line > 500 then line = line:sub(1, 497) .. '...' end
-
-    table.insert(lines, line)
-
-    if line_count >= max_lines then
-      table.insert(lines, '')
-      table.insert(lines, string.format('... (truncated, showing first %d lines)', max_lines))
-      break
-    end
-  end
-
-  file:close()
-  return lines
-end
-
---- Read file tail (last N lines)
---- @param file_path string Path to the file
---- @param tail_lines number Number of lines from the end
---- @return table|nil Lines of content, nil if failed
-function M.read_file_tail(file_path, tail_lines)
-  local cmd = string.format('tail -n %d %s 2>/dev/null', tail_lines, vim.fn.shellescape(file_path))
-  local result = vim.fn.system(cmd)
-
-  if vim.v.shell_error ~= 0 then return M.read_file_content(file_path, tail_lines) end
-
-  local lines = vim.split(result, '\n')
-  if lines[#lines] == '' then table.remove(lines) end
-
-  return lines
-end
-
 --- Preview a regular file
 --- @param file_path string Path to the file
 --- @param bufnr number Buffer number for preview
 --- @return boolean Success status
 function M.preview_file(file_path, bufnr)
-  local info = M.get_file_info(file_path)
-  if not info then return false end
-
-  if info.size > M.config.max_size then
+  -- Early size detection to prevent memory issues
+  if M.is_big_file(file_path, bufnr) then
+    local info = M.get_file_info(file_path)
     local lines = {
       'File too large for preview',
       string.format(
         'Size: %s (max: %s)',
-        info.size_formatted,
+        info and info.size_formatted or 'Unknown',
         string.format('%.1fMB', M.config.max_size / 1024 / 1024)
       ),
       '',
@@ -333,11 +376,14 @@ function M.preview_file(file_path, bufnr)
     return true
   end
 
+  local info = M.get_file_info(file_path)
+  if not info then return false end
+
   -- if the buffer is already opened for this file we reuse the buffer directly
   local existing_bufnr = find_existing_buffer(file_path)
 
   if existing_bufnr then
-    local success = copy_buffer_content(existing_bufnr, bufnr)
+    local success = link_buffer_content(existing_bufnr, bufnr)
     if success then
       local file_config = M.get_file_config(file_path)
 
@@ -347,29 +393,20 @@ function M.preview_file(file_path, bufnr)
       vim.api.nvim_buf_set_option(bufnr, 'wrap', file_config.wrap_lines or M.config.wrap_lines)
       vim.api.nvim_buf_set_option(bufnr, 'number', M.config.line_numbers)
 
-      local content = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-      M.state.content_height = #content
+      -- State already set by link_buffer_content - just reset scroll position
       M.state.scroll_offset = 0
 
       return true
     end
   end
 
-  -- Fallback: Manual file reading with fast UV operations
-  local file_config = M.get_file_config(file_path)
-
-  local content
-  if file_config.tail_lines then
-    content = M.read_file_tail(file_path, file_config.tail_lines)
-  else
-    content = read_file_fast(file_path, M.config.max_lines)
-    if not content then content = M.read_file_content(file_path, M.config.max_lines) end
-  end
+  local content = read_file_streaming(file_path)
 
   if not content then return false end
 
   set_buffer_lines(bufnr, content)
 
+  local file_config = M.get_file_config(file_path)
   vim.api.nvim_buf_set_option(bufnr, 'filetype', info.filetype)
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
   vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
@@ -451,6 +488,16 @@ function M.preview(file_path, bufnr)
     return false
   end
 
+  if M.state.file_handle then
+    M.state.file_handle:close()
+    M.state.file_handle = nil
+  end
+
+  M.state.loaded_lines = 0
+  M.state.total_file_lines = nil
+  M.state.has_more_content = true
+  M.state.is_loading = false
+
   M.state.current_file = file_path
   M.state.bufnr = bufnr
 
@@ -480,12 +527,22 @@ function M.scroll(lines)
   local win_height = vim.api.nvim_win_get_height(M.state.winid)
   local content_height = M.state.content_height or 0
 
+  local current_offset = M.state.scroll_offset or 0
+  local new_offset = current_offset + lines
+
+  -- If scrolling down, try to load more content if needed
+  if lines > 0 then
+    local target_line = new_offset + win_height
+    ensure_content_loaded(target_line)
+    -- Update content height after potential loading
+    content_height = M.state.content_height or 0
+  end
+
   -- allows scrolling for a full content + half window
   local half_screen = math.floor(win_height / 2)
   local max_scroll = math.max(0, content_height + half_screen - win_height)
 
-  local current_offset = M.state.scroll_offset or 0
-  local new_offset = math.max(0, math.min(max_scroll, current_offset + lines))
+  new_offset = math.max(0, math.min(max_scroll, new_offset))
 
   if new_offset ~= current_offset then
     M.state.scroll_offset = new_offset
@@ -502,26 +559,6 @@ end
 --- Set preview window
 --- @param winid number Window ID for the preview
 function M.set_preview_window(winid) M.state.winid = winid end
-
---- Create preview header with file information
---- @param file table File information from search results
---- @return table Lines for the preview header
-function M.create_preview_header(file)
-  if not file then return {} end
-
-  local header = {}
-  local filename = file.name or vim.fn.fnamemodify(file.path or '', ':t')
-  local dir = file.directory or vim.fn.fnamemodify(file.path or '', ':h')
-  if dir == '.' then dir = '' end
-
-  -- Header with file info
-  table.insert(header, string.format('📄 %s', filename))
-  if dir ~= '' then table.insert(header, string.format('📁 %s', dir)) end
-  table.insert(header, string.rep('─', 50))
-  table.insert(header, '')
-
-  return header
-end
 
 --- Update file info buffer
 --- @param file table File information from search results
@@ -550,18 +587,37 @@ function M.update_file_info_buffer(file, bufnr, file_index)
   return true
 end
 
---- Clear buffer completely including any image attachments
---- @param bufnr number Buffer number to clear
-function M.clear_buffer(bufnr)
+function M.clear_buffer_resources(bufnr)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
+  vim.api.nvim_buf_clear_namespace(bufnr, -1, 0, -1)
+  pcall(vim.treesitter.stop, bufnr)
   get_image().clear_buffer_images(bufnr)
-  set_buffer_lines(bufnr, {})
+
+  local ei = vim.o.eventignore
+  vim.o.eventignore = 'all'
+
   vim.api.nvim_buf_set_option(bufnr, 'filetype', '')
+  vim.api.nvim_buf_set_option(bufnr, 'syntax', '')
+  vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
+
+  set_buffer_lines(bufnr, {})
+  vim.o.eventignore = ei
 end
 
---- Clear preview
+function M.clear_buffer(bufnr) M.clear_buffer_resources(bufnr) end
+
 function M.clear()
+  if M.state.file_handle then
+    M.state.file_handle:close()
+    M.state.file_handle = nil
+  end
+
+  M.state.loaded_lines = 0
+  M.state.total_file_lines = nil
+  M.state.has_more_content = true
+  M.state.is_loading = false
+
   if M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) then
     M.clear_buffer(M.state.bufnr)
     set_buffer_lines(M.state.bufnr, { 'No preview available' })
