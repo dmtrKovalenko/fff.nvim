@@ -8,37 +8,19 @@ local function get_main_config()
 end
 
 local active_placements = {} ---@type table<number, any>
+local loading_jobs = {} ---@type table<number, {metadata_job?: any}>
 
-local function identify_image_lines(file_path)
-  local stat = vim.uv.fs_stat(file_path)
-  local size_str = stat and utils.format_file_size(stat.size) or 'Unknown'
-
-  local info_lines = {}
-  table.insert(info_lines, ' Size: ' .. size_str)
-
-  local config = get_main_config()
-  local format_str = config and config.preview and config.preview.imagemagick_info_format_str
-    or '%m: %wx%h, %[colorspace], %q-bit'
-  local cmd = string.format('identify -format "%s" "%s" 2>/dev/null', format_str, file_path)
-  local magick_info = vim.fn.system(cmd)
-
-  if vim.v.shell_error == 0 and magick_info and magick_info ~= '' then
-    magick_info = ' ' .. magick_info:gsub('\n', '')
-    table.insert(info_lines, magick_info)
-  end
-
-  return info_lines
-end
-
--- This is a required function for snacks nvim to fill the buffer with enough space
-local function fill_buffer_space_for_image_preview(bufnr, info_lines)
+local function reserve_image_buffer_space(bufnr, metadata_lines_count)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
   local win = vim.fn.bufwinid(bufnr)
   local buffer_height = win ~= -1 and vim.api.nvim_win_get_height(win) or 24
-  local lines_for_image = math.max(buffer_height - #info_lines - 2, 5)
+  local lines_for_image = math.max(buffer_height - metadata_lines_count - 2, 5)
 
-  local buffer_lines = vim.list_extend({}, info_lines)
+  local buffer_lines = {}
+  for _ = 1, metadata_lines_count do
+    table.insert(buffer_lines, '')
+  end
   for _ = 1, lines_for_image do
     table.insert(buffer_lines, '')
   end
@@ -47,8 +29,64 @@ local function fill_buffer_space_for_image_preview(bufnr, info_lines)
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
 
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, buffer_lines)
-
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', was_modifiable)
+
+  return metadata_lines_count or 2
+end
+
+local function update_metadata_lines(bufnr, info_lines, reserved_lines_count)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
+
+  reserved_lines_count = reserved_lines_count or 2
+
+  local metadata_lines = {}
+  for i = 1, reserved_lines_count do
+    metadata_lines[i] = info_lines[i] or ''
+  end
+
+  vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+  vim.api.nvim_buf_set_lines(bufnr, 0, reserved_lines_count, false, metadata_lines)
+  vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+end
+
+local function identify_image_lines_async(file_path, bufnr, callback)
+  local stat = vim.uv.fs_stat(file_path)
+  local size_str = stat and utils.format_file_size(stat.size) or 'Unknown'
+
+  local initial_info_lines = { ' Size: ' .. size_str }
+
+  if vim.fn.executable('identify') == 0 then
+    callback(initial_info_lines)
+    return
+  end
+
+  callback(initial_info_lines)
+
+  local config = get_main_config()
+  local format_str = config and config.preview and config.preview.imagemagick_info_format_str
+    or '%m: %wx%h, %[colorspace], %q-bit'
+
+  local cmd = { 'identify', '-format', format_str, file_path }
+
+  -- Cancel any previous metadata job
+  if loading_jobs[bufnr] and loading_jobs[bufnr].metadata_job then
+    pcall(loading_jobs[bufnr].metadata_job.kill, loading_jobs[bufnr].metadata_job, 9)
+  end
+  loading_jobs[bufnr] = loading_jobs[bufnr] or {}
+
+  loading_jobs[bufnr].metadata_job = vim.system(cmd, { text = true }, function(result)
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(bufnr) then return end
+
+      local enhanced_info_lines = vim.deepcopy(initial_info_lines)
+      if result.code == 0 and result.stdout and result.stdout ~= '' then
+        local magick_info = ' ' .. result.stdout:gsub('\n', '')
+        table.insert(enhanced_info_lines, magick_info)
+      end
+
+      callback(enhanced_info_lines)
+    end)
+  end)
 end
 
 local IMAGE_EXTENSIONS = {
@@ -84,6 +122,13 @@ end
 function M.clear_buffer_images(bufnr)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
+  if loading_jobs[bufnr] then
+    if loading_jobs[bufnr].metadata_job then
+      pcall(loading_jobs[bufnr].metadata_job.kill, loading_jobs[bufnr].metadata_job, 9)
+    end
+    loading_jobs[bufnr] = nil
+  end
+
   if active_placements[bufnr] then
     pcall(active_placements[bufnr].close, active_placements[bufnr])
     active_placements[bufnr] = nil
@@ -95,7 +140,7 @@ function M.clear_buffer_images(bufnr)
   pcall(vim.api.nvim_buf_clear_namespace, bufnr, -1, 0, -1)
 end
 
---- Display image using the simplest approach that works
+--- Display image with parallel metadata loading (immediate image display)
 --- @param file_path string Path to the image file
 --- @param bufnr number Buffer number to display in
 --- @param max_width number Maximum width in characters
@@ -110,46 +155,30 @@ function M.display_image(file_path, bufnr, max_width, max_height)
   if ok and snacks.image and snacks.image.buf then
     M.clear_buffer_images(bufnr)
 
-    local info_lines = identify_image_lines(file_path)
+    local reserved_metadata_lines = reserve_image_buffer_space(bufnr, 2)
+    local image_start_line = reserved_metadata_lines + 1
 
-    fill_buffer_space_for_image_preview(bufnr, info_lines)
     vim.schedule(function()
       local success, placement = pcall(snacks.image.placement.new, bufnr, file_path, {
-        pos = { #info_lines + 1, 1 },
+        pos = { image_start_line, 1 },
         inline = true,
         fit = 'contain',
         auto_resize = true,
       })
 
-      if success and placement then
-        active_placements[bufnr] = placement
-      else
-        M.display_image_info(file_path, bufnr, 'Snacks.nvim failed: ' .. tostring(placement or 'unknown error'))
-      end
+      if success and placement then active_placements[bufnr] = placement end
     end)
+
+    identify_image_lines_async(
+      file_path,
+      bufnr,
+      function(final_info_lines) update_metadata_lines(bufnr, final_info_lines, reserved_metadata_lines) end
+    )
+
     return true
   end
 
-  M.display_image_info(file_path, bufnr, 'Snacks.nvim not available')
   return false
-end
-
---- Display image information when image display fails
---- @param file_path string Path to the image file
---- @param bufnr number Buffer number to display in
---- @param reason string|nil Reason for failure
-function M.display_image_info(file_path, bufnr, reason)
-  local info_lines = identify_image_lines(file_path)
-
-  if reason then
-    table.insert(info_lines, '')
-    table.insert(info_lines, string.rep('─', 50))
-
-    table.insert(info_lines, ' Preview is not available')
-    table.insert(info_lines, ' Reason: ' .. reason)
-  end
-
-  fill_buffer_space_for_image_preview(bufnr, info_lines)
 end
 
 return M

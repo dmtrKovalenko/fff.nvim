@@ -20,7 +20,7 @@ function M.setup(config)
       width = 0.5,
       max_size = 1 * 1024 * 1024, -- Keep file size limit for early detection
       max_line_length = 1000, -- Keep line length limit for memory safety
-      chunk_size = 1000, -- Lines per chunk for dynamic loading
+      chunk_size = 16384, -- Bytes per chunk for dynamic loading (16KB - fits ~100-200 lines)
       imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
       line_numbers = false,
       wrap_lines = false,
