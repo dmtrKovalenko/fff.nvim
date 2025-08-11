@@ -43,9 +43,25 @@ M.border_highlights = {
   unknown = 'FFFGitSignUntracked',
 }
 
+M.border_highlights_selected = {
+  untracked = 'FFFGitSignUntrackedSelected',
+  modified = 'FFFGitSignModifiedSelected',
+  deleted = 'FFFGitSignDeletedSelected',
+  renamed = 'FFFGitSignRenamedSelected',
+  staged_new = 'FFFGitSignStagedSelected',
+  staged_modified = 'FFFGitSignStagedSelected',
+  staged_deleted = 'FFFGitSignStagedSelected',
+  ignored = 'FFFGitSignIgnoredSelected',
+  clean = '',
+  clear = '',
+  unknown = 'FFFGitSignUntrackedSelected',
+}
+
 function M.get_highlight(git_status) return M.highlights[git_status] or '' end
 
 function M.get_border_highlight(git_status) return M.border_highlights[git_status] or '' end
+
+function M.get_border_highlight_selected(git_status) return M.border_highlights_selected[git_status] or '' end
 
 function M.get_border_char(git_status) return M.border_chars[git_status] or '' end
 
@@ -83,6 +99,39 @@ function M.setup_highlights()
     highlight default link FFFGitSignDeleted GitSignsDelete
     highlight default link FFFGitSignUntracked GitSignsAdd
   ]])
+
+  -- Create selected highlights that preserve foreground colors with Visual background
+  local git_highlights = {
+    { 'FFFGitSignStaged', 'FFFGitSignStagedSelected', '#10B981', 2 },
+    { 'FFFGitSignModified', 'FFFGitSignModifiedSelected', '#F59E0B', 3 },
+    { 'FFFGitSignDeleted', 'FFFGitSignDeletedSelected', '#EF4444', 1 },
+    { 'FFFGitSignRenamed', 'FFFGitSignRenamedSelected', '#8B5CF6', 5 },
+    { 'FFFGitSignUntracked', 'FFFGitSignUntrackedSelected', '#10B981', 2 },
+    { 'FFFGitSignIgnored', 'FFFGitSignIgnoredSelected', '#4B5563', 8 },
+  }
+
+  for _, hl in ipairs(git_highlights) do
+    local base_hl, selected_hl, gui_fg, cterm_fg = hl[1], hl[2], hl[3], hl[4]
+
+    -- Get Visual background colors
+    local visual_bg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'gui')
+    local visual_bg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'cterm')
+
+    -- Create the selected highlight with original foreground and Visual background
+    local gui_bg = visual_bg_gui ~= '' and visual_bg_gui or 'NONE'
+    local cterm_bg = visual_bg_cterm ~= '' and visual_bg_cterm or 'NONE'
+
+    vim.cmd(
+      string.format(
+        'highlight default %s guifg=%s guibg=%s ctermfg=%d ctermbg=%s',
+        selected_hl,
+        gui_fg,
+        gui_bg,
+        cterm_fg,
+        cterm_bg
+      )
+    )
+  end
 end
 
 return M

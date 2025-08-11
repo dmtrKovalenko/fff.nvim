@@ -649,20 +649,28 @@ function M.render_list()
           end
         end
 
-        -- git signs like borders
-        if icon_info and icon_info.git_status then
-          if git_utils.should_show_border(icon_info.git_status) then
-            local border_char = git_utils.get_border_char(icon_info.git_status)
-            local border_hl = git_utils.get_border_highlight(icon_info.git_status)
+        local is_cursor_line = line_idx == cursor_line
+        local border_char = ' ' -- render space so it is highlighted
+        local border_hl = nil
 
-            if border_char ~= '' and border_hl ~= '' then
-              vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
-                sign_text = border_char,
-                sign_hl_group = border_hl,
-                priority = 1000,
-              })
-            end
+        if icon_info and icon_info.git_status and git_utils.should_show_border(icon_info.git_status) then
+          border_char = git_utils.get_border_char(icon_info.git_status)
+          if is_cursor_line then
+            border_hl = git_utils.get_border_highlight_selected(icon_info.git_status)
+          else
+            border_hl = git_utils.get_border_highlight(icon_info.git_status)
           end
+        end
+
+        local final_border_hl = border_hl ~= '' and border_hl
+          or (is_cursor_line and M.state.config.hl.active_file or '')
+
+        if final_border_hl ~= '' or is_cursor_line then
+          vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
+            sign_text = border_char,
+            sign_hl_group = final_border_hl ~= '' and final_border_hl or M.state.config.hl.active_file,
+            priority = 1000,
+          })
         end
       end
     end

@@ -44,7 +44,7 @@ local function cleanup_file_operation()
   end
 end
 
-local function init_dynamic_loading_async(file_path, bufnr, callback)
+local function init_dynamic_loading_async(file_path, callback)
   cleanup_file_operation()
 
   M.state.loaded_lines = 0
@@ -68,14 +68,14 @@ local function init_dynamic_loading_async(file_path, bufnr, callback)
   end)
 end
 
-local function load_forward_chunk_async(bufnr, target_size, callback)
+local function load_forward_chunk_async(target_size, callback)
   if not M.state.file_operation or not M.state.file_operation.fd then
     callback('', 'No file handle available')
     return
   end
 
   M.state.is_loading = true
-  local chunk_size = target_size or (M.config.chunk_size or 65536) -- Default to 64KB chunks
+  local chunk_size = target_size or (M.config.chunk_size or 16384)
 
   vim.uv.fs_read(M.state.file_operation.fd, chunk_size, M.state.file_operation.position, function(err, data)
     vim.schedule(function()
@@ -100,32 +100,27 @@ local function load_forward_chunk_async(bufnr, target_size, callback)
   end)
 end
 
-local function load_next_chunk_async(bufnr, target_size, callback)
+local function load_next_chunk_async(chunk_size, callback)
   if not M.state.file_operation or not M.state.has_more_content or M.state.is_loading then
     callback('', nil)
     return
   end
-  load_forward_chunk_async(bufnr, target_size, callback)
+  load_forward_chunk_async(chunk_size, callback)
 end
 
-local function read_file_streaming_async(file_path, bufnr, config, callback)
-  local initial_size = type(config) == 'number' and config or nil
-
-  init_dynamic_loading_async(file_path, bufnr, function(success, error_msg)
+local function read_file_streaming_async(file_path, bufnr, callback)
+  init_dynamic_loading_async(file_path, function(success, error_msg)
     if not success then
       callback(nil, error_msg)
       return
     end
 
-    local initial_chunk_size = initial_size or (M.config.chunk_size or 65536)
-    load_next_chunk_async(bufnr, initial_chunk_size, function(data, err)
+    load_next_chunk_async(M.config.chunk_size, function(data, err)
       if data and data ~= '' then
         -- there seems to be no other way to append the buffer other than the lines :(
         local lines = vim.split(data, '\n', { plain = true })
         M.state.loaded_lines = #lines
         M.state.content_height = #lines
-
-        if #data < initial_chunk_size then M.state.has_more_content = false end
 
         callback(lines, err)
       else
@@ -149,11 +144,15 @@ local function ensure_content_loaded_async(target_line)
     append_buffer_lines(M.state.bufnr, { '', loading_line })
   end
 
-  -- Load a proper byte chunk size instead of trying to match line count
-  local chunk_size = M.config.chunk_size or 65536
-  load_next_chunk_async(M.state.bufnr, chunk_size, function(data, err)
+  load_next_chunk_async(M.config.chunk_size, function(data, err)
     if err then
       vim.notify('Error loading file content: ' .. err, vim.log.levels.ERROR)
+      -- Remove loading message on error
+      local total_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
+      if total_lines >= 2 then
+        local existing_lines = vim.api.nvim_buf_get_lines(M.state.bufnr, 0, total_lines - 2, false)
+        set_buffer_lines(M.state.bufnr, existing_lines)
+      end
       return
     end
 
@@ -171,6 +170,15 @@ local function ensure_content_loaded_async(target_line)
 
       M.state.content_height = vim.api.nvim_buf_line_count(M.state.bufnr)
       M.state.loaded_lines = M.state.content_height
+    else
+      -- No more data available - remove the loading message
+      local total_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
+      if total_lines >= 2 then
+        local existing_lines = vim.api.nvim_buf_get_lines(M.state.bufnr, 0, total_lines - 2, false)
+        set_buffer_lines(M.state.bufnr, existing_lines)
+        M.state.content_height = #existing_lines
+        M.state.loaded_lines = M.state.content_height
+      end
     end
   end)
 end
@@ -507,7 +515,7 @@ function M.preview_file(file_path, bufnr)
   M.state.current_file = file_path
   M.state.bufnr = bufnr
 
-  read_file_streaming_async(file_path, bufnr, nil, function(content, err)
+  read_file_streaming_async(file_path, bufnr, function(content, err)
     if M.state.current_file ~= file_path then
       -- User has moved to a different file, ignore this result
       cleanup_file_operation()
@@ -640,7 +648,7 @@ function M.preview(file_path, bufnr)
   if image.is_image(file_path) then
     M.clear_buffer(bufnr)
 
-    if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then return false end
+    if not M.state.winid or not vim.api.nvim_win_is_valid(M.state.winid) then return false end
 
     local win_width = vim.api.nvim_win_get_width(M.state.winid) - 2
     local win_height = vim.api.nvim_win_get_height(M.state.winid) - 2
@@ -766,7 +774,6 @@ function M.clear_buffer(bufnr)
 end
 
 function M.clear()
-  -- Clean up all file operations
   cleanup_file_operation()
 
   M.state.loaded_lines = 0

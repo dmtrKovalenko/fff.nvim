@@ -152,15 +152,68 @@ function M.display_image(file_path, bufnr, max_width, max_height)
   vim.api.nvim_buf_set_option(bufnr, 'number', false)
 
   local ok, snacks = pcall(require, 'snacks')
-  if ok and snacks.image and snacks.image.buf then
-    M.clear_buffer_images(bufnr)
+  if not ok then
+    local error_lines = {
+      '⚠ Image Preview Unavailable',
+      '',
+      'snacks.nvim plugin is not installed or not available.',
+      'Please install snacks.nvim to enable image preview.',
+      '',
+      'File: ' .. vim.fn.fnamemodify(file_path, ':t'),
+    }
+    vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, error_lines)
+    vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+    return false
+  end
 
-    local reserved_metadata_lines = reserve_image_buffer_space(bufnr, 2)
-    local image_start_line = reserved_metadata_lines + 1
+  if not (snacks.image and snacks.image.placement and snacks.image.supports_terminal) then
+    local error_lines = {
+      '⚠ Image Preview Unavailable',
+      '',
+      'snacks.nvim image module is not properly configured.',
+      'Please update snacks.nvim to the latest version.',
+      '',
+      'File: ' .. vim.fn.fnamemodify(file_path, ':t'),
+    }
+    vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, error_lines)
+    vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+    return false
+  end
+
+  local reserved_metadata_lines = reserve_image_buffer_space(bufnr, 2)
+  if not snacks.image.supports_terminal() then
+    identify_image_lines_async(
+      file_path,
+      bufnr,
+      function(final_info_lines) update_metadata_lines(bufnr, final_info_lines, reserved_metadata_lines) end
+    )
+
+    return false
+  end
+
+  if not snacks.image.supports_file(file_path) then
+    local error_lines = {
+      '⚠ Unsupported Image Format',
+      '',
+      'File format is not supported for image preview.',
+      'Supported formats: png, jpg, jpeg, gif, bmp, webp, tiff, heic, avif, pdf, mp4, mov',
+      '',
+      'File: ' .. vim.fn.fnamemodify(file_path, ':t'),
+    }
+    vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, error_lines)
+    vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+    return false
+  end
+
+  if snacks.image and snacks.image.placement then
+    M.clear_buffer_images(bufnr)
 
     vim.schedule(function()
       local success, placement = pcall(snacks.image.placement.new, bufnr, file_path, {
-        pos = { image_start_line, 1 },
+        pos = { reserved_metadata_lines + 1, 1 },
         inline = true,
         fit = 'contain',
         auto_resize = true,
