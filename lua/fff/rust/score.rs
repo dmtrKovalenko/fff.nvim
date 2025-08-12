@@ -10,13 +10,13 @@ use rayon::prelude::*;
 pub fn match_and_score_files<'a>(
     files: &'a [FileItem],
     context: &ScoringContext,
-) -> (Vec<&'a FileItem>, Vec<Score>) {
+) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
     if context.query.len() < 2 {
         return score_all_by_frecency(files, context);
     }
 
     if files.is_empty() {
-        return (vec![], vec![]);
+        return (vec![], vec![], 0);
     }
 
     let options = neo_frizbee::Options {
@@ -154,8 +154,10 @@ pub fn match_and_score_files<'a>(
             .then_with(|| b.0.modified.cmp(&a.0.modified))
     });
 
+    let total_matched = results.len();
     results.truncate(context.max_results);
-    results.into_iter().unzip()
+    let (items, scores) = results.into_iter().unzip();
+    (items, scores, total_matched)
 }
 
 /// Check if a filename is a special entry point file that deserves bonus scoring
@@ -186,7 +188,7 @@ fn is_special_entry_point_file(filename: &str) -> bool {
 fn score_all_by_frecency<'a>(
     files: &'a [FileItem],
     context: &ScoringContext,
-) -> (Vec<&'a FileItem>, Vec<Score>) {
+) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
     let mut results: Vec<_> = files
         .par_iter()
         .map(|file| {
@@ -219,8 +221,10 @@ fn score_all_by_frecency<'a>(
             .cmp(&a.1.total)
             .then_with(|| b.0.modified.cmp(&a.0.modified))
     });
+    let total_matched = results.len();
     results.truncate(context.max_results);
-    results.into_iter().unzip()
+    let (items, scores) = results.into_iter().unzip();
+    (items, scores, total_matched)
 }
 
 #[inline]

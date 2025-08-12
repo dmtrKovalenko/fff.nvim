@@ -191,16 +191,14 @@ impl FilePicker {
         };
 
         let time = std::time::Instant::now();
-        let (items, scores) = match_and_score_files(files, &context);
+        let (items, scores, total_matched) = match_and_score_files(files, &context);
         debug!(
             "Fuzzy search completed in {:?}: found {} results for query '{}', top result {:?}",
             time.elapsed(),
-            items.len(),
+            total_matched,
             query,
             items.first(),
         );
-
-        let total_matched = items.len();
         SearchResult {
             items,
             scores,

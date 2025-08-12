@@ -775,7 +775,11 @@ function M.update_status(progress)
     status_info = string.format('Indexing files %d', progress.scanned_files_count)
   else
     local search_metadata = file_picker.get_search_metadata()
-    status_info = string.format('%d/%d', search_metadata.total_matched, search_metadata.total_files)
+    if #M.state.query < 2 then
+      status_info = string.format('%d', search_metadata.total_files)
+    else
+      status_info = string.format('%d/%d', search_metadata.total_matched, search_metadata.total_files)
+    end
   end
 
   if status_info == M.state.last_status_info then return end
