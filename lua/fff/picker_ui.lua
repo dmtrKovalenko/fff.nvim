@@ -505,11 +505,11 @@ function M.render_list()
 
     if total_frecency > 0 and debug_enabled then
       local indicator = ''
-      if mod_frecency >= 6 then -- High modification frecency (recently modified git file)
+      if mod_frecency >= 8 then -- High modification frecency (recently modified git file)
         indicator = '🔥' -- Fire for recently modified
-      elseif access_frecency >= 4 then -- High access frecency (recently accessed)
+      elseif access_frecency >= 8 then -- High access frecency (recently accessed)
         indicator = '⭐' -- Star for frequently accessed
-      elseif total_frecency >= 3 then -- Medium total frecency
+      elseif total_frecency >= 4 then -- Medium total frecency
         indicator = '✨' -- Sparkle for moderate activity
       elseif total_frecency >= 1 then -- Low frecency
         indicator = '•' -- Dot for minimal activity
@@ -856,8 +856,6 @@ function M.select(action)
   action = action or 'edit'
 
   local relative_path = vim.fn.fnamemodify(item.path, ':.')
-  file_picker.access_file(relative_path)
-
   vim.cmd('stopinsert')
   M.close()
 

@@ -1,8 +1,7 @@
 use crate::background_watcher::BackgroundWatcher;
 use crate::error::Error;
-use crate::file_key::FileKey;
 use crate::frecency::FrecencyTracker;
-use crate::git::{format_git_status, GitStatusCache};
+use crate::git::GitStatusCache;
 use crate::score::match_and_score_files;
 use crate::types::{FileItem, ScoringContext, SearchResult};
 use git2::{Repository, Status, StatusOptions};
@@ -78,10 +77,9 @@ impl FileItem {
     }
 
     pub fn update_frecency_scores(&mut self, tracker: &FrecencyTracker) -> Result<(), Error> {
-        let file_key = FileKey::from(&*self);
-        self.access_frecency_score = tracker.get_access_score(&file_key);
+        self.access_frecency_score = tracker.get_access_score(&self.path);
         self.modification_frecency_score =
-            tracker.get_modification_score(self.modified, format_git_status(self.git_status));
+            tracker.get_modification_score(self.modified, self.git_status);
         self.total_frecency_score = self.access_frecency_score + self.modification_frecency_score;
 
         Ok(())
@@ -95,14 +93,6 @@ impl FileItem {
         };
 
         self.update_frecency_scores(frecency)
-    }
-}
-
-impl From<&FileItem> for FileKey {
-    fn from(file: &FileItem) -> Self {
-        FileKey {
-            path: file.relative_path.clone(),
-        }
     }
 }
 
@@ -572,19 +562,19 @@ fn scan_filesystem(
         })?;
 
         let frecency = FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)?;
-        if let Some(git_cache) = &git_cache {
-            files
-                .par_iter_mut()
-                .try_for_each(|file| -> Result<(), Error> {
+        files
+            .par_iter_mut()
+            .try_for_each(|file| -> Result<(), Error> {
+                if let Some(git_cache) = &git_cache {
                     file.git_status = git_cache.lookup_status(&file.path);
+                }
 
-                    if let Some(frecency) = frecency.as_ref() {
-                        file.update_frecency_scores(frecency)?;
-                    }
+                if let Some(frecency) = frecency.as_ref() {
+                    file.update_frecency_scores(frecency)?;
+                }
 
-                    Ok(())
-                })?;
-        }
+                Ok(())
+            })?;
 
         let total_time = scan_start.elapsed();
         info!(

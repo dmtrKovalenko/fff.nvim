@@ -130,23 +130,26 @@ function M.setup_global_autocmds()
   local group = vim.api.nvim_create_augroup('fff_file_tracking', { clear = true })
 
   if M.config.frecency.enabled then
-    vim.api.nvim_create_autocmd({ 'BufRead', 'BufNewFile' }, {
+    vim.api.nvim_create_autocmd({ 'BufReadPost' }, {
       group = group,
+      desc = 'Track file access for FFF frecency',
       callback = function(args)
         local file_path = args.file
+        if not (file_path and file_path ~= '' and not vim.startswith(file_path, 'term://')) then return end
 
-        if file_path and file_path ~= '' and not vim.startswith(file_path, 'term://') then
-          -- never block the UI
-          vim.schedule(function()
-            local stat = vim.uv.fs_stat(file_path)
-            if stat and stat.type == 'file' then
-              local relative_path = vim.fn.fnamemodify(file_path, ':.')
-              pcall(fuzzy.access_file, relative_path)
+        vim.uv.fs_stat(file_path, function(err, stat)
+          if err or not stat then return end
+
+          vim.uv.fs_realpath(file_path, function(rp_err, real_path)
+            if rp_err or not real_path then return end
+            local ok, track_err = pcall(fuzzy.track_access, real_path)
+
+            if not ok then
+              vim.notify('FFF: Failed to track file access: ' .. tostring(track_err), vim.log.levels.ERROR)
             end
           end)
-        end
+        end)
       end,
-      desc = 'Track file access for FFF frecency',
     })
   end
 
