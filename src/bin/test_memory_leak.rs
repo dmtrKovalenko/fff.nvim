@@ -205,6 +205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     max_results,
                     max_threads,
                     None,
+                    None, // prompt_position not relevant for test
                 );
                 let duration = search_start.elapsed();
                 (search_result.items.len(), duration)

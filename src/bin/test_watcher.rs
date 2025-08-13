@@ -156,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let timestamp = chrono::Local::now().format("%H:%M:%S");
             let file_picker = FILE_PICKER.read().unwrap();
             let files = file_picker.as_ref().unwrap().get_files();
-            let search_results = FilePicker::fuzzy_search(files, "rs", 5, 2, None);
+            let search_results = FilePicker::fuzzy_search(files, "rs", 5, 2, None, None);
 
             println!(
                 "🔍 [{}] Search test 'rs': {} matches",

@@ -41,9 +41,9 @@ function M.setup(config)
       preview_down = '<C-d>',
     },
     layout = {
-      prompt_position = 'top',
+      prompt_position = 'bottom',
       preview_position = 'right',
-      preview_width = 0.4,
+      preview_size = 0.4,
       height = 0.8,
       width = 0.8,
     },
@@ -84,15 +84,18 @@ end
 --- Search files with fuzzy matching using blink.cmp's advanced algorithm
 --- @param query string Search query
 --- @param max_results number Maximum number of results (optional)
+--- @param max_threads number Maximum number of threads (optional)
 --- @param current_file string|nil Path to current file to deprioritize (optional)
+--- @param prompt_position string|nil Position of prompt ('top'|'bottom') for result ordering (optional)
 --- @return table List of matching files
-function M.search_files(query, max_results, max_threads, current_file)
+function M.search_files(query, max_results, max_threads, current_file, prompt_position)
   if not M.state.initialized then return {} end
 
   max_results = max_results or M.config.max_results
   max_threads = max_threads or M.config.max_threads
 
-  local ok, search_result = pcall(fuzzy.fuzzy_search_files, query, max_results, max_threads, current_file)
+  local ok, search_result =
+    pcall(fuzzy.fuzzy_search_files, query, max_results, max_threads, current_file, prompt_position)
   if not ok then
     vim.notify('Failed to search files: ' .. tostring(search_result), vim.log.levels.ERROR)
     return {}

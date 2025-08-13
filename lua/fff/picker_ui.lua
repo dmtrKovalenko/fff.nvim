@@ -5,6 +5,226 @@ local preview = require('fff.file_picker.preview')
 local icons = require('fff.file_picker.icons')
 local git_utils = require('fff.git_utils')
 local main = require('fff.main')
+local utils = require('fff.utils')
+
+local function get_prompt_position()
+  local config = M.state.config
+
+  if config and config.layout and config.layout.prompt_position then
+    local terminal_width = vim.o.columns
+    local terminal_height = vim.o.lines
+
+    return utils.resolve_config_value(
+      config.layout.prompt_position,
+      terminal_width,
+      terminal_height,
+      function(value) return utils.is_valid_position(value, { 'top', 'bottom' }) end,
+      'bottom',
+      'layout.prompt_position'
+    )
+  end
+
+  return 'bottom'
+end
+
+local function get_preview_position()
+  local config = M.state.config
+
+  if config and config.layout and config.layout.preview_position then
+    local terminal_width = vim.o.columns
+    local terminal_height = vim.o.lines
+
+    return utils.resolve_config_value(
+      config.layout.preview_position,
+      terminal_width,
+      terminal_height,
+      function(value) return utils.is_valid_position(value, { 'left', 'right', 'top', 'bottom' }) end,
+      'right',
+      'layout.preview_position'
+    )
+  end
+
+  return 'right'
+end
+
+--- Function-based config options:
+--- config.layout.width: number|function(terminal_width, terminal_height): number
+--- config.layout.height: number|function(terminal_width, terminal_height): number
+--- config.layout.preview_size: number|function(terminal_width, terminal_height): number
+--- config.layout.preview_position: string|function(terminal_width, terminal_height): string
+--- config.layout.prompt_position: string|function(terminal_width, terminal_height): string
+
+--- @class LayoutConfig
+--- @field total_width number
+--- @field total_height number
+--- @field start_col number
+--- @field start_row number
+--- @field preview_position string|function Preview position ('left'|'right'|'top'|'bottom') or function(terminal_width, terminal_height): string
+--- @field prompt_position string
+--- @field debug_enabled boolean
+--- @field preview_width number
+--- @field preview_height number
+--- @field separator_width number
+--- @field file_info_height number
+
+--- Calculate layout dimensions and positions for all windows
+--- @param cfg LayoutConfig
+--- @return table Layout configuration
+function M.calculate_layout_dimensions(cfg)
+  local BORDER_SIZE = 2
+  local PROMPT_HEIGHT = 3
+  local SEPARATOR_WIDTH = 1
+  local SEPARATOR_HEIGHT = 1
+
+  local layout = {}
+  local preview_enabled = M.enabled_preview()
+
+  -- Section 1: Base dimensions and bounds checking
+  local total_width = math.max(0, cfg.total_width - BORDER_SIZE)
+  local total_height = math.max(0, cfg.total_height - BORDER_SIZE - PROMPT_HEIGHT)
+
+  -- Section 2: Calculate dimensions based on preview position
+  if cfg.preview_position == 'left' then
+    local separator_width = preview_enabled and SEPARATOR_WIDTH or 0
+    local list_width = math.max(0, total_width - cfg.preview_width - separator_width)
+    local list_height = total_height
+
+    layout.list_col = cfg.start_col + cfg.preview_width + 3 -- +3 for borders and separator
+    layout.list_width = list_width
+    layout.list_height = list_height
+    layout.input_col = layout.list_col
+    layout.input_width = list_width
+
+    if preview_enabled then
+      layout.preview = {
+        col = cfg.start_col + 1,
+        row = cfg.start_row + 1,
+        width = cfg.preview_width,
+        height = list_height,
+      }
+    end
+  elseif cfg.preview_position == 'right' then
+    local separator_width = preview_enabled and SEPARATOR_WIDTH or 0
+    local list_width = math.max(0, total_width - cfg.preview_width - separator_width)
+    local list_height = total_height
+
+    layout.list_col = cfg.start_col + 1
+    layout.list_width = list_width
+    layout.list_height = list_height
+    layout.input_col = layout.list_col
+    layout.input_width = list_width
+
+    if preview_enabled then
+      layout.preview = {
+        col = cfg.start_col + list_width + 3, -- +3 for borders and separator (matches original)
+        row = cfg.start_row + 1,
+        width = cfg.preview_width,
+        height = list_height,
+      }
+    end
+  elseif cfg.preview_position == 'top' then
+    local separator_height = preview_enabled and SEPARATOR_HEIGHT or 0
+    local list_height = math.max(0, total_height - cfg.preview_height - separator_height)
+
+    layout.list_col = cfg.start_col + 1
+    layout.list_width = total_width
+    layout.list_height = list_height
+    layout.input_col = layout.list_col
+    layout.input_width = total_width
+    layout.list_start_row = cfg.start_row + (preview_enabled and (cfg.preview_height + separator_height) or 0) + 1
+
+    if preview_enabled then
+      layout.preview = {
+        col = cfg.start_col + 1,
+        row = cfg.start_row + 1,
+        width = total_width,
+        height = cfg.preview_height,
+      }
+    end
+  else
+    local separator_height = preview_enabled and SEPARATOR_HEIGHT or 0
+    local list_height = math.max(0, total_height - cfg.preview_height - separator_height)
+
+    layout.list_col = cfg.start_col + 1
+    layout.list_width = total_width
+    layout.list_height = list_height
+    layout.input_col = layout.list_col
+    layout.input_width = total_width
+    layout.list_start_row = cfg.start_row + 1
+
+    if preview_enabled then
+      layout.preview = {
+        col = cfg.start_col + 1,
+        width = total_width,
+        height = cfg.preview_height,
+      }
+    end
+  end
+
+  -- Section 3: Position prompt and adjust row positions
+  if cfg.preview_position == 'left' or cfg.preview_position == 'right' then
+    if cfg.prompt_position == 'top' then
+      layout.input_row = cfg.start_row + 1
+      layout.list_row = cfg.start_row + PROMPT_HEIGHT + 1
+    else
+      layout.list_row = cfg.start_row + 1
+      layout.input_row = cfg.start_row + cfg.total_height - BORDER_SIZE
+    end
+
+    if layout.preview then
+      if cfg.prompt_position == 'top' then
+        layout.preview.row = cfg.start_row + 1
+        layout.preview.height = cfg.total_height - BORDER_SIZE
+      else
+        layout.preview.row = cfg.start_row + 1
+        layout.preview.height = cfg.total_height - BORDER_SIZE
+      end
+    end
+  else
+    local list_start_row = layout.list_start_row
+    if cfg.prompt_position == 'top' then
+      layout.input_row = list_start_row
+      layout.list_row = list_start_row + BORDER_SIZE
+      layout.list_height = math.max(0, layout.list_height - BORDER_SIZE)
+    else
+      layout.list_row = list_start_row
+      layout.input_row = list_start_row + layout.list_height + 1
+    end
+
+    if cfg.preview_position == 'bottom' and layout.preview then
+      if cfg.prompt_position == 'top' then
+        layout.preview.row = layout.list_row + layout.list_height + 1
+      else
+        layout.preview.row = layout.input_row + PROMPT_HEIGHT
+      end
+    end
+  end
+
+  -- Section 4: Position debug panel (if enabled)
+  if cfg.debug_enabled and preview_enabled and layout.preview then
+    if cfg.preview_position == 'left' or cfg.preview_position == 'right' then
+      layout.file_info = {
+        width = layout.preview.width,
+        height = cfg.file_info_height,
+        col = layout.preview.col,
+        row = layout.preview.row,
+      }
+      layout.preview.row = layout.preview.row + cfg.file_info_height + SEPARATOR_HEIGHT
+      layout.preview.height = math.max(0, layout.preview.height - cfg.file_info_height - SEPARATOR_HEIGHT)
+    else
+      layout.file_info = {
+        width = layout.preview.width,
+        height = cfg.file_info_height,
+        col = layout.preview.col,
+        row = layout.preview.row,
+      }
+      layout.preview.row = layout.preview.row + cfg.file_info_height + SEPARATOR_HEIGHT
+      layout.preview.height = math.max(0, layout.preview.height - cfg.file_info_height - SEPARATOR_HEIGHT)
+    end
+  end
+
+  return layout
+end
 
 if main.config and main.config.preview then preview.setup(main.config.preview) end
 
@@ -50,21 +270,59 @@ function M.create_ui()
     and main.config.debug
     and main.config.debug.show_scores
 
-  local width = math.floor(vim.o.columns * config.width)
-  local height = math.floor(vim.o.lines * config.height)
+  local terminal_width = vim.o.columns
+  local terminal_height = vim.o.lines
+
+  -- Calculate width and height (support function or number)
+  local width_ratio = utils.resolve_config_value(
+    config.layout.width,
+    terminal_width,
+    terminal_height,
+    utils.is_valid_ratio,
+    0.8,
+    'layout.width'
+  )
+  local height_ratio = utils.resolve_config_value(
+    config.layout.height,
+    terminal_width,
+    terminal_height,
+    utils.is_valid_ratio,
+    0.8,
+    'layout.height'
+  )
+
+  local width = math.floor(terminal_width * width_ratio)
+  local height = math.floor(terminal_height * height_ratio)
   local col = math.floor((vim.o.columns - width) / 2)
   local row = math.floor((vim.o.lines - height) / 2)
 
-  local preview_width = M.enabled_preview() and math.floor(width * config.preview.width) or 0
-  local list_width = width - preview_width - 3 -- Account for separators
-  local list_height = height - 4 -- Same as list window height
+  local prompt_position = get_prompt_position()
+  local preview_position = get_preview_position()
 
-  local file_info_height = 0
-  local preview_height = list_height
-  if debug_enabled_in_preview then
-    file_info_height = 10 -- Fixed height of 10 lines for file info
-    preview_height = list_height - file_info_height -- No subtraction needed - borders are handled by window positioning
-  end
+  local preview_size_ratio = utils.resolve_config_value(
+    config.layout.preview_size,
+    terminal_width,
+    terminal_height,
+    utils.is_valid_ratio,
+    0.4,
+    'layout.preview_size'
+  )
+
+  local layout_config = {
+    total_width = width,
+    total_height = height,
+    start_col = col,
+    start_row = row,
+    preview_position = preview_position,
+    prompt_position = prompt_position,
+    debug_enabled = debug_enabled_in_preview,
+    preview_width = M.enabled_preview() and math.floor(width * preview_size_ratio) or 0,
+    preview_height = M.enabled_preview() and math.floor(height * preview_size_ratio) or 0,
+    separator_width = 3,
+    file_info_height = debug_enabled_in_preview and 10 or 0,
+  }
+
+  local layout = M.calculate_layout_dimensions(layout_config)
 
   M.state.input_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_option(M.state.input_buf, 'bufhidden', 'wipe')
@@ -84,25 +342,27 @@ function M.create_ui()
     M.state.file_info_buf = nil
   end
 
+  -- Create list window
   M.state.list_win = vim.api.nvim_open_win(M.state.list_buf, false, {
     relative = 'editor',
-    width = list_width,
-    height = list_height, -- Use calculated list height
-    col = col + 1,
-    row = row + 1,
+    width = layout.list_width,
+    height = layout.list_height,
+    col = layout.list_col,
+    row = layout.list_row,
     border = 'single',
     style = 'minimal',
     title = ' Files ',
     title_pos = 'left',
   })
 
-  if debug_enabled_in_preview then
+  -- Create file info window if debug enabled
+  if debug_enabled_in_preview and layout.file_info then
     M.state.file_info_win = vim.api.nvim_open_win(M.state.file_info_buf, false, {
       relative = 'editor',
-      width = preview_width,
-      height = file_info_height,
-      col = col + list_width + 3,
-      row = row + 1,
+      width = layout.file_info.width,
+      height = layout.file_info.height,
+      col = layout.file_info.col,
+      row = layout.file_info.row,
       border = 'single',
       style = 'minimal',
       title = ' File Info ',
@@ -112,29 +372,28 @@ function M.create_ui()
     M.state.file_info_win = nil
   end
 
-  local preview_row = debug_enabled_in_preview and (row + file_info_height + 3) or (row + 1)
-  local preview_height_adj = debug_enabled_in_preview and preview_height or (list_height + 2)
-
-  if M.enabled_preview() then
+  -- Create preview window
+  if M.enabled_preview() and layout.preview then
     M.state.preview_win = vim.api.nvim_open_win(M.state.preview_buf, false, {
       relative = 'editor',
-      width = preview_width,
-      height = preview_height_adj,
-      col = col + list_width + 3,
-      row = preview_row,
+      width = layout.preview.width,
+      height = layout.preview.height,
+      col = layout.preview.col,
+      row = layout.preview.row,
       border = 'single',
       style = 'minimal',
-      title = ' PREVIEW TEST TITLE ',
+      title = ' Preview ',
       title_pos = 'left',
     })
   end
 
+  -- Create input window
   M.state.input_win = vim.api.nvim_open_win(M.state.input_buf, false, {
     relative = 'editor',
-    width = list_width,
+    width = layout.input_width,
     height = 1,
-    col = col + 1,
-    row = row + height - 2,
+    col = layout.input_col,
+    row = layout.input_row,
     border = 'single',
     style = 'minimal',
   })
@@ -387,11 +646,13 @@ function M.update_results_sync()
     end
   end
 
+  local prompt_position = get_prompt_position()
   local results = file_picker.search_files(
     M.state.query,
     M.state.config.max_results,
     M.state.config.max_threads,
-    M.state.current_file_cache
+    M.state.current_file_cache,
+    prompt_position
   )
 
   -- because the actual files could be different even with same count
@@ -489,14 +750,11 @@ function M.render_list()
     table.insert(items_to_show, items[i])
   end
 
-  local reversed_items = {}
-  for i = #items_to_show, 1, -1 do
-    table.insert(reversed_items, items_to_show[i])
-  end
+  local display_items = items_to_show
 
   local line_data = {}
 
-  for i, item in ipairs(reversed_items) do
+  for i, item in ipairs(display_items) do
     local icon, icon_hl_group = icons.get_icon_display(item.name, item.extension, false)
     local frecency = ''
     local total_frecency = (item.total_frecency_score or 0)
@@ -559,8 +817,15 @@ function M.render_list()
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
 
   if #items > 0 then
-    -- cursor=1 means first/best item, which appears at the last line after reversal
-    local cursor_line = empty_lines_needed + (display_count - M.state.cursor + 1)
+    local prompt_position = get_prompt_position()
+    local cursor_line
+
+    if prompt_position == 'bottom' then
+      cursor_line = empty_lines_needed + display_count - M.state.cursor + 1
+    else
+      cursor_line = empty_lines_needed + M.state.cursor
+    end
+    cursor_line = math.max(1, math.min(cursor_line, win_height))
 
     if cursor_line > 0 and cursor_line <= win_height then
       vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
@@ -800,28 +1065,38 @@ function M.update_status(progress)
   })
 end
 
---- Move cursor up (towards worse results, which are visually higher)
 function M.move_up()
   if not M.state.active then return end
+  if #M.state.filtered_items == 0 then return end
 
-  if M.state.cursor < #M.state.filtered_items then
-    M.state.cursor = M.state.cursor + 1
-    M.render_list()
-    M.update_preview()
-    M.update_status()
+  local prompt_position = get_prompt_position()
+
+  if prompt_position == 'bottom' then
+    M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
+  else
+    M.state.cursor = math.max(M.state.cursor - 1, 1)
   end
+
+  M.render_list()
+  M.update_preview()
+  M.update_status()
 end
 
---- Move cursor down (towards better results, which are visually lower)
 function M.move_down()
   if not M.state.active then return end
+  if #M.state.filtered_items == 0 then return end
 
-  if M.state.cursor > 1 then
-    M.state.cursor = M.state.cursor - 1
-    M.render_list()
-    M.update_preview()
-    M.update_status()
+  local prompt_position = get_prompt_position()
+
+  if prompt_position == 'bottom' then
+    M.state.cursor = math.max(M.state.cursor - 1, 1)
+  else
+    M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
   end
+
+  M.render_list()
+  M.update_preview()
+  M.update_status()
 end
 
 --- Scroll preview up by half window height
