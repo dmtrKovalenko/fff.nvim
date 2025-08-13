@@ -55,17 +55,15 @@
 
           }
         );
-        # Create a script that copies the build result
-        release-script = pkgs.writeShellScriptBin "release" ''
-          set -euo pipefail
-          nix build
+        # Copies the dynamic library into the target/release folder
+        copy-dynamic-library = /* bash */ ''
+          set -eo pipefail
           mkdir -p target/release
           if [ "$(uname)" = "Darwin" ]; then
-            cp -vf result/lib/libfff_nvim.dylib target/release/libfff_nvim.dylib
+            cp -vf ${my-crate}/lib/libfff_nvim.dylib target/release/libfff_nvim.dylib
           else
-            cp -vf result/lib/libfff_nvim.so    target/release/libfff_nvim.so
+            cp -vf ${my-crate}/lib/libfff_nvim.so target/release/libfff_nvim.so
           fi
-          rm result
           echo "Library copied to target/release/"
         '';
       in
@@ -74,7 +72,17 @@
           inherit my-crate;
         };
 
-        packages.default = my-crate;
+        packages = {
+          default = my-crate;
+
+          # Neovim plugin
+          fff-nvim = pkgs.vimUtils.buildVimPlugin {
+            pname = "fff.nvim";
+            version = "main";
+            src = pkgs.lib.cleanSource ./.;
+            patchPhase = copy-dynamic-library;
+          };
+        };
 
         apps.default = flake-utils.lib.mkApp {
           drv = my-crate;
@@ -82,7 +90,7 @@
 
         # Add the release command
         apps.release = flake-utils.lib.mkApp {
-          drv = release-script;
+          drv = pkgs.writeShellScriptBin "release" copy-dynamic-library;
         };
 
         devShells.default = craneLib.devShell {
