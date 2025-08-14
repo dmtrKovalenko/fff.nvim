@@ -652,7 +652,7 @@ function M.update_results_sync()
     M.state.config.max_results,
     M.state.config.max_threads,
     M.state.current_file_cache,
-    prompt_position
+    prompt_position == 'bottom'
   )
 
   -- because the actual files could be different even with same count
@@ -726,14 +726,12 @@ local function format_file_display(item, max_width)
   return filename, display_path
 end
 
---- Render the list
 function M.render_list()
   if not M.state.active then return end
 
   local items = M.state.filtered_items
   local lines = {}
 
-  local main = require('fff.main')
   local max_path_width = main.config.ui and main.config.ui.max_path_width or 80
   local debug_enabled = main.config and main.config.debug and main.config.debug.show_scores
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)

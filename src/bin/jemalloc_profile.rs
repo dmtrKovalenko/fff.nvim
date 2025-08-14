@@ -89,7 +89,7 @@ fn test_search_memory_pattern(
                     50 + (i % 50), // Vary result count
                     1 + (i % 4),   // Vary thread count
                     None,
-                    None, // prompt_position not relevant for test
+                    false, // prompt_position not relevant for test
                 );
                 (search_result.items.len(), search_result.total_matched)
             } else {

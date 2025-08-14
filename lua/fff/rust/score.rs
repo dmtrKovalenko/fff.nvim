@@ -68,7 +68,7 @@ pub fn match_and_score_files<'a>(
     };
 
     let mut next_filename_match_index = 0;
-    let mut results: Vec<_> = path_matches
+    let results: Vec<_> = path_matches
         .into_iter()
         .enumerate()
         .map(|(index, path_match)| {
@@ -148,16 +148,7 @@ pub fn match_and_score_files<'a>(
         })
         .collect();
 
-    results.sort_by(|a, b| {
-        b.1.total
-            .cmp(&a.1.total)
-            .then_with(|| b.0.modified.cmp(&a.0.modified))
-    });
-
-    let total_matched = results.len();
-    results.truncate(context.max_results);
-    let (items, scores) = results.into_iter().unzip();
-    (items, scores, total_matched)
+    sort_and_truncate(results, context)
 }
 
 /// Check if a filename is a special entry point file that deserves bonus scoring
@@ -189,7 +180,7 @@ fn score_all_by_frecency<'a>(
     files: &'a [FileItem],
     context: &ScoringContext,
 ) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
-    let mut results: Vec<_> = files
+    let results: Vec<_> = files
         .par_iter()
         .map(|file| {
             let total_frecency_score = file.access_frecency_score as i32
@@ -216,15 +207,7 @@ fn score_all_by_frecency<'a>(
         })
         .collect();
 
-    results.sort_by(|a, b| {
-        b.1.total
-            .cmp(&a.1.total)
-            .then_with(|| b.0.modified.cmp(&a.0.modified))
-    });
-    let total_matched = results.len();
-    results.truncate(context.max_results);
-    let (items, scores) = results.into_iter().unzip();
-    (items, scores, total_matched)
+    sort_and_truncate(results, context)
 }
 
 #[inline]
@@ -241,4 +224,32 @@ fn calculate_file_bonus(file: &FileItem, context: &ScoringContext) -> i32 {
     }
 
     bonus
+}
+
+fn sort_and_truncate<'a>(
+    mut results: Vec<(&'a FileItem, Score)>,
+    context: &ScoringContext,
+) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
+    let total_matched = results.len();
+    if context.reverse_order {
+        results.sort_by(|a, b| {
+            b.1.total
+                .cmp(&a.1.total)
+                .then_with(|| b.0.modified.cmp(&a.0.modified))
+        });
+
+        if results.len() > context.max_results {
+            results.drain((total_matched - context.max_results)..total_matched);
+        }
+    } else {
+        results.sort_by(|a, b| {
+            a.1.total
+                .cmp(&b.1.total)
+                .then_with(|| a.0.modified.cmp(&b.0.modified))
+        });
+
+        results.truncate(context.max_results);
+    }
+    let (items, scores) = results.into_iter().unzip();
+    (items, scores, total_matched)
 }

@@ -171,12 +171,15 @@ impl FilePicker {
         max_results: usize,
         max_threads: usize,
         current_file: Option<&'a str>,
-        prompt_position: Option<&'a str>,
+        reverse_order: bool,
     ) -> SearchResult<'a> {
         let max_threads = max_threads.max(1);
         debug!(
-            "Fuzzy search: query='{}', max_results={}, max_threads={}, current_file={:?}, prompt_position={:?}",
-            query, max_results, max_threads, current_file, prompt_position
+            ?query,
+            ?max_results,
+            ?max_threads,
+            ?current_file,
+            "Fuzzy search",
         );
 
         let total_files = files.len();
@@ -189,24 +192,19 @@ impl FilePicker {
             max_threads,
             current_file,
             max_results,
+            reverse_order,
         };
 
         let time = std::time::Instant::now();
-        let (mut items, mut scores, total_matched) = match_and_score_files(files, &context);
+        let (items, scores, total_matched) = match_and_score_files(files, &context);
 
-        // Reverse results when prompt is at bottom so best matches appear closest to prompt.
-        if prompt_position == Some("bottom") {
-            items.reverse();
-            scores.reverse();
-        }
         debug!(
-            "Fuzzy search completed in {:?}: found {} results for query '{}', top result {:?}, prompt_position={:?}",
-            time.elapsed(),
-            total_matched,
-            query,
-            items.first(),
-            prompt_position,
+            ?query,
+            completed_in = ?time.elapsed(),
+            top_position = ?items.first(),
+            "Fuzzy search completed",
         );
+
         SearchResult {
             items,
             scores,

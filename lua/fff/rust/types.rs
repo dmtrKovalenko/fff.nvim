@@ -34,6 +34,7 @@ pub struct ScoringContext<'a> {
     pub max_results: usize,
     pub max_typos: u16,
     pub max_threads: usize,
+    pub reverse_order: bool,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -86,16 +86,16 @@ end
 --- @param max_results number Maximum number of results (optional)
 --- @param max_threads number Maximum number of threads (optional)
 --- @param current_file string|nil Path to current file to deprioritize (optional)
---- @param prompt_position string|nil Position of prompt ('top'|'bottom') for result ordering (optional)
+--- @param reverse_order boolean Reverse order of results
 --- @return table List of matching files
-function M.search_files(query, max_results, max_threads, current_file, prompt_position)
+function M.search_files(query, max_results, max_threads, current_file, reverse_order)
   if not M.state.initialized then return {} end
 
   max_results = max_results or M.config.max_results
   max_threads = max_threads or M.config.max_threads
 
   local ok, search_result =
-    pcall(fuzzy.fuzzy_search_files, query, max_results, max_threads, current_file, prompt_position)
+    pcall(fuzzy.fuzzy_search_files, query, max_results, max_threads, current_file, reverse_order)
   if not ok then
     vim.notify('Failed to search files: ' .. tostring(search_result), vim.log.levels.ERROR)
     return {}
