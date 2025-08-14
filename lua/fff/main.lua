@@ -2,101 +2,15 @@ local fuzzy = require('fff.fuzzy')
 if not fuzzy then error('Failed to load fff.fuzzy module. Ensure the Rust backend is compiled and available.') end
 
 local M = {}
-M.config = {}
-M.state = { initialized = false }
+local state = require('fff.state')
 
 --- Setup the file picker with the given configuration
 --- @param config table Configuration options
 function M.setup(config)
-  local default_config = {
-    base_path = vim.fn.getcwd(),
-    max_results = 100,
-    prompt = '🪿 ', -- Input prompt symbol
-    title = 'FFF Files', -- Window title
-    width = 0.8,
-    height = 0.8,
-    preview = {
-      enabled = true,
-      width = 0.5,
-      max_size = 1 * 1024 * 1024, -- Keep file size limit for early detection
-      max_line_length = 1000, -- Keep line length limit for memory safety
-      chunk_size = 16384, -- Bytes per chunk for dynamic loading (16KB - fits ~100-200 lines)
-      imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
-      line_numbers = false,
-      wrap_lines = false,
-      show_file_info = true,
-      binary_file_threshold = 1024,
-      filetypes = {
-        svg = { wrap_lines = true },
-        markdown = { wrap_lines = true },
-        text = { wrap_lines = true },
-      },
-    },
-    keymaps = {
-      close = '<Esc>',
-      select = '<CR>',
-      select_split = '<C-s>',
-      select_vsplit = '<C-v>',
-      select_tab = '<C-t>',
-      move_up = { '<Up>', '<C-p>' },
-      move_down = { '<Down>', '<C-n>' },
-      preview_scroll_up = '<C-u>',
-      preview_scroll_down = '<C-d>',
-      toggle_debug = '<F2>',
-    },
-    hl = {
-      border = 'FloatBorder',
-      normal = 'Normal',
-      cursor = 'CursorLine',
-      matched = 'IncSearch',
-      title = 'Title',
-      prompt = 'Question',
-      active_file = 'Visual',
-      frecency = 'Number',
-      debug = 'Comment',
-    },
-    layout = {
-      prompt_position = 'top',
-      preview_position = 'right',
-      preview_width = 0.4,
-      height = 0.8,
-      width = 0.8,
-    },
-    frecency = {
-      enabled = true,
-      db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
-    },
-    debug = {
-      enabled = false,
-      show_scores = false,
-    },
-    logging = {
-      enabled = true,
-      log_file = vim.fn.stdpath('log') .. '/fff.log',
-      log_level = 'info',
-    },
-    ui = {
-      wrap_paths = true,
-      wrap_indent = 2,
-      max_path_width = 80,
-    },
-    image_preview = {
-      enabled = true,
-      max_width = 80,
-      max_height = 24,
-    },
-    icons = {
-      enabled = true,
-    },
-    ui_enabled = true,
-  }
-
-  local merged_config = vim.tbl_deep_extend('force', default_config, config or {})
-  M.config = merged_config
-
-  if merged_config.logging.enabled then
+  state.config = vim.tbl_deep_extend('force', state.config, config or {})
+  if state.config.logging.enabled then
     local log_success, log_error =
-      pcall(fuzzy.init_tracing, merged_config.logging.log_file, merged_config.logging.log_level)
+      pcall(fuzzy.init_tracing, state.config.logging.log_file, state.config.logging.log_level)
     if log_success then
       M.log_file_path = log_error
     else
@@ -104,18 +18,18 @@ function M.setup(config)
     end
   end
 
-  local db_path = merged_config.frecency.db_path or (vim.fn.stdpath('cache') .. '/fff_nvim')
+  local db_path = state.config.frecency.db_path or (vim.fn.stdpath('cache') .. '/fff_nvim')
   local ok, result = pcall(fuzzy.init_db, db_path, true)
   if not ok then vim.notify('Failed to initialize frecency database: ' .. result, vim.log.levels.WARN) end
 
-  ok, result = pcall(fuzzy.init_file_picker, merged_config.base_path)
+  ok, result = pcall(fuzzy.init_file_picker, state.config.base_path)
   if not ok then
     vim.notify('Failed to initialize file picker: ' .. result, vim.log.levels.ERROR)
     return false
   end
 
-  M.state.initialized = true
-  M.config = merged_config
+  state.initialized = true
+  state.config = state.config
 
   M.setup_commands()
   M.setup_global_autocmds()
@@ -129,7 +43,7 @@ end
 function M.setup_global_autocmds()
   local group = vim.api.nvim_create_augroup('fff_file_tracking', { clear = true })
 
-  if M.config.frecency.enabled then
+  if state.config.frecency.enabled then
     vim.api.nvim_create_autocmd({ 'BufReadPost' }, {
       group = group,
       desc = 'Track file access for FFF frecency',
@@ -159,13 +73,13 @@ function M.setup_global_autocmds()
     group = group,
     callback = function()
       local new_cwd = vim.v.event.cwd
-      if M.is_initialized() and new_cwd and new_cwd ~= M.config.base_path then
+      if M.is_initialized() and new_cwd and new_cwd ~= state.config.base_path then
         vim.schedule(function()
           local ok, err = pcall(M.change_indexing_directory, new_cwd)
           if not ok then
             vim.notify('FFF: Failed to change indexing directory: ' .. tostring(err), vim.log.levels.ERROR)
           else
-            M.config.base_path = new_cwd
+            state.config.base_path = new_cwd
           end
         end)
       end
@@ -227,14 +141,14 @@ function M.setup_commands()
 
   vim.api.nvim_create_user_command('FFFDebug', function(opts)
     if opts.args == 'toggle' or opts.args == '' then
-      M.config.debug.show_scores = not M.config.debug.show_scores
-      local status = M.config.debug.show_scores and 'enabled' or 'disabled'
+      state.config.debug.show_scores = not state.config.debug.show_scores
+      local status = state.config.debug.show_scores and 'enabled' or 'disabled'
       vim.notify('FFF debug scores ' .. status, vim.log.levels.INFO)
     elseif opts.args == 'on' then
-      M.config.debug.show_scores = true
+      state.config.debug.show_scores = true
       vim.notify('FFF debug scores enabled', vim.log.levels.INFO)
     elseif opts.args == 'off' then
-      M.config.debug.show_scores = false
+      state.config.debug.show_scores = false
       vim.notify('FFF debug scores disabled', vim.log.levels.INFO)
     else
       vim.notify('Usage: :FFFDebug [on|off|toggle]', vim.log.levels.ERROR)
@@ -248,9 +162,9 @@ function M.setup_commands()
   vim.api.nvim_create_user_command('FFFOpenLog', function()
     if M.log_file_path then
       vim.cmd('tabnew ' .. vim.fn.fnameescape(M.log_file_path))
-    elseif M.config and M.config.logging and M.config.logging.log_file then
+    elseif state.config and state.config.logging and state.config.logging.log_file then
       -- Fallback to the configured log file path even if tracing wasn't initialized
-      vim.cmd('tabnew ' .. vim.fn.fnameescape(M.config.logging.log_file))
+      vim.cmd('tabnew ' .. vim.fn.fnameescape(state.config.logging.log_file))
     else
       vim.notify('Log file path not available', vim.log.levels.ERROR)
     end
@@ -300,7 +214,7 @@ end
 --- @param max_results number Maximum number of results
 --- @return table List of matching files
 function M.search(query, max_results)
-  max_results = max_results or M.config.max_results
+  max_results = max_results or state.config.max_results
   local ok, search_result = pcall(fuzzy.fuzzy_search_files, query, max_results, nil, nil)
   if ok and search_result.items then return search_result.items end
   return {}
@@ -407,7 +321,7 @@ function M.health_check()
   return health
 end
 
-function M.is_initialized() return M.state and M.state.initialized or false end
+function M.is_initialized() return state and state.initialized or false end
 
 --- Find files in a specific directory
 --- @param directory string Directory path to search in
@@ -449,7 +363,7 @@ function M.change_indexing_directory(new_path)
     return false
   end
 
-  M.config.base_path = expanded_path
+  state.config.base_path = expanded_path
   return true
 end
 

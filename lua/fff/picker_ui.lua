@@ -4,9 +4,9 @@ local file_picker = require('fff.file_picker')
 local preview = require('fff.file_picker.preview')
 local icons = require('fff.file_picker.icons')
 local git_utils = require('fff.git_utils')
-local main = require('fff.main')
+local state = require('fff.state')
 
-if main.config and main.config.preview then preview.setup(main.config.preview) end
+if state.config and state.config.preview then preview.setup(state.config.preview) end
 
 M.state = {
   active = false,
@@ -27,8 +27,6 @@ M.state = {
   query = '',
   item_line_map = {},
 
-  config = nil,
-
   ns_id = nil,
 
   last_status_info = nil,
@@ -41,14 +39,14 @@ M.state = {
 
 --- Create the picker UI
 function M.create_ui()
-  local config = M.state.config
+  local config = state.config
 
   if not M.state.ns_id then M.state.ns_id = vim.api.nvim_create_namespace('fff_picker_status') end
 
   local debug_enabled_in_preview = M.enabled_preview()
-    and main.config
-    and main.config.debug
-    and main.config.debug.show_scores
+    and state.config
+    and state.config.debug
+    and state.config.debug.show_scores
 
   local width = math.floor(vim.o.columns * config.width)
   local height = math.floor(vim.o.lines * config.height)
@@ -158,7 +156,7 @@ end
 function M.setup_buffers()
   vim.api.nvim_buf_set_option(M.state.input_buf, 'buftype', 'prompt')
   vim.api.nvim_buf_set_option(M.state.input_buf, 'filetype', 'fff_input')
-  vim.fn.prompt_setprompt(M.state.input_buf, M.state.config.prompt)
+  vim.fn.prompt_setprompt(M.state.input_buf, state.config.prompt)
 
   vim.api.nvim_buf_set_option(M.state.list_buf, 'buftype', 'nofile')
   vim.api.nvim_buf_set_option(M.state.list_buf, 'filetype', 'fff_list')
@@ -179,8 +177,6 @@ end
 
 --- Setup window options
 function M.setup_windows()
-  local hl = M.state.config.hl
-
   vim.api.nvim_win_set_option(M.state.input_win, 'wrap', false)
   vim.api.nvim_win_set_option(M.state.input_win, 'cursorline', false)
   vim.api.nvim_win_set_option(M.state.input_win, 'number', false)
@@ -222,7 +218,7 @@ local function set_keymap(mode, keys, handler, opts)
 end
 
 function M.setup_keymaps()
-  local keymaps = M.state.config.keymaps
+  local keymaps = state.config.keymaps
 
   local input_opts = { buffer = M.state.input_buf, noremap = true, silent = true }
 
@@ -262,7 +258,7 @@ function M.setup_keymaps()
   vim.keymap.set('i', '<C-w>', function()
     local col = vim.fn.col('.') - 1
     local line = vim.fn.getline('.')
-    local prompt_len = #M.state.config.prompt
+    local prompt_len = #state.config.prompt
 
     if col <= prompt_len then return '' end
 
@@ -270,7 +266,7 @@ function M.setup_keymaps()
     local after_cursor = line:sub(col + 1)
 
     local new_text = text_part:gsub('%S*%s*$', '')
-    local new_line = M.state.config.prompt .. new_text .. after_cursor
+    local new_line = state.config.prompt .. new_text .. after_cursor
     local new_col = prompt_len + #new_text
 
     vim.fn.setline('.', new_line)
@@ -297,13 +293,12 @@ end
 
 --- Toggle debug display
 function M.toggle_debug()
-  local main = require('fff.main')
-  local old_debug_state = main.config.debug.show_scores
-  main.config.debug.show_scores = not main.config.debug.show_scores
-  local status = main.config.debug.show_scores and 'enabled' or 'disabled'
+  local old_debug_state = state.config.debug.show_scores
+  state.config.debug.show_scores = not state.config.debug.show_scores
+  local status = state.config.debug.show_scores and 'enabled' or 'disabled'
   vim.notify('FFF debug scores ' .. status, vim.log.levels.INFO)
 
-  if old_debug_state ~= main.config.debug.show_scores then
+  if old_debug_state ~= state.config.debug.show_scores then
     local current_query = M.state.query
     local current_items = M.state.items
     local current_cursor = M.state.cursor
@@ -334,13 +329,13 @@ function M.on_input_change()
   if not M.state.active then return end
 
   local lines = vim.api.nvim_buf_get_lines(M.state.input_buf, 0, -1, false)
-  local prompt_len = #M.state.config.prompt
+  local prompt_len = #state.config.prompt
   local query = ''
 
   if #lines > 1 then
     -- join without any separator because it is a use case for a path copy from the terminal buffer
     local all_text = table.concat(lines, '')
-    if all_text:sub(1, prompt_len) == M.state.config.prompt then
+    if all_text:sub(1, prompt_len) == state.config.prompt then
       query = all_text:sub(prompt_len + 1)
     else
       query = all_text
@@ -349,7 +344,7 @@ function M.on_input_change()
     query = query:gsub('\r', ''):match('^%s*(.-)%s*$') or ''
 
     vim.api.nvim_buf_set_option(M.state.input_buf, 'modifiable', true)
-    vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { M.state.config.prompt .. query })
+    vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { state.config.prompt .. query })
 
     -- Move cursor to end
     vim.schedule(function()
@@ -359,7 +354,7 @@ function M.on_input_change()
     end)
   else
     local full_line = lines[1] or ''
-    if full_line:sub(1, prompt_len) == M.state.config.prompt then query = full_line:sub(prompt_len + 1) end
+    if full_line:sub(1, prompt_len) == state.config.prompt then query = full_line:sub(prompt_len + 1) end
   end
 
   M.state.query = query
@@ -389,8 +384,8 @@ function M.update_results_sync()
 
   local results = file_picker.search_files(
     M.state.query,
-    M.state.config.max_results,
-    M.state.config.max_threads,
+    state.config.max_results,
+    state.config.max_threads,
     M.state.current_file_cache
   )
 
@@ -472,9 +467,8 @@ function M.render_list()
   local items = M.state.filtered_items
   local lines = {}
 
-  local main = require('fff.main')
-  local max_path_width = main.config.ui and main.config.ui.max_path_width or 80
-  local debug_enabled = main.config and main.config.debug and main.config.debug.show_scores
+  local max_path_width = state.config.ui and state.config.ui.max_path_width or 80
+  local debug_enabled = state.config and state.config.debug and state.config.debug.show_scores
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
   local display_count = math.min(#items, win_height)
   local empty_lines_needed = win_height - display_count
@@ -570,7 +564,7 @@ function M.render_list()
       vim.api.nvim_buf_add_highlight(
         M.state.list_buf,
         M.state.ns_id,
-        M.state.config.hl.active_file,
+        state.config.hl.active_file,
         cursor_line - 1,
         0,
         -1
@@ -582,7 +576,7 @@ function M.render_list()
 
       if remaining_width > 0 then
         vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, cursor_line - 1, -1, {
-          virt_text = { { string.rep(' ', remaining_width), M.state.config.hl.active_file } },
+          virt_text = { { string.rep(' ', remaining_width), state.config.hl.active_file } },
           virt_text_pos = 'eol',
         })
       end
@@ -610,7 +604,7 @@ function M.render_list()
             vim.api.nvim_buf_add_highlight(
               M.state.list_buf,
               M.state.ns_id,
-              M.state.config.hl.frecency,
+              state.config.hl.frecency,
               line_idx - 1,
               star_start - 1,
               star_end
@@ -623,7 +617,7 @@ function M.render_list()
           vim.api.nvim_buf_add_highlight(
             M.state.list_buf,
             M.state.ns_id,
-            M.state.config.hl.debug,
+            state.config.hl.debug,
             line_idx - 1,
             debug_start - 1,
             debug_end
@@ -662,13 +656,12 @@ function M.render_list()
           end
         end
 
-        local final_border_hl = border_hl ~= '' and border_hl
-          or (is_cursor_line and M.state.config.hl.active_file or '')
+        local final_border_hl = border_hl ~= '' and border_hl or (is_cursor_line and state.config.hl.active_file or '')
 
         if final_border_hl ~= '' or is_cursor_line then
           vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
             sign_text = border_char,
-            sign_hl_group = final_border_hl ~= '' and final_border_hl or M.state.config.hl.active_file,
+            sign_hl_group = final_border_hl ~= '' and final_border_hl or state.config.hl.active_file,
             priority = 1000,
           })
         end
@@ -948,7 +941,7 @@ function M.open(opts)
     end
   end
 
-  M.state.config = vim.tbl_deep_extend('force', main.config or {}, opts or {})
+  state.config = vim.tbl_deep_extend('force', state.config or {}, opts or {})
 
   if not M.create_ui() then
     vim.notify('Failed to create picker UI', vim.log.levels.ERROR)
@@ -987,7 +980,7 @@ end
 M.enabled_preview = function()
   local preview_state = nil
 
-  if M and M.state and M.state.config then preview_state = M.state.config.preview end
+  if M and M.state and state.config then preview_state = state.config.preview end
   if not preview_state then return true end
 
   return preview_state.enabled
