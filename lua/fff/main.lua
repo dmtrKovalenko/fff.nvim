@@ -165,7 +165,7 @@ function M.setup(config)
       enabled = true,
       log_file = vim.fn.stdpath('log') .. '/fff.log',
       log_level = 'info',
-    }
+    },
   }
 
   local migrated_user_config = handle_deprecated_config(config)
