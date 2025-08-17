@@ -72,9 +72,13 @@ end
 --- @return table Layout configuration
 function M.calculate_layout_dimensions(cfg)
   local BORDER_SIZE = 2
-  local PROMPT_HEIGHT = 3
+  local PROMPT_HEIGHT = 2
   local SEPARATOR_WIDTH = 1
   local SEPARATOR_HEIGHT = 1
+
+  if not utils.is_one_of(cfg.preview_position, { 'left', 'right', 'top', 'bottom' }) then
+    error('Invalid preview position: ' .. tostring(cfg.preview_position))
+  end
 
   local layout = {}
   local preview_enabled = M.enabled_preview()
@@ -209,8 +213,8 @@ function M.calculate_layout_dimensions(cfg)
         col = layout.preview.col,
         row = layout.preview.row,
       }
-      layout.preview.row = layout.preview.row + cfg.file_info_height + SEPARATOR_HEIGHT
-      layout.preview.height = math.max(0, layout.preview.height - cfg.file_info_height - SEPARATOR_HEIGHT)
+      layout.preview.row = layout.preview.row + cfg.file_info_height + SEPARATOR_HEIGHT + 1
+      layout.preview.height = math.max(3, layout.preview.height - cfg.file_info_height - SEPARATOR_HEIGHT - 1)
     else
       layout.file_info = {
         width = layout.preview.width,
@@ -218,8 +222,8 @@ function M.calculate_layout_dimensions(cfg)
         col = layout.preview.col,
         row = layout.preview.row,
       }
-      layout.preview.row = layout.preview.row + cfg.file_info_height + SEPARATOR_HEIGHT
-      layout.preview.height = math.max(0, layout.preview.height - cfg.file_info_height - SEPARATOR_HEIGHT)
+      layout.preview.row = layout.preview.row + cfg.file_info_height + SEPARATOR_HEIGHT + 1
+      layout.preview.height = math.max(3, layout.preview.height - cfg.file_info_height - SEPARATOR_HEIGHT - 1)
     end
   end
 
@@ -341,8 +345,8 @@ function M.create_ui()
     M.state.file_info_buf = nil
   end
 
-  -- Create list window
-  M.state.list_win = vim.api.nvim_open_win(M.state.list_buf, false, {
+  -- Create list window with conditional title based on prompt position
+  local list_window_config = {
     relative = 'editor',
     width = layout.list_width,
     height = layout.list_height,
@@ -350,9 +354,16 @@ function M.create_ui()
     row = layout.list_row,
     border = 'single',
     style = 'minimal',
-    title = ' Files ',
-    title_pos = 'left',
-  })
+  }
+
+  local title = ' ' .. (M.state.config.title or 'FFFiles') .. ' '
+  -- Only add title if prompt is at bottom - when prompt is top, title should be on input
+  if prompt_position == 'bottom' then
+    list_window_config.title = title
+    list_window_config.title_pos = 'left'
+  end
+
+  M.state.list_win = vim.api.nvim_open_win(M.state.list_buf, false, list_window_config)
 
   -- Create file info window if debug enabled
   if debug_enabled_in_preview and layout.file_info then
@@ -386,8 +397,8 @@ function M.create_ui()
     })
   end
 
-  -- Create input window
-  M.state.input_win = vim.api.nvim_open_win(M.state.input_buf, false, {
+  -- Create input window with conditional title based on prompt position
+  local input_window_config = {
     relative = 'editor',
     width = layout.input_width,
     height = 1,
@@ -395,7 +406,15 @@ function M.create_ui()
     row = layout.input_row,
     border = 'single',
     style = 'minimal',
-  })
+  }
+
+  -- Add title if prompt is at top - title appears above the prompt
+  if prompt_position == 'top' then
+    input_window_config.title = title
+    input_window_config.title_pos = 'left'
+  end
+
+  M.state.input_win = vim.api.nvim_open_win(M.state.input_buf, false, input_window_config)
 
   M.setup_buffers()
   M.setup_windows()
@@ -944,24 +963,54 @@ function M.update_preview()
 
   M.state.last_preview_file = item.path
 
-  local relative_path = item.relative_path or item.path -- Use relative path if available
-  local win_width = vim.api.nvim_win_get_width(M.state.preview_win)
-  local max_title_width = win_width - 4 -- Account for border and padding
+  local relative_path = item.relative_path or item.path
+  local max_title_width = vim.api.nvim_win_get_width(M.state.preview_win)
 
   local title
-  if #relative_path <= max_title_width then
+  local target_length = max_title_width
+
+  if #relative_path + 2 <= target_length then
     title = string.format(' %s ', relative_path)
   else
-    local filename = vim.fn.fnamemodify(relative_path, ':t')
-    local dirname = vim.fn.fnamemodify(relative_path, ':h')
-    local available_dir_width = max_title_width - #filename - 6 -- Account for '.../' and spaces
+    local available_chars = target_length - 2
 
-    if available_dir_width > 10 then
-      local truncated_dir = '...' .. dirname:sub(-available_dir_width + 3)
-      title = string.format(' %s/%s ', truncated_dir, filename)
+    local filename = vim.fn.fnamemodify(relative_path, ':t')
+    if available_chars <= 3 then
+      title = filename
     else
-      if #filename > max_title_width - 4 then filename = filename:sub(1, max_title_width - 7) .. '...' end
-      title = string.format(' %s ', filename)
+      if #filename + 5 <= available_chars then
+        local normalized_path = vim.fs.normalize(relative_path)
+        local path_parts = vim.split(normalized_path, '[/\\]', { plain = false })
+
+        local segments = {}
+        for _, part in ipairs(path_parts) do
+          if part ~= '' then table.insert(segments, part) end
+        end
+
+        local segments_to_show = { filename }
+        local current_length = #filename + 4 -- 4 for '../' prefix and spaces
+
+        for i = #segments - 1, 1, -1 do
+          local segment = segments[i]
+          local new_length = current_length + #segment + 1 -- +1 for '/'
+
+          if new_length <= available_chars then
+            table.insert(segments_to_show, 1, segment)
+            current_length = new_length
+          else
+            break
+          end
+        end
+
+        if #segments_to_show == #segments then
+          title = string.format(' %s ', table.concat(segments_to_show, '/'))
+        else
+          title = string.format(' ../%s ', table.concat(segments_to_show, '/'))
+        end
+      else
+        local truncated_filename = filename:sub(1, available_chars - 3) .. '...'
+        title = string.format(' %s ', truncated_filename)
+      end
     end
   end
 

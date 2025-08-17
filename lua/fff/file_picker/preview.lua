@@ -288,7 +288,11 @@ function M.is_binary_file_async(file_path, callback)
     end
   end
 
-  -- Check file content asynchronously
+  if M.config.binary_file_threshold <= 0 then
+    callback(false)
+    return
+  end
+
   vim.uv.fs_open(file_path, 'r', 438, function(err, fd)
     if err or not fd then
       callback(false)
