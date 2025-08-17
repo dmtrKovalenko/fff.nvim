@@ -527,14 +527,16 @@ function M.setup_keymaps()
   set_keymap('n', keymaps.preview_scroll_down, M.scroll_preview_down, list_opts)
   set_keymap('n', keymaps.toggle_debug, M.toggle_debug, list_opts)
 
-  local preview_opts = { buffer = M.state.preview_buf, noremap = true, silent = true }
+  if M.state.preview_buf then
+    local preview_opts = { buffer = M.state.preview_buf, noremap = true, silent = true }
 
-  set_keymap('n', keymaps.close, M.focus_input_win, preview_opts)
-  set_keymap('n', keymaps.select, M.select, preview_opts)
-  set_keymap('n', keymaps.select_split, function() M.select('split') end, preview_opts)
-  set_keymap('n', keymaps.select_vsplit, function() M.select('vsplit') end, preview_opts)
-  set_keymap('n', keymaps.select_tab, function() M.select('tab') end, preview_opts)
-  set_keymap('n', keymaps.toggle_debug, M.toggle_debug, preview_opts)
+    set_keymap('n', keymaps.close, M.focus_input_win, preview_opts)
+    set_keymap('n', keymaps.select, M.select, preview_opts)
+    set_keymap('n', keymaps.select_split, function() M.select('split') end, preview_opts)
+    set_keymap('n', keymaps.select_vsplit, function() M.select('vsplit') end, preview_opts)
+    set_keymap('n', keymaps.select_tab, function() M.select('tab') end, preview_opts)
+    set_keymap('n', keymaps.toggle_debug, M.toggle_debug, preview_opts)
+  end
 
   vim.keymap.set('i', '<C-w>', function()
     local col = vim.fn.col('.') - 1
