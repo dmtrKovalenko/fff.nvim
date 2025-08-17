@@ -1,13 +1,12 @@
-use crate::error::Error;
-use crate::file_key::FileKey;
+use crate::{error::Error, git::is_modified_status};
 use heed::{
     types::{Bytes, SerdeBincode},
     EnvFlags,
 };
 use heed::{Database, Env, EnvOpenOptions};
-use std::collections::VecDeque;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::VecDeque, path::Path};
 
 const DECAY_CONSTANT: f64 = 0.0693; // ln(2)/10 for 10-day half-life
 const SECONDS_PER_DAY: f64 = 86400.0;
@@ -19,9 +18,9 @@ pub struct FrecencyTracker {
     db: Database<Bytes, SerdeBincode<VecDeque<u64>>>,
 }
 
-const ACCESS_THRESHOLDS: [(i64, u64); 5] = [
-    (12, 60 * 2),          // 2 minutes
-    (6, 60 * 10),          // 10 minutes
+const MODIFICATION_THRESHOLDS: [(i64, u64); 5] = [
+    (16, 60 * 2),          // 2 minutes
+    (8, 60 * 15),          // 15 minutes
     (4, 60 * 60),          // 1 hour
     (2, 60 * 60 * 24),     // 1 day
     (1, 60 * 60 * 24 * 7), // 1 week
@@ -52,9 +51,10 @@ impl FrecencyTracker {
         })
     }
 
-    fn get_accesses(&self, file_key: &FileKey) -> Result<Option<VecDeque<u64>>, Error> {
+    fn get_accesses(&self, path: &Path) -> Result<Option<VecDeque<u64>>, Error> {
         let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
-        let key_hash = Self::path_to_hash_bytes(&file_key.path);
+
+        let key_hash = Self::path_to_hash_bytes(path)?;
         self.db.get(&rtxn, &key_hash).map_err(Error::DbRead)
     }
 
@@ -65,15 +65,19 @@ impl FrecencyTracker {
             .as_secs()
     }
 
-    fn path_to_hash_bytes(path: &str) -> [u8; 32] {
-        *blake3::hash(path.as_bytes()).as_bytes()
+    fn path_to_hash_bytes(path: &Path) -> Result<[u8; 32], Error> {
+        let Some(key) = path.to_str() else {
+            return Err(Error::InvalidPath(path.to_path_buf()));
+        };
+
+        Ok(*blake3::hash(key.as_bytes()).as_bytes())
     }
 
-    pub fn track_access(&self, file_key: &FileKey) -> Result<(), Error> {
+    pub fn track_access(&self, path: &Path) -> Result<(), Error> {
         let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
 
-        let key_hash = Self::path_to_hash_bytes(&file_key.path);
-        let mut accesses = self.get_accesses(file_key)?.unwrap_or_default();
+        let key_hash = Self::path_to_hash_bytes(path)?;
+        let mut accesses = self.get_accesses(path)?.unwrap_or_default();
 
         let now = self.get_now();
         let cutoff_time = now.saturating_sub((MAX_HISTORY_DAYS * SECONDS_PER_DAY) as u64);
@@ -86,6 +90,8 @@ impl FrecencyTracker {
         }
 
         accesses.push_back(now);
+        tracing::debug!(?path, accesses = accesses.len(), "Tracking access");
+
         self.db
             .put(&mut wtxn, &key_hash, &accesses)
             .map_err(Error::DbWrite)?;
@@ -95,10 +101,12 @@ impl FrecencyTracker {
         Ok(())
     }
 
-    pub fn get_access_score(&self, file_key: &FileKey) -> i64 {
+    pub fn get_access_score(&self, file_path: &Path) -> i64 {
+        tracing::debug!(?file_path, "Calculating access score");
         let accesses = self
-            .get_accesses(file_key)
-            .unwrap_or(None)
+            .get_accesses(file_path)
+            .ok()
+            .flatten()
             .unwrap_or_default();
 
         if accesses.is_empty() {
@@ -129,23 +137,38 @@ impl FrecencyTracker {
         normalized_frecency.round() as i64
     }
 
-    /// Calculate modification frecency score (0-12 points, git-aware)
-    pub fn get_modification_score(&self, modified_time: u64, git_status: &str) -> i64 {
-        let git_shows_changes = matches!(
-            git_status,
-            "modified" | "staged_modified" | "untracked" | "staged_new"
-        );
-
-        if !git_shows_changes {
-            return 0; // No modification score for clean/unchanged files
+    /// Calculating modification score but only if the file is modified in the current git dir
+    pub fn get_modification_score(
+        &self,
+        modified_time: u64,
+        git_status: Option<git2::Status>,
+    ) -> i64 {
+        let is_modified_git_status = git_status.is_some_and(is_modified_status);
+        if !is_modified_git_status {
+            return 0;
         }
 
         let now = self.get_now();
         let duration_since = now.saturating_sub(modified_time);
 
-        for (base_points, threshold_seconds) in ACCESS_THRESHOLDS {
-            if duration_since <= threshold_seconds {
-                return base_points * 2;
+        for i in 0..MODIFICATION_THRESHOLDS.len() {
+            let (current_points, current_threshold) = MODIFICATION_THRESHOLDS[i];
+
+            if duration_since <= current_threshold {
+                if i == 0 || duration_since == current_threshold {
+                    return current_points;
+                }
+
+                let (prev_points, prev_threshold) = MODIFICATION_THRESHOLDS[i - 1];
+
+                let time_range = current_threshold - prev_threshold;
+                let time_offset = duration_since - prev_threshold;
+                let points_diff = prev_points - current_points;
+
+                let interpolated_score =
+                    prev_points - (points_diff * time_offset as i64) / time_range as i64;
+
+                return interpolated_score;
             }
         }
 
@@ -220,5 +243,49 @@ mod tests {
             recent_score,
             old_score
         );
+    }
+
+    #[test]
+    fn test_modification_score_interpolation() {
+        let temp_dir = std::env::temp_dir().join("fff_test_interpolation");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let tracker = FrecencyTracker::new(temp_dir.to_str().unwrap(), true).unwrap();
+
+        let current_time = tracker.get_now();
+        let git_status = Some(git2::Status::WT_MODIFIED);
+
+        // At 5 minutes: should interpolate between 16 and 8 points
+        let five_minutes_ago = current_time - (5 * 60);
+        let score = tracker.get_modification_score(five_minutes_ago, git_status);
+
+        // Expected: 16 - (8 * 3 / 13) = 16 - 1 = 15 points
+        // (time_offset = 5-2 = 3, time_range = 15-2 = 13, points_diff = 16-8 = 8)
+        assert_eq!(score, 15, "5 minutes should interpolate to 15 points");
+
+        let two_minutes_ago = current_time - (2 * 60);
+        let score = tracker.get_modification_score(two_minutes_ago, git_status);
+        assert_eq!(score, 16, "2 minutes should be exactly 16 points");
+
+        let fifteen_minutes_ago = current_time - (15 * 60);
+        let score = tracker.get_modification_score(fifteen_minutes_ago, git_status);
+        assert_eq!(score, 8, "15 minutes should be exactly 8 points");
+
+        // At 12 hours: should interpolate between 4 and 2 points
+        let twelve_hours_ago = current_time - (12 * 60 * 60);
+        let score = tracker.get_modification_score(twelve_hours_ago, git_status);
+        // Expected: 4 - (2 * 11 / 23) = 4 - 0 = 4 points (integer division)
+        // (time_offset = 12-1 = 11 hours, time_range = 24-1 = 23 hours, points_diff = 4-2 = 2)
+        assert_eq!(score, 4, "12 hours should interpolate to 4 points");
+
+        // at 18 hours for more significant interpolation
+        let eighteen_hours_ago = current_time - (18 * 60 * 60);
+        let score = tracker.get_modification_score(eighteen_hours_ago, git_status);
+        // Expected: 4 - (2 * 17 / 23) = 4 - 1 = 3 points
+        assert_eq!(score, 3, "18 hours should interpolate to 3 points");
+
+        let score = tracker.get_modification_score(five_minutes_ago, None);
+        assert_eq!(score, 0, "No git status should return 0");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

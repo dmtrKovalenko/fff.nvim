@@ -140,10 +140,10 @@ end
 
 --- Record file access for frecency tracking
 --- @param file_path string Path to the file that was accessed
-function M.access_file(file_path)
+function M.track_access(file_path)
   if not M.state.initialized then return end
 
-  local ok, result = pcall(fuzzy.access_file, file_path)
+  local ok, result = pcall(fuzzy.track_access, file_path)
   if not ok then vim.notify('Failed to record file access: ' .. result, vim.log.levels.WARN) end
 end
 

@@ -1145,8 +1145,6 @@ function M.select(action)
   action = action or 'edit'
 
   local relative_path = vim.fn.fnamemodify(item.path, ':.')
-  file_picker.access_file(relative_path)
-
   vim.cmd('stopinsert')
   M.close()
 

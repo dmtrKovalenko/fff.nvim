@@ -1,15 +1,14 @@
 use crate::error::Error;
-use crate::file_key::FileKey;
 use crate::file_picker::FilePicker;
 use crate::frecency::FrecencyTracker;
 use mlua::prelude::*;
 use once_cell::sync::Lazy;
+use std::path::PathBuf;
 use std::sync::RwLock;
 use std::time::Duration;
 
 mod background_watcher;
 mod error;
-mod file_key;
 pub mod file_picker;
 mod frecency;
 pub mod git;
@@ -119,7 +118,7 @@ pub fn fuzzy_search_files(
     results.into_lua(lua)
 }
 
-pub fn access_file(_: &Lua, file_path: String) -> LuaResult<bool> {
+pub fn track_access(_: &Lua, file_path: String) -> LuaResult<bool> {
     let Some(ref frecency) = *FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)? else {
         return Ok(false);
     };
@@ -127,10 +126,9 @@ pub fn access_file(_: &Lua, file_path: String) -> LuaResult<bool> {
         return Err(Error::FilePickerMissing)?;
     };
 
-    let file_key = FileKey::new(file_path);
-    frecency.track_access(&file_key)?;
+    let file_path = PathBuf::from(&file_path).canonicalize()?;
+    frecency.track_access(file_path.as_path())?;
 
-    let file_path = file_key.into_path_buf();
     picker.update_single_file_frecency(&file_path, frecency)?;
 
     Ok(true)
@@ -249,7 +247,7 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
         "fuzzy_search_files",
         lua.create_function(fuzzy_search_files)?,
     )?;
-    exports.set("access_file", lua.create_function(access_file)?)?;
+    exports.set("track_access", lua.create_function(track_access)?)?;
     exports.set("cancel_scan", lua.create_function(cancel_scan)?)?;
     exports.set("get_scan_progress", lua.create_function(get_scan_progress)?)?;
     exports.set(
