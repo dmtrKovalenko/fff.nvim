@@ -49,11 +49,11 @@ function M.is_valid_ratio(value) return type(value) == 'number' and value > 0 an
 
 --- Validate position string
 --- @param value any Value to validate
---- @param valid_positions table List of valid position strings
+--- @param values table List of valid values strings
 --- @return boolean True if valid position
-function M.is_valid_position(value, valid_positions)
+function M.is_one_of(value, values)
   if type(value) ~= 'string' then return false end
-  for _, pos in ipairs(valid_positions) do
+  for _, pos in ipairs(values) do
     if value == pos then return true end
   end
   return false

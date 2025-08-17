@@ -226,6 +226,7 @@ fn calculate_file_bonus(file: &FileItem, context: &ScoringContext) -> i32 {
     bonus
 }
 
+/// Dynamically sorts and returns the top results either in ascending or descending order
 fn sort_and_truncate<'a>(
     mut results: Vec<(&'a FileItem, Score)>,
     context: &ScoringContext,
@@ -233,19 +234,19 @@ fn sort_and_truncate<'a>(
     let total_matched = results.len();
     if context.reverse_order {
         results.sort_by(|a, b| {
-            b.1.total
-                .cmp(&a.1.total)
-                .then_with(|| b.0.modified.cmp(&a.0.modified))
-        });
-
-        if results.len() > context.max_results {
-            results.drain((total_matched - context.max_results)..total_matched);
-        }
-    } else {
-        results.sort_by(|a, b| {
             a.1.total
                 .cmp(&b.1.total)
                 .then_with(|| a.0.modified.cmp(&b.0.modified))
+        });
+
+        if results.len() > context.max_results {
+            results.drain(0..(total_matched - context.max_results));
+        }
+    } else {
+        results.sort_by(|a, b| {
+            b.1.total
+                .cmp(&a.1.total)
+                .then_with(|| b.0.modified.cmp(&a.0.modified))
         });
 
         results.truncate(context.max_results);

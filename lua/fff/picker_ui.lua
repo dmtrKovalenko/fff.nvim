@@ -18,7 +18,7 @@ local function get_prompt_position()
       config.layout.prompt_position,
       terminal_width,
       terminal_height,
-      function(value) return utils.is_valid_position(value, { 'top', 'bottom' }) end,
+      function(value) return utils.is_one_of(value, { 'top', 'bottom' }) end,
       'bottom',
       'layout.prompt_position'
     )
@@ -38,7 +38,7 @@ local function get_preview_position()
       config.layout.preview_position,
       terminal_width,
       terminal_height,
-      function(value) return utils.is_valid_position(value, { 'left', 'right', 'top', 'bottom' }) end,
+      function(value) return utils.is_one_of(value, { 'left', 'right', 'top', 'bottom' }) end,
       'right',
       'layout.preview_position'
     )
@@ -259,7 +259,6 @@ M.state = {
   last_preview_file = nil,
 }
 
---- Create the picker UI
 function M.create_ui()
   local config = M.state.config
 
@@ -554,9 +553,7 @@ function M.focus_input_win()
   vim.api.nvim_win_call(M.state.input_win, function() vim.cmd('startinsert!') end)
 end
 
---- Toggle debug display
 function M.toggle_debug()
-  local main = require('fff.main')
   local old_debug_state = main.config.debug.show_scores
   main.config.debug.show_scores = not main.config.debug.show_scores
   local status = main.config.debug.show_scores and 'enabled' or 'disabled'
@@ -647,9 +644,19 @@ function M.update_results_sync()
   end
 
   local prompt_position = get_prompt_position()
+
+  -- Calculate dynamic max_results based on visible window height
+  local dynamic_max_results = M.state.config.max_results
+  if M.state.list_win and vim.api.nvim_win_is_valid(M.state.list_win) then
+    local win_height = vim.api.nvim_win_get_height(M.state.list_win)
+    dynamic_max_results = win_height
+  else
+    dynamic_max_results = M.state.config.max_results or 100
+  end
+
   local results = file_picker.search_files(
     M.state.query,
-    M.state.config.max_results,
+    dynamic_max_results,
     M.state.config.max_threads,
     M.state.current_file_cache,
     prompt_position == 'bottom'
@@ -658,8 +665,13 @@ function M.update_results_sync()
   -- because the actual files could be different even with same count
   M.state.items = results
   M.state.filtered_items = results
-  M.state.cursor = 1
-  M.state.top = 1
+
+  if prompt_position == 'bottom' then
+    M.state.cursor = #results > 0 and #results or 1
+  else
+    M.state.cursor = 1
+  end
+
   M.render_debounced()
 end
 
@@ -730,143 +742,131 @@ function M.render_list()
   if not M.state.active then return end
 
   local items = M.state.filtered_items
-  local lines = {}
-
   local max_path_width = main.config.ui and main.config.ui.max_path_width or 80
   local debug_enabled = main.config and main.config.debug and main.config.debug.show_scores
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
+  local win_width = vim.api.nvim_win_get_width(M.state.list_win)
   local display_count = math.min(#items, win_height)
-  local empty_lines_needed = win_height - display_count
+  local empty_lines_needed = 0
 
-  for i = 1, empty_lines_needed do
-    table.insert(lines, '')
-  end
-
-  local end_idx = math.min(#items, display_count)
-  local items_to_show = {}
-  for i = 1, end_idx do
-    table.insert(items_to_show, items[i])
-  end
-
-  local display_items = items_to_show
-
-  local line_data = {}
-
-  for i, item in ipairs(display_items) do
-    local icon, icon_hl_group = icons.get_icon_display(item.name, item.extension, false)
-    local frecency = ''
-    local total_frecency = (item.total_frecency_score or 0)
-    local access_frecency = (item.access_frecency_score or 0)
-    local mod_frecency = (item.modification_frecency_score or 0)
-
-    if total_frecency > 0 and debug_enabled then
-      local indicator = ''
-      if mod_frecency >= 6 then -- High modification frecency (recently modified git file)
-        indicator = '🔥' -- Fire for recently modified
-      elseif access_frecency >= 4 then -- High access frecency (recently accessed)
-        indicator = '⭐' -- Star for frequently accessed
-      elseif total_frecency >= 3 then -- Medium total frecency
-        indicator = '✨' -- Sparkle for moderate activity
-      elseif total_frecency >= 1 then -- Low frecency
-        indicator = '•' -- Dot for minimal activity
-      end
-      frecency = string.format(' %s%d', indicator, total_frecency)
-    end
-
-    local suffix = frecency
-    local current_indicator = ''
-    if item.is_current_file then current_indicator = ' (current)' end
-
-    local available_width = math.max(max_path_width - #icon - 1 - #suffix - #current_indicator, 40)
-    local filename, dir_path = format_file_display(item, available_width)
-
-    local line
-    if dir_path ~= '' then
-      line = string.format('%s %s %s%s%s', icon, filename, dir_path, suffix, current_indicator)
+  local prompt_position = get_prompt_position()
+  local cursor_line = 0
+  if #items > 0 then
+    if prompt_position == 'bottom' then
+      empty_lines_needed = win_height - display_count
+      cursor_line = empty_lines_needed + M.state.cursor
     else
-      line = string.format('%s %s%s%s', icon, filename, suffix, current_indicator)
+      cursor_line = M.state.cursor
+    end
+    cursor_line = math.max(1, math.min(cursor_line, win_height))
+  end
+
+  local padded_lines = {}
+  if prompt_position == 'bottom' then
+    for _ = 1, empty_lines_needed do
+      table.insert(padded_lines, string.rep(' ', win_width + 5))
+    end
+  end
+
+  local icon_data = {}
+  local path_data = {}
+
+  for i = 1, display_count do
+    local item = items[i]
+
+    local icon, icon_hl_group = icons.get_icon_display(item.name, item.extension, false)
+    icon_data[i] = { icon, icon_hl_group }
+
+    local frecency = ''
+    if debug_enabled then
+      local total_frecency = (item.total_frecency_score or 0)
+      local access_frecency = (item.access_frecency_score or 0)
+      local mod_frecency = (item.modification_frecency_score or 0)
+
+      if total_frecency > 0 then
+        local indicator = ''
+        if mod_frecency >= 6 then
+          indicator = '🔥'
+        elseif access_frecency >= 4 then
+          indicator = '⭐'
+        elseif total_frecency >= 3 then
+          indicator = '✨'
+        elseif total_frecency >= 1 then
+          indicator = '•'
+        end
+        frecency = string.format(' %s%d', indicator, total_frecency)
+      end
     end
 
+    local current_indicator = item.is_current_file and ' (current)' or ''
+    local available_width = math.max(max_path_width - #icon - 1 - #frecency - #current_indicator, 40)
+
+    local filename, dir_path = format_file_display(item, available_width)
+    path_data[i] = { filename, dir_path }
+
+    local line = string.format('%s %s %s%s%s', icon, filename, dir_path, frecency, current_indicator)
     if item.is_current_file then line = string.format('\027[90m%s\027[0m', line) end
 
-    table.insert(lines, line)
-    line_data[i] = {
-      filename_len = #filename,
-      dir_path_len = #dir_path,
-      icon_highlight = {
-        hl_group = icon_hl_group,
-        icon_length = vim.fn.strdisplaywidth(icon),
-        git_status = item.git_status,
-      },
-    }
-  end
-
-  local win_width = vim.api.nvim_win_get_width(M.state.list_win)
-  local padded_lines = {}
-  for _, line in ipairs(lines) do
     local line_len = vim.fn.strdisplaywidth(line)
-    local padding = math.max(0, win_width - line_len + 5) -- +5 extra to ensure full coverage
-    local padded_line = line .. string.rep(' ', padding)
-    table.insert(padded_lines, padded_line)
+    local padding = math.max(0, win_width - line_len + 5)
+    table.insert(padded_lines, line .. string.rep(' ', padding))
   end
 
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', true)
   vim.api.nvim_buf_set_lines(M.state.list_buf, 0, -1, false, padded_lines)
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
 
-  if #items > 0 then
-    local prompt_position = get_prompt_position()
-    local cursor_line
+  vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
 
-    if prompt_position == 'bottom' then
-      cursor_line = empty_lines_needed + display_count - M.state.cursor + 1
-    else
-      cursor_line = empty_lines_needed + M.state.cursor
-    end
-    cursor_line = math.max(1, math.min(cursor_line, win_height))
+  if #items > 0 and cursor_line > 0 and cursor_line <= win_height then
+    vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
 
-    if cursor_line > 0 and cursor_line <= win_height then
-      vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
+    -- Cursor line highlighting
+    vim.api.nvim_buf_add_highlight(
+      M.state.list_buf,
+      M.state.ns_id,
+      M.state.config.hl.active_file,
+      cursor_line - 1,
+      0,
+      -1
+    )
 
-      vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
+    -- Fill remaining width for cursor line
+    local current_line = padded_lines[cursor_line] or ''
+    local line_len = vim.fn.strdisplaywidth(current_line)
+    local remaining_width = math.max(0, win_width - line_len)
 
-      vim.api.nvim_buf_add_highlight(
-        M.state.list_buf,
-        M.state.ns_id,
-        M.state.config.hl.active_file,
-        cursor_line - 1,
-        0,
-        -1
-      )
-
-      local current_line = vim.api.nvim_buf_get_lines(M.state.list_buf, cursor_line - 1, cursor_line, false)[1] or ''
-      local line_len = vim.fn.strdisplaywidth(current_line)
-      local remaining_width = math.max(0, vim.api.nvim_win_get_width(M.state.list_win) - line_len)
-
-      if remaining_width > 0 then
-        vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, cursor_line - 1, -1, {
-          virt_text = { { string.rep(' ', remaining_width), M.state.config.hl.active_file } },
-          virt_text_pos = 'eol',
-        })
-      end
+    if remaining_width > 0 then
+      vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, cursor_line - 1, -1, {
+        virt_text = { { string.rep(' ', remaining_width), M.state.config.hl.active_file } },
+        virt_text_pos = 'eol',
+      })
     end
 
-    for line_idx, line_content in ipairs(lines) do
-      if line_content ~= '' then -- Skip empty lines
-        local content_line_idx = line_idx - empty_lines_needed
+    for i = 1, display_count do
+      local item = items[i]
 
-        local icon_info = line_data[content_line_idx].icon_highlight
-        if icon_info and icon_info.hl_group and icon_info.icon_length > 0 then
+      local line_idx = empty_lines_needed + i
+      local is_cursor_line = line_idx == cursor_line
+      local line_content = padded_lines[line_idx]
+
+      if line_content then
+        local icon, icon_hl_group = unpack(icon_data[i])
+        local filename, dir_path = unpack(path_data[i])
+
+        -- Icon highlighting
+        if icon_hl_group and vim.fn.strdisplaywidth(icon) > 0 then
           vim.api.nvim_buf_add_highlight(
             M.state.list_buf,
             M.state.ns_id,
-            icon_info.hl_group,
+            icon_hl_group,
             line_idx - 1,
             0,
-            icon_info.icon_length
+            vim.fn.strdisplaywidth(icon)
           )
         end
 
+        -- Frecency highlighting
         if debug_enabled then
           local star_start, star_end = line_content:find('⭐%d+')
           if star_start then
@@ -881,47 +881,28 @@ function M.render_list()
           end
         end
 
-        local debug_start, debug_end = line_content:find('%[%d+|[^%]]*%]')
-        if debug_start then
+        local icon_match = line_content:match('^%S+')
+        if icon_match and #filename > 0 and #dir_path > 0 then
+          local prefix_len = #icon_match + 1 + #filename + 1
           vim.api.nvim_buf_add_highlight(
             M.state.list_buf,
             M.state.ns_id,
-            M.state.config.hl.debug,
+            'Comment',
             line_idx - 1,
-            debug_start - 1,
-            debug_end
+            prefix_len,
+            prefix_len + #dir_path
           )
         end
 
-        local icon_match = line_content:match('^%S+') -- First non-space sequence (icon)
-        if icon_match then
-          local filename_len = line_data[content_line_idx].filename_len
-          local dir_path_len = line_data[content_line_idx].dir_path_len
-
-          if filename_len > 0 and dir_path_len > 0 then
-            local prefix_len = #icon_match + 1 + filename_len + 1 -- icon + space + filename + space
-
-            vim.api.nvim_buf_add_highlight(
-              M.state.list_buf,
-              M.state.ns_id,
-              'Comment',
-              line_idx - 1,
-              prefix_len,
-              prefix_len + dir_path_len
-            )
-          end
-        end
-
-        local is_cursor_line = line_idx == cursor_line
-        local border_char = ' ' -- render space so it is highlighted
+        local border_char = ' '
         local border_hl = nil
 
-        if icon_info and icon_info.git_status and git_utils.should_show_border(icon_info.git_status) then
-          border_char = git_utils.get_border_char(icon_info.git_status)
+        if item.git_status and git_utils.should_show_border(item.git_status) then
+          border_char = git_utils.get_border_char(item.git_status)
           if is_cursor_line then
-            border_hl = git_utils.get_border_highlight_selected(icon_info.git_status)
+            border_hl = git_utils.get_border_highlight_selected(item.git_status)
           else
-            border_hl = git_utils.get_border_highlight(icon_info.git_status)
+            border_hl = git_utils.get_border_highlight(item.git_status)
           end
         end
 
@@ -959,8 +940,6 @@ function M.update_preview()
   end
 
   if M.state.last_preview_file == item.path then return end
-
-  local preview = require('fff.file_picker.preview')
   preview.clear()
 
   M.state.last_preview_file = item.path
@@ -1067,13 +1046,7 @@ function M.move_up()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  local prompt_position = get_prompt_position()
-
-  if prompt_position == 'bottom' then
-    M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
-  else
-    M.state.cursor = math.max(M.state.cursor - 1, 1)
-  end
+  M.state.cursor = math.max(M.state.cursor - 1, 1)
 
   M.render_list()
   M.update_preview()
@@ -1084,13 +1057,7 @@ function M.move_down()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  local prompt_position = get_prompt_position()
-
-  if prompt_position == 'bottom' then
-    M.state.cursor = math.max(M.state.cursor - 1, 1)
-  else
-    M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
-  end
+  M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
 
   M.render_list()
   M.update_preview()
@@ -1191,7 +1158,6 @@ function M.close()
   M.state.items = {}
   M.state.filtered_items = {}
   M.state.cursor = 1
-  M.state.top = 1
   M.state.query = ''
   M.state.ns_id = nil
   M.state.last_preview_file = nil
