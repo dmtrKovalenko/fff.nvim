@@ -1238,7 +1238,8 @@ function M.open(opts)
     end
   end
 
-  M.state.config = vim.tbl_deep_extend('force', main.config or {}, opts or {})
+  local config = require('fff.config').get()
+  M.state.config = vim.tbl_deep_extend('force', config or {}, opts or {})
 
   if not M.create_ui() then
     vim.notify('Failed to create picker UI', vim.log.levels.ERROR)
