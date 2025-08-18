@@ -3,7 +3,7 @@ local M = {}
 ---@class fff.conf.State
 local state = {
   ---@type table | nil
-  config = nil
+  config = nil,
 }
 
 local DEPRECATION_RULES = {
@@ -175,15 +175,11 @@ end
 
 --- Setup the file picker with the given configuration
 --- @param config table Configuration options
-function M.setup(config)
-  vim.g.fff = config
-end
+function M.setup(config) vim.g.fff = config end
 
 --- @return table the fff configuration
 function M.get()
-  if not state.config then
-    init()
-  end
+  if not state.config then init() end
   return state.config
 end
 

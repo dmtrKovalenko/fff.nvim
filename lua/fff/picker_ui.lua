@@ -269,10 +269,7 @@ function M.create_ui()
 
   if not M.state.ns_id then M.state.ns_id = vim.api.nvim_create_namespace('fff_picker_status') end
 
-  local debug_enabled_in_preview = M.enabled_preview()
-    and config
-    and config.debug
-    and config.debug.show_scores
+  local debug_enabled_in_preview = M.enabled_preview() and config and config.debug and config.debug.show_scores
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines

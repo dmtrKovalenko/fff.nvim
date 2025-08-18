@@ -7,9 +7,7 @@ M.state = { initialized = false }
 
 --- Setup the file picker with the given configuration
 --- @param config table Configuration options
-function M.setup(config)
-  vim.g.fff = config
-end
+function M.setup(config) vim.g.fff = config end
 
 --- Find files in current directory
 function M.find_files()
@@ -54,8 +52,8 @@ end
 --- @param max_results number Maximum number of results
 --- @return table List of matching files
 function M.search(query, max_results)
-   local fuzzy = require('fff.core').ensure_initialized()
-   max_results = max_results or require('fff.config').get().max_results
+  local fuzzy = require('fff.core').ensure_initialized()
+  max_results = max_results or require('fff.config').get().max_results
   local ok, search_result = pcall(fuzzy.fuzzy_search_files, query, max_results, nil, nil)
   if ok and search_result.items then return search_result.items end
   return {}

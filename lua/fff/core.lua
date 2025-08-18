@@ -68,21 +68,16 @@ local function setup_global_autocmds(config)
 end
 
 --- @return boolean
-M.is_file_picker_initialized = function()
-  return state.file_picker_initialized
-end
+M.is_file_picker_initialized = function() return state.file_picker_initialized end
 
 ---@return fff.fuzzy
 M.ensure_initialized = function()
-  if state.initialized then
-    return fuzzy
-  end
+  if state.initialized then return fuzzy end
   state.initialized = true
 
   local config = require('fff.conf').get()
   if config.logging.enabled then
-    local log_success, log_error =
-        pcall(fuzzy.init_tracing, config.logging.log_file, config.logging.log_level)
+    local log_success, log_error = pcall(fuzzy.init_tracing, config.logging.log_file, config.logging.log_level)
     if log_success then
       M.log_file_path = log_error
     else
