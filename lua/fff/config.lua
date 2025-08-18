@@ -107,6 +107,7 @@ local function init()
     title = 'FFFiles',
     max_results = 100,
     max_threads = 4,
+    lazy_sync = true, -- whether to initialize this plugin lazily
     layout = {
       height = 0.8,
       width = 0.8,
@@ -185,6 +186,15 @@ function M.get()
     init()
   end
   return state.config
+end
+
+--- @return boolean state_changed
+function M.toggle_debug()
+  local old_debug_state = state.config.debug.show_scores
+  state.config.debug.show_scores = not state.config.debug.show_scores
+  local status = state.config.debug.show_scores and 'enabled' or 'disabled'
+  vim.notify('FFF debug scores ' .. status, vim.log.levels.INFO)
+  return old_debug_state ~= state.config.debug.show_scores
 end
 
 return M

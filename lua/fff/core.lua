@@ -7,7 +7,9 @@ local M = {}
 ---@class fff.core.State
 local state = {
   ---@type boolean
-  initialized = false
+  initialized = false,
+  ---@type boolean
+  file_picker_initialized = false,
 }
 
 ---@param config table
@@ -65,89 +67,17 @@ local function setup_global_autocmds(config)
   })
 end
 
-local function setup_commands()
-  vim.api.nvim_create_user_command('FFFFind', function(opts)
-    if opts.args and opts.args ~= '' then
-      -- If argument looks like a directory, use it as base path
-      if vim.fn.isdirectory(opts.args) == 1 then
-        M.find_files_in_dir(opts.args)
-      else
-        -- Otherwise treat as search query
-        M.search_and_show(opts.args)
-      end
-    else
-      M.find_files()
-    end
-  end, {
-    nargs = '?',
-    complete = function(arg_lead)
-      -- Complete with directories and common search terms
-      local dirs = vim.fn.glob(arg_lead .. '*', false, true)
-      local results = {}
-      for _, dir in ipairs(dirs) do
-        if vim.fn.isdirectory(dir) == 1 then table.insert(results, dir) end
-      end
-      return results
-    end,
-    desc = 'Find files with FFF (use directory path or search query)',
-  })
-
-  vim.api.nvim_create_user_command('FFFScan', function() M.scan_files() end, {
-    desc = 'Scan files for FFF',
-  })
-
-  vim.api.nvim_create_user_command('FFFRefreshGit', function() M.refresh_git_status() end, {
-    desc = 'Manually refresh git status for all files',
-  })
-
-  vim.api.nvim_create_user_command('FFFClearCache', function(opts) M.clear_cache(opts.args) end, {
-    nargs = '?',
-    complete = function() return { 'all', 'frecency', 'files' } end,
-    desc = 'Clear FFF caches (all|frecency|files)',
-  })
-
-  vim.api.nvim_create_user_command('FFFHealth', function() M.health_check() end, {
-    desc = 'Check FFF health',
-  })
-
-  vim.api.nvim_create_user_command('FFFDebug', function(opts)
-    if opts.args == 'toggle' or opts.args == '' then
-      M.config.debug.show_scores = not M.config.debug.show_scores
-      local status = M.config.debug.show_scores and 'enabled' or 'disabled'
-      vim.notify('FFF debug scores ' .. status, vim.log.levels.INFO)
-    elseif opts.args == 'on' then
-      M.config.debug.show_scores = true
-      vim.notify('FFF debug scores enabled', vim.log.levels.INFO)
-    elseif opts.args == 'off' then
-      M.config.debug.show_scores = false
-      vim.notify('FFF debug scores disabled', vim.log.levels.INFO)
-    else
-      vim.notify('Usage: :FFFDebug [on|off|toggle]', vim.log.levels.ERROR)
-    end
-  end, {
-    nargs = '?',
-    complete = function() return { 'on', 'off', 'toggle' } end,
-    desc = 'Toggle FFF debug scores display',
-  })
-
-  vim.api.nvim_create_user_command('FFFOpenLog', function()
-    if M.log_file_path then
-      vim.cmd('tabnew ' .. vim.fn.fnameescape(M.log_file_path))
-    elseif M.config and M.config.logging and M.config.logging.log_file then
-      -- Fallback to the configured log file path even if tracing wasn't initialized
-      vim.cmd('tabnew ' .. vim.fn.fnameescape(M.config.logging.log_file))
-    else
-      vim.notify('Log file path not available', vim.log.levels.ERROR)
-    end
-  end, {
-    desc = 'Open FFF log file in new tab',
-  })
+--- @return boolean
+M.is_file_picker_initialized = function()
+  return state.file_picker_initialized
 end
 
-M.ensure_enitialized = function()
+---@return fff.fuzzy
+M.ensure_initialized = function()
   if state.initialized then
-    return true
+    return fuzzy
   end
+  state.initialized = true
 
   local config = require('fff.config').get()
   if config.logging.enabled then
@@ -167,18 +97,17 @@ M.ensure_enitialized = function()
   ok, result = pcall(fuzzy.init_file_picker, config.base_path)
   if not ok then
     vim.notify('Failed to initialize file picker: ' .. result, vim.log.levels.ERROR)
-    return false
+    return fuzzy
   end
 
-  state.initialized = true
+  state.file_picker_initialized = true
 
-  setup_commands()
   setup_global_autocmds(config)
 
   local git_utils = require('fff.git_utils')
   git_utils.setup_highlights()
 
-  return true
+  return fuzzy
 end
 
 return M

@@ -1,17 +1,14 @@
-local fuzzy = require('fff.fuzzy')
-if not fuzzy then error('Failed to load fff.fuzzy module. Ensure the Rust backend is compiled and available.') end
+-- PERF: By default, this plugin initializes itself lazily,
+-- so we do not require any modules at the top of this module.
 
 local M = {}
 
-M.config = {}
 M.state = { initialized = false }
 
 --- Setup the file picker with the given configuration
 --- @param config table Configuration options
---- @return boolean whether the initialization was successful
 function M.setup(config)
   vim.g.fff = config
-  return require('fff.core').ensure_enitialized()
 end
 
 --- Find files in current directory
@@ -36,12 +33,14 @@ end
 
 --- Trigger rescan of files in the current directory
 function M.scan_files()
+  local fuzzy = require('fff.core').ensure_initialized()
   local ok = pcall(fuzzy.scan_files)
   if not ok then vim.notify('Failed to scan files', vim.log.levels.ERROR) end
 end
 
 --- Refresh git status for the active file lock
 function M.refresh_git_status()
+  local fuzzy = require('fff.core').ensure_initialized()
   local ok, updated_files_count = pcall(fuzzy.refresh_git_status)
   if ok then
     vim.notify('Refreshed git status for ' .. tostring(updated_files_count) .. ' files', vim.log.levels.INFO)
@@ -55,7 +54,8 @@ end
 --- @param max_results number Maximum number of results
 --- @return table List of matching files
 function M.search(query, max_results)
-  max_results = max_results or M.config.max_results
+  local fuzzy = require('fff.core').ensure_initialized()
+  max_results = max_results or require('fff.config').get().max_results
   local ok, search_result = pcall(fuzzy.fuzzy_search_files, query, max_results, nil, nil)
   if ok and search_result.items then return search_result.items end
   return {}
@@ -124,7 +124,7 @@ function M.health_check()
     messages = {},
   }
 
-  if not M.is_initialized() then
+  if not require('fff.core').is_file_picker_initialized() then
     health.ok = false
     table.insert(health.messages, 'File picker not initialized')
   else
@@ -162,8 +162,6 @@ function M.health_check()
   return health
 end
 
-function M.is_initialized() return M.state and M.state.initialized or false end
-
 --- Find files in a specific directory
 --- @param directory string Directory path to search in
 function M.find_files_in_dir(directory)
@@ -198,6 +196,7 @@ function M.change_indexing_directory(new_path)
     return false
   end
 
+  local fuzzy = require('fff.core').ensure_initialized()
   local ok, result = pcall(fuzzy.restart_index_in_path, expanded_path)
   if not ok then
     vim.notify('Failed to change directory: ' .. result, vim.log.levels.ERROR)

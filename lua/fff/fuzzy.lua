@@ -1,3 +1,4 @@
+---@class fff.fuzzy
 local M = {}
 
 -- Try to load the Rust module
