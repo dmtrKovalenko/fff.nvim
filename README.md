@@ -27,6 +27,7 @@ It comes with a dedicated rust backend runtime that keep tracks of the file inde
 - Separate file index maintained by a dedicated backend allows <10 milliseconds search time for 50k files codebase
 - Display images in previews (for now requires snacks.nvim)
 - Smart in a plenty of different ways hopefully helpful for your workflow
+- This plugin initializes itself lazily by default
 
 ## Installation
 
@@ -51,10 +52,10 @@ FFF.nvim requires:
   build = "cargo build --release",
   -- or if you are using nixos
   -- build = "nix run .#release",
-  opts = {
+  opts = { -- (optional)
     -- pass here all the options
   },
-  keys = {
+  keys = { -- (optional)
     {
       "ff", -- try it if you didn't it is a banger keybinding for a picker
       function()
@@ -65,6 +66,10 @@ FFF.nvim requires:
   },
 }
 ```
+
+> [!NOTE]
+> There is no need to configure lazy-loading for this plugin,
+> as it initializes itself lazily.
 
 ### Configuration
 
@@ -77,6 +82,7 @@ require('fff').setup({
     title = 'FFFiles',
     max_results = 100,
     max_threads = 4,
+    lazy_sync = true, -- initialize this plugin lazily
     layout = {
       height = 0.8,
       width = 0.8,
@@ -137,6 +143,11 @@ require('fff').setup({
     }
 })
 ```
+
+> [!TIP]
+> Calling `setup` is not required to initialize this plugin.
+> If you prefer, you can also set `vim.g.fff`.
+
 
 ### Key Features
 
