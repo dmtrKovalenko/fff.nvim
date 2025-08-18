@@ -4,7 +4,7 @@
 local M = {}
 
 -- Load the fuzzy module for file operations
-local fuzzy = require('fff.core').ensure_enitialized()
+local fuzzy = require('fff.core').ensure_initialized()
 
 -- State
 M.state = {

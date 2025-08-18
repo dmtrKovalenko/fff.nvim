@@ -74,7 +74,7 @@ vim.api.nvim_create_user_command('FFFHealth', function() require('fff').health_c
 })
 
 vim.api.nvim_create_user_command('FFFDebug', function(opts)
-  local config = require('fff.config').get()
+  local config = require('fff.conf').get()
   if opts.args == 'toggle' or opts.args == '' then
     config.debug.show_scores = not config.debug.show_scores
     local status = config.debug.show_scores and 'enabled' or 'disabled'
@@ -96,7 +96,7 @@ end, {
 
 vim.api.nvim_create_user_command('FFFOpenLog', function()
   local fff = require('fff')
-  local config = require('fff.config').get()
+  local config = require('fff.conf').get()
   if fff.log_file_path then
     vim.cmd('tabnew ' .. vim.fn.fnameescape(fff.log_file_path))
   elseif config and config.logging and config.logging.log_file then

@@ -1,6 +1,6 @@
 local M = {}
 
----@class fff.config.State
+---@class fff.conf.State
 local state = {
   ---@type table | nil
   config = nil
@@ -107,7 +107,6 @@ local function init()
     title = 'FFFiles',
     max_results = 100,
     max_threads = 4,
-    lazy_sync = true, -- whether to initialize this plugin lazily
     layout = {
       height = 0.8,
       width = 0.8,

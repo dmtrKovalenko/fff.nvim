@@ -79,7 +79,7 @@ M.ensure_initialized = function()
   end
   state.initialized = true
 
-  local config = require('fff.config').get()
+  local config = require('fff.conf').get()
   if config.logging.enabled then
     local log_success, log_error =
         pcall(fuzzy.init_tracing, config.logging.log_file, config.logging.log_level)

@@ -54,8 +54,8 @@ end
 --- @param max_results number Maximum number of results
 --- @return table List of matching files
 function M.search(query, max_results)
-  local fuzzy = require('fff.core').ensure_initialized()
-  max_results = max_results or require('fff.config').get().max_results
+   local fuzzy = require('fff.core').ensure_initialized()
+   max_results = max_results or require('fff.config').get().max_results
   local ok, search_result = pcall(fuzzy.fuzzy_search_files, query, max_results, nil, nil)
   if ok and search_result.items then return search_result.items end
   return {}

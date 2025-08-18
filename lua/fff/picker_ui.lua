@@ -1,5 +1,6 @@
 local M = {}
 
+local conf = require('fff.conf')
 local file_picker = require('fff.file_picker')
 local preview = require('fff.file_picker.preview')
 local icons = require('fff.file_picker.icons')
@@ -229,7 +230,7 @@ function M.calculate_layout_dimensions(cfg)
   return layout
 end
 
-local preview_config = require('fff.config').get().preview
+local preview_config = conf.get().preview
 if preview_config then preview.setup(preview_config) end
 
 M.state = {
@@ -575,7 +576,7 @@ function M.focus_input_win()
 end
 
 function M.toggle_debug()
-  local config_changed = require('fff.config').toggle_debug()
+  local config_changed = conf.toggle_debug()
   if config_changed then
     local current_query = M.state.query
     local current_items = M.state.items
@@ -758,7 +759,7 @@ end
 function M.render_list()
   if not M.state.active then return end
 
-  local config = require('fff.config').get()
+  local config = conf.get()
   local items = M.state.filtered_items
   local max_path_width = config.ui and config.ui.max_path_width or 80
   local debug_enabled = config and config.debug and config.debug.show_scores
@@ -1235,7 +1236,7 @@ function M.open(opts)
     end
   end
 
-  local config = require('fff.config').get()
+  local config = conf.get()
   M.state.config = vim.tbl_deep_extend('force', config or {}, opts or {})
 
   if not M.create_ui() then
