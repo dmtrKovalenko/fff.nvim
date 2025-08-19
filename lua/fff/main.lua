@@ -450,7 +450,7 @@ function M.health_check()
 
   if not M.is_initialized() then
     health.ok = false
-    table.insert(health.messages, 'File picker not initialized')
+    table.insert(health.messages, '✗ File picker not initialized')
   else
     table.insert(health.messages, '✓ File picker initialized')
   end

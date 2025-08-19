@@ -1,6 +1,7 @@
 local utils = require('fff.utils')
 local file_picker = require('fff.file_picker')
 local image = require('fff.file_picker.image')
+local filetype_utils = require('fff.filetype')
 
 local M = {}
 
@@ -408,7 +409,7 @@ function M.get_file_info(file_path)
   }
 
   info.extension = vim.fn.fnamemodify(file_path, ':e'):lower()
-  info.filetype = vim.filetype.match({ filename = file_path }) or 'text'
+  info.filetype = filetype_utils.detect(file_path) or 'text'
   info.size_formatted = utils.format_file_size(info.size)
   info.modified_formatted = os.date('%Y-%m-%d %H:%M:%S', info.modified)
   info.accessed_formatted = os.date('%Y-%m-%d %H:%M:%S', info.accessed)
