@@ -437,6 +437,13 @@ function M.setup_buffers()
   vim.api.nvim_buf_set_option(M.state.input_buf, 'filetype', 'fff_input')
   vim.fn.prompt_setprompt(M.state.input_buf, M.state.config.prompt)
 
+  -- Changing the contents of the input buffer will trigger Neovim to guess the language in order to provide
+  -- syntax highlighting. This makes sure that it's always off.
+  vim.api.nvim_create_autocmd('Syntax', {
+    buffer = M.state.input_buf,
+    callback = function() vim.api.nvim_buf_set_option(M.state.input_buf, 'syntax', '') end,
+  })
+
   vim.api.nvim_buf_set_option(M.state.list_buf, 'buftype', 'nofile')
   vim.api.nvim_buf_set_option(M.state.list_buf, 'filetype', 'fff_list')
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
