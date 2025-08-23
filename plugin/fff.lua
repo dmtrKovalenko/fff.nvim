@@ -7,8 +7,8 @@ vim.g.fff_loaded = true
 local init = vim.schedule_wrap(function()
   if vim.v.exiting ~= vim.NIL then return end
   -- PERF: We query the vim.g.fff config to avoid eagerly requiring Lua modules
-  local lazy_sync = vim.tbl_get(vim.g, 'fff', 'lazy_sync') or true
-  if not lazy_sync then require('fff.core').ensure_initialized() end
+  local lazy_sync = vim.tbl_get(vim.g, 'fff', 'lazy_sync')
+  if lazy_sync == nil or not lazy_sync then require('fff.core').ensure_initialized() end
 end)
 
 if vim.v.vim_did_enter == 1 then
