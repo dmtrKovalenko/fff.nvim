@@ -55,21 +55,17 @@ FFF.nvim requires:
   opts = { -- (optional)
     -- pass here all the options
   },
-  keys = { -- (optional)
-    {
-      "ff", -- try it if you didn't it is a banger keybinding for a picker
-      function()
-        require("fff").find_files() -- or find_in_git_root() if you only want git files
-      end,
-      desc = "Open file picker",
-    },
-  },
+  -- No need to lazy-load with lazy.nvim.
+  -- This plugin initializes itself lazily.
+  lazy = false,
+  init = function()
+    -- try it if you didn't it is a banger keybinding for a picker
+    vim.keymap.set("n", "ff", function()
+      require("fff").find_files() -- or find_in_git_root() if you only want git files
+    end, { desc = "Open file picker" })
+  end,
 }
 ```
-
-> [!NOTE]
-> There is no need to configure lazy-loading for this plugin,
-> as it initializes itself lazily.
 
 ### Configuration
 
