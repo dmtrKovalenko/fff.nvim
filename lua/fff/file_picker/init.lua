@@ -2,68 +2,28 @@
 --- Uses advanced fuzzy search algorithm with frecency scoring
 
 local M = {}
-
--- Load the fuzzy module for file operations
 local fuzzy = require('fff.core').ensure_initialized()
 
--- State
 M.state = {
   initialized = false,
   base_path = nil,
   last_scan_time = 0,
-  config = nil,
 }
 
---- Initialize the file picker
---- @param config table Configuration for the file picker
-function M.setup(config)
-  config = config or {}
-
-  -- Default configuration
-  local defaults = {
-    base_path = vim.fn.getcwd(),
-    max_results = 100,
-    max_threads = 4,
-    show_hidden = false,
-    ignore_patterns = {},
-    preview = {
-      enabled = true,
-      max_lines = 100,
-      max_size = 1024 * 1024, -- 1MB
-    },
-    keymaps = {
-      select = '<CR>',
-      vsplit = '<C-v>',
-      split = '<C-s>',
-      tab = '<C-t>',
-      close = '<Esc>',
-      preview_up = '<C-u>',
-      preview_down = '<C-d>',
-    },
-    layout = {
-      prompt_position = 'bottom',
-      preview_position = 'right',
-      preview_size = 0.4,
-      height = 0.8,
-      width = 0.8,
-    },
-  }
-
-  M.config = vim.tbl_deep_extend('force', defaults, config)
-  M.state.config = M.config
-
+function M.setup()
   local db_path = vim.fn.stdpath('cache') .. '/fff_nvim'
   local ok, result = pcall(fuzzy.init_db, db_path, true)
   if not ok then vim.notify('Failed to initialize frecency database: ' .. result, vim.log.levels.WARN) end
 
-  ok, result = pcall(fuzzy.init_file_picker, M.config.base_path)
+  local config = require('fff.conf').get()
+  ok, result = pcall(fuzzy.init_file_picker, config.base_path)
   if not ok then
     vim.notify('Failed to initialize file picker: ' .. result, vim.log.levels.ERROR)
     return false
   end
 
   M.state.initialized = true
-  M.state.base_path = M.config.base_path
+  M.state.base_path = config.base_path
 
   return true
 end
@@ -89,10 +49,11 @@ end
 --- @param reverse_order boolean Reverse order of results
 --- @return table List of matching files
 function M.search_files(query, max_results, max_threads, current_file, reverse_order)
+  local config = require('fff.conf').get()
   if not M.state.initialized then return {} end
 
-  max_results = max_results or M.config.max_results
-  max_threads = max_threads or M.config.max_threads
+  max_results = max_results or config.max_results
+  max_threads = max_threads or config.max_threads
 
   local ok, search_result =
     pcall(fuzzy.fuzzy_search_files, query, max_results, max_threads, current_file, reverse_order)
@@ -171,10 +132,6 @@ end
 --- Check if file picker is initialized
 --- @return boolean
 function M.is_initialized() return M.state.initialized end
-
---- Get current configuration
---- @return table
-function M.get_config() return M.config end
 
 --- Get scan progress information
 --- @return table Progress information with scanned_files_count, is_scanning

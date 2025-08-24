@@ -40,31 +40,59 @@ It comes with a dedicated rust backend runtime that keep tracks of the file inde
 FFF.nvim requires:
 
 - Neovim 0.10.0+
-- Rust toolchain (requires nightly for building the native backend)
+- [Rustup](https://rustup.rs/) (we require nightly for building the native backend rustup will handle toolchain automatically)
 
-### Package Managers
+### Installation
 
 #### lazy.nvim
 
 ```lua
 {
-  "dmtrKovalenko/fff.nvim",
-  build = "cargo build --release",
+  'dmtrKovalenko/fff.nvim',
+  build = 'cargo build --release',
   -- or if you are using nixos
   -- build = "nix run .#release",
   opts = { -- (optional)
-    -- pass here all the options
+    debug = {
+      enabled = true,     -- we expect your collaboration at least during the beta
+      show_scores = true, -- to help us optimize the scoring system, feel free to share your scores!
+    },
   },
   -- No need to lazy-load with lazy.nvim.
   -- This plugin initializes itself lazily.
   lazy = false,
-  init = function()
-    -- try it if you didn't it is a banger keybinding for a picker
-    vim.keymap.set("n", "ff", function()
-      require("fff").find_files() -- or find_in_git_root() if you only want git files
-    end, { desc = "Open file picker" })
-  end,
+  keys = {
+    {
+      "ff", -- try it if you didn't it is a banger keybinding for a picker
+      function()
+	require('fff.main').find_files()
+      end,
+      desc = 'Find files',
+    }
+  }
 }
+```
+
+You can also avoid calling `setup` and simply set `vim.g.fff` instead.
+
+> [!Important]
+> While we are in beta it is required build native backend manually by running `cargo build --release` in the plugin directory.
+
+```lua
+vim.pack.add({ 'https://github.com/dmtrKovalenko/fff.nvim' })
+
+-- the plugin will automatically lazy load
+vim.g.fff = {
+  lazy_sync = true, -- start syncing only when the picker is open
+  debug ={
+    enabled = true,
+    show_scores = true,
+  }
+}
+
+vim.keymap.set('n', 'ff', function()
+   require('fff').find_files()
+end, { desc = 'FFFind files' })
 ```
 
 ### Configuration
@@ -78,7 +106,7 @@ require('fff').setup({
     title = 'FFFiles',
     max_results = 100,
     max_threads = 4,
-    lazy_sync = true, -- initialize this plugin lazily
+    lazy_sync = true, -- set to false if you want file indexing to start on open
     layout = {
       height = 0.8,
       width = 0.8,
@@ -139,11 +167,6 @@ require('fff').setup({
     }
 })
 ```
-
-> [!TIP]
-> Calling `setup` is not required to initialize this plugin.
-> If you prefer, you can also set `vim.g.fff`.
-
 
 ### Key Features
 

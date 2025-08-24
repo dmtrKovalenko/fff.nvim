@@ -1,5 +1,4 @@
 local fuzzy = require('fff.fuzzy')
-
 if not fuzzy then error('Failed to load fff.fuzzy module. Ensure the Rust backend is compiled and available.') end
 
 local M = {}
@@ -46,13 +45,12 @@ local function setup_global_autocmds(config)
     group = group,
     callback = function()
       local new_cwd = vim.v.event.cwd
-      if M.is_initialized() and new_cwd and new_cwd ~= M.config.base_path then
+      if state.initialized and new_cwd and new_cwd ~= config.base_path then
         vim.schedule(function()
-          local ok, err = pcall(M.change_indexing_directory, new_cwd)
+          local picker = require('fff.main')
+          local ok, err = pcall(picker.change_indexing_directory, new_cwd)
           if not ok then
             vim.notify('FFF: Failed to change indexing directory: ' .. tostring(err), vim.log.levels.ERROR)
-          else
-            M.config.base_path = new_cwd
           end
         end)
       end
@@ -70,7 +68,6 @@ end
 --- @return boolean
 M.is_file_picker_initialized = function() return state.file_picker_initialized end
 
----@return fff.fuzzy
 M.ensure_initialized = function()
   if state.initialized then return fuzzy end
   state.initialized = true
@@ -96,7 +93,6 @@ M.ensure_initialized = function()
   end
 
   state.file_picker_initialized = true
-
   setup_global_autocmds(config)
 
   local git_utils = require('fff.git_utils')

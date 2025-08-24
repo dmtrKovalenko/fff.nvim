@@ -201,7 +201,8 @@ function M.change_indexing_directory(new_path)
     return false
   end
 
-  M.config.base_path = expanded_path
+  local config = require('fff.conf').get()
+  config.base_path = expanded_path
   return true
 end
 
