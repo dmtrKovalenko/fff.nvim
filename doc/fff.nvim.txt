@@ -1,4 +1,4 @@
-*fff.nvim.txt*         For Neovim >= 0.8.0         Last change: 2025 August 18
+*fff.nvim.txt*         For Neovim >= 0.8.0         Last change: 2025 August 24
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -27,6 +27,7 @@ FEATURES                                                   *fff.nvim-features*
 - Separate file index maintained by a dedicated backend allows <10 milliseconds search time for 50k files codebase
 - Display images in previews (for now requires snacks.nvim)
 - Smart in a plenty of different ways hopefully helpful for your workflow
+- This plugin initializes itself lazily by default
 
 
 INSTALLATION                                           *fff.nvim-installation*
@@ -42,33 +43,61 @@ PREREQUISITES ~
 FFF.nvim requires:
 
 - Neovim 0.10.0+
-- Rust toolchain (requires nightly for building the native backend)
+- Rustup <https://rustup.rs/> (we require nightly for building the native backend rustup will handle toolchain automatically)
 
 
-PACKAGE MANAGERS ~
+INSTALLATION ~
 
 
 LAZY.NVIM
 
 >lua
     {
-      "dmtrKovalenko/fff.nvim",
-      build = "cargo build --release",
+      'dmtrKovalenko/fff.nvim',
+      build = 'cargo build --release',
       -- or if you are using nixos
       -- build = "nix run .#release",
-      opts = {
-        -- pass here all the options
+      opts = { -- (optional)
+        debug = {
+          enabled = true,     -- we expect your collaboration at least during the beta
+          show_scores = true, -- to help us optimize the scoring system, feel free to share your scores!
+        },
       },
+      -- No need to lazy-load with lazy.nvim.
+      -- This plugin initializes itself lazily.
+      lazy = false,
       keys = {
         {
           "ff", -- try it if you didn't it is a banger keybinding for a picker
           function()
-            require("fff").find_files() -- or find_in_git_root() if you only want git files
+        require('fff.main').find_files()
           end,
-          desc = "Open file picker",
-        },
-      },
+          desc = 'Find files',
+        }
+      }
     }
+<
+
+You can also avoid calling `setup` and simply set `vim.g.fff` instead.
+
+
+  [!Important] While we are in beta it is required build native backend manually
+  by running `cargo build --release` in the plugin directory.
+>lua
+    vim.pack.add({ 'https://github.com/dmtrKovalenko/fff.nvim' })
+    
+    -- the plugin will automatically lazy load
+    vim.g.fff = {
+      lazy_sync = true, -- start syncing only when the picker is open
+      debug ={
+        enabled = true,
+        show_scores = true,
+      }
+    }
+    
+    vim.keymap.set('n', 'ff', function()
+       require('fff').find_files()
+    end, { desc = 'FFFind files' })
 <
 
 
@@ -84,6 +113,7 @@ all available options:
         title = 'FFFiles',
         max_results = 100,
         max_threads = 4,
+        lazy_sync = true, -- set to false if you want file indexing to start on open
         layout = {
           height = 0.8,
           width = 0.8,
