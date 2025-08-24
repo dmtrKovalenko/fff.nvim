@@ -1,5 +1,5 @@
 [files]
-extend-exclude = ["/CHANGELOG.md"]
+extend-exclude = ["/CHANGELOG.md", "data/filetypes/base.lua"]
 
 [default.extend-words]
 noice = "noice"
