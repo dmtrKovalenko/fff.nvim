@@ -429,10 +429,14 @@ function M.create_ui()
   return true
 end
 
---- Setup buffer options
 function M.setup_buffers()
+  vim.api.nvim_buf_set_name(M.state.input_buf, 'fffile search')
+  vim.api.nvim_buf_set_name(M.state.list_buf, 'fffiles list')
+  vim.api.nvim_buf_set_name(M.state.preview_buf, 'fffile preview')
+
   vim.api.nvim_buf_set_option(M.state.input_buf, 'buftype', 'prompt')
   vim.api.nvim_buf_set_option(M.state.input_buf, 'filetype', 'fff_input')
+
   vim.fn.prompt_setprompt(M.state.input_buf, M.state.config.prompt)
 
   vim.api.nvim_buf_set_option(M.state.list_buf, 'buftype', 'nofile')
