@@ -432,7 +432,7 @@ end
 function M.setup_buffers()
   vim.api.nvim_buf_set_name(M.state.input_buf, 'fffile search')
   vim.api.nvim_buf_set_name(M.state.list_buf, 'fffiles list')
-  vim.api.nvim_buf_set_name(M.state.preview_buf, 'fffile preview')
+  if M.enabled_preview() then vim.api.nvim_buf_set_name(M.state.preview_buf, 'fffile preview') end
 
   vim.api.nvim_buf_set_option(M.state.input_buf, 'buftype', 'prompt')
   vim.api.nvim_buf_set_option(M.state.input_buf, 'filetype', 'fff_input')
