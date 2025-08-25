@@ -1243,42 +1243,25 @@ end
 function M.open(opts)
   if M.state.active then return end
 
-  -- Get base path first
   local base_path = opts and opts.cwd or vim.fn.getcwd()
 
-  -- Capture current file before creating UI (which changes current buffer)
   local current_buf = vim.api.nvim_get_current_buf()
   if current_buf and vim.api.nvim_buf_is_valid(current_buf) then
     local current_file = vim.api.nvim_buf_get_name(current_buf)
     if current_file ~= '' and vim.fn.filereadable(current_file) == 1 then
       local absolute_path = vim.fn.fnamemodify(current_file, ':p')
-      -- Convert to relative path from base_path
       local relative_path =
         vim.fn.fnamemodify(vim.fn.resolve(absolute_path), ':s?' .. vim.fn.escape(base_path, '\\') .. '/??')
       M.state.current_file_cache = relative_path
-      vim.notify(
-        'DEBUG: Current file captured (relative): ' .. tostring(M.state.current_file_cache),
-        vim.log.levels.INFO
-      )
     else
       M.state.current_file_cache = nil
     end
   else
-    vim.notify('DEBUG: No valid current buffer found', vim.log.levels.INFO)
     M.state.current_file_cache = nil
   end
 
   if not file_picker.is_initialized() then
-    local config = {
-      base_path = base_path,
-      max_results = 100,
-      frecency = {
-        enabled = true,
-        db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
-      },
-    }
-
-    if not file_picker.setup(config) then
+    if not file_picker.setup() then
       vim.notify('Failed to initialize file picker', vim.log.levels.ERROR)
       return
     end
