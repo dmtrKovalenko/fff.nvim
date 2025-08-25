@@ -825,14 +825,12 @@ function M.render_list()
       end
     end
 
-    local current_indicator = item.is_current_file and ' (current)' or ''
-    local available_width = math.max(max_path_width - #icon - 1 - #frecency - #current_indicator, 40)
+    local available_width = math.max(max_path_width - #icon - 1 - #frecency, 40)
 
     local filename, dir_path = format_file_display(item, available_width)
     path_data[i] = { filename, dir_path }
 
-    local line = string.format('%s %s %s%s%s', icon, filename, dir_path, frecency, current_indicator)
-    if item.is_current_file then line = string.format('\027[90m%s\027[0m', line) end
+    local line = string.format('%s %s %s%s', icon, filename, dir_path, frecency)
 
     local line_len = vim.fn.strdisplaywidth(line)
     local padding = math.max(0, win_width - line_len + 5)
@@ -881,12 +879,17 @@ function M.render_list()
         local icon, icon_hl_group = unpack(icon_data[i])
         local filename, dir_path = unpack(path_data[i])
 
+        local score = file_picker.get_file_score(i)
+        if score and score.current_file_penalty ~= 0 then vim.print(score.current_file_penalty) end
+        local is_current_file = score and score.current_file_penalty and score.current_file_penalty < 0
+
         -- Icon highlighting
         if icon_hl_group and vim.fn.strdisplaywidth(icon) > 0 then
+          local icon_highlight = is_current_file and 'Comment' or icon_hl_group
           vim.api.nvim_buf_add_highlight(
             M.state.list_buf,
             M.state.ns_id,
-            icon_hl_group,
+            icon_highlight,
             line_idx - 1,
             0,
             vim.fn.strdisplaywidth(icon)
@@ -919,6 +922,18 @@ function M.render_list()
             prefix_len,
             prefix_len + #dir_path
           )
+        end
+
+        if is_current_file then
+          if not is_cursor_line then
+            vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, 'Comment', line_idx - 1, 0, -1)
+          end
+
+          local virt_text_hl = is_cursor_line and M.state.config.hl.active_file or 'Comment'
+          vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
+            virt_text = { { ' (current)', virt_text_hl } },
+            virt_text_pos = 'right_align',
+          })
         end
 
         local border_char = ' '
@@ -1228,9 +1243,34 @@ end
 function M.open(opts)
   if M.state.active then return end
 
+  -- Get base path first
+  local base_path = opts and opts.cwd or vim.fn.getcwd()
+
+  -- Capture current file before creating UI (which changes current buffer)
+  local current_buf = vim.api.nvim_get_current_buf()
+  if current_buf and vim.api.nvim_buf_is_valid(current_buf) then
+    local current_file = vim.api.nvim_buf_get_name(current_buf)
+    if current_file ~= '' and vim.fn.filereadable(current_file) == 1 then
+      local absolute_path = vim.fn.fnamemodify(current_file, ':p')
+      -- Convert to relative path from base_path
+      local relative_path =
+        vim.fn.fnamemodify(vim.fn.resolve(absolute_path), ':s?' .. vim.fn.escape(base_path, '\\') .. '/??')
+      M.state.current_file_cache = relative_path
+      vim.notify(
+        'DEBUG: Current file captured (relative): ' .. tostring(M.state.current_file_cache),
+        vim.log.levels.INFO
+      )
+    else
+      M.state.current_file_cache = nil
+    end
+  else
+    vim.notify('DEBUG: No valid current buffer found', vim.log.levels.INFO)
+    M.state.current_file_cache = nil
+  end
+
   if not file_picker.is_initialized() then
     local config = {
-      base_path = opts and opts.cwd or vim.fn.getcwd(),
+      base_path = base_path,
       max_results = 100,
       frecency = {
         enabled = true,

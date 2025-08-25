@@ -121,14 +121,21 @@ pub fn match_and_score_files<'a>(
                 _ => 0,
             };
 
+            let current_file_penalty = calculate_current_file_penalty(file, base_score, context);
+            if current_file_penalty < 0 {
+                tracing::debug!(file =?file.relative_path, ?current_file_penalty, "Applied penalty");
+            }
+
             let total = base_score
                 .saturating_add(frecency_boost)
                 .saturating_add(distance_penalty)
-                .saturating_add(filename_bonus);
+                .saturating_add(filename_bonus)
+                .saturating_add(current_file_penalty);
 
             let score = Score {
                 total,
                 base_score,
+                current_file_penalty,
                 filename_bonus,
                 special_filename_bonus: if has_special_filename_bonus {
                     filename_bonus
@@ -186,20 +193,18 @@ fn score_all_by_frecency<'a>(
             let total_frecency_score = file.access_frecency_score as i32
                 + (file.modification_frecency_score as i32).saturating_mul(4);
 
-            let distance_penalty =
-                calculate_distance_penalty(context.current_file, &file.relative_path);
-
-            let total = total_frecency_score
-                .saturating_add(distance_penalty)
-                .saturating_add(calculate_file_bonus(file, context));
+            let current_file_penalty =
+                calculate_current_file_penalty(file, total_frecency_score, context);
+            let total = total_frecency_score.saturating_add(current_file_penalty);
 
             let score = Score {
                 total,
                 base_score: 0,
                 filename_bonus: 0,
+                distance_penalty: 0,
                 special_filename_bonus: 0,
+                current_file_penalty,
                 frecency_boost: total_frecency_score,
-                distance_penalty,
                 match_type: "frecency",
             };
 
@@ -211,19 +216,25 @@ fn score_all_by_frecency<'a>(
 }
 
 #[inline]
-fn calculate_file_bonus(file: &FileItem, context: &ScoringContext) -> i32 {
-    let mut bonus = 0i32;
+fn calculate_current_file_penalty(
+    file: &FileItem,
+    base_score: i32,
+    context: &ScoringContext,
+) -> i32 {
+    let mut penalty = 0i32;
 
     if let Some(current) = context.current_file {
-        if file.relative_path == *current {
-            bonus -= match file.git_status {
-                Some(status) if is_modified_status(status) => 150,
-                _ => 300,
+        if file.relative_path.as_str() == current {
+            penalty -= match file.git_status {
+                Some(status) if is_modified_status(status) => base_score / 2,
+                _ => base_score,
             };
+
+            tracing::debug!(file =?file.relative_path, current=?context.current_file, ?penalty, "Calculating current file penalty");
         }
     }
 
-    bonus
+    penalty
 }
 
 /// Dynamically sorts and returns the top results either in ascending or descending order

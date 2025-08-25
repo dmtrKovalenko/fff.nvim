@@ -35,14 +35,12 @@ pub fn calculate_distance_penalty(current_file: Option<&str>, candidate_path: &s
         .count();
 
     let current_depth_from_common = current_parts.len() - common_len;
-    let candidate_depth_from_common = candidate_parts.len() - common_len;
-    let total_distance = current_depth_from_common + candidate_depth_from_common;
 
-    if total_distance == 0 {
-        return 0; // Same path
+    if current_depth_from_common == 0 {
+        return 0; // Current file is at the common ancestor level
     }
 
-    let penalty = -(total_distance as i32 * 2);
+    let penalty = -(current_depth_from_common as i32);
 
     penalty.max(-20)
 }
@@ -50,90 +48,84 @@ pub fn calculate_distance_penalty(current_file: Option<&str>, candidate_path: &s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+
     #[test]
+    #[cfg(not(target_family = "windows"))]
     fn test_calculate_distance_penalty() {
-        {
-            let other_path = Path::new("path").join("to").join("file.txt");
-            assert_eq!(
-                calculate_distance_penalty(None, other_path.to_str().unwrap()),
-                0
-            );
-        }
-        {
-            let base_path = Path::new("path").join("to").join("current");
-            let current_path = base_path.join("file.txt");
-            let other_path = base_path.join("other.txt");
-            assert_eq!(
-                calculate_distance_penalty(
-                    Some(current_path.to_str().unwrap()),
-                    other_path.to_str().unwrap()
-                ),
-                0
-            );
-        }
-        {
-            let base_path = Path::new("path").join("to");
-            let current_path = base_path.join("current").join("file.txt");
-            let other_path = base_path.join("file.txt");
-            assert_eq!(
-                calculate_distance_penalty(
-                    Some(current_path.to_str().unwrap()),
-                    other_path.to_str().unwrap()
-                ),
-                -2
-            );
-        }
-        {
-            let base_path = Path::new("path").join("to");
-            let current_path = base_path.join("current").join("file.txt");
-            let other_path = base_path.join("other").join("file.txt");
-            assert_eq!(
-                calculate_distance_penalty(
-                    Some(current_path.to_str().unwrap()),
-                    other_path.to_str().unwrap()
-                ),
-                -4
-            );
-        }
-        {
-            let base_path = Path::new("path").join("to");
-            let current_path = base_path.join("current").join("file.txt");
-            let other_path = base_path.join("another").join("dir").join("file.txt");
-            assert_eq!(
-                calculate_distance_penalty(
-                    Some(current_path.to_str().unwrap()),
-                    other_path.to_str().unwrap()
-                ),
-                -6
-            );
-        }
-        {
-            let current_path = Path::new("a")
-                .join("b")
-                .join("c")
-                .join("d")
-                .join("file.txt");
-            let other_path = Path::new("x")
-                .join("y")
-                .join("z")
-                .join("w")
-                .join("file.txt");
-            assert_eq!(
-                calculate_distance_penalty(
-                    Some(current_path.to_str().unwrap()),
-                    other_path.to_str().unwrap()
-                ),
-                -16
-            );
-        }
-        {
-            let current_path = Path::new("file1.txt").to_str().unwrap();
-            let other_path = Path::new("file2.txt").to_str().unwrap();
-            assert_eq!(
-                calculate_distance_penalty(Some(current_path), other_path),
-                0
-            );
-        }
+        assert_eq!(
+            calculate_distance_penalty(None, "examples/user/test/mod.rs"),
+            0
+        );
+        // Same directory
+        assert_eq!(
+            calculate_distance_penalty(
+                Some("examples/user/test/main.rs"),
+                "examples/user/test/mod.rs"
+            ),
+            0
+        );
+        //
+        // One level apart
+        assert_eq!(
+            calculate_distance_penalty(
+                Some("examples/user/test/subdir/file.rs"),
+                "examples/user/test/mod.rs"
+            ),
+            -1
+        );
+        //
+        // Different subdirectories (same parent)
+        assert_eq!(
+            calculate_distance_penalty(
+                Some("examples/user/test/dir1/file.rs"),
+                "examples/user/test/dir2/mod.rs"
+            ),
+            -1
+        );
+
+        assert_eq!(
+            calculate_distance_penalty(
+                Some("examples/audio-announce/src/lib/audio-announce.rs"),
+                "examples/audio-announce/src/main.rs"
+            ),
+            -1
+        );
+
+        assert_eq!(
+            calculate_distance_penalty(
+                Some("examples/audio-announce/src/audio-announce.rs"),
+                "examples/pixel/src/main.rs"
+            ),
+            -2
+        );
+
+        // Root level files
+        assert_eq!(calculate_distance_penalty(Some("main.rs"), "lib.rs"), 0);
+    }
+
+    #[test]
+    #[cfg(target_family = "windows")]
+    fn distance_penalty_works_on_windows() {
+        assert_eq!(
+            calculate_distance_penalty(None, "examples\\user\\test\\mod.rs"),
+            0
+        );
+        // Same directory
+        assert_eq!(
+            calculate_distance_penalty(
+                Some("examples\\user\\test\\main.rs"),
+                "examples\\user\\test\\mod.rs"
+            ),
+            0
+        );
+        //
+        // One level apart
+        assert_eq!(
+            calculate_distance_penalty(
+                Some("examples\\user\\test\\subdir\\file.rs"),
+                "examples\\user\\test\\mod.rs"
+            ),
+            -1
+        );
     }
 }

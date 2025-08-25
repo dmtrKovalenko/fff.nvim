@@ -84,19 +84,7 @@ end
 function M.get_file_score(index)
   if not M.state.last_search_result or not M.state.last_search_result.scores then return nil end
 
-  -- Convert to 0-based index for Lua table access
-  local score = M.state.last_search_result.scores[index]
-  if not score then return nil end
-
-  return {
-    total = score.total or 0,
-    base_score = score.base_score or 0,
-    filename_bonus = score.filename_bonus or 0,
-    special_filename_bonus = score.special_filename_bonus or 0,
-    frecency_boost = score.frecency_boost or 0,
-    distance_penalty = score.distance_penalty or 0,
-    match_type = score.match_type or 'unknown',
-  }
+  return M.state.last_search_result.scores[index]
 end
 
 --- Record file access for frecency tracking

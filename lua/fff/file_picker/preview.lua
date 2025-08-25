@@ -455,7 +455,12 @@ function M.create_file_info_content(file, info, file_index)
     )
     table.insert(
       lines,
-      string.format('Score Modifiers: frec_boost=%d, dist_penalty=%d', score.frecency_boost, score.distance_penalty)
+      string.format(
+        'Score Modifiers: frec_boost=%d, dist_penalty=%d, current_penalty=%d',
+        score.frecency_boost,
+        score.distance_penalty,
+        score.current_file_penalty or 0
+      )
     )
   else
     table.insert(lines, 'Score Breakdown: N/A (no score data available)')

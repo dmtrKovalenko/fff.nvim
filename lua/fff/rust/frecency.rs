@@ -102,7 +102,6 @@ impl FrecencyTracker {
     }
 
     pub fn get_access_score(&self, file_path: &Path) -> i64 {
-        tracing::debug!(?file_path, "Calculating access score");
         let accesses = self
             .get_accesses(file_path)
             .ok()

@@ -24,6 +24,7 @@ pub struct Score {
     pub special_filename_bonus: i32,
     pub frecency_boost: i32,
     pub distance_penalty: i32,
+    pub current_file_penalty: i32,
     pub match_type: &'static str,
 }
 
@@ -73,6 +74,7 @@ impl IntoLua for Score {
         table.set("special_filename_bonus", self.special_filename_bonus)?;
         table.set("frecency_boost", self.frecency_boost)?;
         table.set("distance_penalty", self.distance_penalty)?;
+        table.set("current_file_penalty", self.current_file_penalty)?;
         table.set("match_type", self.match_type)?;
         Ok(LuaValue::Table(table))
     }
