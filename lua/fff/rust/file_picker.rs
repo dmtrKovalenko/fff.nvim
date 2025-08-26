@@ -3,7 +3,7 @@ use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
 use crate::score::match_and_score_files;
-use crate::types::{FileItem, ScoringContext, SearchResult};
+use crate::types::{FileItem, MatchedFile, Score, ScoringContext};
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -157,12 +157,12 @@ impl FilePicker {
 
     pub fn fuzzy_search<'a>(
         files: &'a [FileItem],
-        query: &'a str,
+        query: &str,
         max_results: usize,
         max_threads: usize,
-        current_file: Option<&'a str>,
+        current_file: Option<&str>,
         reverse_order: bool,
-    ) -> SearchResult<'a> {
+    ) -> Vec<MatchedFile<'a>> {
         let max_threads = max_threads.max(1);
         debug!(
             ?query,
@@ -171,8 +171,6 @@ impl FilePicker {
             ?current_file,
             "Fuzzy search",
         );
-
-        let total_files = files.len();
 
         // small queries with a large number of results can match absolutely everything
         let max_typos = (query.len() as u16 / 4).clamp(2, 6);
@@ -186,21 +184,16 @@ impl FilePicker {
         };
 
         let time = std::time::Instant::now();
-        let (items, scores, total_matched) = match_and_score_files(files, &context);
+        let results = match_and_score_files(files, &context);
 
         debug!(
             ?query,
             completed_in = ?time.elapsed(),
-            top_position = ?items.first(),
+            top_position = ?if context.reverse_order { results.last() } else {results.first()},
             "Fuzzy search completed",
         );
 
-        SearchResult {
-            items,
-            scores,
-            total_matched,
-            total_files,
-        }
+        results
     }
 
     pub fn get_scan_progress(&self) -> ScanProgress {

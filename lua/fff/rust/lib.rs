@@ -1,8 +1,11 @@
 use crate::error::Error;
 use crate::file_picker::FilePicker;
 use crate::frecency::FrecencyTracker;
+use crate::search_results::{SearchResult, SearchResultsState};
+use crate::types::FileItem;
 use mlua::prelude::*;
 use once_cell::sync::Lazy;
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -14,6 +17,7 @@ mod frecency;
 pub mod git;
 mod path_utils;
 pub mod score;
+mod search_results;
 mod tracing;
 pub mod types;
 use mimalloc::MiMalloc;
@@ -21,6 +25,8 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+pub static LAST_SEARCH_RESULTS: Lazy<RwLock<Option<SearchResultsState>>> =
+    Lazy::new(|| RwLock::new(None));
 pub static FRECENCY: Lazy<RwLock<Option<FrecencyTracker>>> = Lazy::new(|| RwLock::new(None));
 pub static FILE_PICKER: Lazy<RwLock<Option<FilePicker>>> = Lazy::new(|| RwLock::new(None));
 
@@ -106,13 +112,40 @@ pub fn fuzzy_search_files(
         return Err(Error::FilePickerMissing)?;
     };
 
+    let all_files = picker.get_files();
+    // let all_files = {
+    //
+    //     let Some(ref last_search_results) = *LAST_SEARCH_RESULTS
+    //         .read()
+    //         .map_err(|_| Error::AcquireItemLock)?
+    //     else {
+    //     };
+    //
+    //     last_search_results.all_files_to_sort(&query, all_files)
+    // }?;
+
     let results = FilePicker::fuzzy_search(
-        picker.get_files(),
+        &all_files,
         &query,
         max_results,
         max_threads,
         current_file.as_deref(),
         order_reverse,
+    );
+
+    let Some(ref mut last_search_results) = *LAST_SEARCH_RESULTS
+        .write()
+        .map_err(|_| Error::AcquireItemLock)?
+    else {
+        return Err(Error::FilePickerMissing)?;
+    };
+
+    let results = SearchResult::capture_and_truncate_search_results(
+        query,
+        results,
+        last_search_results,
+        all_files.len(),
+        max_results,
     );
 
     results.into_lua(lua)

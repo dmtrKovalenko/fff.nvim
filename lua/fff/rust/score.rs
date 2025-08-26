@@ -3,20 +3,21 @@ use std::path::MAIN_SEPARATOR;
 use crate::{
     git::is_modified_status,
     path_utils::calculate_distance_penalty,
-    types::{FileItem, Score, ScoringContext},
+    types::{FileItem, MatchedFile, Score, ScoringContext},
 };
+use ignore::Match;
 use rayon::prelude::*;
 
 pub fn match_and_score_files<'a>(
     files: &'a [FileItem],
     context: &ScoringContext,
-) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
+) -> Vec<MatchedFile<'a>> {
     if context.query.len() < 2 {
         return score_all_by_frecency(files, context);
     }
 
     if files.is_empty() {
-        return (vec![], vec![], 0);
+        return vec![];
     }
 
     let options = neo_frizbee::Options {
@@ -68,12 +69,12 @@ pub fn match_and_score_files<'a>(
     };
 
     let mut next_filename_match_index = 0;
-    let results: Vec<_> = path_matches
+    let mut results: Vec<_> = path_matches
         .into_iter()
         .enumerate()
         .map(|(index, path_match)| {
-            let file_idx = path_match.index_in_haystack as usize;
-            let file = &files[file_idx];
+            let file_index = path_match.index_in_haystack as usize;
+            let file = &files[file_index];
 
             let mut base_score = path_match.score as i32;
             let frecency_boost = base_score.saturating_mul(file.total_frecency_score as i32) / 100;
@@ -151,11 +152,16 @@ pub fn match_and_score_files<'a>(
                 },
             };
 
-            (file, score)
+            MatchedFile {
+                file,
+                score,
+                file_index,
+            }
         })
         .collect();
 
-    sort_and_truncate(results, context)
+    sort_and_truncate(&mut results, context);
+    results
 }
 
 /// Check if a filename is a special entry point file that deserves bonus scoring
@@ -186,10 +192,11 @@ fn is_special_entry_point_file(filename: &str) -> bool {
 fn score_all_by_frecency<'a>(
     files: &'a [FileItem],
     context: &ScoringContext,
-) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
-    let results: Vec<_> = files
+) -> Vec<MatchedFile<'a>> {
+    let mut results: Vec<MatchedFile<'a>> = files
         .par_iter()
-        .map(|file| {
+        .enumerate()
+        .map(|(index, file)| {
             let total_frecency_score = file.access_frecency_score as i32
                 + (file.modification_frecency_score as i32).saturating_mul(4);
 
@@ -208,11 +215,16 @@ fn score_all_by_frecency<'a>(
                 match_type: "frecency",
             };
 
-            (file, score)
+            MatchedFile {
+                file,
+                score,
+                file_index: index,
+            }
         })
         .collect();
 
-    sort_and_truncate(results, context)
+    sort_and_truncate(&mut results, context);
+    results
 }
 
 #[inline]
@@ -238,30 +250,20 @@ fn calculate_current_file_penalty(
 }
 
 /// Dynamically sorts and returns the top results either in ascending or descending order
-fn sort_and_truncate<'a>(
-    mut results: Vec<(&'a FileItem, Score)>,
-    context: &ScoringContext,
-) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
-    let total_matched = results.len();
+fn sort_and_truncate<'a>(results: &mut Vec<MatchedFile>, context: &ScoringContext) {
     if context.reverse_order {
         results.sort_by(|a, b| {
-            a.1.total
-                .cmp(&b.1.total)
-                .then_with(|| a.0.modified.cmp(&b.0.modified))
+            a.score
+                .total
+                .cmp(&b.score.total)
+                .then_with(|| a.file.modified.cmp(&b.file.modified))
         });
-
-        if results.len() > context.max_results {
-            results.drain(0..(total_matched - context.max_results));
-        }
     } else {
         results.sort_by(|a, b| {
-            b.1.total
-                .cmp(&a.1.total)
-                .then_with(|| b.0.modified.cmp(&a.0.modified))
+            b.score
+                .total
+                .cmp(&a.score.total)
+                .then_with(|| b.file.modified.cmp(&a.file.modified))
         });
-
-        results.truncate(context.max_results);
     }
-    let (items, scores) = results.into_iter().unzip();
-    (items, scores, total_matched)
 }

@@ -16,7 +16,7 @@ pub struct FileItem {
     pub git_status: Option<git2::Status>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Score {
     pub total: i32,
     pub base_score: i32,
@@ -38,12 +38,11 @@ pub struct ScoringContext<'a> {
     pub reverse_order: bool,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct SearchResult<'a> {
-    pub items: Vec<&'a FileItem>,
-    pub scores: Vec<Score>,
-    pub total_matched: usize,
-    pub total_files: usize,
+#[derive(Debug)]
+pub struct MatchedFile<'a> {
+    pub file: &'a FileItem,
+    pub file_index: usize,
+    pub score: Score,
 }
 
 impl IntoLua for &FileItem {
@@ -76,17 +75,6 @@ impl IntoLua for Score {
         table.set("distance_penalty", self.distance_penalty)?;
         table.set("current_file_penalty", self.current_file_penalty)?;
         table.set("match_type", self.match_type)?;
-        Ok(LuaValue::Table(table))
-    }
-}
-
-impl IntoLua for SearchResult<'_> {
-    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
-        let table = lua.create_table()?;
-        table.set("items", self.items)?;
-        table.set("scores", self.scores)?;
-        table.set("total_matched", self.total_matched)?;
-        table.set("total_files", self.total_files)?;
         Ok(LuaValue::Table(table))
     }
 }
