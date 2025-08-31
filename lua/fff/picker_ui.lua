@@ -466,13 +466,14 @@ end
 --- Setup window options
 function M.setup_windows()
   local hl = M.state.config.hl
-
+  local win_hl = string.format('Normal:%s,FloatBorder:%s,FloatTitle:%s', hl.normal, hl.border, hl.title)
   vim.api.nvim_win_set_option(M.state.input_win, 'wrap', false)
   vim.api.nvim_win_set_option(M.state.input_win, 'cursorline', false)
   vim.api.nvim_win_set_option(M.state.input_win, 'number', false)
   vim.api.nvim_win_set_option(M.state.input_win, 'relativenumber', false)
   vim.api.nvim_win_set_option(M.state.input_win, 'signcolumn', 'no')
   vim.api.nvim_win_set_option(M.state.input_win, 'foldcolumn', '0')
+  vim.api.nvim_win_set_option(M.state.input_win, 'winhighlight', win_hl)
 
   vim.api.nvim_win_set_option(M.state.list_win, 'wrap', false)
   vim.api.nvim_win_set_option(M.state.list_win, 'cursorline', false)
@@ -480,6 +481,7 @@ function M.setup_windows()
   vim.api.nvim_win_set_option(M.state.list_win, 'relativenumber', false)
   vim.api.nvim_win_set_option(M.state.list_win, 'signcolumn', 'yes:1') -- Enable signcolumn for git status borders
   vim.api.nvim_win_set_option(M.state.list_win, 'foldcolumn', '0')
+  vim.api.nvim_win_set_option(M.state.list_win, 'winhighlight', win_hl)
 
   if M.enabled_preview() then
     vim.api.nvim_win_set_option(M.state.preview_win, 'wrap', false)
@@ -488,6 +490,7 @@ function M.setup_windows()
     vim.api.nvim_win_set_option(M.state.preview_win, 'relativenumber', false)
     vim.api.nvim_win_set_option(M.state.preview_win, 'signcolumn', 'no')
     vim.api.nvim_win_set_option(M.state.preview_win, 'foldcolumn', '0')
+    vim.api.nvim_win_set_option(M.state.preview_win, 'winhighlight', win_hl)
   end
 end
 
@@ -957,6 +960,18 @@ function M.render_list()
             sign_hl_group = final_border_hl ~= '' and final_border_hl or M.state.config.hl.active_file,
             priority = 1000,
           })
+        end
+
+        local match_start, match_end = string.find(line_content, M.state.query, 1)
+        if match_start and match_end then
+          vim.api.nvim_buf_add_highlight(
+            M.state.list_buf,
+            M.state.ns_id,
+            config.hl.matched or 'IncSearch',
+            line_idx - 1,
+            match_start - 1,
+            match_end
+          )
         end
       end
     end
