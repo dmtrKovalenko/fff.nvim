@@ -146,17 +146,20 @@ all available options:
           preview_scroll_down = '<C-d>',
           toggle_debug = '<F2>',
         },
-        hl = {
-          border = 'FloatBorder',
-          normal = 'Normal',
-          cursor = 'CursorLine',
-          matched = 'IncSearch',
-          title = 'Title',
-          prompt = 'Question',
-          active_file = 'Visual',
-          frecency = 'Number',
-          debug = 'Comment',
-        },
+	ui = {
+	  picker = 'default',  -- one of 'default' or 'mini' (requires `mini.pick`)
+	  hl = {
+	    border = 'FloatBorder',
+	    normal = 'Normal',
+	    cursor = 'CursorLine',
+	    matched = 'IncSearch',
+	    title = 'Title',
+	    prompt = 'Question',
+	    active_file = 'Visual',
+	    frecency = 'Number',
+	    debug = 'Comment',
+	  },
+	},
         frecency = {
           enabled = true,
           db_path = vim.fn.stdpath('cache') .. '/fff_nvim',

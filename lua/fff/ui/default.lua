@@ -465,7 +465,7 @@ end
 
 --- Setup window options
 function M.setup_windows()
-  local hl = M.state.config.hl
+  local hl = M.state.config.ui.hl
   local win_hl = string.format('Normal:%s,FloatBorder:%s,FloatTitle:%s', hl.normal, hl.border, hl.title)
   vim.api.nvim_win_set_option(M.state.input_win, 'wrap', false)
   vim.api.nvim_win_set_option(M.state.input_win, 'cursorline', false)
@@ -853,7 +853,7 @@ function M.render_list()
     vim.api.nvim_buf_add_highlight(
       M.state.list_buf,
       M.state.ns_id,
-      M.state.config.hl.active_file,
+      M.state.config.ui.hl.active_file,
       cursor_line - 1,
       0,
       -1
@@ -866,7 +866,7 @@ function M.render_list()
 
     if remaining_width > 0 then
       vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, cursor_line - 1, -1, {
-        virt_text = { { string.rep(' ', remaining_width), M.state.config.hl.active_file } },
+        virt_text = { { string.rep(' ', remaining_width), M.state.config.ui.hl.active_file } },
         virt_text_pos = 'eol',
       })
     end
@@ -906,7 +906,7 @@ function M.render_list()
             vim.api.nvim_buf_add_highlight(
               M.state.list_buf,
               M.state.ns_id,
-              M.state.config.hl.frecency,
+              M.state.config.ui.hl.frecency,
               line_idx - 1,
               star_start - 1,
               star_end
@@ -932,7 +932,7 @@ function M.render_list()
             vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, 'Comment', line_idx - 1, 0, -1)
           end
 
-          local virt_text_hl = is_cursor_line and M.state.config.hl.active_file or 'Comment'
+          local virt_text_hl = is_cursor_line and M.state.config.ui.hl.active_file or 'Comment'
           vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
             virt_text = { { ' (current)', virt_text_hl } },
             virt_text_pos = 'right_align',
@@ -952,7 +952,7 @@ function M.render_list()
         end
 
         local final_border_hl = border_hl ~= '' and border_hl
-          or (is_cursor_line and M.state.config.hl.active_file or '')
+          or (is_cursor_line and M.state.config.ui.hl.active_file or '')
 
         if final_border_hl ~= '' or is_cursor_line then
           vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
@@ -967,7 +967,7 @@ function M.render_list()
           vim.api.nvim_buf_add_highlight(
             M.state.list_buf,
             M.state.ns_id,
-            config.hl.matched or 'IncSearch',
+            config.ui.hl.matched or 'IncSearch',
             line_idx - 1,
             match_start - 1,
             match_end
