@@ -11,11 +11,27 @@ function M.setup(config) vim.g.fff = config end
 
 --- Find files in current directory
 function M.find_files()
-  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
-  if picker_ok then
-    picker_ui.open()
+  local config = require('fff.conf').get()
+  local picker = config.ui.picker
+
+  if picker == 'default' then
+    local picker_ok, picker_ui = pcall(require, 'fff.ui.default')
+    if picker_ok then
+      picker_ui.open()
+    else
+      vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
+    end
+  elseif picker == 'mini' then
+    local ok, _ = pcall(require, 'mini.pick')
+    if not ok then
+      vim.notify('mini.pick is not installed', vim.log.levels.ERROR)
+      return
+    end
+    local mini_picker = require('fff.ui.mini')
+    if not mini_picker.is_initialized() then mini_picker.setup() end
+    MiniPick.registry.fffiles()
   else
-    vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
+    vim.notify('Unknown picker:' .. picker, vim.log.levels.ERROR)
   end
 end
 
@@ -144,6 +160,19 @@ function M.health_check()
     end
   end
 
+  local optional_plugins = {
+    { plugin = 'mini.pick', desc = 'Use mini.pick UI' },
+  }
+
+  for _, dep in ipairs(optional_plugins) do
+    local ok, _ = pcall(require, dep.plugin)
+    if not ok then
+      table.insert(health.messages, string.format('Optional: %s not found (%s)', dep.plugin, dep.desc))
+    else
+      table.insert(health.messages, string.format('✓ %s found', dep.plugin))
+    end
+  end
+
   if health.ok then
     vim.notify('FFF health check passed ✓', vim.log.levels.INFO)
   else
@@ -170,11 +199,27 @@ function M.find_files_in_dir(directory)
 
   M.change_indexing_directory(directory)
 
-  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
-  if picker_ok then
-    picker_ui.open({ title = 'Files in ' .. vim.fn.fnamemodify(directory, ':t') })
+  local config = require('fff.conf').get()
+  local picker = config.ui.picker
+
+  if picker == 'default' then
+    local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+    if picker_ok then
+      picker_ui.open({ title = 'Files in ' .. vim.fn.fnamemodify(directory, ':t') })
+    else
+      vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
+    end
+  elseif picker == 'mini' then
+    local ok, _ = pcall(require, 'mini.pick')
+    if not ok then
+      vim.notify('mini.pick is not installed', vim.log.levels.ERROR)
+      return
+    end
+    local mini_picker = require('fff.ui.mini')
+    if not mini_picker.is_initialized() then mini_picker.setup() end
+    MiniPick.registry.fffiles()
   else
-    vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
+    vim.notify('Unknown picker:' .. picker, vim.log.levels.ERROR)
   end
 end
 
