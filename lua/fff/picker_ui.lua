@@ -463,10 +463,10 @@ function M.setup_buffers()
   end
 end
 
---- Setup window options
 function M.setup_windows()
   local hl = M.state.config.hl
   local win_hl = string.format('Normal:%s,FloatBorder:%s,FloatTitle:%s', hl.normal, hl.border, hl.title)
+
   vim.api.nvim_win_set_option(M.state.input_win, 'wrap', false)
   vim.api.nvim_win_set_option(M.state.input_win, 'cursorline', false)
   vim.api.nvim_win_set_option(M.state.input_win, 'number', false)
@@ -492,6 +492,54 @@ function M.setup_windows()
     vim.api.nvim_win_set_option(M.state.preview_win, 'foldcolumn', '0')
     vim.api.nvim_win_set_option(M.state.preview_win, 'winhighlight', win_hl)
   end
+
+  local picker_group = vim.api.nvim_create_augroup('fff_picker_focus', { clear = true })
+  local picker_windows = nil
+
+  if M.enabled_preview() then
+    picker_windows = { M.state.input_win, M.state.preview_win, M.state.list_win }
+  else
+    picker_windows = { M.state.input_win, M.state.list_win }
+  end
+
+  if M.state.preview_win then table.insert(picker_windows, M.state.preview_win) end
+  if M.state.file_info_win then table.insert(picker_windows, M.state.file_info_win) end
+
+  vim.api.nvim_create_autocmd('WinLeave', {
+    group = picker_group,
+    callback = function()
+      if not M.state.active then return end
+
+      local current_win = vim.api.nvim_get_current_win()
+      local is_picker_window = false
+      for _, win in ipairs(picker_windows) do
+        if win and vim.api.nvim_win_is_valid(win) and current_win == win then
+          is_picker_window = true
+          break
+        end
+      end
+
+      -- if we current focused on picker window and leaving it
+      if is_picker_window then
+        vim.defer_fn(function()
+          if not M.state.active then return end
+
+          local new_win = vim.api.nvim_get_current_win()
+          local entering_picker_window = false
+
+          for _, win in ipairs(picker_windows) do
+            if win and vim.api.nvim_win_is_valid(win) and new_win == win then
+              entering_picker_window = true
+              break
+            end
+          end
+
+          if not entering_picker_window then M.close() end
+        end, 10)
+      end
+    end,
+    desc = 'Close picker when focus leaves picker windows',
+  })
 end
 
 local function set_keymap(mode, keys, handler, opts)
@@ -1253,6 +1301,9 @@ function M.close()
     M.state.search_timer:close()
     M.state.search_timer = nil
   end
+
+  -- Clean up picker focus autocmds
+  pcall(vim.api.nvim_del_augroup_by_name, 'fff_picker_focus')
 end
 
 function M.open(opts)
