@@ -5,6 +5,7 @@ use crate::{
     path_utils::calculate_distance_penalty,
     types::{FileItem, Score, ScoringContext},
 };
+use neo_frizbee::Scoring;
 use rayon::prelude::*;
 
 pub fn match_and_score_files<'a>(
@@ -19,10 +20,15 @@ pub fn match_and_score_files<'a>(
         return (vec![], vec![], 0);
     }
 
-    let options = neo_frizbee::Options {
+    let has_uppercase_letter = context.query.chars().any(|c| c.is_uppercase());
+    let options = neo_frizbee::Config {
         prefilter: true,
         max_typos: Some(context.max_typos),
         sort: false,
+        scoring: Scoring {
+            capitalization_bonus: if has_uppercase_letter { 8 } else { 0 },
+            ..Default::default()
+        },
     };
 
     let query_contains_path_separator = context.query.contains(MAIN_SEPARATOR);
@@ -32,7 +38,7 @@ pub fn match_and_score_files<'a>(
         context.query,
         haystack.len()
     );
-    let path_matches = neo_frizbee::match_list(context.query, &haystack, options);
+    let path_matches = neo_frizbee::match_list(context.query, &haystack, &options);
     tracing::debug!(
         "Matched {} files for query '{}'",
         path_matches.len(),
@@ -44,11 +50,7 @@ pub fn match_and_score_files<'a>(
     // instead of spawning a separate matching process, but it's okay for the beta
     let haystack_of_filenames = path_matches
         .par_iter()
-        .filter_map(|m| {
-            files
-                .get(m.index_in_haystack as usize)
-                .map(|f| f.file_name.as_str())
-        })
+        .filter_map(|m| files.get(m.index as usize).map(|f| f.file_name.as_str()))
         .collect::<Vec<_>>();
 
     // if there is a / in the query we don't even match filenames
@@ -58,11 +60,11 @@ pub fn match_and_score_files<'a>(
         let mut list = neo_frizbee::match_list_parallel(
             context.query,
             &haystack_of_filenames,
-            options,
+            &options,
             context.max_threads,
         );
 
-        list.par_sort_unstable_by_key(|m| m.index_in_haystack);
+        list.par_sort_unstable_by_key(|m| m.index);
 
         list
     };
@@ -72,7 +74,7 @@ pub fn match_and_score_files<'a>(
         .into_iter()
         .enumerate()
         .map(|(index, path_match)| {
-            let file_idx = path_match.index_in_haystack as usize;
+            let file_idx = path_match.index as usize;
             let file = &files[file_idx];
 
             let mut base_score = path_match.score as i32;
@@ -83,7 +85,7 @@ pub fn match_and_score_files<'a>(
             let filename_match = filename_matches
                 .get(next_filename_match_index)
                 .and_then(|m| {
-                    if m.index_in_haystack == index as u32 {
+                    if m.index == index as u32 {
                         next_filename_match_index += 1;
                         Some(m)
                     } else {
