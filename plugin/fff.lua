@@ -9,6 +9,10 @@ local init = vim.schedule_wrap(function()
   -- PERF: We query the vim.g.fff config to avoid eagerly requiring Lua modules
   local lazy_sync = vim.tbl_get(vim.g, 'fff', 'lazy_sync')
   if lazy_sync == nil or not lazy_sync then require('fff.core').ensure_initialized() end
+  if Snacks and pcall(require, 'snacks.picker') then
+    -- Users can call Snacks.picker.fff() after this
+    Snacks.picker.sources.fff = require('fff.snacks').source
+  end
 end)
 
 if vim.v.vim_did_enter == 1 then
@@ -101,4 +105,14 @@ vim.api.nvim_create_user_command('FFFOpenLog', function()
   end
 end, {
   desc = 'Open FFF log file in new tab',
+})
+
+vim.api.nvim_create_user_command('FFFSnacks', function()
+  if Snacks and pcall(require, 'snacks.picker') then
+    Snacks.picker(require('fff.snacks').source)
+  else
+    vim.notify('Snacks is not loaded', vim.log.levels.ERROR)
+  end
+end, {
+  desc = 'Open FFF in snacks picker',
 })
