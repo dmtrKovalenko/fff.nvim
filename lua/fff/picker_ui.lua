@@ -1278,12 +1278,7 @@ function M.select(action)
     -- If current active buffer is not a normal buffer we find a suitable window with a tab otherwise opening a new split
     if current_buftype ~= '' or not current_buf_modifiable then
       local suitable_win = find_suitable_window()
-      if suitable_win then
-        vim.api.nvim_set_current_win(suitable_win)
-      else
-        vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
-        return
-      end
+      if suitable_win then vim.api.nvim_set_current_win(suitable_win) end
     end
 
     vim.cmd('edit ' .. vim.fn.fnameescape(relative_path))
