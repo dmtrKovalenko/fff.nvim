@@ -1,9 +1,8 @@
-name: Release
+name: Prebuild
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main, feat/prebuild]
 
 jobs:
   build:
@@ -18,44 +17,47 @@ jobs:
           # Glibc 2.21
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: target/x86_64-unknown-linux-gnu/release/libfff_fuzzy.so
+            artifact_name: target/x86_64-unknown-linux-gnu/release/libfff_nvim.so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            artifact_name: target/aarch64-unknown-linux-gnu/release/libfff_fuzzy.so
+            artifact_name: target/aarch64-unknown-linux-gnu/release/libfff_nvim.so
           # Musl 1.2.3
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            artifact_name: target/x86_64-unknown-linux-musl/release/libfff_fuzzy.so
+            artifact_name: target/x86_64-unknown-linux-musl/release/libfff_nvim.so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            artifact_name: target/aarch64-unknown-linux-musl/release/libfff_fuzzy.so
-          # Android (Termux)
-          - os: ubuntu-latest
-            target: aarch64-linux-android
-            artifact_name: target/aarch64-linux-android/release/libfff_fuzzy.so
+            artifact_name: target/aarch64-unknown-linux-musl/release/libfff_nvim.so
+          # # Android (Termux)
+          # - os: ubuntu-latest
+          #   target: aarch64-linux-android
+          #   artifact_name: target/aarch64-linux-android/release/libfff_nvim.so
 
           ## macOS builds
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: target/x86_64-apple-darwin/release/libfff_fuzzy.dylib
+            artifact_name: target/x86_64-apple-darwin/release/libfff_nvim.dylib
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: target/aarch64-apple-darwin/release/libfff_fuzzy.dylib
+            artifact_name: target/aarch64-apple-darwin/release/libfff_nvim.dylib
 
           ## Windows builds
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: target/x86_64-pc-windows-msvc/release/fff_fuzzy.dll
+            artifact_name: target/x86_64-pc-windows-msvc/release/fff_nvim.dll
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: target/aarch64-pc-windows-msvc/release/fff_nvim.dll
 
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Set Rust toolchain
-        if: contains(matrix.target, 'linux')
-        # https://github.com/rust-cross/cargo-zigbuild/issues/327
-        run: echo -e '[toolchain]\nchannel = "nightly-2025-02-19"' > rust-toolchain.toml
+      # - name: Set Rust toolchain
+      #   if: contains(matrix.target, 'linux')
+      #   # https://github.com/rust-cross/cargo-zigbuild/issues/327
+      #   run: echo -e '[toolchain]\nchannel = "nightly-2025-02-19"' > rust-toolchain.toml
 
       - name: Install Rust
         run: |
@@ -88,7 +90,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: ${{ matrix.target }}.*
+          path: ${{ matrix.target }}*
 
   release:
     name: Release
@@ -97,22 +99,37 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
+        with:
+          path: ./binaries
 
       - name: Generate checksums
+        working-directory: ./binaries
         run: |
+          ls -a 
           for file in ./**/*; do
             sha256sum "$file" > "${file}.sha256"
           done
 
+      - name: Prepare tag
+        id: vars
+        shell: bash
+        run: |
+          sha="$(git rev-parse --short HEAD)"
+          echo "tag=$sha" >> $GITHUB_OUTPUT
+
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
+          name: "${{ steps.vars.outputs.tag }}"
+          tag_name: "${{ steps.vars.outputs.tag }}"
           token: ${{ github.token }}
-          files: ./**/*
+          files: ./binaries/**/*
           draft: false
-          prerelease: false
-          generate_release_notes: true
+          prerelease: true
+          generate_release_notes: false
+          body: |
+           Nightly release from commit: ${{ github.sha }}

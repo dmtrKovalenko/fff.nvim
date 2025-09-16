@@ -1,3 +1,5 @@
+local download = require('fff.download')
+
 --- @return string
 local function get_lib_extension()
   if jit.os:lower() == 'mac' or jit.os:lower() == 'osx' then return '.dylib' end
@@ -10,6 +12,7 @@ end
 local base_path = debug.getinfo(1).source:match('@?(.*/)')
 
 local paths = {
+  download.get_binary_path(),
   base_path .. '../../../target/release/lib?' .. get_lib_extension(),
   base_path .. '../../../target/release/?' .. get_lib_extension(),
 }
@@ -24,7 +27,7 @@ package.cpath = package.cpath .. ';' .. table.concat(paths, ';')
 
 local ok, backend = pcall(require, 'fff_nvim')
 if not ok then
-  error('Failed to load fff rust backend. Make sure that it has been built with `cargo build --release`')
+  error('Failed to load fff rust backend. Make sure that it has been downloaded or built with `cargo build --release`')
 end
 
 return backend
