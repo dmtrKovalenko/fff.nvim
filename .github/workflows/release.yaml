@@ -1,0 +1,135 @@
+name: Prebuild
+
+on:
+  push:
+    branches: [main, feat/prebuild]
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          ## Linux builds
+          # Glibc 2.21
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: target/x86_64-unknown-linux-gnu/release/libfff_nvim.so
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: target/aarch64-unknown-linux-gnu/release/libfff_nvim.so
+          # Musl 1.2.3
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: target/x86_64-unknown-linux-musl/release/libfff_nvim.so
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact_name: target/aarch64-unknown-linux-musl/release/libfff_nvim.so
+          # # Android (Termux)
+          # - os: ubuntu-latest
+          #   target: aarch64-linux-android
+          #   artifact_name: target/aarch64-linux-android/release/libfff_nvim.so
+
+          ## macOS builds
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: target/x86_64-apple-darwin/release/libfff_nvim.dylib
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: target/aarch64-apple-darwin/release/libfff_nvim.dylib
+
+          ## Windows builds
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: target/x86_64-pc-windows-msvc/release/fff_nvim.dll
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: target/aarch64-pc-windows-msvc/release/fff_nvim.dll
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # - name: Set Rust toolchain
+      #   if: contains(matrix.target, 'linux')
+      #   # https://github.com/rust-cross/cargo-zigbuild/issues/327
+      #   run: echo -e '[toolchain]\nchannel = "nightly-2025-02-19"' > rust-toolchain.toml
+
+      - name: Install Rust
+        run: |
+          # https://github.com/rust-cross/cargo-zigbuild/issues/327
+          rustup toolchain install nightly-2025-02-19
+          rustup default nightly-2025-02-19
+          rustup target add ${{ matrix.target }}
+
+      - name: Build for Linux
+        if: contains(matrix.os, 'ubuntu')
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+          cross build --release --target ${{ matrix.target }}
+          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.so"
+
+      - name: Build for macOS
+        if: contains(matrix.os, 'macos')
+        run: |
+          # Ventura (https://en.wikipedia.org/wiki/MacOS_version_history#Releases)
+          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }}
+          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.dylib"
+
+      - name: Build for Windows
+        if: contains(matrix.os, 'windows')
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.dll"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ matrix.target }}*
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./binaries
+
+      - name: Generate checksums
+        working-directory: ./binaries
+        run: |
+          ls -a 
+          for file in ./**/*; do
+            sha256sum "$file" > "${file}.sha256"
+          done
+
+      - name: Prepare tag
+        id: vars
+        shell: bash
+        run: |
+          sha="$(git rev-parse --short HEAD)"
+          echo "tag=$sha" >> $GITHUB_OUTPUT
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "${{ steps.vars.outputs.tag }}"
+          tag_name: "${{ steps.vars.outputs.tag }}"
+          token: ${{ github.token }}
+          files: ./binaries/**/*
+          draft: false
+          prerelease: true
+          generate_release_notes: false
+          body: |
+           Nightly release from commit: ${{ github.sha }}

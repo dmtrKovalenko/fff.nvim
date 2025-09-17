@@ -1,0 +1,37 @@
+name: Stylua
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "**/*.lua"
+      - .stylua.toml
+      - .github/workflows/stylua.yaml
+  pull_request:
+    paths:
+      - "**/*.lua"
+      - .stylua.toml
+      - .github/workflows/stylua.yaml
+
+env:
+  CLICOLOR: 1
+
+jobs:
+  stylua:
+    name: Check lua files using Stylua
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Stylua Check Repo
+        uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: latest
+          args: --color=always --check .

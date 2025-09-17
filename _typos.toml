@@ -1,0 +1,18 @@
+[files]
+extend-exclude = ["/CHANGELOG.md", "data/filetypes/base.lua"]
+
+[default.extend-words]
+noice = "noice"
+fo = "fo"
+
+[default]
+extend-ignore-re = [
+  # git commit hashes in CHANGELOG.md
+  "\\[[0-9a-f]{7}\\]",
+  # Line ignore with trailing # spellchecker:disable-line
+  "(?Rm)^.*(#|--|//)\\s*spellchecker:disable-line$",
+  # Line block with # spellchecker:<on|off>
+  "(?s)(#|--|//|)\\s*spellchecker:off.*?\\n\\s*(#|--|//)\\s*spellchecker:on",
+  # Vim doc formatting
+  "vim:.+:"
+]
