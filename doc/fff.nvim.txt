@@ -1,4 +1,4 @@
-*fff.nvim.txt*        For Neovim >= 0.8.0       Last change: 2025 September 16
+*fff.nvim.txt*       For Neovim >= 0.10.0       Last change: 2025 September 17
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -80,26 +80,35 @@ LAZY.NVIM
     }
 <
 
-You can also avoid calling `setup` and simply set `vim.g.fff` instead.
 
+VIM.PACK
 
-  [!Important] While we are in beta it is required build native backend manually
-  by running `cargo build --release` in the plugin directory.
 >lua
     vim.pack.add({ 'https://github.com/dmtrKovalenko/fff.nvim' })
+    
+    nvim.create_autocmd('PackChanged', {
+      callback = function(event)
+        if event.data.updated then 
+          require('fff.download').download_or_build_binary() 
+        end
+      end,
+    })
     
     -- the plugin will automatically lazy load
     vim.g.fff = {
       lazy_sync = true, -- start syncing only when the picker is open
-      debug ={
+      debug = {
         enabled = true,
         show_scores = true,
-      }
+      },
     }
     
-    vim.keymap.set('n', 'ff', function()
-       require('fff').find_files()
-    end, { desc = 'FFFind files' })
+    vim.keymap.set(
+      'n',
+      'ff',
+      function() require('fff').find_files() end,
+      { desc = 'FFFind files' }
+    )
 <
 
 

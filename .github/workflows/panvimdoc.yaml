@@ -11,6 +11,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # fetch last 2 commits required for auto force push back
+          fetch-depth: 2
+
       - name: panvimdoc
         uses: kdheepak/panvimdoc@main
         with:
