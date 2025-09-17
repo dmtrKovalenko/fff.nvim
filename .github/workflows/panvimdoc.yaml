@@ -1,6 +1,6 @@
 on:
   push:
-    branches:
+    branches-ignore:
       - main
 name: docs
 
@@ -15,13 +15,19 @@ jobs:
         uses: kdheepak/panvimdoc@main
         with:
           vimdoc: fff.nvim
-          version: "Neovim >= 0.8.0"
+          version: "Neovim >= 0.10.0"
           demojify: true
           treesitter: true
-      - name: Push changes
-        uses: stefanzweifel/git-auto-commit-action@v6
+
+      - name: Get last commit message
+        id: last-commit
+        run: |
+          echo "message=$(git log -1 --pretty=%s)" >> $GITHUB_OUTPUT
+          echo "author=$(git log -1 --pretty=\"%an <%ae>\")" >> $GITHUB_OUTPUT
+
+      - uses: stefanzweifel/git-auto-commit-action@v6
         with:
-          commit_message: "chore: autgenerate vimdoc"
-          commit_user_name: "github-actions[bot]"
-          commit_user_email: "github-actions[bot]@users.noreply.github.com"
-          commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          commit_author: ${{ steps.last-commit.outputs.author }}
+          commit_message: ${{ steps.last-commit.outputs.message }}
+          commit_options: "--amend --no-edit"
+          push_options: "--force"
