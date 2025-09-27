@@ -805,9 +805,9 @@ dependencies = [
 
 [[package]]
 name = "neo_frizbee"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "021c5b347f5d2a54823afe6bd29b5079d53e9eb50c1ee38a7dab82e6ea07c8f8"
+checksum = "2b4421f748f561dd0bb677e46f2e6c1ed2c52ba7130349229a73445af5010d17"
 dependencies = [
  "multiversion",
  "rayon",

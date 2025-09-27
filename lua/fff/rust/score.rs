@@ -27,12 +27,13 @@ pub fn match_and_score_files<'a>(
         sort: false,
         scoring: Scoring {
             capitalization_bonus: if has_uppercase_letter { 8 } else { 0 },
+            matching_case_bonus: if has_uppercase_letter { 4 } else { 0 },
             ..Default::default()
         },
     };
 
     let query_contains_path_separator = context.query.contains(MAIN_SEPARATOR);
-    let haystack: Vec<&str> = files.iter().map(|f| f.relative_path.as_str()).collect();
+    let haystack: Vec<_> = files.iter().map(|f| f.relative_path.to_lowercase()).collect();
     tracing::debug!(
         "Starting fuzzy search for query '{}' in {} files",
         context.query,
@@ -50,7 +51,7 @@ pub fn match_and_score_files<'a>(
     // instead of spawning a separate matching process, but it's okay for the beta
     let haystack_of_filenames = path_matches
         .par_iter()
-        .filter_map(|m| files.get(m.index as usize).map(|f| f.file_name.as_str()))
+        .filter_map(|m| files.get(m.index as usize).map(|f| f.file_name.to_lowercase()))
         .collect::<Vec<_>>();
 
     // if there is a / in the query we don't even match filenames
