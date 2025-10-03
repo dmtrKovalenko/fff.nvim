@@ -7,12 +7,22 @@ local function get_lib_extension()
   return '.so'
 end
 
+---@param bin_path string
+---@return string
+local function get_binary_cpath(bin_path)
+    local bin_dir = vim.fn.fnamemodify(bin_path, ':h')
+    local bin_file = vim.fn.fnamemodify(bin_path, ':t')
+    local cfile = bin_file:gsub('fff_nvim', '?')
+    return bin_dir .. '/' .. cfile
+end
+
 -- search for the lib in the /target/release directory with and without the lib prefix
 -- since MSVC doesn't include the prefix
 local base_path = debug.getinfo(1).source:match('@?(.*/)')
+local binary_cpath = get_binary_cpath(download.get_binary_path())
 
 local paths = {
-  download.get_binary_path(),
+  binary_cpath,
   base_path .. '../../../target/release/lib?' .. get_lib_extension(),
   base_path .. '../../../target/release/?' .. get_lib_extension(),
 }
