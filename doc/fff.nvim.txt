@@ -128,6 +128,8 @@ all available options:
         layout = {
           height = 0.8,
           width = 0.8,
+          row = nil, -- ratio (0.0 = top edge, 1.0 = bottom edge) nil is centered
+          col = nil, -- ratio (0.0 = left edge, 1.0 = right edge) nil is centered
           prompt_position = 'bottom', -- or 'top'
           preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
           preview_size = 0.5,

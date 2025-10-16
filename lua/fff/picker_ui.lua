@@ -294,8 +294,39 @@ function M.create_ui()
 
   local width = math.floor(terminal_width * width_ratio)
   local height = math.floor(terminal_height * height_ratio)
-  local col = math.floor((vim.o.columns - width) / 2)
-  local row = math.floor((vim.o.lines - height) / 2)
+
+  -- Calculate col and row (support function or number)
+  local col_ratio_default = 0.5 - (width_ratio / 2) -- default center
+  local col_ratio
+  if config.layout.col ~= nil then
+    col_ratio = utils.resolve_config_value(
+      config.layout.col,
+      terminal_width,
+      terminal_height,
+      utils.is_valid_ratio,
+      col_ratio_default,
+      'layout.col'
+    )
+  else
+    col_ratio = col_ratio_default
+  end
+  local row_ratio_default = 0.5 - (height_ratio / 2) -- default center
+  local row_ratio
+  if config.layout.row ~= nil then
+    row_ratio = utils.resolve_config_value(
+      config.layout.row,
+      terminal_width,
+      terminal_height,
+      utils.is_valid_ratio,
+      row_ratio_default,
+      'layout.row'
+    )
+  else
+    row_ratio = row_ratio_default
+  end
+
+  local col = math.floor(terminal_width * col_ratio)
+  local row = math.floor(terminal_height * row_ratio)
 
   local prompt_position = get_prompt_position()
   local preview_position = get_preview_position()
