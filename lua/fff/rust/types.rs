@@ -1,7 +1,7 @@
 use mlua::prelude::*;
 use std::path::PathBuf;
 
-use crate::git::format_git_status;
+use crate::{git::format_git_status, location::Location};
 
 #[derive(Debug, Clone)]
 pub struct FileItem {
@@ -44,6 +44,7 @@ pub struct SearchResult<'a> {
     pub scores: Vec<Score>,
     pub total_matched: usize,
     pub total_files: usize,
+    pub location: Option<Location>,
 }
 
 impl IntoLua for &FileItem {
@@ -80,6 +81,17 @@ impl IntoLua for Score {
     }
 }
 
+struct LuaPosition((i32, i32));
+
+impl IntoLua for LuaPosition {
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+        let table = lua.create_table()?;
+        table.set("line", self.0.0)?;
+        table.set("col", self.0.1)?;
+        Ok(LuaValue::Table(table))
+    }
+}
+
 impl IntoLua for SearchResult<'_> {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let table = lua.create_table()?;
@@ -87,6 +99,27 @@ impl IntoLua for SearchResult<'_> {
         table.set("scores", self.scores)?;
         table.set("total_matched", self.total_matched)?;
         table.set("total_files", self.total_files)?;
+
+        if let Some(location) = &self.location {
+            let location_table = lua.create_table()?;
+
+            match location {
+                Location::Line(line) => {
+                    location_table.set("line", *line)?;
+                }
+                Location::Position { line, col } => {
+                    location_table.set("line", *line)?;
+                    location_table.set("col", *col)?;
+                }
+                Location::Range { start, end } => {
+                    location_table.set("start", LuaPosition(*start))?;
+                    location_table.set("end", LuaPosition(*end))?;
+                }
+            }
+
+            table.set("location", location_table)?;
+        }
+
         Ok(LuaValue::Table(table))
     }
 }

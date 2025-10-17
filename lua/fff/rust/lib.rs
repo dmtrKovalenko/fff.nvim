@@ -16,6 +16,7 @@ mod path_utils;
 pub mod score;
 mod tracing;
 pub mod types;
+mod location;
 use mimalloc::MiMalloc;
 
 #[global_allocator]

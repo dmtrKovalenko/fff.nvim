@@ -2,14 +2,15 @@ use crate::background_watcher::BackgroundWatcher;
 use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
+use crate::location::parse_location;
 use crate::score::match_and_score_files;
 use crate::types::{FileItem, ScoringContext, SearchResult};
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::SystemTime;
 use tracing::{debug, error, info, warn};
@@ -173,6 +174,7 @@ impl FilePicker {
         );
 
         let total_files = files.len();
+        let (query, location) = parse_location(query);
 
         // small queries with a large number of results can match absolutely everything
         let max_typos = (query.len() as u16 / 4).clamp(2, 6);
@@ -200,6 +202,7 @@ impl FilePicker {
             scores,
             total_matched,
             total_files,
+            location,
         }
     }
 
