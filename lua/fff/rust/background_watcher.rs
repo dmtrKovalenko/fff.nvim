@@ -1,10 +1,10 @@
+use crate::FILE_PICKER;
 use crate::error::Error;
 use crate::file_picker::FilePicker;
 use crate::git::GitStatusCache;
-use crate::FILE_PICKER;
 use git2::Repository;
 use notify::RecursiveMode;
-use notify_debouncer_mini::{new_debouncer, DebounceEventResult, DebouncedEvent};
+use notify_debouncer_mini::{DebounceEventResult, DebouncedEvent, new_debouncer};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -202,10 +202,10 @@ pub fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repositor
             return true;
         }
 
-        if let Some(fname) = rel.file_name().and_then(|f| f.to_str()) {
-            if matches!(fname, "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD") {
-                return true;
-            }
+        if let Some(fname) = rel.file_name().and_then(|f| f.to_str())
+            && matches!(fname, "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD")
+        {
+            return true;
         }
     }
 

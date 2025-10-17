@@ -1,4 +1,4 @@
-use fff_nvim::{file_picker::FilePicker, FILE_PICKER};
+use fff_nvim::{FILE_PICKER, file_picker::FilePicker};
 use std::env;
 use std::io::{self, Write};
 use std::thread;
@@ -33,10 +33,10 @@ fn get_memory_usage() -> Result<u64, Box<dyn std::error::Error>> {
         for line in content.lines() {
             if line.starts_with("VmRSS:") {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    if let Ok(rss_kb) = parts[1].parse::<u64>() {
-                        return Ok(rss_kb * 1024); // Convert KB to bytes
-                    }
+                if let Ok(rss_kb) = parts[1].parse::<u64>()
+                    && parts.len() >= 2
+                {
+                    return Ok(rss_kb * 1024); // Convert KB to bytes
                 }
             }
         }
@@ -101,19 +101,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scan_completed = false;
 
     loop {
-        if let Ok(file_picker_guard) = FILE_PICKER.read() {
-            if let Some(ref picker) = *file_picker_guard {
-                if !picker.is_scan_active() {
-                    println!("Scan inactive, checking file count...");
-                    let file_count = picker.get_files().len();
-                    if file_count > 0 {
-                        println!("Async scan found {} files", file_count);
-                        scan_completed = true;
-                        break;
-                    }
-                } else {
-                    println!("Scan active, waiting...");
+        if let Ok(file_picker_guard) = FILE_PICKER.read()
+            && let Some(ref picker) = *file_picker_guard
+        {
+            if !picker.is_scan_active() {
+                println!("Scan inactive, checking file count...");
+                let file_count = picker.get_files().len();
+                if file_count > 0 {
+                    println!("Async scan found {} files", file_count);
+                    scan_completed = true;
+                    break;
                 }
+            } else {
+                println!("Scan active, waiting...");
             }
         }
         thread::sleep(Duration::from_millis(100));
@@ -127,12 +127,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // If async scan didn't work, trigger a manual scan
     if !scan_completed {
         println!("Triggering manual rescan...");
-        if let Ok(mut file_picker_guard) = FILE_PICKER.write() {
-            if let Some(ref mut picker) = *file_picker_guard {
-                match picker.trigger_rescan() {
-                    Ok(_) => println!("Manual rescan completed"),
-                    Err(e) => println!("Manual rescan failed: {:?}", e),
-                }
+        if let Ok(mut file_picker_guard) = FILE_PICKER.write()
+            && let Some(ref mut picker) = *file_picker_guard
+        {
+            match picker.trigger_rescan() {
+                Ok(_) => println!("Manual rescan completed"),
+                Err(e) => println!("Manual rescan failed: {:?}", e),
             }
         }
     }
@@ -218,50 +218,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Check memory every 100 searches or every 5 seconds
         let now = Instant::now();
-        if search_count % 100 == 0 || now.duration_since(last_memory_check) > Duration::from_secs(5)
+        if (search_count % 100 == 0
+            || now.duration_since(last_memory_check) > Duration::from_secs(5))
+            && let Ok(current_memory) = get_memory_usage()
         {
-            if let Ok(current_memory) = get_memory_usage() {
-                memory_samples.push(current_memory);
+            memory_samples.push(current_memory);
 
-                if current_memory > peak_memory {
-                    peak_memory = current_memory;
-                }
+            if current_memory > peak_memory {
+                peak_memory = current_memory;
+            }
 
-                let memory_growth = current_memory.saturating_sub(initial_memory);
+            let memory_growth = current_memory.saturating_sub(initial_memory);
 
-                println!(
-                    "🔍 Search #{}: '{}' -> {} results in {:?} | Memory: {} (+{}) | Peak: {}",
-                    search_count,
-                    query,
-                    result_count,
-                    search_duration,
-                    format_bytes(current_memory),
-                    format_bytes(memory_growth),
-                    format_bytes(peak_memory)
-                );
+            println!(
+                "🔍 Search #{}: '{}' -> {} results in {:?} | Memory: {} (+{}) | Peak: {}",
+                search_count,
+                query,
+                result_count,
+                search_duration,
+                format_bytes(current_memory),
+                format_bytes(memory_growth),
+                format_bytes(peak_memory)
+            );
 
-                last_memory_check = now;
+            last_memory_check = now;
 
-                // Calculate memory growth trend over last 10 samples
-                if memory_samples.len() >= 10 {
-                    let recent_samples = &memory_samples[memory_samples.len() - 10..];
-                    let first_recent = recent_samples[0];
-                    let last_recent = recent_samples[recent_samples.len() - 1];
+            // Calculate memory growth trend over last 10 samples
+            if memory_samples.len() >= 10 {
+                let recent_samples = &memory_samples[memory_samples.len() - 10..];
+                let first_recent = recent_samples[0];
+                let last_recent = recent_samples[recent_samples.len() - 1];
 
-                    if last_recent > first_recent {
-                        let recent_growth = last_recent - first_recent;
-                        if recent_growth > 1024 * 1024 {
-                            // More than 1MB growth in recent samples
-                            println!(
-                                "⚠️  POTENTIAL LEAK: Recent memory growth: {}",
-                                format_bytes(recent_growth)
-                            );
-                        }
+                if last_recent > first_recent {
+                    let recent_growth = last_recent - first_recent;
+                    if recent_growth > 1024 * 1024 {
+                        // More than 1MB growth in recent samples
+                        println!(
+                            "⚠️  POTENTIAL LEAK: Recent memory growth: {}",
+                            format_bytes(recent_growth)
+                        );
                     }
                 }
-
-                io::stdout().flush().unwrap();
             }
+
+            io::stdout().flush().unwrap();
         }
 
         // Brief pause to prevent overwhelming the system

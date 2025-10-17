@@ -206,4 +206,31 @@ function M.change_indexing_directory(new_path)
   return true
 end
 
+--- Opens the file under the cursor with an optional callback if the only file
+--- is found and we are about to inline open it
+--- @param open_cb function|nil Optional callback function to execute after opening the file
+function M.open_file_under_cursor(open_cb)
+  local filename = vim.fn.expand('<cfile>')
+  local full_path_with_suffix = vim.fn.expand('<cWORD>')
+
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  if not picker_ok then
+    vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
+    return
+  end
+
+  picker_ui.open_with_callback(full_path_with_suffix, function(files, metadata, location, get_file_score)
+    if #files == 1 or require('fff.file_picker').get_file_score(1).exact_match then
+      if open_cb and type(open_cb) == 'function' then open_cb(files[1].path) end
+      vim.api.nvim_command(string.format('e %s', vim.fn.fnameescape(files[1].path)))
+
+      if location then vim.schedule(function() require('fff.location_utils').jump_to_location(location) end) end
+
+      return true
+    else
+      return false -- Open UI with results
+    end
+  end)
+end
+
 return M

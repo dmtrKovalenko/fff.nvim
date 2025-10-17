@@ -154,6 +154,7 @@ pub fn match_and_score_files<'a>(
                 },
                 frecency_boost,
                 distance_penalty,
+                exact_match: path_match.exact || filename_match.is_some_and(|m| m.exact),
                 match_type: match filename_match {
                     Some(filename_match) if filename_match.exact => "exact_filename",
                     Some(_) => "fuzzy_filename",
@@ -215,6 +216,7 @@ fn score_all_by_frecency<'a>(
                 special_filename_bonus: 0,
                 current_file_penalty,
                 frecency_boost: total_frecency_score,
+                exact_match: false,
                 match_type: "frecency",
             };
 
@@ -233,15 +235,15 @@ fn calculate_current_file_penalty(
 ) -> i32 {
     let mut penalty = 0i32;
 
-    if let Some(current) = context.current_file {
-        if file.relative_path.as_str() == current {
-            penalty -= match file.git_status {
-                Some(status) if is_modified_status(status) => base_score / 2,
-                _ => base_score,
-            };
+    if let Some(current) = context.current_file
+        && file.relative_path.as_str() == current
+    {
+        penalty -= match file.git_status {
+            Some(status) if is_modified_status(status) => base_score / 2,
+            _ => base_score,
+        };
 
-            tracing::debug!(file =?file.relative_path, current=?context.current_file, ?penalty, "Calculating current file penalty");
-        }
+        tracing::debug!(file =?file.relative_path, current=?context.current_file, ?penalty, "Calculating current file penalty");
     }
 
     penalty

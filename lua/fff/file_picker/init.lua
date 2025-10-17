@@ -78,6 +78,13 @@ function M.get_search_metadata()
   }
 end
 
+--- Get location data from the last search result
+--- @return table|nil Location data if available
+function M.get_search_location()
+  if not M.state.last_search_result then return nil end
+  return M.state.last_search_result.location
+end
+
 --- Get score information for a file by index (1-based)
 --- @param index number The index of the file in the last search results
 --- @return table|nil Score information or nil if not available

@@ -1,9 +1,9 @@
 use crate::{error::Error, git::is_modified_status};
-use heed::{
-    types::{Bytes, SerdeBincode},
-    EnvFlags,
-};
 use heed::{Database, Env, EnvOpenOptions};
+use heed::{
+    EnvFlags,
+    types::{Bytes, SerdeBincode},
+};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::VecDeque, path::Path};

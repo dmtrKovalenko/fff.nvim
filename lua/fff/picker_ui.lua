@@ -6,6 +6,7 @@ local preview = require('fff.file_picker.preview')
 local icons = require('fff.file_picker.icons')
 local git_utils = require('fff.git_utils')
 local utils = require('fff.utils')
+local location_utils = require('fff.location_utils')
 
 local function get_prompt_position()
   local config = M.state.config
@@ -251,6 +252,7 @@ M.state = {
   top = 1,
   query = '',
   item_line_map = {},
+  location = nil, -- Current location from search results
 
   config = nil,
 
@@ -262,6 +264,7 @@ M.state = {
   search_debounce_ms = 50, -- Debounce delay for search
 
   last_preview_file = nil,
+  last_preview_location = nil, -- Track last preview location to detect changes
 }
 
 function M.create_ui()
@@ -739,6 +742,9 @@ function M.update_results_sync()
     prompt_position == 'bottom'
   )
 
+  -- Get location from search results
+  M.state.location = file_picker.get_search_location()
+
   -- because the actual files could be different even with same count
   M.state.items = results
   M.state.filtered_items = results
@@ -1033,6 +1039,7 @@ function M.update_preview()
   if #items == 0 or M.state.cursor > #items then
     M.clear_preview()
     M.state.last_preview_file = nil
+    M.state.last_preview_location = nil
     return
   end
 
@@ -1040,13 +1047,19 @@ function M.update_preview()
   if not item then
     M.clear_preview()
     M.state.last_preview_file = nil
+    M.state.last_preview_location = nil
     return
   end
 
-  if M.state.last_preview_file == item.path then return end
+  -- Check if we need to update the preview (file changed OR location changed)
+  local location_changed = not vim.deep_equal(M.state.last_preview_location, M.state.location)
+
+  if M.state.last_preview_file == item.path and not location_changed then return end
+
   preview.clear()
 
   M.state.last_preview_file = item.path
+  M.state.last_preview_location = vim.deepcopy(M.state.location)
 
   local relative_path = item.relative_path or item.path
   local max_title_width = vim.api.nvim_win_get_width(M.state.preview_win)
@@ -1107,7 +1120,7 @@ function M.update_preview()
   if M.state.file_info_buf then preview.update_file_info_buffer(item, M.state.file_info_buf, M.state.cursor) end
 
   preview.set_preview_window(M.state.preview_win)
-  preview.preview(item.path, M.state.preview_buf)
+  preview.preview(item.path, M.state.preview_buf, M.state.location)
 end
 
 --- Clear preview
@@ -1266,6 +1279,8 @@ function M.select(action)
   action = action or 'edit'
 
   local relative_path = vim.fn.fnamemodify(item.path, ':.')
+  local location = M.state.location -- Capture location before closing
+
   vim.cmd('stopinsert')
   M.close()
 
@@ -1287,6 +1302,11 @@ function M.select(action)
     vim.cmd('vsplit ' .. vim.fn.fnameescape(relative_path))
   elseif action == 'tab' then
     vim.cmd('tabedit ' .. vim.fn.fnameescape(relative_path))
+  end
+
+  if location then
+    -- Use vim.schedule to ensure the file is fully loaded before jumping
+    vim.schedule(function() location_utils.jump_to_location(location) end)
   end
 end
 
@@ -1339,7 +1359,9 @@ function M.close()
   M.state.query = ''
   M.state.ns_id = nil
   M.state.last_preview_file = nil
+  M.state.last_preview_location = nil
   M.state.current_file_cache = nil
+  M.state.location = nil
 
   if M.state.search_timer then
     M.state.search_timer:stop()
@@ -1351,45 +1373,162 @@ function M.close()
   pcall(vim.api.nvim_del_augroup_by_name, 'fff_picker_focus')
 end
 
-function M.open(opts)
-  if M.state.active then return end
-
-  local base_path = opts and opts.cwd or vim.fn.getcwd()
-
+--- Helper function to determine current file cache for deprioritization
+--- @param base_path string Base path for relative path calculation
+--- @return string|nil Current file cache path
+local function get_current_file_cache(base_path)
   local current_buf = vim.api.nvim_get_current_buf()
-  if current_buf and vim.api.nvim_buf_is_valid(current_buf) then
-    local current_file = vim.api.nvim_buf_get_name(current_buf)
-    if current_file ~= '' and vim.fn.filereadable(current_file) == 1 then
-      local absolute_path = vim.fn.fnamemodify(current_file, ':p')
-      local relative_path =
-        vim.fn.fnamemodify(vim.fn.resolve(absolute_path), ':s?' .. vim.fn.escape(base_path, '\\') .. '/??')
-      M.state.current_file_cache = relative_path
-    else
-      M.state.current_file_cache = nil
-    end
-  else
-    M.state.current_file_cache = nil
-  end
+  if not current_buf or not vim.api.nvim_buf_is_valid(current_buf) then return nil end
 
+  local current_file = vim.api.nvim_buf_get_name(current_buf)
+  if current_file == '' then return nil end
+
+  -- Use vim.uv.fs_stat to check if file exists and is readable
+  local stat = vim.uv.fs_stat(current_file)
+  if not stat or stat.type ~= 'file' then return nil end
+
+  local absolute_path = vim.fn.fnamemodify(current_file, ':p')
+  local relative_path =
+    vim.fn.fnamemodify(vim.fn.resolve(absolute_path), ':s?' .. vim.fn.escape(base_path, '\\') .. '/??')
+  return relative_path
+end
+
+--- Helper function for common picker initialization
+--- @param opts table|nil Options passed to the picker
+--- @return table|nil Merged configuration, nil if initialization failed
+local function initialize_picker(opts)
+  local base_path = opts and opts.cwd or vim.uv.cwd()
+
+  -- Initialize file picker if needed
   if not file_picker.is_initialized() then
     if not file_picker.setup() then
       vim.notify('Failed to initialize file picker', vim.log.levels.ERROR)
-      return
+      return nil
     end
   end
 
   local config = conf.get()
-  M.state.config = vim.tbl_deep_extend('force', config or {}, opts or {})
+  local merged_config = vim.tbl_deep_extend('force', config or {}, opts or {})
+
+  return merged_config, base_path
+end
+
+--- Helper function to open UI with optional prefetched results
+--- @param query string|nil Pre-filled query (nil for empty)
+--- @param results table|nil Pre-fetched results (nil to search normally)
+--- @param location table|nil Pre-fetched location data
+--- @param merged_config table Merged configuration
+--- @param current_file_cache string|nil Current file cache
+local function open_ui_with_state(query, results, location, merged_config, current_file_cache)
+  M.state.config = merged_config
 
   if not M.create_ui() then
     vim.notify('Failed to create picker UI', vim.log.levels.ERROR)
-    return
+    return false
   end
 
   M.state.active = true
-  vim.cmd('startinsert!')
+  M.state.current_file_cache = current_file_cache
+
+  -- Set up initial state
+  if query then
+    M.state.query = query
+    vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { M.state.config.prompt .. query })
+  else
+    M.state.query = ''
+  end
+
+  if results then
+    -- Use prefetched results
+    M.state.items = results
+    M.state.filtered_items = results
+    M.state.cursor = #results > 0 and 1 or 1
+    M.state.location = location
+
+    M.render_list()
+    M.update_preview()
+    M.update_status()
+  else
+    M.update_results()
+    M.clear_preview()
+    M.update_status()
+  end
+
+  vim.api.nvim_set_current_win(M.state.input_win)
+
+  -- Position cursor at end of query if there is one
+  if query then
+    vim.schedule(function()
+      if M.state.active and M.state.input_win and vim.api.nvim_win_is_valid(M.state.input_win) then
+        vim.api.nvim_win_set_cursor(M.state.input_win, { 1, #M.state.config.prompt + #query })
+        vim.cmd('startinsert!')
+      end
+    end)
+  else
+    vim.cmd('startinsert!')
+  end
 
   M.monitor_scan_progress(0)
+  return true
+end
+
+--- Execute a search query with callback handling before potentially opening the UI
+--- @param query string The search query to execute
+--- @param callback function Function called with results: function(results, metadata, location, get_file_score) -> boolean
+--- @param opts? table Optional configuration to override defaults (same as M.open)
+--- @return boolean true if callback handled results, false if UI was opened
+function M.open_with_callback(query, callback, opts)
+  if M.state.active then return false end
+
+  local merged_config, base_path = initialize_picker(opts)
+  if not merged_config then return false end
+
+  local current_file_cache = get_current_file_cache(base_path)
+
+  local max_results = merged_config.max_results or 100
+  local max_threads = merged_config.max_threads or 4
+  local results = file_picker.search_files(query, max_results, max_threads, current_file_cache, false)
+
+  local metadata = file_picker.get_search_metadata()
+  local location = file_picker.get_search_location()
+
+  local callback_handled = false
+  if type(callback) == 'function' then
+    local ok, result = pcall(callback, results, metadata, location, file_picker.get_file_score)
+    if ok then
+      callback_handled = result == true
+    else
+      vim.notify('Error in search callback: ' .. tostring(result), vim.log.levels.ERROR)
+    end
+  end
+
+  if callback_handled then return true end
+  open_ui_with_state(query, results, location, merged_config, current_file_cache)
+
+  return false
+end
+
+--- Open the file picker UI
+--- @param opts? table Optional configuration to override defaults
+--- @param opts.cwd? string Custom working directory (default: vim.fn.getcwd())
+--- @param opts.title? string Window title (default: "FFFiles")
+--- @param opts.prompt? string Input prompt text (default: "🪿 ")
+--- @param opts.max_results? number Maximum number of results to display (default: 100)
+--- @param opts.max_threads? number Maximum number of threads for file scanning (default: 4)
+--- @param opts.layout? table Layout configuration
+--- @param opts.layout.width? number|function Window width as ratio (0.0-1.0) or function(terminal_width, terminal_height): number (default: 0.8)
+--- @param opts.layout.height? number|function Window height as ratio (0.0-1.0) or function(terminal_width, terminal_height): number (default: 0.8)
+--- @param opts.layout.prompt_position? string|function Prompt position: 'top'|'bottom' or function(terminal_width, terminal_height): string (default: 'bottom')
+--- @param opts.layout.preview_position? string|function Preview position: 'left'|'right'|'top'|'bottom' or function(terminal_width, terminal_height): string (default: 'right')
+--- @param opts.layout.preview_size? number|function Preview size as ratio (0.0-1.0) or function(terminal_width, terminal_height): number (default: 0.5)
+function M.open(opts)
+  if M.state.active then return end
+
+  local merged_config, base_path = initialize_picker(opts)
+  if not merged_config then return end
+
+  local current_file_cache = get_current_file_cache(base_path)
+  return open_ui_with_state(nil, nil, nil, merged_config, current_file_cache)
 end
 
 function M.monitor_scan_progress(iteration)

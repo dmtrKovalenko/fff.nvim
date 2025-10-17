@@ -2,14 +2,15 @@ use crate::background_watcher::BackgroundWatcher;
 use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
+use crate::location::parse_location;
 use crate::score::match_and_score_files;
 use crate::types::{FileItem, ScoringContext, SearchResult};
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::SystemTime;
 use tracing::{debug, error, info, warn};
@@ -173,6 +174,7 @@ impl FilePicker {
         );
 
         let total_files = files.len();
+        let (query, location) = parse_location(query);
 
         // small queries with a large number of results can match absolutely everything
         let max_typos = (query.len() as u16 / 4).clamp(2, 6);
@@ -200,6 +202,7 @@ impl FilePicker {
             scores,
             total_matched,
             total_files,
+            location,
         }
     }
 
@@ -286,10 +289,10 @@ impl FilePicker {
         file_path: impl AsRef<Path>,
         frecency_tracker: &FrecencyTracker,
     ) -> Result<(), Error> {
-        if let Ok(index) = self.sync_data.find_file_index(file_path.as_ref()) {
-            if let Some(file) = self.sync_data.files.get_mut(index) {
-                file.update_frecency_scores(frecency_tracker)?;
-            }
+        if let Ok(index) = self.sync_data.find_file_index(file_path.as_ref())
+            && let Some(file) = self.sync_data.files.get_mut(index)
+        {
+            file.update_frecency_scores(frecency_tracker)?;
         }
 
         Ok(())
@@ -448,10 +451,10 @@ fn spawn_scan_and_watcher(
                 );
 
                 git_workdir = sync.git_workdir.clone();
-                if let Ok(mut file_picker_guard) = crate::FILE_PICKER.write() {
-                    if let Some(ref mut picker) = *file_picker_guard {
-                        picker.sync_data = sync;
-                    }
+                if let Ok(mut file_picker_guard) = crate::FILE_PICKER.write()
+                    && let Some(ref mut picker) = *file_picker_guard
+                {
+                    picker.sync_data = sync;
                 }
             }
             Err(e) => {
@@ -464,10 +467,10 @@ fn spawn_scan_and_watcher(
             Ok(watcher) => {
                 info!("Background file watcher initialized successfully");
 
-                if let Ok(mut file_picker_guard) = crate::FILE_PICKER.write() {
-                    if let Some(ref mut picker) = *file_picker_guard {
-                        picker.background_watcher = Some(watcher);
-                    }
+                if let Ok(mut file_picker_guard) = crate::FILE_PICKER.write()
+                    && let Some(ref mut picker) = *file_picker_guard
+                {
+                    picker.background_watcher = Some(watcher);
                 }
             }
             Err(e) => {
@@ -534,24 +537,24 @@ fn scan_filesystem(
             let base_path = base_path.to_path_buf();
 
             Box::new(move |result| {
-                if let Ok(entry) = result {
-                    if entry.file_type().is_some_and(|ft| ft.is_file()) {
-                        let path = entry.path();
+                if let Ok(entry) = result
+                    && entry.file_type().is_some_and(|ft| ft.is_file())
+                {
+                    let path = entry.path();
 
-                        if is_git_file(path) {
-                            return WalkState::Continue;
-                        }
+                    if is_git_file(path) {
+                        return WalkState::Continue;
+                    }
 
-                        let file_item = FileItem::new(
-                            path.to_path_buf(),
-                            &base_path,
-                            None, // Git status will be added after join
-                        );
+                    let file_item = FileItem::new(
+                        path.to_path_buf(),
+                        &base_path,
+                        None, // Git status will be added after join
+                    );
 
-                        if let Ok(mut files_vec) = files.lock() {
-                            files_vec.push(file_item);
-                            counter.fetch_add(1, Ordering::Relaxed);
-                        }
+                    if let Ok(mut files_vec) = files.lock() {
+                        files_vec.push(file_item);
+                        counter.fetch_add(1, Ordering::Relaxed);
                     }
                 }
                 WalkState::Continue

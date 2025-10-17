@@ -2,11 +2,11 @@
 #![allow(dead_code)]
 #![allow(clippy::enum_variant_names)]
 
-use fff_nvim::{file_picker::FilePicker, git::format_git_status, FILE_PICKER, FRECENCY};
+use fff_nvim::{FILE_PICKER, FRECENCY, file_picker::FilePicker, git::format_git_status};
 use std::env;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 

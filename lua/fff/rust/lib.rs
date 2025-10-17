@@ -12,6 +12,7 @@ mod error;
 pub mod file_picker;
 mod frecency;
 pub mod git;
+mod location;
 mod path_utils;
 pub mod score;
 mod tracing;

@@ -140,7 +140,7 @@ function M.clear_buffer_images(bufnr)
   pcall(vim.api.nvim_buf_clear_namespace, bufnr, -1, 0, -1)
 end
 
---- Load metadat of the image, displays it and display image in paralallel
+--- Load metadata of the image, displays it and display image in paralallel
 --- Fully asynchronous
 --- @param file_path string Path to the image file
 --- @param bufnr number Buffer number to display in
