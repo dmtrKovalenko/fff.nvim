@@ -32,6 +32,4 @@ jobs:
       - uses: stefanzweifel/git-auto-commit-action@v6
         with:
           commit_author: ${{ steps.last-commit.outputs.author }}
-          commit_message: ${{ steps.last-commit.outputs.message }}
-          commit_options: "--amend --no-edit"
-          push_options: "--force"
+          commit_message: chore: Update docs for - ${{ steps.last-commit.outputs.message }}

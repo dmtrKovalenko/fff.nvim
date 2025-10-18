@@ -5,6 +5,32 @@ local location_utils = require('fff.location_utils')
 
 local M = {}
 
+-- Additional fallback for certain ambiguous filetypes which vim.filetype.match is not handling correctly
+local function fix_vim_filetype_match_quirks(extension)
+  local extension_map = {
+    ts = 'typescript',
+    tex = 'latex',
+    md = 'markdown',
+    txt = 'text',
+  }
+
+  return extension_map[extension]
+end
+
+local function detect_filetype(file_path)
+  local has_plenary, plenary_filetype = pcall(require, 'plenary.filetype')
+  if has_plenary then
+    local detected = plenary_filetype.detect(file_path)
+    if detected and detected ~= '' then return detected end
+  end
+
+  local builtin_filetype = vim.filetype.match({ filename = file_path })
+  if builtin_filetype and builtin_filetype ~= '' then return builtin_filetype end
+
+  local extension = vim.fn.fnamemodify(file_path, ':e'):lower()
+  return get_filetype_from_extension(extension)
+end
+
 local function set_buffer_lines(bufnr, lines)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
@@ -442,7 +468,7 @@ function M.get_file_info(file_path)
   }
 
   info.extension = vim.fn.fnamemodify(file_path, ':e'):lower()
-  info.filetype = vim.filetype.match({ filename = file_path }) or 'text'
+  info.filetype = detect_filetype(file_path) or 'text'
   info.size_formatted = utils.format_file_size(info.size)
   info.modified_formatted = os.date('%Y-%m-%d %H:%M:%S', info.modified)
   info.accessed_formatted = os.date('%Y-%m-%d %H:%M:%S', info.accessed)
@@ -660,7 +686,7 @@ end
 function M.get_file_config(file_path)
   if not M.config or not M.config.filetypes then return {} end
 
-  local filetype = vim.filetype.match({ filename = file_path }) or 'text'
+  local filetype = detect_filetype(file_path) or 'text'
   return M.config.filetypes[filetype] or {}
 end
 
