@@ -6,7 +6,7 @@ local location_utils = require('fff.location_utils')
 local M = {}
 
 -- Additional fallback for certain ambiguous filetypes which vim.filetype.match is not handling correctly
-local function fix_vim_filetype_match_quirks(extension)
+local function get_fixed_filetype_detection(extension)
   local extension_map = {
     ts = 'typescript',
     tex = 'latex',
@@ -28,7 +28,7 @@ local function detect_filetype(file_path)
   if builtin_filetype and builtin_filetype ~= '' then return builtin_filetype end
 
   local extension = vim.fn.fnamemodify(file_path, ':e'):lower()
-  return get_filetype_from_extension(extension)
+  return get_fixed_filetype_detection(extension)
 end
 
 local function set_buffer_lines(bufnr, lines)
