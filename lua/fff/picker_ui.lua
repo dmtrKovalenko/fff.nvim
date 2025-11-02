@@ -386,8 +386,7 @@ function M.create_ui()
     row = layout.list_row,
     -- To make the input feel connected with the picker, we customize the
     -- respective corner border characters based on prompt_position
-    border = prompt_position == 'bottom'
-      and { '┌', '─', '┐', '│', '', '', '', '│' }
+    border = prompt_position == 'bottom' and { '┌', '─', '┐', '│', '', '', '', '│' }
       or { '├', '─', '┤', '│', '┘', '─', '└', '│' },
     style = 'minimal',
   }
@@ -442,8 +441,7 @@ function M.create_ui()
     row = layout.input_row,
     -- To make the input feel connected with the picker, we customize the
     -- respective corner border characters based on prompt_position
-    border = prompt_position == 'bottom'
-      and { '├', '─', '┤', '│', '┘', '─', '└', '│' }
+    border = prompt_position == 'bottom' and { '├', '─', '┤', '│', '┘', '─', '└', '│' }
       or { '┌', '─', '┐', '│', '', '', '', '│' },
     style = 'minimal',
   }
