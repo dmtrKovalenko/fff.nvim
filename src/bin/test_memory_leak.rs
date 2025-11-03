@@ -202,10 +202,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let search_result = FilePicker::fuzzy_search(
                     picker.get_files(),
                     query,
-                    max_results,
-                    max_threads,
-                    None,
-                    false, // prompt_position not relevant for test
+                    fff_nvim::file_picker::FuzzySearchOptions {
+                        max_results,
+                        max_threads,
+                        current_file: None,
+                        reverse_order: false,
+                        project_path: None,
+                        last_same_query_match: None,
+                        combo_boost_score_multiplier: 100,
+                        min_combo_count: 3,
+                    },
                 );
                 let duration = search_start.elapsed();
                 (search_result.items.len(), duration)

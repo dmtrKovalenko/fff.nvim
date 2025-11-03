@@ -1,6 +1,6 @@
 local M = {}
 
----@class fff.conf.State
+--@class fff.conf.State
 local state = {
   ---@type table | nil
   config = nil,
@@ -140,6 +140,7 @@ local function init()
       preview_scroll_up = '<C-u>',
       preview_scroll_down = '<C-d>',
       toggle_debug = '<F2>',
+      cycle_previous_query = '<C-Up>',
     },
     hl = {
       border = 'FloatBorder',
@@ -155,6 +156,12 @@ local function init()
     frecency = {
       enabled = true,
       db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
+    },
+    history = {
+      enabled = true,
+      db_path = vim.fn.stdpath('data') .. '/fff_queries',
+      min_combo_count = 3, -- Minimum selections before combo boost applies (3 = boost starts on 3rd selection)
+      combo_boost_score_multiplier = 100, -- Score multiplier for combo matches (files repeatedly opened with same query)
     },
     debug = {
       enabled = false, -- Set to true to show scores in the UI

@@ -1,5 +1,3 @@
-use std::path::MAIN_SEPARATOR;
-
 use crate::{
     git::is_modified_status,
     path_utils::calculate_distance_penalty,
@@ -8,6 +6,7 @@ use crate::{
 };
 use neo_frizbee::Scoring;
 use rayon::prelude::*;
+use std::path::MAIN_SEPARATOR;
 
 pub fn match_and_score_files<'a>(
     files: &'a [FileItem],
@@ -145,15 +144,31 @@ pub fn match_and_score_files<'a>(
             };
 
             let current_file_penalty = calculate_current_file_penalty(file, base_score, context);
-            if current_file_penalty < 0 {
-                tracing::debug!(file =?file.relative_path, ?current_file_penalty, "Applied penalty");
-            }
+
+            let combo_match_boost = {
+                let last_same_query_match = context
+                    .last_same_query_match
+                    .filter(|m| m.file_path.as_os_str() == file.path.as_os_str());
+
+                match last_same_query_match {
+                    // if we request a combo match without a boost we have to render it anyway
+                    Some(_) if context.min_combo_count == 0 => 1000,
+                    Some(combo_match) if combo_match.open_count >= context.min_combo_count => {
+                        combo_match.open_count as i32 * context.combo_boost_score_multiplier
+                    }
+                    // until we hit the combo count threshold, we add a smaller boost because it
+                    // makes sense and makes the search more efficient
+                    Some(combo_match) => combo_match.open_count as i32 * 5,
+                    _ => 0,
+                }
+            };
 
             let total = base_score
                 .saturating_add(frecency_boost)
                 .saturating_add(distance_penalty)
                 .saturating_add(filename_bonus)
-                .saturating_add(current_file_penalty);
+                .saturating_add(current_file_penalty)
+                .saturating_add(combo_match_boost);
 
             let score = Score {
                 total,
@@ -167,6 +182,7 @@ pub fn match_and_score_files<'a>(
                 },
                 frecency_boost,
                 distance_penalty,
+                combo_match_boost,
                 exact_match: path_match.exact || filename_match.is_some_and(|m| m.exact),
                 match_type: match filename_match {
                     Some(filename_match) if filename_match.exact => "exact_filename",
@@ -227,6 +243,7 @@ fn score_all_by_frecency<'a>(
                 filename_bonus: 0,
                 distance_penalty: 0,
                 special_filename_bonus: 0,
+                combo_match_boost: 0,
                 current_file_penalty,
                 frecency_boost: total_frecency_score,
                 exact_match: false,
@@ -255,8 +272,6 @@ fn calculate_current_file_penalty(
             Some(status) if is_modified_status(status) => base_score / 2,
             _ => base_score,
         };
-
-        tracing::debug!(file =?file.relative_path, current=?context.current_file, ?penalty, "Calculating current file penalty");
     }
 
     penalty
@@ -357,6 +372,7 @@ mod tests {
             frecency_boost: 0,
             exact_match: false,
             match_type: "test",
+            combo_match_boost: 0,
         };
         (file, score_obj)
     }
@@ -390,6 +406,10 @@ mod tests {
             max_typos: 2,
             current_file: None,
             reverse_order: false,
+            last_same_query_match: None,
+            project_path: None,
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
         };
 
         // Test with partial sort (threshold = 3 * 2 = 6, our len is 10 > 6)
@@ -431,6 +451,10 @@ mod tests {
             max_typos: 2,
             current_file: None,
             reverse_order: false,
+            last_same_query_match: None,
+            project_path: None,
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
         };
 
         let (items, scores, _) = sort_and_truncate(results, &context);
@@ -465,6 +489,10 @@ mod tests {
             max_typos: 2,
             current_file: None,
             reverse_order: false,
+            last_same_query_match: None,
+            project_path: None,
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
         };
 
         // threshold = 2 * 2 = 4, len = 3 < 4, so regular sort
@@ -500,6 +528,10 @@ mod tests {
             max_typos: 2,
             current_file: None,
             reverse_order: true,
+            last_same_query_match: None,
+            project_path: None,
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
         };
 
         let (items, scores, _) = sort_and_truncate(results, &context);

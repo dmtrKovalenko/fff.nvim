@@ -1,7 +1,7 @@
 use mlua::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::{git::format_git_status, location::Location};
+use crate::{git::format_git_status, location::Location, query_tracker::QueryMatchEntry};
 
 #[derive(Debug, Clone)]
 pub struct FileItem {
@@ -27,6 +27,7 @@ pub struct Score {
     pub frecency_boost: i32,
     pub distance_penalty: i32,
     pub current_file_penalty: i32,
+    pub combo_match_boost: i32,
     pub exact_match: bool,
     pub match_type: &'static str,
 }
@@ -34,11 +35,15 @@ pub struct Score {
 #[derive(Debug, Clone)]
 pub struct ScoringContext<'a> {
     pub query: &'a str,
+    pub project_path: Option<&'a Path>,
     pub current_file: Option<&'a str>,
     pub max_results: usize,
     pub max_typos: u16,
     pub max_threads: usize,
     pub reverse_order: bool,
+    pub last_same_query_match: Option<&'a QueryMatchEntry>,
+    pub combo_boost_score_multiplier: i32,
+    pub min_combo_count: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -79,6 +84,7 @@ impl IntoLua for Score {
         table.set("frecency_boost", self.frecency_boost)?;
         table.set("distance_penalty", self.distance_penalty)?;
         table.set("current_file_penalty", self.current_file_penalty)?;
+        table.set("combo_match_boost", self.combo_match_boost)?;
         table.set("match_type", self.match_type)?;
         table.set("exact_match", self.exact_match)?;
         Ok(LuaValue::Table(table))

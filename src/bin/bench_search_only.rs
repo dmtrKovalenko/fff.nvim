@@ -88,10 +88,18 @@ fn main() {
 
         for _ in 0..iterations {
             let results = FilePicker::fuzzy_search(
-                &files, query, 100,   // max_results
-                4,     // max_threads
-                None,  // current_file
-                false, // reverse_order
+                &files,
+                query,
+                fff_nvim::file_picker::FuzzySearchOptions {
+                    max_results: 100,
+                    max_threads: 4,
+                    current_file: None,
+                    reverse_order: false,
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                },
             );
             match_count += results.total_matched;
         }
