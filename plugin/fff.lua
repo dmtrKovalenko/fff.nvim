@@ -53,6 +53,17 @@ vim.api.nvim_create_user_command('FFFScan', function() require('fff').scan_files
   desc = 'Scan files for FFF',
 })
 
+vim.api.nvim_create_user_command('FFFBuffers', function(opts)
+  local fff = require('fff')
+  fff.buffers({
+    title = 'Buffers',
+    prompt = opts.args ~= '' and opts.args or nil,
+  })
+end, {
+  nargs = '?',
+  desc = 'Browse and switch between open buffers with FFF',
+})
+
 vim.api.nvim_create_user_command('FFFRefreshGit', function() require('fff').refresh_git_status() end, {
   desc = 'Manually refresh git status for all files',
 })
