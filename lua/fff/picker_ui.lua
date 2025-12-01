@@ -598,6 +598,33 @@ local function set_keymap(mode, keys, handler, opts)
   end
 end
 
+local function mode_matches(filter, mode)
+  if not filter then return true end
+  if type(filter) == 'table' then return vim.tbl_contains(filter, mode) end
+  return filter == mode
+end
+
+local function setup_custom_action_keymaps(buffer_mode, buffer)
+  local actions = M.state.config.keymaps.actions
+  if type(actions) ~= 'table' or vim.tbl_isempty(actions) then return end
+
+  local opts = { buffer = buffer, noremap = true, silent = true }
+
+  for key, spec in pairs(actions) do
+    local action_spec = spec
+    local mode_filter = nil
+
+    if type(spec) == 'table' and (spec.action or spec.mode) then
+      action_spec = spec.action or spec
+      mode_filter = spec.mode
+    end
+
+    if mode_matches(mode_filter, buffer_mode) then
+      set_keymap(buffer_mode, key, function() M.run_action(action_spec) end, opts)
+    end
+  end
+end
+
 function M.setup_keymaps()
   local keymaps = M.state.config.keymaps
 
@@ -613,6 +640,7 @@ function M.setup_keymaps()
   set_keymap('i', keymaps.preview_scroll_up, M.scroll_preview_up, input_opts)
   set_keymap('i', keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
   set_keymap('i', keymaps.toggle_debug, M.toggle_debug, input_opts)
+  setup_custom_action_keymaps('i', M.state.input_buf)
 
   local list_opts = { buffer = M.state.list_buf, noremap = true, silent = true }
 
@@ -626,6 +654,7 @@ function M.setup_keymaps()
   set_keymap('n', keymaps.preview_scroll_up, M.scroll_preview_up, list_opts)
   set_keymap('n', keymaps.preview_scroll_down, M.scroll_preview_down, list_opts)
   set_keymap('n', keymaps.toggle_debug, M.toggle_debug, list_opts)
+  setup_custom_action_keymaps('n', M.state.list_buf)
 
   if M.state.preview_buf then
     local preview_opts = { buffer = M.state.preview_buf, noremap = true, silent = true }
@@ -636,6 +665,7 @@ function M.setup_keymaps()
     set_keymap('n', keymaps.select_vsplit, function() M.select('vsplit') end, preview_opts)
     set_keymap('n', keymaps.select_tab, function() M.select('tab') end, preview_opts)
     set_keymap('n', keymaps.toggle_debug, M.toggle_debug, preview_opts)
+    setup_custom_action_keymaps('n', M.state.preview_buf)
   end
 
   vim.keymap.set('i', '<C-w>', function()
@@ -1304,7 +1334,9 @@ local function find_suitable_window()
   return nil
 end
 
-function M.select(action)
+local builtin_actions = {}
+
+local function build_action_context()
   if not M.state.active then return end
 
   local items = M.state.filtered_items
@@ -1313,15 +1345,24 @@ function M.select(action)
   local item = items[M.state.cursor]
   if not item then return end
 
-  action = action or 'edit'
+  return {
+    item = item,
+    index = M.state.cursor,
+    path = item.path,
+    relative_path = vim.fn.fnamemodify(item.path, ':.'),
+    location = M.state.location and vim.deepcopy(M.state.location) or nil,
+    query = M.state.query,
+    config = M.state.config,
+    close_picker = function()
+      if M.state.active then M.close() end
+    end,
+  }
+end
 
-  local relative_path = vim.fn.fnamemodify(item.path, ':.')
-  local location = M.state.location -- Capture location before closing
+local function open_file_action(ctx, command)
+  local relative_path = ctx.relative_path or vim.fn.fnamemodify(ctx.path, ':.')
 
-  vim.cmd('stopinsert')
-  M.close()
-
-  if action == 'edit' then
+  if command == 'edit' then
     local current_buf = vim.api.nvim_get_current_buf()
     local current_buftype = vim.api.nvim_buf_get_option(current_buf, 'buftype')
     local current_buf_modifiable = vim.api.nvim_buf_get_option(current_buf, 'modifiable')
@@ -1333,18 +1374,113 @@ function M.select(action)
     end
 
     vim.cmd('edit ' .. vim.fn.fnameescape(relative_path))
-  elseif action == 'split' then
+  elseif command == 'split' then
     vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
-  elseif action == 'vsplit' then
+  elseif command == 'vsplit' then
     vim.cmd('vsplit ' .. vim.fn.fnameescape(relative_path))
-  elseif action == 'tab' then
+  elseif command == 'tab' then
     vim.cmd('tabedit ' .. vim.fn.fnameescape(relative_path))
   end
 
-  if location then
+  if ctx.location then
     -- Use vim.schedule to ensure the file is fully loaded before jumping
-    vim.schedule(function() location_utils.jump_to_location(location) end)
+    vim.schedule(function() location_utils.jump_to_location(ctx.location) end)
   end
+end
+
+builtin_actions.edit = { callback = function(ctx) open_file_action(ctx, 'edit') end, close = true }
+builtin_actions.split = { callback = function(ctx) open_file_action(ctx, 'split') end, close = true }
+builtin_actions.vsplit = { callback = function(ctx) open_file_action(ctx, 'vsplit') end, close = true }
+builtin_actions.tab = { callback = function(ctx) open_file_action(ctx, 'tab') end, close = true }
+
+local function is_list(value) return type(value) == 'table' and vim.tbl_islist(value) end
+
+local function resolve_action(action_spec)
+  if not action_spec then return nil end
+
+  local resolved = action_spec
+  if type(resolved) == 'string' then
+    resolved = (M.state.config.actions or {})[resolved] or builtin_actions[resolved]
+  end
+
+  if not resolved then return nil end
+
+  if is_list(resolved) then
+    local parts = {}
+    for _, part_spec in ipairs(resolved) do
+      local part = resolve_action(part_spec)
+      if part then parts[#parts + 1] = part end
+    end
+
+    if #parts == 0 then return nil end
+
+    return {
+      close = parts[#parts].close,
+      desc = parts[#parts].desc,
+      callback = function(ctx)
+        for _, part in ipairs(parts) do
+          part.callback(ctx)
+        end
+      end,
+    }
+  end
+
+  if type(resolved) == 'function' then
+    return {
+      callback = resolved,
+      close = true,
+    }
+  end
+
+  if type(resolved) == 'table' then
+    local spec = vim.deepcopy(resolved)
+    local nested = spec.action and resolve_action(spec.action) or nil
+    local callback = spec.callback or spec.fn or (nested and nested.callback)
+    local close = spec.close
+    if close == nil then close = (nested and nested.close) or true end
+
+    if not callback then return nil end
+
+    return {
+      callback = callback,
+      close = close,
+      desc = spec.desc,
+    }
+  end
+
+  return nil
+end
+
+function M.run_action(action_spec)
+  if not M.state.active then return end
+
+  local ctx = build_action_context()
+  if not ctx then return end
+
+  local action = resolve_action(action_spec or 'edit')
+  if not action or type(action.callback) ~= 'function' then
+    vim.notify('FFF: Unknown action "' .. tostring(action_spec) .. '"', vim.log.levels.WARN)
+    return
+  end
+
+  local should_close = action.close ~= false
+
+  if should_close then
+    vim.cmd('stopinsert')
+    M.close()
+  end
+
+  local ok, err = pcall(action.callback, ctx)
+  if not ok then
+    vim.schedule(function()
+      vim.notify('FFF: action error - ' .. tostring(err), vim.log.levels.ERROR)
+    end)
+  end
+end
+
+function M.select(action)
+  -- Backward compatible entry point for default actions
+  M.run_action(action or 'edit')
 end
 
 function M.close()

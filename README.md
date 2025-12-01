@@ -150,6 +150,7 @@ require('fff').setup({
       preview_scroll_up = '<C-u>',
       preview_scroll_down = '<C-d>',
       toggle_debug = '<F2>',
+      actions = {}, -- map additional keybinds to named actions
     },
     hl = {
       border = 'FloatBorder',
@@ -166,6 +167,7 @@ require('fff').setup({
       enabled = true,
       db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
     },
+    actions = {}, -- define custom actions here
     debug = {
       enabled = false, -- Set to true to show scores in the UI
       show_scores = false,
@@ -189,6 +191,30 @@ require('fff').scan_files()                         -- Trigger rescan of files i
 require('fff').refresh_git_status()                 -- Refresh git status for the active file lock
 require('fff').find_files_in_dir(path)              -- Find files in a specific directory
 require('fff').change_indexing_directory(new_path)  -- Change the base directory for the file picker
+```
+
+### Custom actions
+
+You can register snack-style actions and map them to additional keys. Actions receive the current item context (`ctx.item`, `ctx.path`, `ctx.relative_path`, `ctx.query`, `ctx.location`, and `ctx.close_picker()` to close manually).
+Built-in action names you can reuse: `edit`, `split`, `vsplit`, `tab`.
+
+```lua
+require('fff').setup({
+  actions = {
+    open_in_gh = {
+      desc = 'Browse file on GitHub',
+      callback = function(ctx)
+        vim.fn.jobstart({ 'gh', 'browse', ctx.relative_path }, { detach = true })
+      end,
+      -- set close = false to keep the picker open after running
+    },
+  },
+  keymaps = {
+    actions = {
+      ['<C-b>'] = { action = 'open_in_gh', mode = { 'n', 'i' } },
+    },
+  },
+})
 ```
 
 #### Commands

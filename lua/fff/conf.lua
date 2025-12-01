@@ -140,6 +140,7 @@ local function init()
       preview_scroll_up = '<C-u>',
       preview_scroll_down = '<C-d>',
       toggle_debug = '<F2>',
+      actions = {},
     },
     hl = {
       border = 'FloatBorder',
@@ -156,6 +157,7 @@ local function init()
       enabled = true,
       db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
     },
+    actions = {},
     debug = {
       enabled = false, -- Set to true to show scores in the UI
       show_scores = false,
