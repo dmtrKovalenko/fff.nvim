@@ -66,7 +66,9 @@ impl FileItem {
 
         Self {
             path,
+            relative_path_lower: relative_path.to_lowercase(),
             relative_path,
+            file_name_lower: name.to_lowercase(),
             file_name: name,
             size,
             modified,
@@ -592,7 +594,8 @@ fn scan_filesystem(
             files.len()
         );
 
-        files.par_sort_unstable_by(|a, b| a.path.cmp(&b.path));
+        // Sort by OsStr instead of Path to avoid expensive component-by-component comparison
+        files.par_sort_unstable_by(|a, b| a.path.as_os_str().cmp(b.path.as_os_str()));
         Ok(FileSync { files, git_workdir })
     })
 }

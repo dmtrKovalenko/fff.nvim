@@ -15,6 +15,14 @@ path = "src/bin/test_watcher.rs"
 name = "jemalloc_profile"
 path = "src/bin/jemalloc_profile.rs"
 
+[[bin]]
+name = "search_profiler"
+path = "src/bin/search_profiler.rs"
+
+[[bin]]
+name = "search_only"
+path = "src/bin/search_only.rs"
+
 
 [dependencies]
 blake3 = "1.8.2"
@@ -37,3 +45,11 @@ thiserror = "2.0.10"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3.8"
+
+[[bench]]
+name = "indexing_and_search"
+harness = false

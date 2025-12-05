@@ -7,7 +7,9 @@ use crate::{git::format_git_status, location::Location};
 pub struct FileItem {
     pub path: PathBuf,
     pub relative_path: String,
+    pub relative_path_lower: String,
     pub file_name: String,
+    pub file_name_lower: String,
     pub size: u64,
     pub modified: u64,
     pub access_frecency_score: i64,
