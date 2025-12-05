@@ -10,3 +10,6 @@ result
 .repro/
 .wrangler/
 *.so
+big-repo/
+# all the perf like utility files
+*.data

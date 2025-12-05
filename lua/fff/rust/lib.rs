@@ -15,6 +15,7 @@ pub mod git;
 mod location;
 mod path_utils;
 pub mod score;
+mod sort_buffer;
 mod tracing;
 pub mod types;
 use mimalloc::MiMalloc;
@@ -120,16 +121,19 @@ pub fn fuzzy_search_files(
 }
 
 pub fn track_access(_: &Lua, file_path: String) -> LuaResult<bool> {
+    let file_path = PathBuf::from(&file_path);
+
+    // Track access in frecency DB (expensive LMDB write, ~100-200ms)
+    // Do this WITHOUT holding FILE_PICKER lock to avoid blocking searches
     let Some(ref frecency) = *FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)? else {
         return Ok(false);
     };
+    frecency.track_access(file_path.as_path())?;
+
+    // Quick lock to update single file's frecency score in picker
     let Some(ref mut picker) = *FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)? else {
         return Err(Error::FilePickerMissing)?;
     };
-
-    let file_path = PathBuf::from(&file_path).canonicalize()?;
-    frecency.track_access(file_path.as_path())?;
-
     picker.update_single_file_frecency(&file_path, frecency)?;
 
     Ok(true)
