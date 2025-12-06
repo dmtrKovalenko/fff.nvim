@@ -13,7 +13,14 @@ pub fn match_and_score_files<'a>(
     files: &'a [FileItem],
     context: &ScoringContext,
 ) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
-    if context.query.len() < 2 {
+    // Treat spaces as path separators: "helper mod" -> "helper/mod"
+    let query = context
+        .query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(&MAIN_SEPARATOR.to_string());
+
+    if query.len() < 2 {
         return score_all_by_frecency(files, context);
     }
 
@@ -21,7 +28,7 @@ pub fn match_and_score_files<'a>(
         return (vec![], vec![], 0);
     }
 
-    let has_uppercase_letter = context.query.chars().any(|c| c.is_uppercase());
+    let has_uppercase_letter = query.chars().any(|c| c.is_uppercase());
     let options = neo_frizbee::Config {
         prefilter: true,
         max_typos: Some(context.max_typos),
@@ -33,17 +40,17 @@ pub fn match_and_score_files<'a>(
         },
     };
 
-    let query_contains_path_separator = context.query.contains(MAIN_SEPARATOR);
+    let query_contains_path_separator = query.contains(MAIN_SEPARATOR);
     let haystack: Vec<&str> = files
         .iter()
         .map(|f| f.relative_path_lower.as_str())
         .collect();
     tracing::debug!(
         "Starting fuzzy search for query '{}' in {} files",
-        context.query,
+        query,
         haystack.len()
     );
-    let path_matches = neo_frizbee::match_list(context.query, &haystack, &options);
+    let path_matches = neo_frizbee::match_list(&query, &haystack, &options);
     tracing::debug!(
         "Matched {} files for query '{}'",
         path_matches.len(),
