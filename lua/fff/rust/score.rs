@@ -13,12 +13,13 @@ pub fn match_and_score_files<'a>(
     files: &'a [FileItem],
     context: &ScoringContext,
 ) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
-    // Treat spaces as path separators: "helper mod" -> "helper/mod"
-    let query = context
-        .query
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(&MAIN_SEPARATOR.to_string());
+    // Trim whitespace; only treat spaces as path separators if multiple words
+    let terms: Vec<&str> = context.query.split_whitespace().collect();
+    let query = if terms.len() > 1 {
+        terms.join(std::path::MAIN_SEPARATOR_STR)
+    } else {
+        context.query.trim().to_string()
+    };
 
     if query.len() < 2 {
         return score_all_by_frecency(files, context);
