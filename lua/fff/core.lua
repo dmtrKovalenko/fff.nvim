@@ -16,7 +16,7 @@ local function setup_global_autocmds(config)
   local group = vim.api.nvim_create_augroup('fff_file_tracking', { clear = true })
 
   if config.frecency.enabled then
-    vim.api.nvim_create_autocmd({ 'BufReadPost' }, {
+    vim.api.nvim_create_autocmd({ 'BufEnter' }, {
       group = group,
       desc = 'Track file access for FFF frecency',
       callback = function(args)
