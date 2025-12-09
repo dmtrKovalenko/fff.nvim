@@ -15,7 +15,7 @@ pub mod git;
 mod location;
 mod path_utils;
 pub mod score;
-mod sort_buffer;
+pub mod sort_buffer;
 mod tracing;
 pub mod types;
 use mimalloc::MiMalloc;

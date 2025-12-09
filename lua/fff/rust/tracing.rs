@@ -1,6 +1,7 @@
 use crate::error::Error;
 use std::path::Path;
 use tracing_appender::non_blocking;
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 static TRACING_INITIALIZED: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
@@ -51,7 +52,8 @@ pub fn init_tracing(log_file_path: &str, log_level: Option<&str>) -> Result<Stri
                     .with_thread_names(false)
                     .with_file(true)
                     .with_line_number(true)
-                    .with_ansi(false),
+                    .with_ansi(false)
+                    .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE),
             )
             .with(
                 EnvFilter::builder()
