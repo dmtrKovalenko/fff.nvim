@@ -22,7 +22,6 @@ path = "src/bin/search_profiler.rs"
 name = "bench_search_only"
 path = "src/bin/bench_search_only.rs"
 
-
 [dependencies]
 blake3 = "1.8.2"
 chrono = { version = "0.4", features = ["serde"] }
