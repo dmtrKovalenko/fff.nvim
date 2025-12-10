@@ -79,7 +79,17 @@ pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<bool> {
         LuaError::RuntimeError(format!("Failed to canonicalize path '{}': {}", new_path, e))
     })?;
 
-    reinit_file_picker_internal(canonical_path)?;
+    // Spawn a background thread to avoid blocking Lua/UI thread
+    std::thread::spawn(move || {
+        ::tracing::info!("Starting async directory change to: {}", canonical_path.display());
+
+        if let Err(e) = reinit_file_picker_internal(canonical_path.clone()) {
+            ::tracing::error!("Failed to reinit file picker for path {}: {:?}", canonical_path.display(), e);
+        } else {
+            ::tracing::info!("Successfully changed directory to: {}", canonical_path.display());
+        }
+    });
+
     Ok(true)
 }
 
