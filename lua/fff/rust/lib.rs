@@ -3,7 +3,7 @@ use crate::file_picker::FilePicker;
 use crate::frecency::FrecencyTracker;
 use mlua::prelude::*;
 use once_cell::sync::Lazy;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -52,7 +52,7 @@ pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
     Ok(true)
 }
 
-fn reinit_file_picker_internal(path: std::path::PathBuf) -> Result<(), Error> {
+fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
     let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
 
     // drop should clean it anyway but just to be extra sure
@@ -66,7 +66,7 @@ fn reinit_file_picker_internal(path: std::path::PathBuf) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<bool> {
+pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<()> {
     let path = std::path::PathBuf::from(&new_path);
     if !path.exists() {
         return Err(LuaError::RuntimeError(format!(
@@ -79,8 +79,20 @@ pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<bool> {
         LuaError::RuntimeError(format!("Failed to canonicalize path '{}': {}", new_path, e))
     })?;
 
-    reinit_file_picker_internal(canonical_path)?;
-    Ok(true)
+    // Spawn a background thread to avoid blocking Lua/UI thread
+    std::thread::spawn(move || {
+        if let Err(e) = reinit_file_picker_internal(&canonical_path) {
+            ::tracing::error!(
+                ?e,
+                ?canonical_path,
+                "Failed to index directory after changing"
+            );
+        } else {
+            ::tracing::info!(?canonical_path, "Successfully reindexed directory");
+        }
+    });
+
+    Ok(())
 }
 
 pub fn scan_files(_: &Lua, _: ()) -> LuaResult<()> {
