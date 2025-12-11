@@ -25,6 +25,7 @@ It comes with a dedicated rust backend runtime that keep tracks of the file inde
 - [Typo resistant fuzzy search](https://github.com/saghen/frizbee)
 - Git status integration allowing to take advantage of last modified times within a worktree
 - Separate file index maintained by a dedicated backend allows <10 milliseconds search time for 50k files codebase
+- **Buffer picker** - quickly switch between open buffers (similar to fzf.vim's `:Buffers`)
 - Display images in previews (for now requires snacks.nvim)
 - Smart in a plenty of different ways hopefully helpful for your workflow
 - This plugin initializes itself lazily by default
@@ -70,7 +71,12 @@ FFF.nvim requires:
       "ff", -- try it if you didn't it is a banger keybinding for a picker
       function() require('fff').find_files() end,
       desc = 'FFFind files',
-    }
+    },
+    {
+      "<leader>b",
+      function() require('fff').buffers() end,
+      desc = 'FFF Buffers',
+    },
   }
 }
 ```
@@ -102,6 +108,13 @@ vim.keymap.set(
   'ff',
   function() require('fff').find_files() end,
   { desc = 'FFFind files' }
+)
+
+vim.keymap.set(
+  'n',
+  '<leader>b',
+  function() require('fff').buffers() end,
+  { desc = 'FFF Buffers' }
 )
 ```
 
@@ -185,6 +198,7 @@ require('fff').setup({
 ```lua
 require('fff').find_files()                         -- Find files in current directory
 require('fff').find_in_git_root()                   -- Find files in the current git repository
+require('fff').buffers()                            -- Open buffer picker (similar to fzf.vim :Buffers)
 require('fff').scan_files()                         -- Trigger rescan of files in the current directory
 require('fff').refresh_git_status()                 -- Refresh git status for the active file lock
 require('fff').find_files_in_dir(path)              -- Find files in a specific directory
@@ -196,12 +210,44 @@ require('fff').change_indexing_directory(new_path)  -- Change the base directory
 FFF.nvim provides several commands for interacting with the file picker:
 
 - `:FFFFind [path|query]` - Open file picker. Optional: provide directory path or search query
+- `:FFFBuffers` - Open buffer picker to browse and switch between open buffers
 - `:FFFScan` - Manually trigger a rescan of files in the current directory
 - `:FFFRefreshGit` - Manually refresh git status for all files
 - `:FFFClearCache [all|frecency|files]` - Clear various caches
 - `:FFFHealth` - Check FFF health status and dependencies
 - `:FFFDebug [on|off|toggle]` - Toggle debug scores display
 - `:FFFOpenLog` - Open the FFF log file in a new tab
+
+#### Buffer Picker
+
+The buffer picker (`:FFFBuffers`) provides a fast way to switch between open buffers, similar to fzf.vim's `:Buffers` command.
+
+**Features:**
+- Buffers sorted by most recently accessed
+- Status indicators: `%` for current buffer, `#` for alternate buffer
+- Shows `[+]` for modified buffers and `[RO]` for read-only buffers
+- File icons via nvim-web-devicons
+- Preview of buffer contents
+- Delete buffers with `<C-d>`
+
+**Keybindings in buffer picker:**
+
+| Key | Action |
+|-----|--------|
+| `<CR>` | Open buffer in current window |
+| `<C-s>` | Open buffer in horizontal split |
+| `<C-v>` | Open buffer in vertical split |
+| `<C-t>` | Open buffer in new tab |
+| `<C-d>` | Delete the selected buffer |
+| `<Esc>` | Close picker |
+| `<Up>` / `<C-p>` | Move selection up |
+| `<Down>` / `<C-n>` | Move selection down |
+
+**Example keybinding:**
+
+```lua
+vim.keymap.set('n', '<leader>b', function() require('fff').buffers() end, { desc = 'FFF Buffers' })
+```
 
 #### Multiple Key Bindings
 

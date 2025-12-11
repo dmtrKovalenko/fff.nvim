@@ -206,6 +206,17 @@ function M.change_indexing_directory(new_path)
   return true
 end
 
+--- Open the buffer picker
+--- @param opts? table Optional configuration to override defaults
+function M.buffers(opts)
+  local buffers_ok, buffers = pcall(require, 'fff.buffers')
+  if buffers_ok then
+    buffers.open(opts)
+  else
+    vim.notify('Failed to load buffer picker', vim.log.levels.ERROR)
+  end
+end
+
 --- Opens the file under the cursor with an optional callback if the only file
 --- is found and we are about to inline open it
 --- @param open_cb function|nil Optional callback function to execute after opening the file
