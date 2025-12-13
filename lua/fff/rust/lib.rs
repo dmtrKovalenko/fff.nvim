@@ -1,6 +1,7 @@
 use crate::error::Error;
-use crate::file_picker::FilePicker;
+use crate::file_picker::{FilePicker, FuzzySearchOptions};
 use crate::frecency::FrecencyTracker;
+use crate::query_tracker::QueryTracker;
 use mlua::prelude::*;
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
@@ -13,10 +14,11 @@ pub mod file_picker;
 mod frecency;
 pub mod git;
 mod location;
+mod log;
 mod path_utils;
+pub mod query_tracker;
 pub mod score;
-pub mod sort_buffer;
-mod tracing;
+mod sort_buffer;
 pub mod types;
 use mimalloc::MiMalloc;
 
@@ -25,19 +27,44 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 pub static FRECENCY: Lazy<RwLock<Option<FrecencyTracker>>> = Lazy::new(|| RwLock::new(None));
 pub static FILE_PICKER: Lazy<RwLock<Option<FilePicker>>> = Lazy::new(|| RwLock::new(None));
+pub static QUERY_TRACKER: Lazy<RwLock<Option<QueryTracker>>> = Lazy::new(|| RwLock::new(None));
 
-pub fn init_db(_: &Lua, (db_path, use_unsafe_no_lock): (String, bool)) -> LuaResult<bool> {
+pub fn init_db(
+    _: &Lua,
+    (frecency_db_path, history_db_path, use_unsafe_no_lock): (String, String, bool),
+) -> LuaResult<bool> {
     let mut frecency = FRECENCY.write().map_err(|_| Error::AcquireFrecencyLock)?;
     if frecency.is_some() {
-        return Ok(false);
+        *frecency = None;
     }
-    *frecency = Some(FrecencyTracker::new(&db_path, use_unsafe_no_lock)?);
+    *frecency = Some(FrecencyTracker::new(&frecency_db_path, use_unsafe_no_lock)?);
+    tracing::info!("Frecency database initialized at {}", frecency_db_path);
+
+    let mut query_tracker = QUERY_TRACKER
+        .write()
+        .map_err(|_| Error::AcquireFrecencyLock)?;
+    if query_tracker.is_some() {
+        *query_tracker = None;
+    }
+
+    let tracker = QueryTracker::new(&history_db_path, use_unsafe_no_lock)?;
+    *query_tracker = Some(tracker);
+    tracing::info!("Query tracker database initialized at {}", history_db_path);
+
     Ok(true)
 }
 
-pub fn destroy_db(_: &Lua, _: ()) -> LuaResult<bool> {
+pub fn destroy_frecency_db(_: &Lua, _: ()) -> LuaResult<bool> {
     let mut frecency = FRECENCY.write().map_err(|_| Error::AcquireFrecencyLock)?;
     *frecency = None;
+    Ok(true)
+}
+
+pub fn destroy_query_db(_: &Lua, _: ()) -> LuaResult<bool> {
+    let mut query_tracker = QUERY_TRACKER
+        .write()
+        .map_err(|_| Error::AcquireFrecencyLock)?;
+    *query_tracker = None;
     Ok(true)
 }
 
@@ -108,25 +135,60 @@ pub fn scan_files(_: &Lua, _: ()) -> LuaResult<()> {
 
 pub fn fuzzy_search_files(
     lua: &Lua,
-    (query, max_results, max_threads, current_file, order_reverse): (
-        String,
-        usize,
-        usize,
-        Option<String>,
-        bool,
-    ),
+    (
+        query,
+        max_results,
+        max_threads,
+        current_file,
+        order_reverse,
+        combo_boost_score_multiplier,
+        min_combo_count,
+    ): (String, usize, usize, Option<String>, bool, i32, Option<u32>),
 ) -> LuaResult<LuaValue> {
     let Some(ref mut picker) = *FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)? else {
         return Err(Error::FilePickerMissing)?;
     };
 
+    let base_path = picker.base_path();
+    let min_combo_count = min_combo_count.unwrap_or(3);
+
+    let last_same_query_entry = {
+        let query_tracker = QUERY_TRACKER
+            .read()
+            .map_err(|_| Error::AcquireFrecencyLock)?;
+
+        if query_tracker.as_ref().is_none() {
+            tracing::warn!("Query tracker not initialized");
+        }
+
+        query_tracker
+            .as_ref()
+            .map(|tracker| tracker.get_last_query_entry(&query, base_path, min_combo_count))
+            .transpose()?
+            .flatten()
+    };
+
+    tracing::debug!(
+        ?last_same_query_entry,
+        ?base_path,
+        ?query,
+        ?min_combo_count,
+        "Last same query entry"
+    );
+
     let results = FilePicker::fuzzy_search(
         picker.get_files(),
         &query,
-        max_results,
-        max_threads,
-        current_file.as_deref(),
-        order_reverse,
+        FuzzySearchOptions {
+            max_results,
+            max_threads,
+            current_file: current_file.as_deref(),
+            reverse_order: order_reverse,
+            project_path: Some(picker.base_path()),
+            last_same_query_match: last_same_query_entry.as_ref(),
+            combo_boost_score_multiplier,
+            min_combo_count,
+        },
     );
 
     results.into_lua(lua)
@@ -214,6 +276,61 @@ pub fn cancel_scan(_: &Lua, _: ()) -> LuaResult<bool> {
     Ok(true)
 }
 
+pub fn track_query_completion(_: &Lua, (query, file_path): (String, String)) -> LuaResult<bool> {
+    // Get the project path before spawning thread
+    let project_path = {
+        let Some(ref picker) = *FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)? else {
+            return Ok(false);
+        };
+        picker.base_path().to_path_buf()
+    };
+
+    // Canonicalize the file path before spawning thread
+    let file_path = match PathBuf::from(&file_path).canonicalize() {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::warn!(?file_path, error = ?e, "Failed to canonicalize file path for tracking");
+            return Ok(false);
+        }
+    };
+
+    // Spawn background thread to do the actual tracking (expensive DB write)
+    std::thread::spawn(move || {
+        if let Ok(Some(tracker)) = QUERY_TRACKER.write().as_deref_mut()
+            && let Err(e) = tracker.track_query_completion(&query, &project_path, &file_path)
+        {
+            tracing::error!(
+                query = %query,
+                file = %file_path.display(),
+                error = ?e,
+                "Failed to track query completion"
+            );
+        }
+    });
+
+    Ok(true)
+}
+
+pub fn get_historical_query(_: &Lua, offset: usize) -> LuaResult<Option<String>> {
+    let project_path = {
+        let Some(ref picker) = *FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)? else {
+            return Ok(None);
+        };
+        picker.base_path().to_path_buf()
+    };
+
+    let Some(ref tracker) = *QUERY_TRACKER
+        .read()
+        .map_err(|_| Error::AcquireFrecencyLock)?
+    else {
+        return Ok(None);
+    };
+
+    tracker
+        .get_historical_query(&project_path, offset)
+        .map_err(Into::into)
+}
+
 pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool> {
     let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
     let picker = file_picker
@@ -246,14 +363,17 @@ pub fn init_tracing(
     _: &Lua,
     (log_file_path, log_level): (String, Option<String>),
 ) -> LuaResult<String> {
-    crate::tracing::init_tracing(&log_file_path, log_level.as_deref())
+    crate::log::init_tracing(&log_file_path, log_level.as_deref())
         .map_err(|e| LuaError::RuntimeError(format!("Failed to initialize tracing: {}", e)))
 }
 
 fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
     let exports = lua.create_table()?;
     exports.set("init_db", lua.create_function(init_db)?)?;
-    exports.set("destroy_db", lua.create_function(destroy_db)?)?;
+    exports.set(
+        "destroy_frecency_db",
+        lua.create_function(destroy_frecency_db)?,
+    )?;
     exports.set("init_file_picker", lua.create_function(init_file_picker)?)?;
     exports.set(
         "restart_index_in_path",
@@ -284,6 +404,16 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
         "cleanup_file_picker",
         lua.create_function(cleanup_file_picker)?,
     )?;
+    exports.set("destroy_query_db", lua.create_function(destroy_query_db)?)?;
+    exports.set(
+        "track_query_completion",
+        lua.create_function(track_query_completion)?,
+    )?;
+    exports.set(
+        "get_historical_query",
+        lua.create_function(get_historical_query)?,
+    )?;
+
     Ok(exports)
 }
 
