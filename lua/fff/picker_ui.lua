@@ -973,7 +973,7 @@ function M.render_list()
     -- For combo items, insert header first
     if has_combo and combo_item_index and i == combo_item_index then table.insert(padded_lines, combo_header_line) end
 
-    local icon, icon_hl_group = icons.get_icon_display(item.name, item.extension, false)
+    local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
     icon_data[i] = { icon, icon_hl_group }
 
     local frecency = ''
