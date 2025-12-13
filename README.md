@@ -164,6 +164,28 @@ require('fff').setup({
       active_file = 'Visual',
       frecency = 'Number',
       debug = 'Comment',
+      combo_header = 'Number',
+      -- Git text highlights for file names
+      git_staged = 'FFFGitStaged',
+      git_modified = 'FFFGitModified',
+      git_deleted = 'FFFGitDeleted',
+      git_renamed = 'FFFGitRenamed',
+      git_untracked = 'FFFGitUntracked',
+      git_ignored = 'FFFGitIgnored',
+      -- Git sign/border highlights
+      git_sign_staged = 'FFFGitSignStaged',
+      git_sign_modified = 'FFFGitSignModified',
+      git_sign_deleted = 'FFFGitSignDeleted',
+      git_sign_renamed = 'FFFGitSignRenamed',
+      git_sign_untracked = 'FFFGitSignUntracked',
+      git_sign_ignored = 'FFFGitSignIgnored',
+      -- Git sign selected highlights
+      git_sign_staged_selected = 'FFFGitSignStagedSelected',
+      git_sign_modified_selected = 'FFFGitSignModifiedSelected',
+      git_sign_deleted_selected = 'FFFGitSignDeletedSelected',
+      git_sign_renamed_selected = 'FFFGitSignRenamedSelected',
+      git_sign_untracked_selected = 'FFFGitSignUntrackedSelected',
+      git_sign_ignored_selected = 'FFFGitSignIgnoredSelected',
     },
     -- Store file open frecency 
     frecency = {
