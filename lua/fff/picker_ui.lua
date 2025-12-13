@@ -973,7 +973,7 @@ function M.render_list()
     -- For combo items, insert header first
     if has_combo and combo_item_index and i == combo_item_index then table.insert(padded_lines, combo_header_line) end
 
-    local icon, icon_hl_group = icons.get_icon_display(item.name, item.extension, false)
+    local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
     icon_data[i] = { icon, icon_hl_group }
 
     local frecency = ''
@@ -997,12 +997,14 @@ function M.render_list()
       end
     end
 
-    local available_width = math.max(max_path_width - #icon - 1 - #frecency, 40)
+    local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
+    local available_width = math.max(max_path_width - icon_width - #frecency, 40)
 
     local filename, dir_path = format_file_display(item, available_width)
     path_data[i] = { filename, dir_path }
 
-    local line = string.format('%s %s %s%s', icon, filename, dir_path, frecency)
+    local line = icon and string.format('%s %s %s%s', icon, filename, dir_path, frecency)
+      or string.format('%s %s%s', filename, dir_path, frecency)
 
     local line_len = vim.fn.strdisplaywidth(line)
     local padding = math.max(0, win_width - line_len + 5)
@@ -1091,7 +1093,7 @@ function M.render_list()
         local is_current_file = score and score.current_file_penalty and score.current_file_penalty < 0
 
         -- Icon highlighting
-        if icon_hl_group and vim.fn.strdisplaywidth(icon) > 0 then
+        if icon and icon_hl_group and vim.fn.strdisplaywidth(icon) > 0 then
           local icon_highlight = is_current_file and 'Comment' or icon_hl_group
           vim.api.nvim_buf_add_highlight(
             M.state.list_buf,

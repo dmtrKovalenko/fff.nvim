@@ -80,7 +80,8 @@
             pname = "fff.nvim";
             version = "main";
             src = pkgs.lib.cleanSource ./.;
-            patchPhase = copy-dynamic-library;
+            postPatch = copy-dynamic-library;
+            doCheck = false; # Skip require check since we have a Rust FFI component
           };
         };
 

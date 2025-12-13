@@ -1,19 +1,5 @@
 local M = {}
 
-M.highlights = {
-  untracked = 'FFFGitUntracked',
-  modified = 'FFFGitModified',
-  deleted = 'FFFGitDeleted',
-  renamed = 'FFFGitRenamed',
-  staged_new = 'FFFGitStaged',
-  staged_modified = 'FFFGitStaged',
-  staged_deleted = 'FFFGitStaged',
-  ignored = 'FFFGitIgnored',
-  clean = '',
-  clear = '',
-  unknown = 'FFFGitUntracked',
-}
-
 -- git signs like borders
 M.border_chars = {
   untracked = '┆', -- Dotted vertical line
@@ -29,39 +15,83 @@ M.border_chars = {
   clear = '',
 }
 
-M.border_highlights = {
-  untracked = 'FFFGitSignUntracked',
-  modified = 'FFFGitSignModified',
-  deleted = 'FFFGitSignDeleted',
-  renamed = 'FFFGitSignRenamed',
-  staged_new = 'FFFGitSignStaged',
-  staged_modified = 'FFFGitSignStaged',
-  staged_deleted = 'FFFGitSignStaged',
-  ignored = 'FFFGitSignIgnored',
-  clean = '',
-  clear = '',
-  unknown = 'FFFGitSignUntracked',
-}
+-- Cache for config-based highlight mappings
+local highlights_cache = nil
+local border_highlights_cache = nil
+local border_highlights_selected_cache = nil
 
-M.border_highlights_selected = {
-  untracked = 'FFFGitSignUntrackedSelected',
-  modified = 'FFFGitSignModifiedSelected',
-  deleted = 'FFFGitSignDeletedSelected',
-  renamed = 'FFFGitSignRenamedSelected',
-  staged_new = 'FFFGitSignStagedSelected',
-  staged_modified = 'FFFGitSignStagedSelected',
-  staged_deleted = 'FFFGitSignStagedSelected',
-  ignored = 'FFFGitSignIgnoredSelected',
-  clean = '',
-  clear = '',
-  unknown = 'FFFGitSignUntrackedSelected',
-}
+--- Build and cache highlight mappings from config
+local function ensure_cache()
+  if highlights_cache then return end
 
-function M.get_highlight(git_status) return M.highlights[git_status] or '' end
+  local config = require('fff.conf').get()
 
-function M.get_border_highlight(git_status) return M.border_highlights[git_status] or '' end
+  highlights_cache = {
+    untracked = config.hl.git_untracked,
+    modified = config.hl.git_modified,
+    deleted = config.hl.git_deleted,
+    renamed = config.hl.git_renamed,
+    staged_new = config.hl.git_staged,
+    staged_modified = config.hl.git_staged,
+    staged_deleted = config.hl.git_staged,
+    ignored = config.hl.git_ignored,
+    clean = '',
+    clear = '',
+    unknown = config.hl.git_untracked,
+  }
 
-function M.get_border_highlight_selected(git_status) return M.border_highlights_selected[git_status] or '' end
+  border_highlights_cache = {
+    untracked = config.hl.git_sign_untracked,
+    modified = config.hl.git_sign_modified,
+    deleted = config.hl.git_sign_deleted,
+    renamed = config.hl.git_sign_renamed,
+    staged_new = config.hl.git_sign_staged,
+    staged_modified = config.hl.git_sign_staged,
+    staged_deleted = config.hl.git_sign_staged,
+    ignored = config.hl.git_sign_ignored,
+    clean = '',
+    clear = '',
+    unknown = config.hl.git_sign_untracked,
+  }
+
+  border_highlights_selected_cache = {
+    untracked = config.hl.git_sign_untracked_selected,
+    modified = config.hl.git_sign_modified_selected,
+    deleted = config.hl.git_sign_deleted_selected,
+    renamed = config.hl.git_sign_renamed_selected,
+    staged_new = config.hl.git_sign_staged_selected,
+    staged_modified = config.hl.git_sign_staged_selected,
+    staged_deleted = config.hl.git_sign_staged_selected,
+    ignored = config.hl.git_sign_ignored_selected,
+    clean = '',
+    clear = '',
+    unknown = config.hl.git_sign_untracked_selected,
+  }
+end
+
+--- Get highlight group for git status text
+--- @param git_status string Git status
+--- @return string Highlight group name
+function M.get_highlight(git_status)
+  ensure_cache()
+  return highlights_cache[git_status] or ''
+end
+
+--- Get border highlight group for git status
+--- @param git_status string Git status
+--- @return string Highlight group name
+function M.get_border_highlight(git_status)
+  ensure_cache()
+  return border_highlights_cache[git_status] or ''
+end
+
+--- Get selected border highlight group for git status
+--- @param git_status string Git status
+--- @return string Highlight group name
+function M.get_border_highlight_selected(git_status)
+  ensure_cache()
+  return border_highlights_selected_cache[git_status] or ''
+end
 
 function M.get_border_char(git_status) return M.border_chars[git_status] or '' end
 

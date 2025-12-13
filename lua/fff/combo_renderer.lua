@@ -54,11 +54,12 @@ local function create_header_text(combo_count, win_width, disable_combo_display)
 end
 
 local function apply_header_highlights(buf, ns_id, line_idx, text_len, border_hl)
+  local config = require('fff.conf').get()
   vim.api.nvim_buf_add_highlight(buf, ns_id, border_hl, line_idx - 1, 0, -1)
   vim.api.nvim_buf_add_highlight(
     buf,
     ns_id,
-    'Number',
+    config.hl.combo_header,
     line_idx - 1,
     LEFT_HEADER_PADDING,
     LEFT_HEADER_PADDING + text_len
