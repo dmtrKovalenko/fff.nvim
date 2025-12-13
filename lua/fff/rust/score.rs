@@ -12,7 +12,15 @@ pub fn match_and_score_files<'a>(
     files: &'a [FileItem],
     context: &ScoringContext,
 ) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
-    if context.query.len() < 2 {
+    // Trim whitespace; only treat spaces as path separators if multiple words
+    let terms: Vec<&str> = context.query.split_whitespace().collect();
+    let query = if terms.len() > 1 {
+        terms.join(std::path::MAIN_SEPARATOR_STR)
+    } else {
+        context.query.trim().to_string()
+    };
+
+    if query.len() < 2 {
         return score_all_by_frecency(files, context);
     }
 
@@ -20,7 +28,7 @@ pub fn match_and_score_files<'a>(
         return (vec![], vec![], 0);
     }
 
-    let has_uppercase_letter = context.query.chars().any(|c| c.is_uppercase());
+    let has_uppercase_letter = query.chars().any(|c| c.is_uppercase());
     let options = neo_frizbee::Config {
         prefilter: true,
         max_typos: Some(context.max_typos),
@@ -32,17 +40,17 @@ pub fn match_and_score_files<'a>(
         },
     };
 
-    let query_contains_path_separator = context.query.contains(MAIN_SEPARATOR);
+    let query_contains_path_separator = query.contains(MAIN_SEPARATOR);
     let haystack: Vec<&str> = files
         .iter()
         .map(|f| f.relative_path_lower.as_str())
         .collect();
     tracing::debug!(
         "Starting fuzzy search for query '{}' in {} files",
-        context.query,
+        query,
         haystack.len()
     );
-    let path_matches = neo_frizbee::match_list(context.query, &haystack, &options);
+    let path_matches = neo_frizbee::match_list(&query, &haystack, &options);
     tracing::debug!(
         "Matched {} files for query '{}'",
         path_matches.len(),
@@ -545,5 +553,89 @@ mod tests {
         assert_eq!(items[0].relative_path, "file2.rs");
         assert_eq!(items[1].relative_path, "file6.rs");
         assert_eq!(items[2].relative_path, "file4.rs");
+    }
+
+    #[test]
+    fn test_spaces_become_path_separators() {
+        // Files with nested paths
+        let files = vec![
+            FileItem {
+                path: PathBuf::from("src/helper/mod.rs"),
+                relative_path: "src/helper/mod.rs".to_string(),
+                relative_path_lower: "src/helper/mod.rs".to_string(),
+                file_name: "mod.rs".to_string(),
+                file_name_lower: "mod.rs".to_string(),
+                size: 0,
+                modified: 1000,
+                access_frecency_score: 0,
+                modification_frecency_score: 0,
+                total_frecency_score: 0,
+                git_status: None,
+            },
+            FileItem {
+                path: PathBuf::from("src/helpermod.rs"),
+                relative_path: "src/helpermod.rs".to_string(),
+                relative_path_lower: "src/helpermod.rs".to_string(),
+                file_name: "helpermod.rs".to_string(),
+                file_name_lower: "helpermod.rs".to_string(),
+                size: 0,
+                modified: 2000,
+                access_frecency_score: 0,
+                modification_frecency_score: 0,
+                total_frecency_score: 0,
+                git_status: None,
+            },
+        ];
+
+        // Query "helper mod" should match "src/helper/mod.rs" because spaces become "/"
+        let context = ScoringContext {
+            query: "helper mod",
+            max_results: 10,
+            max_threads: 1,
+            max_typos: 2,
+            current_file: None,
+            reverse_order: false,
+        };
+
+        let (items, _, _) = match_and_score_files(&files, &context);
+
+        // Should match the path with the separator
+        assert!(!items.is_empty(), "Should match at least one file");
+        assert!(
+            items.iter().any(|f| f.relative_path == "src/helper/mod.rs"),
+            "Should match src/helper/mod.rs when query has space"
+        );
+    }
+
+    #[test]
+    fn test_single_word_query_trimmed() {
+        let files = vec![FileItem {
+            path: PathBuf::from("src/module.rs"),
+            relative_path: "src/module.rs".to_string(),
+            relative_path_lower: "src/module.rs".to_string(),
+            file_name: "module.rs".to_string(),
+            file_name_lower: "module.rs".to_string(),
+            size: 0,
+            modified: 1000,
+            access_frecency_score: 0,
+            modification_frecency_score: 0,
+            total_frecency_score: 0,
+            git_status: None,
+        }];
+
+        // Query with leading/trailing whitespace should be trimmed
+        let context = ScoringContext {
+            query: "  module  ",
+            max_results: 10,
+            max_threads: 1,
+            max_typos: 2,
+            current_file: None,
+            reverse_order: false,
+        };
+
+        let (items, _, _) = match_and_score_files(&files, &context);
+
+        assert_eq!(items.len(), 1, "Should match one file");
+        assert_eq!(items[0].relative_path, "src/module.rs");
     }
 }
