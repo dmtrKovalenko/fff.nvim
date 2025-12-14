@@ -3,19 +3,33 @@ use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
 use crate::location::parse_location;
+use crate::query_tracker::QueryMatchEntry;
 use crate::score::match_and_score_files;
 use crate::types::{FileItem, ScoringContext, SearchResult};
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::SystemTime;
-use tracing::{debug, error, info, warn};
+use tracing::{Level, debug, error, info, warn};
 
 use crate::{FILE_PICKER, FRECENCY};
+
+#[derive(Debug, Clone, Copy)]
+pub struct FuzzySearchOptions<'a> {
+    pub max_results: usize,
+    pub max_threads: usize,
+    pub current_file: Option<&'a str>,
+    pub reverse_order: bool,
+    pub project_path: Option<&'a Path>,
+    pub last_same_query_match: Option<&'a QueryMatchEntry>,
+    pub combo_boost_score_multiplier: i32,
+    pub min_combo_count: u32,
+}
 
 #[derive(Debug, Clone)]
 struct FileSync {
@@ -33,7 +47,7 @@ impl FileSync {
 
     fn find_file_index(&self, path: &Path) -> Result<usize, usize> {
         self.files
-            .binary_search_by(|file| file.path.as_path().cmp(path))
+            .binary_search_by(|file| file.path.as_os_str().cmp(path.as_os_str()))
     }
 }
 
@@ -66,7 +80,9 @@ impl FileItem {
 
         Self {
             path,
+            relative_path_lower: relative_path.to_lowercase(),
             relative_path,
+            file_name_lower: name.to_lowercase(),
             file_name: name,
             size,
             modified,
@@ -120,6 +136,10 @@ impl std::fmt::Debug for FilePicker {
 }
 
 impl FilePicker {
+    pub fn base_path(&self) -> &Path {
+        &self.base_path
+    }
+
     pub fn git_root(&self) -> Option<&Path> {
         self.sync_data.git_workdir.as_deref()
     }
@@ -159,17 +179,14 @@ impl FilePicker {
     pub fn fuzzy_search<'a>(
         files: &'a [FileItem],
         query: &'a str,
-        max_results: usize,
-        max_threads: usize,
-        current_file: Option<&'a str>,
-        reverse_order: bool,
+        options: FuzzySearchOptions<'a>,
     ) -> SearchResult<'a> {
-        let max_threads = max_threads.max(1);
+        let max_threads = options.max_threads.max(1);
         debug!(
             ?query,
-            ?max_results,
+            max_results = ?options.max_results,
             ?max_threads,
-            ?current_file,
+            current_file = ?options.current_file,
             "Fuzzy search",
         );
 
@@ -180,14 +197,19 @@ impl FilePicker {
         let max_typos = (query.len() as u16 / 4).clamp(2, 6);
         let context = ScoringContext {
             query,
+            project_path: options.project_path,
             max_typos,
             max_threads,
-            current_file,
-            max_results,
-            reverse_order,
+            current_file: options.current_file,
+            max_results: options.max_results,
+            reverse_order: options.reverse_order,
+            last_same_query_match: options.last_same_query_match,
+            combo_boost_score_multiplier: options.combo_boost_score_multiplier,
+            min_combo_count: options.min_combo_count,
         };
 
         let time = std::time::Instant::now();
+
         let (items, scores, total_matched) = match_and_score_files(files, &context);
 
         debug!(
@@ -215,14 +237,7 @@ impl FilePicker {
         }
     }
 
-    pub fn update_git_statuses(
-        &mut self,
-        status_cache: Option<GitStatusCache>,
-    ) -> Result<(), Error> {
-        let Some(status_cache) = status_cache else {
-            return Ok(());
-        };
-
+    pub fn update_git_statuses(&mut self, status_cache: GitStatusCache) -> Result<(), Error> {
         debug!(
             statuses_count = status_cache.statuses_len(),
             "Updating git status",
@@ -238,6 +253,8 @@ impl FilePicker {
                     if let Some(frecency) = frecency.as_ref() {
                         file.update_frecency_scores(frecency)?;
                     }
+                } else {
+                    error!(?path, "Couldn't update the git status for path");
                 }
 
                 Ok(())
@@ -278,8 +295,14 @@ impl FilePicker {
             .as_mut()
             .ok_or_else(|| Error::FilePickerMissing)?;
 
-        let statuses_count = git_status.as_ref().map_or(0, |cache| cache.statuses_len());
-        picker.update_git_statuses(git_status)?;
+        let statuses_count = if let Some(git_status) = git_status {
+            let count = git_status.statuses_len();
+            picker.update_git_statuses(git_status)?;
+
+            count
+        } else {
+            0
+        };
 
         Ok(statuses_count)
     }
@@ -334,7 +357,8 @@ impl FilePicker {
         }
     }
 
-    pub fn on_create_or_modify(&mut self, path: impl AsRef<Path>) -> Option<&FileItem> {
+    #[tracing::instrument(skip(self), name = "timing_update", level = Level::DEBUG)]
+    pub fn on_create_or_modify(&mut self, path: impl AsRef<Path> + Debug) -> Option<&FileItem> {
         let path = path.as_ref();
         match self.sync_data.find_file_index(path) {
             Ok(pos) => {
@@ -407,14 +431,17 @@ impl FilePicker {
         self.is_scanning.store(true, Ordering::Relaxed);
         self.scanned_files_count.store(0, Ordering::Relaxed);
 
-        if let Ok(sync) = scan_filesystem(&self.base_path, &self.scanned_files_count) {
-            info!(
-                "Filesystem scan completed: found {} files",
-                sync.files.len()
-            );
-            self.sync_data = sync
-        } else {
-            warn!("Filesystem scan failed");
+        let scan_result = scan_filesystem(&self.base_path, &self.scanned_files_count);
+        match scan_result {
+            Ok(sync) => {
+                info!(
+                    "Filesystem scan completed: found {} files",
+                    sync.files.len()
+                );
+
+                self.sync_data = sync
+            }
+            Err(error) => error!(?error, "Failed to scan file system"),
         }
 
         self.is_scanning.store(false, Ordering::Relaxed);
@@ -515,6 +542,7 @@ fn scan_filesystem(
                     .recurse_untracked_dirs(true)
                     .exclude_submodules(true),
             );
+
             (git_workdir, status_cache)
         });
 
@@ -592,7 +620,8 @@ fn scan_filesystem(
             files.len()
         );
 
-        files.par_sort_unstable_by(|a, b| a.path.cmp(&b.path));
+        // Sort by OsStr instead of Path to avoid expensive component-by-component comparison
+        files.par_sort_unstable_by(|a, b| a.path.as_os_str().cmp(b.path.as_os_str()));
         Ok(FileSync { files, git_workdir })
     })
 }

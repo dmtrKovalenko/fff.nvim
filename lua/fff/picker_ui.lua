@@ -7,6 +7,7 @@ local icons = require('fff.file_picker.icons')
 local git_utils = require('fff.git_utils')
 local utils = require('fff.utils')
 local location_utils = require('fff.location_utils')
+local combo_renderer = require('fff.combo_renderer')
 
 local function get_prompt_position()
   local config = M.state.config
@@ -254,23 +255,30 @@ M.state = {
   item_line_map = {},
   location = nil, -- Current location from search results
 
+  -- History cycling state
+  history_offset = nil, -- Current offset in history (nil = not cycling, 0 = first query)
+  next_search_force_combo_boost = false, -- Force combo boost on next search (for history recall)
+
   config = nil,
 
   ns_id = nil,
 
   last_status_info = nil,
 
-  search_timer = nil,
-  search_debounce_ms = 50, -- Debounce delay for search
-
   last_preview_file = nil,
   last_preview_location = nil, -- Track last preview location to detect changes
+
+  preview_timer = nil, -- Separate timer for preview updates
+  preview_debounce_ms = 100, -- Preview is more expensive, debounce more
 }
 
 function M.create_ui()
   local config = M.state.config
 
-  if not M.state.ns_id then M.state.ns_id = vim.api.nvim_create_namespace('fff_picker_status') end
+  if not M.state.ns_id then
+    M.state.ns_id = vim.api.nvim_create_namespace('fff_picker_status')
+    combo_renderer.init(M.state.ns_id)
+  end
 
   local debug_enabled_in_preview = M.enabled_preview() and config and config.debug and config.debug.show_scores
 
@@ -613,6 +621,7 @@ function M.setup_keymaps()
   set_keymap('i', keymaps.preview_scroll_up, M.scroll_preview_up, input_opts)
   set_keymap('i', keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
   set_keymap('i', keymaps.toggle_debug, M.toggle_debug, input_opts)
+  set_keymap('i', keymaps.cycle_previous_query, M.recall_query_from_history, input_opts)
 
   local list_opts = { buffer = M.state.list_buf, noremap = true, silent = true }
 
@@ -737,12 +746,6 @@ function M.on_input_change()
 
   M.state.query = query
 
-  if M.state.search_timer then
-    M.state.search_timer:stop()
-    M.state.search_timer:close()
-    M.state.search_timer = nil
-  end
-
   M.update_results_sync()
 end
 
@@ -771,12 +774,19 @@ function M.update_results_sync()
     dynamic_max_results = M.state.config.max_results or 100
   end
 
+  -- Check if we should force combo boost for this search (history recall)
+  local min_combo_override = nil
+  if M.state.next_search_force_combo_boost then
+    min_combo_override = 0 -- Force combo boost by setting min_combo_count to 0
+  end
+
   local results = file_picker.search_files(
     M.state.query,
+    M.state.current_file_cache,
     dynamic_max_results,
     M.state.config.max_threads,
-    M.state.current_file_cache,
-    prompt_position == 'bottom'
+    prompt_position == 'bottom',
+    min_combo_override
   )
 
   -- Get location from search results
@@ -793,6 +803,28 @@ function M.update_results_sync()
   end
 
   M.render_debounced()
+end
+
+function M.update_preview_debounced()
+  -- Cancel previous preview timer
+  if M.state.preview_timer then
+    M.state.preview_timer:stop()
+    M.state.preview_timer:close()
+    M.state.preview_timer = nil
+  end
+
+  -- Create new timer with longer debounce for expensive preview
+  M.state.preview_timer = vim.loop.new_timer()
+  M.state.preview_timer:start(
+    M.state.preview_debounce_ms,
+    0,
+    vim.schedule_wrap(function()
+      if M.state.active then
+        M.update_preview()
+        M.state.preview_timer = nil
+      end
+    end)
+  )
 end
 
 function M.render_debounced()
@@ -858,6 +890,18 @@ local function format_file_display(item, max_width)
   return filename, display_path
 end
 
+--- Calculate number of rows an item will occupy when rendered
+--- @param item_index number Index of the item (1-based)
+--- @param has_combo boolean Whether any combo boost exists
+--- @param combo_item_index number|nil Index of the combo-boosted item
+--- @return number Number of rows (1 or 2 currently)
+local function get_item_row_count(item_index, has_combo, combo_item_index)
+  if has_combo and item_index == combo_item_index then
+    return 2 -- Combo header line + content line
+  end
+  return 1 -- Just content line
+end
+
 function M.render_list()
   if not M.state.active then return end
 
@@ -867,33 +911,67 @@ function M.render_list()
   local debug_enabled = config and config.debug and config.debug.show_scores
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
   local win_width = vim.api.nvim_win_get_width(M.state.list_win)
-  local display_count = math.min(#items, win_height)
   local empty_lines_needed = 0
 
-  local prompt_position = get_prompt_position()
-  local cursor_line = 0
+  local combo_boost_score_multiplier = config.history and config.history.combo_boost_score_multiplier or 100
+  local has_combo, combo_header_line, combo_header_text_len, combo_item_index = combo_renderer.detect_and_prepare(
+    items,
+    file_picker,
+    win_width,
+    combo_boost_score_multiplier,
+    -- disable rendering of combos if cycling through history or user wants to always show the last match
+    M.state.next_search_force_combo_boost or config.history.min_combo_count == 0
+  )
+  M.state.next_search_force_combo_boost = false -- effectively reset if set by the history recall
+
+  -- Calculate how many items fit (accounting for multi-row items)
+  local display_count = 0
+  local accumulated_rows = 0
   if #items > 0 then
-    if prompt_position == 'bottom' then
-      empty_lines_needed = win_height - display_count
-      cursor_line = empty_lines_needed + M.state.cursor
-    else
-      cursor_line = M.state.cursor
+    display_count = 1 -- Always show at least first item, even if it exceeds win_height
+    accumulated_rows = get_item_row_count(1, has_combo, combo_item_index)
+
+    for i = 2, #items do
+      local item_rows = get_item_row_count(i, has_combo, combo_item_index)
+      if accumulated_rows + item_rows > win_height then
+        break -- Next item won't fit
+      end
+      accumulated_rows = accumulated_rows + item_rows
+      display_count = i
     end
-    cursor_line = math.max(1, math.min(cursor_line, win_height))
+  end
+
+  local prompt_position = get_prompt_position()
+
+  -- Calculate which items to display based on prompt position
+  local display_start = 1
+  local display_end = display_count
+
+  if prompt_position == 'bottom' and #items > display_count then
+    -- Bottom prompt: show last N items (including combo if it naturally fits)
+    display_end = #items
+    display_start = math.max(1, display_end - display_count + 1)
+  end
+
+  display_count = display_end - display_start + 1
+
+  if M.state.cursor < display_start then
+    M.state.cursor = display_start
+  elseif M.state.cursor > display_end then
+    M.state.cursor = display_end
   end
 
   local padded_lines = {}
-  if prompt_position == 'bottom' then
-    for _ = 1, empty_lines_needed do
-      table.insert(padded_lines, string.rep(' ', win_width + 5))
-    end
-  end
-
   local icon_data = {}
   local path_data = {}
+  local item_to_lines = {} -- Maps item index to its line indices {first_line, last_line}
 
-  for i = 1, display_count do
+  for i = display_start, display_end do
     local item = items[i]
+    local item_start_line = #padded_lines + 1
+
+    -- For combo items, insert header first
+    if has_combo and combo_item_index and i == combo_item_index then table.insert(padded_lines, combo_header_line) end
 
     local icon, icon_hl_group = icons.get_icon_display(item.name, item.extension, false)
     icon_data[i] = { icon, icon_hl_group }
@@ -929,6 +1007,43 @@ function M.render_list()
     local line_len = vim.fn.strdisplaywidth(line)
     local padding = math.max(0, win_width - line_len + 5)
     table.insert(padded_lines, line .. string.rep(' ', padding))
+
+    -- Record line range for this item
+    local item_end_line = #padded_lines
+    item_to_lines[i] = {
+      first = item_start_line,
+      last = item_end_line,
+    }
+  end
+
+  -- Handle bottom positioning: add empty lines at the top
+  local empty_line_offset = 0
+  if prompt_position == 'bottom' then
+    local total_content_lines = #padded_lines
+    empty_lines_needed = math.max(0, win_height - total_content_lines)
+
+    if empty_lines_needed > 0 then
+      -- Insert empty lines at the beginning
+      for i = empty_lines_needed, 1, -1 do
+        table.insert(padded_lines, 1, string.rep(' ', win_width + 5))
+      end
+      empty_line_offset = empty_lines_needed
+
+      -- Adjust item_to_lines mapping
+      for i = display_start, display_end do
+        if item_to_lines[i] then
+          item_to_lines[i].first = item_to_lines[i].first + empty_line_offset
+          item_to_lines[i].last = item_to_lines[i].last + empty_line_offset
+        end
+      end
+    end
+  end
+
+  -- Calculate cursor line based on current item
+  local cursor_line = 0
+  if #items > 0 and M.state.cursor >= 1 and M.state.cursor <= #items then
+    local cursor_item = item_to_lines[M.state.cursor]
+    if cursor_item then cursor_line = cursor_item.last end
   end
 
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', true)
@@ -937,36 +1052,35 @@ function M.render_list()
 
   vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
 
+  -- Set cursor position
   if #items > 0 and cursor_line > 0 and cursor_line <= win_height then
     vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
+  end
 
-    -- Cursor line highlighting
-    vim.api.nvim_buf_add_highlight(
-      M.state.list_buf,
-      M.state.ns_id,
-      M.state.config.hl.active_file,
-      cursor_line - 1,
-      0,
-      -1
-    )
-
-    -- Fill remaining width for cursor line
-    local current_line = padded_lines[cursor_line] or ''
-    local line_len = vim.fn.strdisplaywidth(current_line)
-    local remaining_width = math.max(0, win_width - line_len)
-
-    if remaining_width > 0 then
-      vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, cursor_line - 1, -1, {
-        virt_text = { { string.rep(' ', remaining_width), M.state.config.hl.active_file } },
-        virt_text_pos = 'eol',
-      })
-    end
-
-    for i = 1, display_count do
+  -- Apply highlighting to all items
+  if #items > 0 then
+    for i = display_start, display_end do
       local item = items[i]
+      local item_lines = item_to_lines[i]
+      if not item_lines then goto continue end
 
-      local line_idx = empty_lines_needed + i
-      local is_cursor_line = line_idx == cursor_line
+      local is_cursor_item = (M.state.cursor == i)
+
+      -- Highlight only the content line (last line), not the combo header
+      if is_cursor_item then
+        local content_line = item_lines.last
+        -- Highlight entire line and extend to EOL
+        vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, content_line - 1, 0, {
+          end_col = 0,
+          end_row = content_line,
+          hl_group = M.state.config.hl.active_file,
+          hl_eol = true,
+          priority = 100,
+        })
+      end
+
+      -- Now apply file-specific highlights to the last line
+      local line_idx = item_lines.last
       local line_content = padded_lines[line_idx]
 
       if line_content then
@@ -1018,36 +1132,56 @@ function M.render_list()
         end
 
         if is_current_file then
-          if not is_cursor_line then
+          if not is_cursor_item then
             vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, 'Comment', line_idx - 1, 0, -1)
           end
 
-          local virt_text_hl = is_cursor_line and M.state.config.hl.active_file or 'Comment'
+          local virt_text_hl = is_cursor_item and M.state.config.hl.active_file or 'Comment'
           vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
             virt_text = { { ' (current)', virt_text_hl } },
             virt_text_pos = 'right_align',
           })
         end
 
-        local border_char = ' '
-        local border_hl = nil
-
         if item.git_status and git_utils.should_show_border(item.git_status) then
-          border_char = git_utils.get_border_char(item.git_status)
-          if is_cursor_line then
-            border_hl = git_utils.get_border_highlight_selected(item.git_status)
+          local border_char = git_utils.get_border_char(item.git_status)
+          local border_hl
+
+          if is_cursor_item then
+            -- When selected, create a combined highlight: border color on cursor background
+            local base_hl = git_utils.get_border_highlight(item.git_status)
+            if base_hl and base_hl ~= '' then
+              -- Get the foreground color from the border highlight
+              local border_fg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(base_hl)), 'fg')
+              -- Get the background from cursor highlight
+              local cursor_bg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(M.state.config.hl.active_file)), 'bg')
+
+              -- Create temporary highlight group
+              local temp_hl_name = 'FFFGitBorderSelected_' .. i
+              if border_fg ~= '' and cursor_bg ~= '' then
+                vim.api.nvim_set_hl(0, temp_hl_name, { fg = border_fg, bg = cursor_bg })
+                border_hl = temp_hl_name
+              else
+                border_hl = git_utils.get_border_highlight_selected(item.git_status)
+              end
+            else
+              border_hl = M.state.config.hl.active_file
+            end
           else
             border_hl = git_utils.get_border_highlight(item.git_status)
           end
-        end
 
-        local final_border_hl = border_hl ~= '' and border_hl
-          or (is_cursor_line and M.state.config.hl.active_file or '')
-
-        if final_border_hl ~= '' or is_cursor_line then
+          if border_hl and border_hl ~= '' then
+            vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
+              sign_text = border_char,
+              sign_hl_group = border_hl,
+              priority = 1000,
+            })
+          end
+        elseif is_cursor_item then
           vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
-            sign_text = border_char,
-            sign_hl_group = final_border_hl ~= '' and final_border_hl or M.state.config.hl.active_file,
+            sign_text = ' ',
+            sign_hl_group = M.state.config.hl.active_file,
             priority = 1000,
           })
         end
@@ -1064,7 +1198,19 @@ function M.render_list()
           )
         end
       end
+
+      ::continue::
     end
+
+    combo_renderer.render_highlights_and_overlays(
+      combo_item_index,
+      combo_header_text_len,
+      M.state.list_buf,
+      M.state.list_win,
+      M.state.ns_id,
+      M.state.config.hl.border,
+      item_to_lines
+    )
   end
 end
 
@@ -1268,6 +1414,54 @@ function M.scroll_preview_down()
   preview.scroll(scroll_lines)
 end
 
+--- Reset history cycling state
+function M.reset_history_state()
+  M.state.history_offset = nil
+  M.state.updating_from_history = false
+end
+
+--- Recall query from history with temporary min_combo_count=0
+function M.recall_query_from_history()
+  if not M.state.active then return end
+
+  -- Initialize offset on first press
+  if M.state.history_offset == nil then
+    M.state.history_offset = 0
+  else
+    -- Increment offset for next query
+    M.state.history_offset = M.state.history_offset + 1
+  end
+
+  -- Fetch query at current offset from Rust
+  local fuzzy = require('fff.core').ensure_initialized()
+  local ok, query = pcall(fuzzy.get_historical_query, M.state.history_offset)
+
+  if not ok or not query then
+    -- Reached end of history, wrap to beginning
+    M.state.history_offset = 0
+    ok, query = pcall(fuzzy.get_historical_query, 0)
+
+    if not ok or not query then
+      -- No history available at all
+      vim.notify('No query history available', vim.log.levels.INFO)
+      M.state.history_offset = nil
+      return
+    end
+  end
+
+  M.state.next_search_force_combo_boost = true
+
+  -- this is going to trigger the on_input_change handler with the normal search and render flow
+  vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { M.state.config.prompt .. query })
+
+  -- Position cursor at end
+  vim.schedule(function()
+    if M.state.active and M.state.input_win and vim.api.nvim_win_is_valid(M.state.input_win) then
+      vim.api.nvim_win_set_cursor(M.state.input_win, { 1, #M.state.config.prompt + #query })
+    end
+  end)
+end
+
 --- Find the first visible window with a normal file buffer
 --- @return number|nil Window ID of the first suitable window, or nil if none found
 local function find_suitable_window()
@@ -1317,6 +1511,7 @@ function M.select(action)
 
   local relative_path = vim.fn.fnamemodify(item.path, ':.')
   local location = M.state.location -- Capture location before closing
+  local query = M.state.query -- Capture query before closing for tracking
 
   vim.cmd('stopinsert')
   M.close()
@@ -1341,10 +1536,19 @@ function M.select(action)
     vim.cmd('tabedit ' .. vim.fn.fnameescape(relative_path))
   end
 
-  if location then
-    -- Use vim.schedule to ensure the file is fully loaded before jumping
-    vim.schedule(function() location_utils.jump_to_location(location) end)
-  end
+  -- Derive side effects on vim schedule to ensure they run after the file is opened
+  vim.schedule(function()
+    if location then location_utils.jump_to_location(location) end
+
+    if query and query ~= '' then
+      local config = conf.get()
+      if config.history and config.history.enabled then
+        local fff = require('fff.core').ensure_initialized()
+        -- Track in background thread (non-blocking, handled by Rust)
+        pcall(fff.track_query_completion, query, item.path)
+      end
+    end
+  end)
 end
 
 function M.close()
@@ -1352,6 +1556,8 @@ function M.close()
 
   vim.cmd('stopinsert')
   M.state.active = false
+
+  combo_renderer.cleanup()
 
   local windows = {
     M.state.input_win,
@@ -1382,6 +1588,12 @@ function M.close()
     end
   end
 
+  if M.state.preview_timer then
+    M.state.preview_timer:stop()
+    M.state.preview_timer:close()
+    M.state.preview_timer = nil
+  end
+
   M.state.input_win = nil
   M.state.list_win = nil
   M.state.file_info_win = nil
@@ -1399,13 +1611,7 @@ function M.close()
   M.state.last_preview_location = nil
   M.state.current_file_cache = nil
   M.state.location = nil
-
-  if M.state.search_timer then
-    M.state.search_timer:stop()
-    M.state.search_timer:close()
-    M.state.search_timer = nil
-  end
-
+  M.reset_history_state()
   -- Clean up picker focus autocmds
   pcall(vim.api.nvim_del_augroup_by_name, 'fff_picker_focus')
 end
@@ -1521,10 +1727,7 @@ function M.open_with_callback(query, callback, opts)
   if not merged_config then return false end
 
   local current_file_cache = get_current_file_cache(base_path)
-
-  local max_results = merged_config.max_results or 100
-  local max_threads = merged_config.max_threads or 4
-  local results = file_picker.search_files(query, max_results, max_threads, current_file_cache, false)
+  local results = file_picker.search_files(query, nil, nil, current_file_cache, nil)
 
   local metadata = file_picker.get_search_metadata()
   local location = file_picker.get_search_location()

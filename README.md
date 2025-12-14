@@ -88,8 +88,8 @@ vim.pack.add({ 'https://github.com/dmtrKovalenko/fff.nvim' })
 
 nvim.create_autocmd('PackChanged', {
   callback = function(event)
-    if event.data.updated then 
-      require('fff.download').download_or_build_binary() 
+    if event.data.updated then
+      require('fff.download').download_or_build_binary()
     end
   end,
 })
@@ -158,11 +158,14 @@ require('fff').setup({
       select_split = '<C-s>',
       select_vsplit = '<C-v>',
       select_tab = '<C-t>',
+      -- you can assign multiple keys to any action
       move_up = { '<Up>', '<C-p>' },
       move_down = { '<Down>', '<C-n>' },
       preview_scroll_up = '<C-u>',
       preview_scroll_down = '<C-d>',
       toggle_debug = '<F2>',
+      -- goes to the previous query in history
+      cycle_previous_query = '<C-Up>',
     },
     hl = {
       border = 'FloatBorder',
@@ -175,9 +178,17 @@ require('fff').setup({
       frecency = 'Number',
       debug = 'Comment',
     },
+    -- Store file open frecency 
     frecency = {
       enabled = true,
       db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
+    },
+    -- Store successfully opened queries with respective matches
+    history = {
+      enabled = true,
+      db_path = vim.fn.stdpath('data') .. '/fff_queries',
+      min_combo_count = 3, -- file will get a boost if it was selected 3 in a row times per specific query
+      combo_boost_score_multiplier = 100, -- Score multiplier for combo matches 
     },
     debug = {
       enabled = false, -- Set to true to show scores in the UI

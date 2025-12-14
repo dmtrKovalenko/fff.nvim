@@ -11,17 +11,7 @@ M.state = {
 }
 
 function M.setup()
-  local db_path = vim.fn.stdpath('cache') .. '/fff_nvim'
-  local ok, result = pcall(fuzzy.init_db, db_path, true)
-  if not ok then vim.notify('Failed to initialize frecency database: ' .. result, vim.log.levels.WARN) end
-
   local config = require('fff.conf').get()
-  ok, result = pcall(fuzzy.init_file_picker, config.base_path)
-  if not ok then
-    vim.notify('Failed to initialize file picker: ' .. result, vim.log.levels.ERROR)
-    return false
-  end
-
   M.state.initialized = true
   M.state.base_path = config.base_path
 
@@ -43,20 +33,34 @@ end
 
 --- Search files with fuzzy matching using blink.cmp's advanced algorithm
 --- @param query string Search query
---- @param max_results number Maximum number of results (optional)
---- @param max_threads number Maximum number of threads (optional)
+--- @param max_results number|nil Maximum number of results (optional)
+--- @param max_threads number|nil Maximum number of threads (optional)
 --- @param current_file string|nil Path to current file to deprioritize (optional)
 --- @param reverse_order boolean Reverse order of results
+--- @param min_combo_count_override number|nil Optional override for min_combo_count (nil uses config)
 --- @return table List of matching files
-function M.search_files(query, max_results, max_threads, current_file, reverse_order)
+function M.search_files(query, current_file, max_results, max_threads, reverse_order, min_combo_count_override)
   local config = require('fff.conf').get()
   if not M.state.initialized then return {} end
 
-  max_results = max_results or config.max_results
-  max_threads = max_threads or config.max_threads
+  max_results = max_results or config.max_results or 40
+  max_threads = max_threads or config.max_threads or 4
+  local combo_boost_score_multiplier = config.history and config.history.combo_boost_score_multiplier or 100
 
-  local ok, search_result =
-    pcall(fuzzy.fuzzy_search_files, query, max_results, max_threads, current_file, reverse_order)
+  -- Use override if provided, otherwise use config value
+  local min_combo_count = min_combo_count_override
+  if min_combo_count == nil then min_combo_count = config.history and config.history.min_combo_count or 3 end
+
+  local ok, search_result = pcall(
+    fuzzy.fuzzy_search_files,
+    query,
+    max_results,
+    max_threads,
+    current_file,
+    reverse_order,
+    combo_boost_score_multiplier,
+    min_combo_count
+  )
   if not ok then
     vim.notify('Failed to search files: ' .. tostring(search_result), vim.log.levels.ERROR)
     return {}

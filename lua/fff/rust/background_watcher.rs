@@ -2,22 +2,26 @@ use crate::FILE_PICKER;
 use crate::error::Error;
 use crate::file_picker::FilePicker;
 use crate::git::GitStatusCache;
+use crate::sort_buffer::sort_with_buffer;
 use git2::Repository;
-use notify::RecursiveMode;
-use notify_debouncer_mini::{DebounceEventResult, DebouncedEvent, new_debouncer};
+use notify::event::{AccessKind, AccessMode};
+use notify::{Config, EventKind, RecursiveMode};
+use notify_debouncer_full::{
+    DebounceEventResult, DebouncedEvent, RecommendedCache, new_debouncer_opt,
+};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{Level, error, info, warn};
 
-type Debouncer = notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>;
+type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, RecommendedCache>;
 
 pub struct BackgroundWatcher {
     debouncer: Arc<Mutex<Option<Debouncer>>>,
 }
 
-const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(500);
-const MAX_PATHS_THRESHOLD: usize = 50;
+const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
+const MAX_PATHS_THRESHOLD: usize = 1024;
 
 impl BackgroundWatcher {
     pub fn new(base_path: PathBuf, git_workdir: Option<PathBuf>) -> Result<Self, Error> {
@@ -38,22 +42,29 @@ impl BackgroundWatcher {
         base_path: PathBuf,
         git_workdir: Option<PathBuf>,
     ) -> Result<Debouncer, Error> {
-        let mut debouncer = new_debouncer(DEBOUNCE_TIMEOUT, {
-            move |result: DebounceEventResult| match result {
-                Ok(events) => {
-                    if !events.is_empty() {
+        // do not follow symlinks as then notifiers spawns a bunch of events for symlinked
+        // files that could be git ignored, we have to property differentiate those and if
+        // the file was edited through a
+        let config = Config::default().with_follow_symlinks(false);
+
+        let mut debouncer = new_debouncer_opt(
+            DEBOUNCE_TIMEOUT,
+            Some(DEBOUNCE_TIMEOUT / 2), // tick rate for the event span
+            {
+                move |result: DebounceEventResult| match result {
+                    Ok(events) => {
                         handle_debounced_events(events, &git_workdir);
                     }
+                    Err(errors) => {
+                        error!("File watcher errors: {:?}", errors);
+                    }
                 }
-                Err(errors) => {
-                    error!("File watcher errors: {:?}", errors);
-                }
-            }
-        })?;
+            },
+            RecommendedCache::new(),
+            config,
+        )?;
 
-        debouncer
-            .watcher()
-            .watch(base_path.as_path(), RecursiveMode::Recursive)?;
+        debouncer.watch(base_path.as_path(), RecursiveMode::Recursive)?;
         info!("File watcher initizlieed for path: {}", base_path.display());
 
         Ok(debouncer)
@@ -81,79 +92,180 @@ impl Drop for BackgroundWatcher {
     }
 }
 
+#[tracing::instrument(name = "fs_events", skip(events), level = Level::DEBUG)]
 fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<PathBuf>) {
-    debug!("Processing {} debounced events", events.len());
-
-    let Ok(mut file_picker_guard) = FILE_PICKER.write() else {
-        error!("Failed to acquire file picker write lock");
-        return;
-    };
-
-    let Some(ref mut picker) = *file_picker_guard else {
-        error!("File picker not initialized");
-        return;
-    };
-
-    let mut need_full_git_rescan = false;
-
+    // this will be called very often, we have to minimiy the lock time for file picker
     let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
-    let mut files_to_update_git_status = Vec::with_capacity(events.len() * 2);
+    let mut need_full_rescan = false;
+    let mut need_full_git_rescan = false;
+    let mut paths_to_remove = Vec::new();
+    let mut paths_to_add_or_modify = Vec::new();
     let mut affected_paths_count = 0usize;
 
-    for event in &events {
-        let path = &event.path;
-        if is_ignore_definition_path(path) {
-            info!(
-                "Detected change in the ignore definition file: {}",
-                path.display()
-            );
-
-            return trigger_full_rescan(picker);
-        }
-
-        if is_dotgit_change_affecting_status(path, &repo) {
-            need_full_git_rescan = true;
-        }
-
-        if !should_include_file(path, &repo) {
+    for debounced_event in &events {
+        // It is very important to not react to the access errors because we inevitably
+        // gonna trigger the sync by our own preview or other unnecessary noise
+        if matches!(
+            debounced_event.event.kind,
+            EventKind::Access(
+                AccessKind::Read
+                    | AccessKind::Open(_)
+                    | AccessKind::Close(AccessMode::Read | AccessMode::Execute)
+            )
+        ) {
             continue;
         }
 
-        debug!("Handling fs event: {:?}", event);
+        tracing::debug!(event = ?debounced_event.event, "Processing FS event");
+        for path in &debounced_event.event.paths {
+            if is_ignore_definition_path(path) {
+                info!(
+                    "Detected change in ignore definition file: {}",
+                    path.display()
+                );
+                need_full_rescan = true;
+                break;
+            }
 
-        affected_paths_count += 1;
+            if is_dotgit_change_affecting_status(path, &repo) {
+                need_full_git_rescan = true;
+            }
+
+            if !should_include_file(path, &repo) {
+                continue;
+            }
+
+            if !path.exists() {
+                paths_to_remove.push(path.as_path());
+            } else {
+                paths_to_add_or_modify.push(path.as_path());
+            }
+        }
+
+        affected_paths_count += debounced_event.event.paths.len();
         if affected_paths_count > MAX_PATHS_THRESHOLD {
             warn!(
                 "Too many affected paths ({}) in a single batch, triggering full rescan",
                 affected_paths_count
             );
 
-            return trigger_full_rescan(picker);
+            need_full_rescan = true;
+            break;
         }
 
-        if !path.exists() {
-            picker.remove_file_by_path(path);
-            continue;
-        }
-
-        let file = picker.on_create_or_modify(path);
-        if let Some(file) = file {
-            files_to_update_git_status.push(file.relative_path.clone());
+        if need_full_rescan {
+            break;
         }
     }
 
+    if need_full_rescan {
+        info!(?affected_paths_count, "Triggering full rescan");
+        trigger_full_rescan();
+        return;
+    }
+
+    // It's important to get the allocated sort
+    sort_with_buffer(paths_to_add_or_modify.as_mut_slice(), |a, b| {
+        a.as_os_str().cmp(b.as_os_str())
+    });
+    paths_to_add_or_modify.dedup_by(|a, b| a.as_os_str().eq(b.as_os_str()));
+
+    info!(
+        "Event processing summary: {} to remove, {} to add/modify",
+        paths_to_remove.len(),
+        paths_to_add_or_modify.len()
+    );
+
+    let Some(repo) = repo.as_ref() else {
+        info!("No git repo, skipping git status updates");
+        return;
+    };
+
     if need_full_git_rescan {
-        drop(file_picker_guard); // it's going to be relocked after rescan
-        info!("Triggering full git rescan by the notification results");
+        info!("Triggering full git rescan");
 
         if let Err(e) = FilePicker::refresh_git_status_global() {
             error!("Failed to refresh git status: {:?}", e);
         }
-    } else if let Some(repo) = repo.as_ref() {
-        let status = GitStatusCache::git_status_for_paths(repo, &files_to_update_git_status);
+
+        return;
+    }
+
+    if paths_to_remove.is_empty() && paths_to_add_or_modify.is_empty() {
+        return;
+    }
+
+    let files_to_update_git_status = {
+        let Ok(mut file_picker_guard) = FILE_PICKER.write() else {
+            error!("Failed to acquire file picker write lock");
+            return;
+        };
+
+        let Some(ref mut picker) = *file_picker_guard else {
+            error!("File picker not initialized");
+            return;
+        };
+
+        // Apply file removals
+        for path in paths_to_remove {
+            picker.remove_file_by_path(path);
+        }
+
+        // Apply file additions/modifications and collect paths for git status update
+        let mut files_to_update_git_status = Vec::with_capacity(paths_to_add_or_modify.len());
+        for path in paths_to_add_or_modify {
+            if let Some(file) = picker.on_create_or_modify(path) {
+                files_to_update_git_status.push(file.path.clone());
+            }
+        }
+
+        files_to_update_git_status
+    };
+
+    info!(
+        "Fetching git status for {} files",
+        files_to_update_git_status.len()
+    );
+
+    let status = match GitStatusCache::git_status_for_paths(repo, &files_to_update_git_status) {
+        Ok(status) => status,
+        Err(e) => {
+            tracing::error!(?e, "Failed to query git statue");
+            return;
+        }
+    };
+
+    // only lock the picker for theshortest possitble time
+    if let Ok(mut file_picker_guard) = FILE_PICKER.write()
+        && let Some(ref mut picker) = *file_picker_guard
+    {
         if let Err(e) = picker.update_git_statuses(status) {
             error!("Failed to update git statuses: {:?}", e);
+        } else {
+            info!("Successfully updated git statuses in picker");
         }
+    } else {
+        error!("Failed to acquire picker lock for git status update");
+    }
+}
+
+fn trigger_full_rescan() {
+    info!("Triggering full filesystem rescan");
+
+    let Ok(mut file_picker_guard) = FILE_PICKER.write() else {
+        error!("Failed to acquire file picker write lock for full rescan");
+        return;
+    };
+
+    let Some(ref mut picker) = *file_picker_guard else {
+        error!("File picker not initialized, cannot trigger rescan");
+        return;
+    };
+
+    if let Err(e) = picker.trigger_rescan() {
+        error!("Failed to trigger full rescan: {:?}", e);
+    } else {
+        info!("Full filesystem rescan completed successfully");
     }
 }
 
@@ -164,12 +276,6 @@ fn should_include_file(path: &Path, repo: &Option<Repository>) -> bool {
 
     repo.as_ref()
         .is_some_and(|repo| repo.is_path_ignored(path) == Ok(false))
-}
-
-fn trigger_full_rescan(picker: &mut FilePicker) {
-    if let Err(e) = picker.trigger_rescan() {
-        error!("Failed to trigger full rescan: {:?}", e);
-    }
 }
 
 #[inline]
