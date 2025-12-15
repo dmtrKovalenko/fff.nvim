@@ -1,9 +1,9 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use fff_nvim::FILE_PICKER;
-use fff_nvim::file_picker::FilePicker;
+use fff_nvim::file_picker::{FilePicker, FuzzySearchOptions};
+use fff_nvim::types::PaginationArgs;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing_subscriber;
 
 /// Initialize tracing to output to console
 fn init_tracing() {
@@ -231,10 +231,19 @@ fn bench_search_queries(c: &mut Criterion) {
                 let results = FilePicker::fuzzy_search(
                     black_box(&files),
                     black_box(query),
-                    black_box(100),
-                    black_box(4),
-                    black_box(None),
-                    black_box(false),
+                    FuzzySearchOptions {
+                        max_threads: 4,
+                        current_file: None,
+
+                        project_path: None,
+                        last_same_query_match: None,
+                        combo_boost_score_multiplier: 100,
+                        min_combo_count: 3,
+                        pagination: PaginationArgs {
+                            offset: 0,
+                            limit: 100,
+                        },
+                    },
                 );
                 results.total_matched
             });
@@ -269,10 +278,19 @@ fn bench_search_thread_scaling(c: &mut Criterion) {
                     let results = FilePicker::fuzzy_search(
                         black_box(&files),
                         black_box(query),
-                        black_box(100),
-                        black_box(threads),
-                        black_box(None),
-                        black_box(false),
+                        FuzzySearchOptions {
+                            max_threads: threads,
+                            current_file: None,
+
+                            project_path: None,
+                            last_same_query_match: None,
+                            combo_boost_score_multiplier: 100,
+                            min_combo_count: 3,
+                            pagination: PaginationArgs {
+                                offset: 0,
+                                limit: 100,
+                            },
+                        },
                     );
                     results.total_matched
                 });
@@ -305,10 +323,19 @@ fn bench_search_result_limits(c: &mut Criterion) {
                 let results = FilePicker::fuzzy_search(
                     black_box(&files),
                     black_box(query),
-                    black_box(limit),
-                    black_box(4),
-                    black_box(None),
-                    black_box(false),
+                    FuzzySearchOptions {
+                        max_threads: 4,
+                        current_file: None,
+
+                        project_path: None,
+                        last_same_query_match: None,
+                        combo_boost_score_multiplier: 100,
+                        min_combo_count: 3,
+                        pagination: PaginationArgs {
+                            offset: 0,
+                            limit: limit,
+                        },
+                    },
                 );
                 results.total_matched
             });
@@ -353,10 +380,19 @@ fn bench_search_scalability(c: &mut Criterion) {
                 let results = FilePicker::fuzzy_search(
                     black_box(subset),
                     black_box(query),
-                    black_box(100),
-                    black_box(4),
-                    black_box(None),
-                    black_box(false),
+                    FuzzySearchOptions {
+                        max_threads: 4,
+                        current_file: None,
+
+                        project_path: None,
+                        last_same_query_match: None,
+                        combo_boost_score_multiplier: 100,
+                        min_combo_count: 3,
+                        pagination: PaginationArgs {
+                            offset: 0,
+                            limit: 100,
+                        },
+                    },
                 );
                 results.total_matched
             });
@@ -387,10 +423,19 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box(query),
-                black_box(100),
-                black_box(4),
-                black_box(None),
-                black_box(false),
+                FuzzySearchOptions {
+                    max_threads: 4,
+                    current_file: None,
+
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 0,
+                        limit: 100,
+                    },
+                },
             );
             results.total_matched
         });
@@ -402,10 +447,19 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box(query),
-                black_box(100),
-                black_box(4),
-                black_box(None),
-                black_box(true),
+                FuzzySearchOptions {
+                    max_threads: 4,
+                    current_file: None,
+
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 0,
+                        limit: 100,
+                    },
+                },
             );
             results.total_matched
         });
@@ -417,10 +471,19 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box("mod"),
-                black_box(500),
-                black_box(4),
-                black_box(None),
-                black_box(false),
+                FuzzySearchOptions {
+                    max_threads: 4,
+                    current_file: None,
+
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 0,
+                        limit: 500,
+                    },
+                },
             );
             results.total_matched
         });
@@ -431,10 +494,19 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box("mod"),
-                black_box(500),
-                black_box(4),
-                black_box(None),
-                black_box(true),
+                FuzzySearchOptions {
+                    max_threads: 4,
+                    current_file: None,
+
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 0,
+                        limit: 500,
+                    },
+                },
             );
             results.total_matched
         });
@@ -446,10 +518,19 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box("controller"),
-                black_box(10),
-                black_box(4),
-                black_box(None),
-                black_box(false),
+                FuzzySearchOptions {
+                    max_threads: 4,
+                    current_file: None,
+
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 0,
+                        limit: 10,
+                    },
+                },
             );
             results.total_matched
         });
@@ -460,10 +541,110 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box("controller"),
-                black_box(10),
-                black_box(4),
-                black_box(None),
-                black_box(true),
+                FuzzySearchOptions {
+                    max_threads: 4,
+                    current_file: None,
+
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 0,
+                        limit: 10,
+                    },
+                },
+            );
+            results.total_matched
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark pagination: first page vs deep page
+fn bench_pagination_performance(c: &mut Criterion) {
+    let files = match setup_once() {
+        Ok(files) => files,
+        Err(e) => {
+            eprintln!("⚠ Skipping pagination benchmarks: {}", e);
+            return;
+        }
+    };
+
+    let mut group = c.benchmark_group("pagination");
+    group.sample_size(100);
+
+    let query = "mod";
+    let page_size = 40;
+
+    // Benchmark first page (uses partial sort optimization)
+    group.bench_function("page_0_size_40", |b| {
+        b.iter(|| {
+            let results = FilePicker::fuzzy_search(
+                black_box(&files),
+                black_box(query),
+                FuzzySearchOptions {
+                    max_threads: 4,
+                    current_file: None,
+
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 0,
+                        limit: page_size,
+                    },
+                },
+            );
+            results.total_matched
+        });
+    });
+
+    // Benchmark 10th page (requires full sort, no optimization)
+    group.bench_function("page_10_size_40", |b| {
+        b.iter(|| {
+            let results = FilePicker::fuzzy_search(
+                black_box(&files),
+                black_box(query),
+                FuzzySearchOptions {
+                    max_threads: 4,
+                    current_file: None,
+
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 10,
+                        limit: page_size,
+                    },
+                },
+            );
+            results.total_matched
+        });
+    });
+
+    // Benchmark 50th page (even deeper pagination)
+    group.bench_function("page_50_size_40", |b| {
+        b.iter(|| {
+            let results = FilePicker::fuzzy_search(
+                black_box(&files),
+                black_box(query),
+                FuzzySearchOptions {
+                    max_threads: 4,
+                    current_file: None,
+
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 50,
+                        limit: page_size,
+                    },
+                },
             );
             results.total_matched
         });
@@ -480,6 +661,7 @@ criterion_group!(
     bench_search_result_limits,
     bench_search_scalability,
     bench_search_ordering,
+    bench_pagination_performance,
 );
 
 criterion_main!(benches);

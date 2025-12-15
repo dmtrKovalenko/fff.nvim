@@ -32,18 +32,23 @@ pub struct Score {
     pub match_type: &'static str,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PaginationArgs {
+    pub offset: usize,
+    pub limit: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScoringContext<'a> {
     pub query: &'a str,
     pub project_path: Option<&'a Path>,
     pub current_file: Option<&'a str>,
-    pub max_results: usize,
     pub max_typos: u16,
     pub max_threads: usize,
-    pub reverse_order: bool,
     pub last_same_query_match: Option<&'a QueryMatchEntry>,
     pub combo_boost_score_multiplier: i32,
     pub min_combo_count: u32,
+    pub pagination: PaginationArgs,
 }
 
 #[derive(Debug, Clone, Default)]

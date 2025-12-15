@@ -113,6 +113,7 @@ local function init()
       prompt_position = 'bottom', -- or 'top'
       preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
       preview_size = 0.5,
+      show_scrollbar = true, -- Show scrollbar for pagination
     },
     preview = {
       enabled = true,
@@ -155,6 +156,7 @@ local function init()
       frecency = 'Number',
       debug = 'Comment',
       combo_header = 'Number',
+      scrollbar = 'Comment',
       -- Multi-select highlights
       selected = 'FFFSelected',
       selected_active = 'FFFSelectedActive',

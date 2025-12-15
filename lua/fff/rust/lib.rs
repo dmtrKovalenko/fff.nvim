@@ -2,6 +2,7 @@ use crate::error::Error;
 use crate::file_picker::{FilePicker, FuzzySearchOptions};
 use crate::frecency::FrecencyTracker;
 use crate::query_tracker::QueryTracker;
+use crate::types::PaginationArgs;
 use mlua::prelude::*;
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
@@ -133,17 +134,26 @@ pub fn scan_files(_: &Lua, _: ()) -> LuaResult<()> {
     Ok(())
 }
 
+#[allow(clippy::type_complexity)]
 pub fn fuzzy_search_files(
     lua: &Lua,
     (
         query,
-        max_results,
         max_threads,
         current_file,
-        order_reverse,
         combo_boost_score_multiplier,
         min_combo_count,
-    ): (String, usize, usize, Option<String>, bool, i32, Option<u32>),
+        page_index,
+        page_size,
+    ): (
+        String,
+        usize,
+        Option<String>,
+        i32,
+        Option<u32>,
+        Option<usize>,
+        Option<usize>,
+    ),
 ) -> LuaResult<LuaValue> {
     let Some(ref mut picker) = *FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)? else {
         return Err(Error::FilePickerMissing)?;
@@ -173,21 +183,25 @@ pub fn fuzzy_search_files(
         ?base_path,
         ?query,
         ?min_combo_count,
-        "Last same query entry"
+        ?page_index,
+        ?page_size,
+        "Fuzzy search parameters"
     );
 
     let results = FilePicker::fuzzy_search(
         picker.get_files(),
         &query,
         FuzzySearchOptions {
-            max_results,
             max_threads,
             current_file: current_file.as_deref(),
-            reverse_order: order_reverse,
             project_path: Some(picker.base_path()),
             last_same_query_match: last_same_query_entry.as_ref(),
             combo_boost_score_multiplier,
             min_combo_count,
+            pagination: PaginationArgs {
+                offset: page_index.unwrap_or(0),
+                limit: page_size.unwrap_or(0),
+            },
         },
     );
 
@@ -420,5 +434,9 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
 // https://github.com/mlua-rs/mlua/issues/318
 #[mlua::lua_module(skip_memory_check)]
 fn fff_nvim(lua: &Lua) -> LuaResult<LuaTable> {
+    // Install panic hook IMMEDIATELY on module load
+    // This ensures any panics are logged even if init_tracing is never called
+    crate::log::install_panic_hook();
+
     create_exports(lua)
 }

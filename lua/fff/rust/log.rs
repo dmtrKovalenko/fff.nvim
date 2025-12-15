@@ -7,6 +7,78 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 static TRACING_INITIALIZED: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
     std::sync::OnceLock::new();
 
+static PANIC_HOOK_INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// Install panic hook that writes to both stderr and a fallback file
+/// This is called separately from init_tracing to ensure panics are always logged
+pub fn install_panic_hook() {
+    PANIC_HOOK_INSTALLED.get_or_init(|| {
+        let default_panic = std::panic::take_hook();
+
+        std::panic::set_hook(Box::new(move |panic_info| {
+            let payload = panic_info.payload();
+            let message = if let Some(s) = payload.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic payload".to_string()
+            };
+
+            let location = if let Some(location) = panic_info.location() {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            } else {
+                "unknown location".to_string()
+            };
+
+            // Always log to tracing (if initialized)
+            tracing::error!(
+                panic.message = %message,
+                panic.location = %location,
+                "PANIC occurred in FFF.nvim"
+            );
+
+            // Always print to stderr
+            eprintln!("=== FFF.nvim PANIC ===");
+            eprintln!("Message: {}", message);
+            eprintln!("Location: {}", location);
+            eprintln!("======================");
+
+            // Try to write to fallback panic log file
+            if let Some(cache_dir) = dirs::cache_dir() {
+                let panic_log = cache_dir.join("fff_nvim_panic.log");
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+
+                let panic_entry = format!(
+                    "\n[{}] PANIC at {}\nMessage: {}\n",
+                    timestamp, location, message
+                );
+
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&panic_log)
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        f.write_all(panic_entry.as_bytes())
+                    });
+
+                eprintln!("Panic logged to: {}", panic_log.display());
+            }
+
+            default_panic(panic_info);
+        }));
+    });
+}
+
 /// Initialize tracing with single log file
 ///
 /// # Arguments
@@ -16,6 +88,9 @@ static TRACING_INITIALIZED: std::sync::OnceLock<tracing_appender::non_blocking::
 /// # Returns
 /// * `Result<String, Error>` - Full path to the log file on success
 pub fn init_tracing(log_file_path: &str, log_level: Option<&str>) -> Result<String, Error> {
+    // Install panic hook first (does nothing if already installed)
+    install_panic_hook();
+
     let log_path = Path::new(log_file_path);
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -69,36 +144,6 @@ pub fn init_tracing(log_file_path: &str, log_level: Option<&str>) -> Result<Stri
                 log_path.display()
             );
         }
-
-        std::panic::set_hook(Box::new(|panic_info| {
-            let payload = panic_info.payload();
-            let message = if let Some(s) = payload.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = payload.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "Unknown panic payload".to_string()
-            };
-
-            let location = if let Some(location) = panic_info.location() {
-                format!(
-                    "{}:{}:{}",
-                    location.file(),
-                    location.line(),
-                    location.column()
-                )
-            } else {
-                "unknown location".to_string()
-            };
-
-            tracing::error!(
-                panic.message = %message,
-                panic.location = %location,
-                "PANIC occurred in FFF.nvim"
-            );
-
-            eprintln!("FFF.nvim PANIC: {} at {}", message, location);
-        }));
 
         guard
     });

@@ -31,6 +31,7 @@ ahash = "0.8"
 blake3 = "1.8.2"
 chrono = { version = "0.4", features = ["serde"] }
 ctrlc = "3.4.2"
+dirs = "5.0"
 git2 = "0.20.2"
 glidesort = "0.1"
 heed = "0.22.0"
