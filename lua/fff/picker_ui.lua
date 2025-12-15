@@ -270,6 +270,11 @@ M.state = {
 
   preview_timer = nil, -- Separate timer for preview updates
   preview_debounce_ms = 100, -- Preview is more expensive, debounce more
+
+  -- Set of selected file paths: { [filepath] = true }
+  -- Uses Set pattern: selected items exist as keys with value true, deselected items are removed (nil)
+  -- This allows O(1) lookup and automatic deduplication without needing to filter false values
+  selected_files = {},
 }
 
 function M.create_ui()
@@ -622,6 +627,8 @@ function M.setup_keymaps()
   set_keymap('i', keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
   set_keymap('i', keymaps.toggle_debug, M.toggle_debug, input_opts)
   set_keymap('i', keymaps.cycle_previous_query, M.recall_query_from_history, input_opts)
+  set_keymap('i', keymaps.toggle_select, M.toggle_select, input_opts)
+  set_keymap('i', keymaps.send_to_quickfix, M.send_to_quickfix, input_opts)
 
   local list_opts = { buffer = M.state.list_buf, noremap = true, silent = true }
 
@@ -635,6 +642,8 @@ function M.setup_keymaps()
   set_keymap('n', keymaps.preview_scroll_up, M.scroll_preview_up, list_opts)
   set_keymap('n', keymaps.preview_scroll_down, M.scroll_preview_down, list_opts)
   set_keymap('n', keymaps.toggle_debug, M.toggle_debug, list_opts)
+  set_keymap('n', keymaps.toggle_select, M.toggle_select, list_opts)
+  set_keymap('n', keymaps.send_to_quickfix, M.send_to_quickfix, list_opts)
 
   if M.state.preview_buf then
     local preview_opts = { buffer = M.state.preview_buf, noremap = true, silent = true }
@@ -645,6 +654,8 @@ function M.setup_keymaps()
     set_keymap('n', keymaps.select_vsplit, function() M.select('vsplit') end, preview_opts)
     set_keymap('n', keymaps.select_tab, function() M.select('tab') end, preview_opts)
     set_keymap('n', keymaps.toggle_debug, M.toggle_debug, preview_opts)
+    set_keymap('n', keymaps.toggle_select, M.toggle_select, preview_opts)
+    set_keymap('n', keymaps.send_to_quickfix, M.send_to_quickfix, preview_opts)
   end
 
   vim.keymap.set('i', '<C-w>', function()
@@ -1188,6 +1199,16 @@ function M.render_list()
           })
         end
 
+        if M.state.selected_files[item.path] then
+          local selection_hl = is_cursor_item and M.state.config.hl.selected_active or M.state.config.hl.selected
+
+          vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
+            sign_text = '▊',
+            sign_hl_group = selection_hl,
+            priority = 1001, -- Higher than git status (1000)
+          })
+        end
+
         local match_start, match_end = string.find(line_content, M.state.query, 1)
         if match_start and match_end then
           vim.api.nvim_buf_add_highlight(
@@ -1500,6 +1521,89 @@ local function find_suitable_window()
   return nil
 end
 
+--- Toggle selection for the current item
+function M.toggle_select()
+  if not M.state.active then return end
+
+  local items = M.state.filtered_items
+  if #items == 0 or M.state.cursor > #items then return end
+
+  local item = items[M.state.cursor]
+  if not item or not item.path then return end
+
+  -- Toggle selection using Set pattern:
+  -- Selected: { [path] = true } - key exists in table
+  -- Deselected: key removed from table via nil (NOT set to false)
+  -- This is important: setting to nil removes the key, so pairs() won't iterate over it
+  local was_selected = M.state.selected_files[item.path]
+  if was_selected then
+    M.state.selected_files[item.path] = nil -- Remove from set
+  else
+    M.state.selected_files[item.path] = true -- Add to set
+  end
+
+  M.render_list()
+
+  -- only when selecting the element not deslecting
+  if not was_selected then
+    if get_prompt_position() == 'bottom' then
+      M.move_up()
+    else
+      M.move_down()
+    end
+  end
+end
+
+--- Send selected files to quickfix list and close picker
+function M.send_to_quickfix()
+  if not M.state.active then return end
+
+  -- Collect selected files from the Set-like structure
+  -- No need to filter for 'false' values because deselected files are removed from the table (set to nil)
+  -- The pairs() iterator only iterates over keys that exist in the table
+  -- So only selected files (value = true) will be collected here
+  local selected_paths = {}
+  for path, _ in pairs(M.state.selected_files) do
+    table.insert(selected_paths, path)
+  end
+
+  -- If no selections, use current file under cursor
+  if #selected_paths == 0 then
+    local items = M.state.filtered_items
+    if #items > 0 and M.state.cursor <= #items then
+      local item = items[M.state.cursor]
+      if item and item.path then table.insert(selected_paths, item.path) end
+    end
+  end
+
+  -- Exit if still nothing to add
+  if #selected_paths == 0 then
+    vim.notify('No files to send to quickfix', vim.log.levels.WARN)
+    return
+  end
+
+  -- Close picker first
+  M.close()
+
+  -- Build quickfix list entries
+  local qf_list = {}
+  for _, path in ipairs(selected_paths) do
+    table.insert(qf_list, {
+      filename = path,
+      lnum = 1,
+      col = 1,
+      text = vim.fn.fnamemodify(path, ':.'), -- Relative path as text
+    })
+  end
+
+  -- Set quickfix list and open it
+  vim.fn.setqflist(qf_list, 'r')
+  vim.cmd('copen')
+
+  local count = #selected_paths
+  vim.notify(string.format('Added %d file%s to quickfix list', count, count > 1 and 's' or ''), vim.log.levels.INFO)
+end
+
 function M.select(action)
   if not M.state.active then return end
 
@@ -1613,6 +1717,7 @@ function M.close()
   M.state.last_preview_location = nil
   M.state.current_file_cache = nil
   M.state.location = nil
+  M.state.selected_files = {}
   M.reset_history_state()
   -- Clean up picker focus autocmds
   pcall(vim.api.nvim_del_augroup_by_name, 'fff_picker_focus')
@@ -1765,6 +1870,9 @@ end
 --- @param opts.layout.preview_size? number|function Preview size as ratio (0.0-1.0) or function(terminal_width, terminal_height): number (default: 0.5)
 function M.open(opts)
   if M.state.active then return end
+
+  -- Initialize selection state
+  M.state.selected_files = {}
 
   local merged_config, base_path = initialize_picker(opts)
   if not merged_config then return end

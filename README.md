@@ -153,6 +153,9 @@ require('fff').setup({
       toggle_debug = '<F2>',
       -- goes to the previous query in history
       cycle_previous_query = '<C-Up>',
+      -- multi-select keymaps for quickfix
+      toggle_select = '<Tab>',
+      send_to_quickfix = '<C-q>',
     },
     hl = {
       border = 'FloatBorder',
@@ -165,6 +168,9 @@ require('fff').setup({
       frecency = 'Number',
       debug = 'Comment',
       combo_header = 'Number',
+      -- Multi-select highlights
+      selected = 'FFFSelected',
+      selected_active = 'FFFSelectedActive',
       -- Git text highlights for file names
       git_staged = 'FFFGitStaged',
       git_modified = 'FFFGitModified',
@@ -187,7 +193,7 @@ require('fff').setup({
       git_sign_untracked_selected = 'FFFGitSignUntrackedSelected',
       git_sign_ignored_selected = 'FFFGitSignIgnoredSelected',
     },
-    -- Store file open frecency 
+    -- Store file open frecency
     frecency = {
       enabled = true,
       db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
@@ -197,7 +203,7 @@ require('fff').setup({
       enabled = true,
       db_path = vim.fn.stdpath('data') .. '/fff_queries',
       min_combo_count = 3, -- file will get a boost if it was selected 3 in a row times per specific query
-      combo_boost_score_multiplier = 100, -- Score multiplier for combo matches 
+      combo_boost_score_multiplier = 100, -- Score multiplier for combo matches
     },
     debug = {
       enabled = false, -- Set to true to show scores in the UI
@@ -236,7 +242,6 @@ FFF.nvim provides several commands for interacting with the file picker:
 - `:FFFDebug [on|off|toggle]` - Toggle debug scores display
 - `:FFFOpenLog` - Open the FFF log file in a new tab
 
-
 #### Multiline Paste Support
 
 The input field automatically handles multiline clipboard content by joining all lines into a single search query. This is particularly useful when copying file paths from terminal output.
@@ -248,6 +253,14 @@ Toggle scoring information display:
 - Press `F2` while in the picker
 - Use `:FFFDebug` command
 - Enable by default with `debug.show_scores = true`
+
+#### Multi-Select and Quickfix Integration
+
+Select multiple files and send them to Neovim's quickfix list (keymaps are configurable):
+
+- `<Tab>` - Toggle selection for the current file (shows thick border `▊` in signcolumn)
+- `<C-q>` - Send selected files to quickfix list and close picker
+
 
 ### Troubleshooting
 

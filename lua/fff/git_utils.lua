@@ -140,11 +140,11 @@ function M.setup_highlights()
     { 'FFFGitSignIgnored', 'FFFGitSignIgnoredSelected', '#4B5563', 8 },
   }
 
+  local visual_bg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'gui')
+  local visual_bg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'cterm')
+
   for _, hl in ipairs(git_highlights) do
     local _, selected_hl, gui_fg, cterm_fg = hl[1], hl[2], hl[3], hl[4]
-
-    local visual_bg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'gui')
-    local visual_bg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'cterm')
 
     local gui_bg = visual_bg_gui ~= '' and visual_bg_gui or 'NONE'
     local cterm_bg = visual_bg_cterm ~= '' and visual_bg_cterm or 'NONE'
@@ -160,6 +160,37 @@ function M.setup_highlights()
       )
     )
   end
+
+  -- Selection highlight - use Directory/Number colors (better than green 'Added')
+  vim.cmd('highlight default link FFFSelected Directory')
+
+  local dir_fg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Directory')), 'fg', 'gui')
+  local dir_fg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Directory')), 'fg', 'cterm')
+
+  if dir_fg_gui == '' or dir_fg_gui == '-1' then
+    -- Directory not defined, try Number
+    dir_fg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Number')), 'fg', 'gui')
+    dir_fg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Number')), 'fg', 'cterm')
+  end
+
+  -- Fallback to blue if neither Directory nor Number have colors
+  local is_dark_bg = vim.o.background == 'dark'
+  local gui_fg = dir_fg_gui ~= '' and dir_fg_gui or (is_dark_bg and '#60A5FA' or '#0369A1')
+  local cterm_fg = dir_fg_cterm ~= '' and dir_fg_cterm or (is_dark_bg and '12' or '4')
+
+  local gui_bg = visual_bg_gui ~= '' and visual_bg_gui or 'NONE'
+  local cterm_bg = visual_bg_cterm ~= '' and visual_bg_cterm or 'NONE'
+
+  -- Create combined highlight: Directory/Number foreground + Visual background
+  vim.cmd(
+    string.format(
+      'highlight default FFFSelectedActive guifg=%s guibg=%s ctermfg=%s ctermbg=%s',
+      gui_fg,
+      gui_bg,
+      cterm_fg,
+      cterm_bg
+    )
+  )
 end
 
 return M

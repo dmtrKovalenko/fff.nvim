@@ -141,6 +141,8 @@ local function init()
       preview_scroll_down = '<C-d>',
       toggle_debug = '<F2>',
       cycle_previous_query = '<C-Up>',
+      toggle_select = '<Tab>',
+      send_to_quickfix = '<C-q>',
     },
     hl = {
       border = 'FloatBorder',
@@ -153,6 +155,9 @@ local function init()
       frecency = 'Number',
       debug = 'Comment',
       combo_header = 'Number',
+      -- Multi-select highlights
+      selected = 'FFFSelected',
+      selected_active = 'FFFSelectedActive',
       -- Git text highlights for file names
       git_staged = 'FFFGitStaged',
       git_modified = 'FFFGitModified',
