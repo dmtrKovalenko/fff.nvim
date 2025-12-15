@@ -147,7 +147,6 @@ mod tests {
         // Simple test to verify highest scores come first
         let mut data = vec![100, 300, 200];
         sort_with_buffer(&mut data, |a, b| b.cmp(a));
-        println!("After sort: {:?}", data);
         assert_eq!(data[0], 300, "Highest should be first");
         assert_eq!(data[1], 200, "Middle should be second");
         assert_eq!(data[2], 100, "Lowest should be last");
