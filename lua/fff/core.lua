@@ -28,11 +28,7 @@ local function setup_global_autocmds(config)
 
           vim.uv.fs_realpath(file_path, function(rp_err, real_path)
             if rp_err or not real_path then return end
-            local ok, track_err = pcall(fuzzy.track_access, real_path)
-
-            if not ok then
-              vim.notify('FFF: Failed to track file access: ' .. tostring(track_err), vim.log.levels.ERROR)
-            end
+            pcall(fuzzy.track_access, real_path)
           end)
         end)
       end,

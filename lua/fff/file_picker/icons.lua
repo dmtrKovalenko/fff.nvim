@@ -21,13 +21,11 @@ function M.setup()
     if ok then
       M.provider = provider
       M.provider_name = provider_name
-      vim.notify('FFF Icons: Loaded provider ' .. provider_name, vim.log.levels.INFO)
       return true
     end
   end
 
   M.setup_failed = true
-  vim.notify('FFF Icons: No icon provider found', vim.log.levels.WARN)
   return false
 end
 
