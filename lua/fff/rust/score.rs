@@ -195,7 +195,7 @@ pub fn match_and_score_files<'a>(
         })
         .collect();
 
-    sort_and_truncate(results, context)
+    sort_and_paginate(results, context)
 }
 
 /// Check if a filename is a special entry point file that deserves bonus scoring
@@ -254,7 +254,7 @@ fn score_all_by_frecency<'a>(
         })
         .collect();
 
-    sort_and_truncate(results, context)
+    sort_and_paginate(results, context)
 }
 
 #[inline]
@@ -277,75 +277,77 @@ fn calculate_current_file_penalty(
     penalty
 }
 
-/// Dynamically sorts and returns the top results either in ascending or descending order
-/// Uses partial sorting for large result sets to improve performance
-fn sort_and_truncate<'a>(
+/// Sorts elements by total score (descending) and returns the requested page.
+/// Always returns results in descending order (best scores first).
+/// The UI layer handles rendering order based on prompt position.
+#[tracing::instrument(skip_all, level = tracing::Level::DEBUG)]
+fn sort_and_paginate<'a>(
     mut results: Vec<(&'a FileItem, Score)>,
     context: &ScoringContext,
 ) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
     let total_matched = results.len();
 
-    // For large result sets, use partial sort to avoid sorting everything
-    let threshold = context.max_results * 2;
+    if total_matched == 0 {
+        return (vec![], vec![], 0);
+    }
 
-    if context.reverse_order {
-        // Ascending order: want highest N items displayed as [low -> high]
-        if results.len() > threshold {
-            // Partition at position (len - max_results) with ascending comparator
-            // This puts the highest max_results items after this position
-            let partition_index = results.len() - context.max_results;
-            results.select_nth_unstable_by(partition_index, |a, b| {
-                a.1.total
-                    .cmp(&b.1.total)
-                    .then_with(|| a.0.modified.cmp(&b.0.modified))
-            });
-            // Remove everything before partition_index, keeping highest max_results items
-            results.drain(0..partition_index);
-        }
-
-        // Sort remaining results in ascending order using glidesort
-        sort_with_buffer(&mut results, |a, b| {
-            a.1.total
-                .cmp(&b.1.total)
-                .then_with(|| a.0.modified.cmp(&b.0.modified))
-        });
-
-        // If still more than max_results (for small datasets), drain the front
-        if results.len() > context.max_results {
-            results.drain(0..(results.len() - context.max_results));
-        }
+    let offset = context.pagination.offset;
+    let limit = if context.pagination.limit > 0 {
+        context.pagination.limit
     } else {
-        // Descending order: want highest N items displayed as [high -> low]
-        if results.len() > threshold {
-            // Partition at position (max_results - 1) with descending comparator
-            // This puts the highest max_results items at the front
-            results.select_nth_unstable_by(context.max_results - 1, |a, b| {
-                b.1.total
-                    .cmp(&a.1.total)
-                    .then_with(|| b.0.modified.cmp(&a.0.modified))
-            });
-            // Keep only the first max_results items
-            results.truncate(context.max_results);
-        }
+        total_matched
+    };
 
-        // Sort remaining results in descending order using glidesort
-        sort_with_buffer(&mut results, |a, b| {
+    // Check if offset is out of bounds
+    if offset >= total_matched {
+        tracing::warn!(
+            offset = offset,
+            total_matched = total_matched,
+            "Pagination: offset >= total_matched, returning empty"
+        );
+
+        return (vec![], vec![], total_matched);
+    }
+
+    let items_needed = offset.saturating_add(limit).min(total_matched);
+    // Use partial sort if we need less than half the results and dataset is large
+    let use_partial_sort = items_needed < total_matched / 2 && total_matched > 100;
+    // Always sort in descending order (best scores first)
+    if use_partial_sort {
+        // Partition at position (items_needed - 1) with descending comparator
+        // This puts the highest N needed items at the front
+        results.select_nth_unstable_by(items_needed - 1, |a, b| {
             b.1.total
                 .cmp(&a.1.total)
                 .then_with(|| b.0.modified.cmp(&a.0.modified))
         });
-
-        // Ensure we only return max_results items (for small datasets)
-        results.truncate(context.max_results);
+        results.truncate(items_needed);
     }
 
-    let (items, scores) = results.into_iter().unzip();
+    // select nth does not sort the results, we have to sort accordingly anyway
+    sort_with_buffer(&mut results, |a, b| {
+        b.1.total
+            .cmp(&a.1.total)
+            .then_with(|| b.0.modified.cmp(&a.0.modified))
+    });
+
+    // in the best scenario truncation happened in the select_nth step
+    if results.len() > limit {
+        let page_end = std::cmp::min(offset + limit, results.len());
+        let page_size = page_end - offset;
+
+        results.drain(0..offset);
+        results.truncate(page_size);
+    }
+
+    let (items, scores): (Vec<&FileItem>, Vec<Score>) = results.into_iter().unzip();
     (items, scores, total_matched)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::PaginationArgs;
     use std::path::PathBuf;
 
     fn create_test_file(path: &str, score: i32, modified: u64) -> (FileItem, Score) {
@@ -401,23 +403,26 @@ mod tests {
 
         let context = ScoringContext {
             query: "test",
-            max_results: 3,
             max_threads: 1,
             max_typos: 2,
             current_file: None,
-            reverse_order: false,
             last_same_query_match: None,
             project_path: None,
             combo_boost_score_multiplier: 100,
             min_combo_count: 3,
+
+            pagination: PaginationArgs {
+                offset: 0,
+                limit: 0,
+            },
         };
 
-        // Test with partial sort (threshold = 3 * 2 = 6, our len is 10 > 6)
-        let (items, scores, total) = sort_and_truncate(results.clone(), &context);
+        // Test with full sort - returns all results sorted descending
+        let (items, scores, total) = sort_and_paginate(results.clone(), &context);
 
-        // Should return top 3: 300, 250, 200
+        // Should return all 10 items sorted by score descending
         assert_eq!(total, 10);
-        assert_eq!(scores.len(), 3);
+        assert_eq!(scores.len(), 10);
         assert_eq!(scores[0].total, 300, "First should be highest score");
         assert_eq!(scores[1].total, 250, "Second should be second highest");
         assert_eq!(scores[2].total, 200, "Third should be third highest");
@@ -446,26 +451,34 @@ mod tests {
 
         let context = ScoringContext {
             query: "test",
-            max_results: 3,
             max_threads: 1,
             max_typos: 2,
             current_file: None,
-            reverse_order: false,
             last_same_query_match: None,
             project_path: None,
             combo_boost_score_multiplier: 100,
             min_combo_count: 3,
+
+            pagination: PaginationArgs {
+                offset: 0,
+                limit: 0,
+            },
         };
 
-        let (items, scores, _) = sort_and_truncate(results, &context);
+        let (items, scores, _) = sort_and_paginate(results, &context);
 
-        // Should return: 200(9000), 200(1000), 100(8000)
+        // Should return all 5 items sorted: 200(9000), 200(1000), 100(8000), 100(5000), 100(3000)
+        assert_eq!(scores.len(), 5);
         assert_eq!(scores[0].total, 200);
         assert_eq!(items[0].modified, 9000, "First 200 should be newest");
         assert_eq!(scores[1].total, 200);
         assert_eq!(items[1].modified, 1000, "Second 200 should be older");
         assert_eq!(scores[2].total, 100);
-        assert_eq!(items[2].modified, 8000, "Third should be newest of 100s");
+        assert_eq!(items[2].modified, 8000, "First 100 should be newest");
+        assert_eq!(scores[3].total, 100);
+        assert_eq!(items[3].modified, 5000);
+        assert_eq!(scores[4].total, 100);
+        assert_eq!(items[4].modified, 3000, "Last 100 should be oldest");
     }
 
     #[test]
@@ -484,66 +497,29 @@ mod tests {
 
         let context = ScoringContext {
             query: "test",
-            max_results: 2,
             max_threads: 1,
             max_typos: 2,
             current_file: None,
-            reverse_order: false,
             last_same_query_match: None,
             project_path: None,
             combo_boost_score_multiplier: 100,
             min_combo_count: 3,
+
+            pagination: PaginationArgs {
+                offset: 0,
+                limit: 0,
+            },
         };
 
-        // threshold = 2 * 2 = 4, len = 3 < 4, so regular sort
-        let (items, scores, _) = sort_and_truncate(results, &context);
+        // Returns all results sorted descending
+        let (items, scores, _) = sort_and_paginate(results, &context);
 
-        assert_eq!(scores.len(), 2);
+        assert_eq!(scores.len(), 3);
         assert_eq!(scores[0].total, 200);
         assert_eq!(scores[1].total, 100);
+        assert_eq!(scores[2].total, 50);
         assert_eq!(items[0].relative_path, "file2.rs");
         assert_eq!(items[1].relative_path, "file1.rs");
-    }
-
-    #[test]
-    fn test_reverse_order_partial_sort() {
-        let test_data = vec![
-            create_test_file("file1.rs", 100, 1000),
-            create_test_file("file2.rs", 200, 2000),
-            create_test_file("file3.rs", 50, 3000),
-            create_test_file("file4.rs", 300, 4000),
-            create_test_file("file5.rs", 150, 5000),
-            create_test_file("file6.rs", 250, 6000),
-        ];
-
-        let results: Vec<(&FileItem, Score)> = test_data
-            .iter()
-            .map(|(file, score)| (file, score.clone()))
-            .collect();
-
-        let context = ScoringContext {
-            query: "test",
-            max_results: 3,
-            max_threads: 1,
-            max_typos: 2,
-            current_file: None,
-            reverse_order: true,
-            last_same_query_match: None,
-            project_path: None,
-            combo_boost_score_multiplier: 100,
-            min_combo_count: 3,
-        };
-
-        let (items, scores, _) = sort_and_truncate(results, &context);
-
-        // Reverse order should return highest 3 in ascending order: 200, 250, 300
-        // This is for bottom-prompt UI where best results appear at bottom near the prompt
-        assert_eq!(scores.len(), 3);
-        assert_eq!(scores[0].total, 200, "First should be third highest");
-        assert_eq!(scores[1].total, 250, "Second should be second highest");
-        assert_eq!(scores[2].total, 300, "Third should be highest");
-        assert_eq!(items[0].relative_path, "file2.rs");
-        assert_eq!(items[1].relative_path, "file6.rs");
-        assert_eq!(items[2].relative_path, "file4.rs");
+        assert_eq!(items[2].relative_path, "file3.rs");
     }
 }

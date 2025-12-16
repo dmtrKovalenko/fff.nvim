@@ -8,6 +8,7 @@ local git_utils = require('fff.git_utils')
 local utils = require('fff.utils')
 local location_utils = require('fff.location_utils')
 local combo_renderer = require('fff.combo_renderer')
+local scrollbar = require('fff.scrollbar')
 
 local function get_prompt_position()
   local config = M.state.config
@@ -259,6 +260,14 @@ M.state = {
   history_offset = nil, -- Current offset in history (nil = not cycling, 0 = first query)
   next_search_force_combo_boost = false, -- Force combo boost on next search (for history recall)
 
+  -- Pagination state
+  pagination = {
+    page_index = 0, -- Current page index (0-based)
+    page_size = 20, -- Items per page (updated dynamically)
+    total_matched = 0, -- Total results from last search
+    prefetch_margin = 5, -- Trigger refetch when within N items of edge
+  },
+
   config = nil,
 
   ns_id = nil,
@@ -371,6 +380,7 @@ function M.create_ui()
   }
 
   local layout = M.calculate_layout_dimensions(layout_config)
+  M.state.layout = layout
 
   M.state.input_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_option(M.state.input_buf, 'bufhidden', 'wipe')
@@ -776,14 +786,17 @@ function M.update_results_sync()
 
   local prompt_position = get_prompt_position()
 
-  -- Calculate dynamic max_results based on visible window height
-  local dynamic_max_results = M.state.config.max_results
+  -- Calculate page size dynamically based on window height
+  local page_size
   if M.state.list_win and vim.api.nvim_win_is_valid(M.state.list_win) then
-    local win_height = vim.api.nvim_win_get_height(M.state.list_win)
-    dynamic_max_results = win_height
+    page_size = vim.api.nvim_win_get_height(M.state.list_win)
   else
-    dynamic_max_results = M.state.config.max_results or 100
+    page_size = M.state.config.max_results or 100
   end
+
+  -- Update pagination state
+  M.state.pagination.page_size = page_size
+  M.state.pagination.page_index = 0 -- Reset to first page on new search
 
   -- Check if we should force combo boost for this search (history recall)
   local min_combo_override = nil
@@ -791,29 +804,130 @@ function M.update_results_sync()
     min_combo_override = 0 -- Force combo boost by setting min_combo_count to 0
   end
 
-  local results = file_picker.search_files(
+  local results = file_picker.search_files_paginated(
     M.state.query,
     M.state.current_file_cache,
-    dynamic_max_results,
     M.state.config.max_threads,
-    prompt_position == 'bottom',
-    min_combo_override
+    min_combo_override,
+    0,
+    page_size
   )
 
   -- Get location from search results
   M.state.location = file_picker.get_search_location()
 
-  -- because the actual files could be different even with same count
+  local metadata = file_picker.get_search_metadata()
+  M.state.pagination.total_matched = metadata.total_matched
+
   M.state.items = results
   M.state.filtered_items = results
 
-  if prompt_position == 'bottom' then
-    M.state.cursor = #results > 0 and #results or 1
-  else
-    M.state.cursor = 1
-  end
+  -- Results always come in descending order (best first) from Rust
+  -- For bottom prompt, we render in reverse so best items appear at bottom
+  -- But cursor index should still point to items[1] (best item)
+  M.state.cursor = #results > 0 and 1 or 1
 
   M.render_debounced()
+end
+
+--- Load page with given page index
+function M.load_page_at_index(new_page_index, adjust_cursor_fn)
+  local page_size = M.state.pagination.page_size
+  local total = M.state.pagination.total_matched
+
+  -- Protect against division by zero
+  if page_size == 0 or total == 0 then return false end
+
+  -- Calculate max page index
+  local max_page_index = math.max(0, math.ceil(total / page_size) - 1)
+
+  -- Clamp page_index to valid range
+  new_page_index = math.max(0, math.min(new_page_index, max_page_index))
+
+  local prompt_position = get_prompt_position()
+
+  local ok, results = pcall(
+    file_picker.search_files_paginated,
+    M.state.query,
+    M.state.current_file_cache,
+    M.state.config.max_threads,
+    nil, -- No combo boost override for page navigation
+    new_page_index,
+    page_size
+  )
+
+  if not ok then
+    vim.notify('Error in paginated search: ' .. tostring(results), vim.log.levels.ERROR)
+    vim.api.nvim_err_writeln('FFF ERROR: Paginated search failed: ' .. tostring(results))
+    return false
+  end
+
+  if #results == 0 then return false end
+
+  -- CRITICAL: Update total_matched from the latest search metadata
+  -- This prevents stale total_matched values that can cause out-of-bounds pagination
+  local metadata = file_picker.get_search_metadata()
+  M.state.pagination.total_matched = metadata.total_matched
+
+  M.state.items = results
+  M.state.filtered_items = results
+  M.state.pagination.page_index = new_page_index
+
+  -- Adjust cursor position (provided by caller)
+  if adjust_cursor_fn then
+    local ok, err = pcall(adjust_cursor_fn, #results)
+    if not ok then
+      vim.notify('Error in cursor adjustment: ' .. tostring(err), vim.log.levels.ERROR)
+      return false
+    end
+  end
+
+  local ok, err = pcall(M.render_list)
+  if not ok then
+    vim.notify('Error in render_list: ' .. tostring(err), vim.log.levels.ERROR)
+    return false
+  end
+
+  ok, err = pcall(M.update_preview)
+  if not ok then
+    vim.notify('Error in update_preview: ' .. tostring(err), vim.log.levels.ERROR)
+    return false
+  end
+
+  ok, err = pcall(M.update_status)
+  if not ok then
+    vim.notify('Error in update_status: ' .. tostring(err), vim.log.levels.ERROR)
+    return false
+  end
+  return true
+end
+
+--- Load next page (scroll down reached end)
+function M.load_next_page()
+  local page_size = M.state.pagination.page_size
+  local total = M.state.pagination.total_matched
+  local current_page = M.state.pagination.page_index
+
+  -- Protect against division by zero
+  if page_size == 0 or total == 0 then return false end
+
+  local max_page_index = math.max(0, math.ceil(total / page_size) - 1)
+  if current_page >= max_page_index then return false end
+
+  local new_page_index = current_page + 1
+  local prompt_position = get_prompt_position()
+
+  return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = 1 end)
+end
+
+--- Load previous page (scroll up reached beginning)
+function M.load_previous_page()
+  if M.state.pagination.page_index == 0 then return false end
+
+  local new_page_index = M.state.pagination.page_index - 1
+  local prompt_position = get_prompt_position()
+
+  return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = result_count end)
 end
 
 function M.update_preview_debounced()
@@ -954,22 +1068,15 @@ function M.render_list()
 
   local prompt_position = get_prompt_position()
 
-  -- Calculate which items to display based on prompt position
+  -- All items in M.state.items should be displayed (already paginated)
   local display_start = 1
-  local display_end = display_count
+  local display_end = #items
 
-  if prompt_position == 'bottom' and #items > display_count then
-    -- Bottom prompt: show last N items (including combo if it naturally fits)
-    display_end = #items
-    display_start = math.max(1, display_end - display_count + 1)
-  end
-
-  display_count = display_end - display_start + 1
-
-  if M.state.cursor < display_start then
-    M.state.cursor = display_start
-  elseif M.state.cursor > display_end then
-    M.state.cursor = display_end
+  -- Simple cursor validation
+  if M.state.cursor < 1 then
+    M.state.cursor = 1
+  elseif M.state.cursor > #items then
+    M.state.cursor = #items
   end
 
   local padded_lines = {}
@@ -977,7 +1084,15 @@ function M.render_list()
   local path_data = {}
   local item_to_lines = {} -- Maps item index to its line indices {first_line, last_line}
 
-  for i = display_start, display_end do
+  -- For bottom prompt, iterate in reverse order to render best results at bottom
+  local iter_start, iter_end, iter_step
+  if prompt_position == 'bottom' then
+    iter_start, iter_end, iter_step = display_end, display_start, -1
+  else
+    iter_start, iter_end, iter_step = display_start, display_end, 1
+  end
+
+  for i = iter_start, iter_end, iter_step do
     local item = items[i]
     local item_start_line = #padded_lines + 1
 
@@ -1075,154 +1190,152 @@ function M.render_list()
     for i = display_start, display_end do
       local item = items[i]
       local item_lines = item_to_lines[i]
-      if not item_lines then goto continue end
+      if item_lines then
+        local is_cursor_item = (M.state.cursor == i)
 
-      local is_cursor_item = (M.state.cursor == i)
-
-      -- Highlight only the content line (last line), not the combo header
-      if is_cursor_item then
-        local content_line = item_lines.last
-        -- Highlight entire line and extend to EOL
-        vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, content_line - 1, 0, {
-          end_col = 0,
-          end_row = content_line,
-          hl_group = M.state.config.hl.active_file,
-          hl_eol = true,
-          priority = 100,
-        })
-      end
-
-      -- Now apply file-specific highlights to the last line
-      local line_idx = item_lines.last
-      local line_content = padded_lines[line_idx]
-
-      if line_content then
-        local icon, icon_hl_group = unpack(icon_data[i])
-        local filename, dir_path = unpack(path_data[i])
-
-        local score = file_picker.get_file_score(i)
-        local is_current_file = score and score.current_file_penalty and score.current_file_penalty < 0
-
-        -- Icon highlighting
-        if icon and icon_hl_group and vim.fn.strdisplaywidth(icon) > 0 then
-          local icon_highlight = is_current_file and 'Comment' or icon_hl_group
-          vim.api.nvim_buf_add_highlight(
-            M.state.list_buf,
-            M.state.ns_id,
-            icon_highlight,
-            line_idx - 1,
-            0,
-            vim.fn.strdisplaywidth(icon)
-          )
+        -- Highlight only the content line (last line), not the combo header
+        if is_cursor_item then
+          local content_line = item_lines.last
+          -- Highlight entire line and extend to EOL
+          vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, content_line - 1, 0, {
+            end_col = 0,
+            end_row = content_line,
+            hl_group = M.state.config.hl.active_file,
+            hl_eol = true,
+            priority = 100,
+          })
         end
 
-        -- Frecency highlighting
-        if debug_enabled then
-          local star_start, star_end = line_content:find('⭐%d+')
-          if star_start then
+        -- Now apply file-specific highlights to the last line
+        local line_idx = item_lines.last
+        local line_content = padded_lines[line_idx]
+
+        if line_content then
+          local icon, icon_hl_group = unpack(icon_data[i])
+          local filename, dir_path = unpack(path_data[i])
+
+          local score = file_picker.get_file_score(i)
+          local is_current_file = score and score.current_file_penalty and score.current_file_penalty < 0
+
+          -- Icon highlighting
+          if icon and icon_hl_group and vim.fn.strdisplaywidth(icon) > 0 then
+            local icon_highlight = is_current_file and 'Comment' or icon_hl_group
             vim.api.nvim_buf_add_highlight(
               M.state.list_buf,
               M.state.ns_id,
-              M.state.config.hl.frecency,
+              icon_highlight,
               line_idx - 1,
-              star_start - 1,
-              star_end
+              0,
+              vim.fn.strdisplaywidth(icon)
             )
           end
-        end
 
-        local icon_match = line_content:match('^%S+')
-        if icon_match and #filename > 0 and #dir_path > 0 then
-          local prefix_len = #icon_match + 1 + #filename + 1
-          vim.api.nvim_buf_add_highlight(
-            M.state.list_buf,
-            M.state.ns_id,
-            'Comment',
-            line_idx - 1,
-            prefix_len,
-            prefix_len + #dir_path
-          )
-        end
-
-        if is_current_file then
-          if not is_cursor_item then
-            vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, 'Comment', line_idx - 1, 0, -1)
+          -- Frecency highlighting
+          if debug_enabled then
+            local star_start, star_end = line_content:find('⭐%d+')
+            if star_start then
+              vim.api.nvim_buf_add_highlight(
+                M.state.list_buf,
+                M.state.ns_id,
+                M.state.config.hl.frecency,
+                line_idx - 1,
+                star_start - 1,
+                star_end
+              )
+            end
           end
 
-          local virt_text_hl = is_cursor_item and M.state.config.hl.active_file or 'Comment'
-          vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
-            virt_text = { { ' (current)', virt_text_hl } },
-            virt_text_pos = 'right_align',
-          })
-        end
+          local icon_match = line_content:match('^%S+')
+          if icon_match and #filename > 0 and #dir_path > 0 then
+            local prefix_len = #icon_match + 1 + #filename + 1
+            vim.api.nvim_buf_add_highlight(
+              M.state.list_buf,
+              M.state.ns_id,
+              'Comment',
+              line_idx - 1,
+              prefix_len,
+              prefix_len + #dir_path
+            )
+          end
 
-        if item.git_status and git_utils.should_show_border(item.git_status) then
-          local border_char = git_utils.get_border_char(item.git_status)
-          local border_hl
+          if is_current_file then
+            if not is_cursor_item then
+              vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, 'Comment', line_idx - 1, 0, -1)
+            end
 
-          if is_cursor_item then
-            -- When selected, create a combined highlight: border color on cursor background
-            local base_hl = git_utils.get_border_highlight(item.git_status)
-            if base_hl and base_hl ~= '' then
-              -- Get the foreground color from the border highlight
-              local border_fg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(base_hl)), 'fg')
-              -- Get the background from cursor highlight
-              local cursor_bg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(M.state.config.hl.active_file)), 'bg')
+            local virt_text_hl = is_cursor_item and M.state.config.hl.active_file or 'Comment'
+            vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
+              virt_text = { { ' (current)', virt_text_hl } },
+              virt_text_pos = 'right_align',
+            })
+          end
 
-              -- Create temporary highlight group
-              local temp_hl_name = 'FFFGitBorderSelected_' .. i
-              if border_fg ~= '' and cursor_bg ~= '' then
-                vim.api.nvim_set_hl(0, temp_hl_name, { fg = border_fg, bg = cursor_bg })
-                border_hl = temp_hl_name
+          if item.git_status and git_utils.should_show_border(item.git_status) then
+            local border_char = git_utils.get_border_char(item.git_status)
+            local border_hl
+
+            if is_cursor_item then
+              -- When selected, create a combined highlight: border color on cursor background
+              local base_hl = git_utils.get_border_highlight(item.git_status)
+              if base_hl and base_hl ~= '' then
+                -- Get the foreground color from the border highlight
+                local border_fg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(base_hl)), 'fg')
+                -- Get the background from cursor highlight
+                local cursor_bg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(M.state.config.hl.active_file)), 'bg')
+
+                -- Create temporary highlight group
+                local temp_hl_name = 'FFFGitBorderSelected_' .. i
+                if border_fg ~= '' and cursor_bg ~= '' then
+                  vim.api.nvim_set_hl(0, temp_hl_name, { fg = border_fg, bg = cursor_bg })
+                  border_hl = temp_hl_name
+                else
+                  border_hl = git_utils.get_border_highlight_selected(item.git_status)
+                end
               else
-                border_hl = git_utils.get_border_highlight_selected(item.git_status)
+                border_hl = M.state.config.hl.active_file
               end
             else
-              border_hl = M.state.config.hl.active_file
+              border_hl = git_utils.get_border_highlight(item.git_status)
             end
-          else
-            border_hl = git_utils.get_border_highlight(item.git_status)
-          end
 
-          if border_hl and border_hl ~= '' then
+            if border_hl and border_hl ~= '' then
+              vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
+                sign_text = border_char,
+                sign_hl_group = border_hl,
+                priority = 1000,
+              })
+            end
+          elseif is_cursor_item then
             vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
-              sign_text = border_char,
-              sign_hl_group = border_hl,
+              sign_text = ' ',
+              sign_hl_group = M.state.config.hl.active_file,
               priority = 1000,
             })
           end
-        elseif is_cursor_item then
-          vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
-            sign_text = ' ',
-            sign_hl_group = M.state.config.hl.active_file,
-            priority = 1000,
-          })
-        end
 
-        if M.state.selected_files[item.path] then
-          local selection_hl = is_cursor_item and M.state.config.hl.selected_active or M.state.config.hl.selected
+          if M.state.selected_files[item.path] then
+            local selection_hl = is_cursor_item and M.state.config.hl.selected_active or M.state.config.hl.selected
 
-          vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
-            sign_text = '▊',
-            sign_hl_group = selection_hl,
-            priority = 1001, -- Higher than git status (1000)
-          })
-        end
+            vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
+              sign_text = '▊',
+              sign_hl_group = selection_hl,
+              priority = 1001, -- Higher than git status (1000)
+            })
+          end
 
-        local match_start, match_end = string.find(line_content, M.state.query, 1)
-        if match_start and match_end then
-          vim.api.nvim_buf_add_highlight(
-            M.state.list_buf,
-            M.state.ns_id,
-            config.hl.matched or 'IncSearch',
-            line_idx - 1,
-            match_start - 1,
-            match_end
-          )
+          local match_start, match_end = string.find(line_content, M.state.query, 1)
+          if match_start and match_end then
+            vim.api.nvim_buf_add_highlight(
+              M.state.list_buf,
+              M.state.ns_id,
+              config.hl.matched or 'IncSearch',
+              line_idx - 1,
+              match_start - 1,
+              match_end
+            )
+          end
         end
       end
-
-      ::continue::
     end
 
     combo_renderer.render_highlights_and_overlays(
@@ -1235,6 +1348,9 @@ function M.render_list()
       item_to_lines
     )
   end
+
+  -- Render scrollbar (will be created lazily if needed)
+  scrollbar.render(M.state.layout, M.state.config, M.state.list_win, M.state.pagination)
 end
 
 function M.update_preview()
@@ -1399,7 +1515,40 @@ function M.move_up()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  M.state.cursor = math.max(M.state.cursor - 1, 1)
+  local prompt_position = get_prompt_position()
+  local items_count = #M.state.filtered_items
+
+  -- Pagination logic depends on prompt position
+  if prompt_position == 'bottom' then
+    -- Bottom prompt with reverse rendering: visually moving UP means cursor INCREASES
+    -- because higher index items are rendered at lower line numbers
+    local near_bottom = M.state.cursor >= (items_count - M.state.pagination.prefetch_margin)
+    local at_last_item = M.state.cursor >= items_count
+
+    if near_bottom and at_last_item then
+      local page_size = M.state.pagination.page_size
+      if page_size > 0 then
+        local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
+        local has_more = M.state.pagination.page_index < max_page
+        if has_more then
+          M.load_next_page()
+          return
+        end
+      end
+    end
+
+    M.state.cursor = math.min(M.state.cursor + 1, items_count)
+  else
+    -- Top prompt: scrolling UP means going to BETTER results (previous page)
+    if M.state.cursor <= M.state.pagination.prefetch_margin + 1 and M.state.cursor <= 1 then
+      if M.state.pagination.page_index > 0 then
+        vim.schedule(M.load_previous_page)
+        return
+      end
+    end
+
+    M.state.cursor = math.max(M.state.cursor - 1, 1)
+  end
 
   M.render_list()
   M.update_preview()
@@ -1410,7 +1559,40 @@ function M.move_down()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
+  local prompt_position = get_prompt_position()
+  local items_count = #M.state.filtered_items
+
+  -- Pagination logic depends on prompt position
+  if prompt_position == 'bottom' then
+    -- Bottom prompt with reverse rendering: visually moving DOWN means cursor DECREASES
+    -- because lower index items (better) are rendered at higher line numbers
+    if M.state.cursor <= M.state.pagination.prefetch_margin + 1 and M.state.cursor <= 1 then
+      if M.state.pagination.page_index > 0 then
+        vim.schedule(M.load_previous_page)
+        return
+      end
+    end
+
+    M.state.cursor = math.max(M.state.cursor - 1, 1)
+  else
+    -- Top prompt: scrolling DOWN means going to WORSE results (next page)
+    local near_bottom = M.state.cursor >= (items_count - M.state.pagination.prefetch_margin)
+    local at_last_item = M.state.cursor >= items_count
+
+    if near_bottom and at_last_item then
+      local page_size = M.state.pagination.page_size
+      if page_size > 0 then
+        local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
+        local has_more = M.state.pagination.page_index < max_page
+        if has_more then
+          M.load_next_page()
+          return
+        end
+      end
+    end
+
+    M.state.cursor = math.min(M.state.cursor + 1, items_count)
+  end
 
   M.render_list()
   M.update_preview()
@@ -1664,6 +1846,7 @@ function M.close()
   M.state.active = false
 
   combo_renderer.cleanup()
+  scrollbar.cleanup()
 
   local windows = {
     M.state.input_win,

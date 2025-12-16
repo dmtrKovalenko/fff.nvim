@@ -5,7 +5,7 @@ use crate::git::GitStatusCache;
 use crate::location::parse_location;
 use crate::query_tracker::QueryMatchEntry;
 use crate::score::match_and_score_files;
-use crate::types::{FileItem, ScoringContext, SearchResult};
+use crate::types::{FileItem, PaginationArgs, ScoringContext, SearchResult};
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
 use std::fmt::Debug;
@@ -21,14 +21,13 @@ use crate::{FILE_PICKER, FRECENCY};
 
 #[derive(Debug, Clone, Copy)]
 pub struct FuzzySearchOptions<'a> {
-    pub max_results: usize,
     pub max_threads: usize,
     pub current_file: Option<&'a str>,
-    pub reverse_order: bool,
     pub project_path: Option<&'a Path>,
     pub last_same_query_match: Option<&'a QueryMatchEntry>,
     pub combo_boost_score_multiplier: i32,
     pub min_combo_count: u32,
+    pub pagination: PaginationArgs,
 }
 
 #[derive(Debug, Clone)]
@@ -184,7 +183,7 @@ impl FilePicker {
         let max_threads = options.max_threads.max(1);
         debug!(
             ?query,
-            max_results = ?options.max_results,
+            pagination = ?options.pagination,
             ?max_threads,
             current_file = ?options.current_file,
             "Fuzzy search",
@@ -195,27 +194,30 @@ impl FilePicker {
 
         // small queries with a large number of results can match absolutely everything
         let max_typos = (query.len() as u16 / 4).clamp(2, 6);
+
         let context = ScoringContext {
             query,
             project_path: options.project_path,
             max_typos,
             max_threads,
             current_file: options.current_file,
-            max_results: options.max_results,
-            reverse_order: options.reverse_order,
             last_same_query_match: options.last_same_query_match,
             combo_boost_score_multiplier: options.combo_boost_score_multiplier,
             min_combo_count: options.min_combo_count,
+            pagination: options.pagination,
         };
 
         let time = std::time::Instant::now();
 
+        // Match, score, and paginate files (all done in sort_and_truncate)
         let (items, scores, total_matched) = match_and_score_files(files, &context);
 
         debug!(
             ?query,
             completed_in = ?time.elapsed(),
-            top_position = ?items.first(),
+            total_matched,
+            returned_count = items.len(),
+            pagination = ?options.pagination,
             "Fuzzy search completed",
         );
 

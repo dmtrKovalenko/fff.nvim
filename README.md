@@ -123,6 +123,7 @@ require('fff').setup({
       prompt_position = 'bottom', -- or 'top'
       preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
       preview_size = 0.5,
+      show_scrollbar = true, -- Show scrollbar for pagination
     },
     preview = {
       enabled = true,
@@ -168,6 +169,7 @@ require('fff').setup({
       frecency = 'Number',
       debug = 'Comment',
       combo_header = 'Number',
+      scrollbar = 'Comment', -- Highlight for scrollbar thumb (track uses border)
       -- Multi-select highlights
       selected = 'FFFSelected',
       selected_active = 'FFFSelectedActive',

@@ -160,14 +160,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 files,
                 "rs",
                 fff_nvim::file_picker::FuzzySearchOptions {
-                    max_results: 5,
                     max_threads: 2,
                     current_file: None,
-                    reverse_order: false,
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
+                    pagination: fff_nvim::types::PaginationArgs {
+                        offset: 0,
+                        limit: 5,
+                    },
                 },
             );
 
