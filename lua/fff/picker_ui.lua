@@ -260,6 +260,10 @@ M.state = {
   history_offset = nil, -- Current offset in history (nil = not cycling, 0 = first query)
   next_search_force_combo_boost = false, -- Force combo boost on next search (for history recall)
 
+  -- Combo state
+  combo_visible = true, -- Whether to show combo indicator (hidden after significant navigation)
+  combo_initial_cursor = nil, -- Initial cursor position when combo was shown
+
   -- Pagination state
   pagination = {
     page_index = 0, -- Current page index (0-based)
@@ -798,6 +802,10 @@ function M.update_results_sync()
   M.state.pagination.page_size = page_size
   M.state.pagination.page_index = 0 -- Reset to first page on new search
 
+  -- Reset combo visibility on new search
+  M.state.combo_visible = true
+  M.state.combo_initial_cursor = 1 -- Will be at position 1 after search
+
   -- Check if we should force combo boost for this search (history recall)
   local min_combo_override = nil
   if M.state.next_search_force_combo_boost then
@@ -1015,16 +1023,19 @@ local function format_file_display(item, max_width)
   return filename, display_path
 end
 
---- Calculate number of rows an item will occupy when rendered
---- @param item_index number Index of the item (1-based)
---- @param has_combo boolean Whether any combo boost exists
---- @param combo_item_index number|nil Index of the combo-boosted item
---- @return number Number of rows (1 or 2 currently)
-local function get_item_row_count(item_index, has_combo, combo_item_index)
-  if has_combo and item_index == combo_item_index then
-    return 2 -- Combo header line + content line
-  end
-  return 1 -- Just content line
+--- Adjust scroll for bottom prompt to eliminate gaps
+local function scroll_to_bottom()
+  if not M.state.list_win or not vim.api.nvim_win_is_valid(M.state.list_win) then return end
+
+  local win_height = vim.api.nvim_win_get_height(M.state.list_win)
+  local buf_lines = vim.api.nvim_buf_line_count(M.state.list_buf)
+
+  vim.api.nvim_win_call(M.state.list_win, function()
+    local view = vim.fn.winsaveview()
+    -- Force topline to show content at bottom
+    view.topline = math.max(1, buf_lines - win_height + 1)
+    vim.fn.winrestview(view)
+  end)
 end
 
 function M.render_list()
@@ -1038,32 +1049,21 @@ function M.render_list()
   local win_width = vim.api.nvim_win_get_width(M.state.list_win)
   local empty_lines_needed = 0
 
-  local combo_boost_score_multiplier = config.history and config.history.combo_boost_score_multiplier or 100
+  local combo_boost_score_multiplier = config.history and config.history.combo_boost_multiplier or 100
   local has_combo, combo_header_line, combo_header_text_len, combo_item_index = combo_renderer.detect_and_prepare(
     items,
     file_picker,
     win_width,
     combo_boost_score_multiplier,
-    -- disable rendering of combos if cycling through history or user wants to always show the last match
+    -- disable rendering of (xn combo) if cycling through history or user wants to always show the last match
     M.state.next_search_force_combo_boost or config.history.min_combo_count == 0
   )
   M.state.next_search_force_combo_boost = false -- effectively reset if set by the history recall
 
-  -- Calculate how many items fit (accounting for multi-row items)
-  local display_count = 0
-  local accumulated_rows = 0
-  if #items > 0 then
-    display_count = 1 -- Always show at least first item, even if it exceeds win_height
-    accumulated_rows = get_item_row_count(1, has_combo, combo_item_index)
-
-    for i = 2, #items do
-      local item_rows = get_item_row_count(i, has_combo, combo_item_index)
-      if accumulated_rows + item_rows > win_height then
-        break -- Next item won't fit
-      end
-      accumulated_rows = accumulated_rows + item_rows
-      display_count = i
-    end
+  -- If combo was detected but we've navigated too far, hide it
+  if has_combo and not M.state.combo_visible then
+    has_combo = false
+    combo_item_index = nil
   end
 
   local prompt_position = get_prompt_position()
@@ -1096,7 +1096,7 @@ function M.render_list()
     local item = items[i]
     local item_start_line = #padded_lines + 1
 
-    -- For combo items, insert header first
+    -- For combo items, insert header first as a padded line
     if has_combo and combo_item_index and i == combo_item_index then table.insert(padded_lines, combo_header_line) end
 
     local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
@@ -1181,7 +1181,7 @@ function M.render_list()
   vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
 
   -- Set cursor position
-  if #items > 0 and cursor_line > 0 and cursor_line <= win_height then
+  if #items > 0 and cursor_line > 0 and cursor_line <= #padded_lines then
     vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
   end
 
@@ -1345,7 +1345,8 @@ function M.render_list()
       M.state.list_win,
       M.state.ns_id,
       M.state.config.hl.border,
-      item_to_lines
+      item_to_lines,
+      prompt_position
     )
   end
 
@@ -1553,6 +1554,18 @@ function M.move_up()
   M.render_list()
   M.update_preview()
   M.update_status()
+
+  if M.state.combo_initial_cursor and M.state.combo_visible then
+    local cursor_distance = math.abs(M.state.cursor - M.state.combo_initial_cursor)
+    local half_page = math.floor(M.state.pagination.page_size / 2)
+    if cursor_distance > half_page then
+      M.state.combo_visible = false
+      combo_renderer.cleanup()
+      M.render_list() -- Re-render once without combo
+      -- Scroll to bottom for bottom prompt to eliminate gap
+      if get_prompt_position() == 'bottom' then scroll_to_bottom() end
+    end
+  end
 end
 
 function M.move_down()
@@ -1597,6 +1610,18 @@ function M.move_down()
   M.render_list()
   M.update_preview()
   M.update_status()
+
+  if M.state.combo_initial_cursor and M.state.combo_visible then
+    local cursor_distance = math.abs(M.state.cursor - M.state.combo_initial_cursor)
+    local half_page = math.floor(M.state.pagination.page_size / 2)
+    if cursor_distance > half_page then
+      M.state.combo_visible = false
+      combo_renderer.cleanup()
+      M.render_list() -- Re-render once without combo
+      -- Scroll to bottom for bottom prompt to eliminate gap
+      if get_prompt_position() == 'bottom' then scroll_to_bottom() end
+    end
+  end
 end
 
 --- Scroll preview up by half window height
@@ -1901,6 +1926,8 @@ function M.close()
   M.state.current_file_cache = nil
   M.state.location = nil
   M.state.selected_files = {}
+  M.state.combo_visible = true
+  M.state.combo_initial_cursor = nil
   M.reset_history_state()
   -- Clean up picker focus autocmds
   pcall(vim.api.nvim_del_augroup_by_name, 'fff_picker_focus')
