@@ -104,9 +104,15 @@ local function position_overlay_window(state_key, buf, width, row, col)
   vim.api.nvim_win_set_option(overlay_state[state_key], 'winhl', 'Normal:Normal')
 end
 
-local function update_overlays(list_win, combo_header_line, border_hl)
+local function update_overlays(list_win, combo_header_line, border_hl, prompt_position)
   local list_config = vim.api.nvim_win_get_config(list_win)
+  -- combo_header_line is a 1-based buffer line index
+  -- list_config.row is the window position (includes border)
+  -- Buffer content starts at row + 1 (after top border)
+  -- For bottom prompt: overlay needs adjustment due to different border handling
+  -- For top prompt: use standard calculation
   local combo_header_row = list_config.row + combo_header_line
+  if prompt_position == 'bottom' then combo_header_row = combo_header_row - 1 end
 
   -- Skip update if position and highlight haven't changed
   if
@@ -121,20 +127,16 @@ local function update_overlays(list_win, combo_header_line, border_hl)
     return
   end
 
-  -- Cache current values
   overlay_state.last_row = combo_header_row
   overlay_state.last_col = list_config.col
   overlay_state.last_border_hl = border_hl
 
-  -- Update both overlays in a batch to minimize API calls
   local left_buf = get_or_create_overlay_buf('left_buf')
   local right_buf = get_or_create_overlay_buf('right_buf')
 
-  -- Update content for both buffers
   update_overlay_content(left_buf, LEFT_OVERLAY_CONTENT, border_hl)
   update_overlay_content(right_buf, RIGHT_OVERLAY_CONTENT, border_hl)
 
-  -- Position both windows
   position_overlay_window('left_win', left_buf, LEFT_OVERLAY_WIDTH, combo_header_row, list_config.col)
   position_overlay_window(
     'right_win',
@@ -156,7 +158,6 @@ local function clear_overlays_internal()
     overlay_state.right_win = nil
   end
 
-  -- Clear cache
   overlay_state.last_row = nil
   overlay_state.last_col = nil
   overlay_state.last_border_hl = nil
@@ -178,7 +179,8 @@ function M.render_highlights_and_overlays(
   list_win,
   ns_id,
   border_hl,
-  item_to_lines
+  item_to_lines,
+  prompt_position
 )
   if not combo_item_index then
     clear_overlays_internal()
@@ -193,7 +195,7 @@ function M.render_highlights_and_overlays(
 
   local combo_header_line_idx = combo_item_lines.first
   apply_header_highlights(list_buf, ns_id, combo_header_line_idx, text_len, border_hl)
-  update_overlays(list_win, combo_header_line_idx, border_hl)
+  update_overlays(list_win, combo_header_line_idx, border_hl, prompt_position)
 end
 
 function M.get_overlay_widths() return LEFT_OVERLAY_WIDTH, RIGHT_OVERLAY_WIDTH end
