@@ -14,7 +14,7 @@ local function get_current_version(plugin_dir, callback)
   end)
 end
 
-local function get_binary_dir(plugin_dir) return plugin_dir .. '/../target' end
+local function get_binary_dir(plugin_dir) return plugin_dir .. '/../target/release' end
 
 local function get_binary_path(plugin_dir)
   local binary_dir = get_binary_dir(plugin_dir)

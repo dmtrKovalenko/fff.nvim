@@ -43,9 +43,14 @@ local function setup_global_autocmds(config)
       local new_cwd = vim.v.event.cwd
       if state.initialized and new_cwd and new_cwd ~= config.base_path then
         vim.schedule(function()
-          local picker = require('fff.main')
-          local ok, err = pcall(picker.change_indexing_directory, new_cwd)
+          -- Delay require to avoid circular dependency: core -> main -> picker_ui -> file_picker -> core
+          local ok, picker = pcall(require, 'fff.main')
           if not ok then
+            vim.notify('FFF: Failed to load main module: ' .. tostring(picker), vim.log.levels.ERROR)
+            return
+          end
+          local change_ok, err = pcall(picker.change_indexing_directory, new_cwd)
+          if not change_ok then
             vim.notify('FFF: Failed to change indexing directory: ' .. tostring(err), vim.log.levels.ERROR)
           end
         end)
