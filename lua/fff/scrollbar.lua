@@ -16,11 +16,14 @@ local ns_id = vim.api.nvim_create_namespace('fff_scrollbar')
 --- @param config table Config with hl (highlight groups)
 --- @param list_win number List window handle
 --- @param pagination table Pagination state with page_index, page_size, total_matched
-function M.render(layout, config, list_win, pagination)
+--- @param prompt_position string|nil Prompt position ('top' or 'bottom', defaults to 'bottom')
+function M.render(layout, config, list_win, pagination, prompt_position)
   if layout.show_scrollbar == false then return end
 
   -- this is the most often path, we don't want to show scrollbar if use doesn't scrolling
   if not scrollbar_state.ever_shown and pagination.page_index == 0 then return end
+
+  prompt_position = prompt_position or 'bottom'
 
   local total_pages = pagination.page_size > 0 and math.ceil(pagination.total_matched / pagination.page_size) or 1
   local has_multiple_pages = total_pages > 1
@@ -61,7 +64,15 @@ function M.render(layout, config, list_win, pagination)
 
   local thumb_size = math.max(1, math.floor(win_height / total_pages))
   local scrollbar_range = win_height - thumb_size
-  local thumb_start = math.floor((pagination.page_index / math.max(1, total_pages - 1)) * scrollbar_range)
+
+  -- inverse the scrollbar when the position is at the bottom
+  local thumb_start
+  if prompt_position == 'bottom' then
+    thumb_start =
+      math.floor(((total_pages - 1 - pagination.page_index) / math.max(1, total_pages - 1)) * scrollbar_range)
+  else
+    thumb_start = math.floor((pagination.page_index / math.max(1, total_pages - 1)) * scrollbar_range)
+  end
 
   local lines = {}
   for i = 1, win_height do
