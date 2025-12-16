@@ -1350,7 +1350,8 @@ function M.render_list()
   end
 
   -- Render scrollbar (will be created lazily if needed)
-  scrollbar.render(M.state.layout, M.state.config, M.state.list_win, M.state.pagination)
+  local prompt_position = get_prompt_position()
+  scrollbar.render(M.state.layout, M.state.config, M.state.list_win, M.state.pagination, prompt_position)
 end
 
 function M.update_preview()
