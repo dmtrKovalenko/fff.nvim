@@ -1230,6 +1230,25 @@ function M.render_list()
             )
           end
 
+          -- Highlights the text if configured
+          if config.git and config.git.status_text_color and icon and #filename > 0 then
+            local icon_byte_len = #icon
+            local filename_start = icon_byte_len + 1 -- +1 for space after icon
+            local filename_end = filename_start + #filename -- length is fine as sane file system doesn't allow unicode in paths
+
+            local git_text_hl = item.git_status and git_utils.get_text_highlight(item.git_status) or nil
+            if git_text_hl and git_text_hl ~= '' and not is_current_file then
+              vim.api.nvim_buf_add_highlight(
+                M.state.list_buf,
+                M.state.ns_id,
+                git_text_hl,
+                line_idx - 1,
+                filename_start,
+                filename_end
+              )
+            end
+          end
+
           -- Frecency highlighting
           if debug_enabled then
             local star_start, star_end = line_content:find('⭐%d+')
@@ -1245,13 +1264,13 @@ function M.render_list()
             end
           end
 
-          local icon_match = line_content:match('^%S+')
-          if icon_match and #filename > 0 and #dir_path > 0 then
-            local prefix_len = #icon_match + 1 + #filename + 1
+          -- Directory path highlighting
+          if icon and #filename > 0 and #dir_path > 0 then
+            local prefix_len = #icon + 1 + #filename + 1 -- icon bytes + space + filename bytes + space
             vim.api.nvim_buf_add_highlight(
               M.state.list_buf,
               M.state.ns_id,
-              'Comment',
+              config.hl.directory_path or 'Comment',
               line_idx - 1,
               prefix_len,
               prefix_len + #dir_path
