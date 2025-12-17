@@ -10,10 +10,11 @@ M.state = { initialized = false }
 function M.setup(config) vim.g.fff = config end
 
 --- Find files in current directory
-function M.find_files()
+--- @param opts? table Optional configuration {renderer = custom_renderer}
+function M.find_files(opts)
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
   if picker_ok then
-    picker_ui.open()
+    picker_ui.open(opts)
   else
     vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
   end

@@ -10,6 +10,8 @@ local overlay_state = {
   last_row = nil,
   last_col = nil,
   last_border_hl = nil,
+  -- Track if combo was rendered in last call
+  was_rendered = false,
 }
 
 local LEFT_OVERLAY_CONTENT = '├────'
@@ -161,6 +163,7 @@ local function clear_overlays_internal()
   overlay_state.last_row = nil
   overlay_state.last_col = nil
   overlay_state.last_border_hl = nil
+  -- Note: we intentionally don't clear was_rendered here to track the transition
 end
 
 function M.detect_and_prepare(items, file_picker, win_width, combo_boost_score_multiplier, disable_combo_display)
@@ -172,6 +175,8 @@ function M.detect_and_prepare(items, file_picker, win_width, combo_boost_score_m
   return true, header_line, text_len, combo_item_index
 end
 
+--- Render combo highlights and overlays
+--- @return boolean was_hidden True if combo was just hidden (was rendered before, not now)
 function M.render_highlights_and_overlays(
   combo_item_index,
   text_len,
@@ -182,24 +187,44 @@ function M.render_highlights_and_overlays(
   item_to_lines,
   prompt_position
 )
+  local was_rendered_before = overlay_state.was_rendered
+  local is_rendering_now = false
+
   if not combo_item_index then
     clear_overlays_internal()
-    return
+  else
+    local combo_item_lines = item_to_lines[combo_item_index]
+    if not combo_item_lines then
+      clear_overlays_internal()
+    else
+      local combo_header_line_idx = combo_item_lines.first
+      apply_header_highlights(list_buf, ns_id, combo_header_line_idx, text_len, border_hl)
+      update_overlays(list_win, combo_header_line_idx, border_hl, prompt_position)
+      is_rendering_now = true
+    end
   end
 
-  local combo_item_lines = item_to_lines[combo_item_index]
-  if not combo_item_lines then
-    clear_overlays_internal()
-    return
-  end
+  overlay_state.was_rendered = is_rendering_now
 
-  local combo_header_line_idx = combo_item_lines.first
-  apply_header_highlights(list_buf, ns_id, combo_header_line_idx, text_len, border_hl)
-  update_overlays(list_win, combo_header_line_idx, border_hl, prompt_position)
+  -- Return true if combo was just hidden (transition from visible to hidden)
+  return was_rendered_before and not is_rendering_now
+end
+
+--- Get the combo header text for a given item
+--- @param combo_count number The combo multiplier count
+--- @param win_width number Window width for formatting
+--- @param disable_combo_display boolean Whether to show combo count
+--- @return string header_text The formatted header line
+--- @return number text_len Length of the header text (without padding)
+function M.get_combo_header_text(combo_count, win_width, disable_combo_display)
+  return create_header_text(combo_count, win_width, disable_combo_display)
 end
 
 function M.get_overlay_widths() return LEFT_OVERLAY_WIDTH, RIGHT_OVERLAY_WIDTH end
 
-function M.cleanup() clear_overlays_internal() end
+function M.cleanup()
+  clear_overlays_internal()
+  overlay_state.was_rendered = false
+end
 
 return M
