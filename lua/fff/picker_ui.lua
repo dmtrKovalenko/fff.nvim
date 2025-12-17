@@ -1222,9 +1222,7 @@ local function apply_all_highlights(lines, item_to_lines, ctx)
   end
 end
 
---- Finalize rendering with combo overlays and scrollbar
---- @param item_to_lines table Item to lines mapping
---- @param ctx table Render context
+-- Renders all virtual buffer overalys
 local function finalize_render(item_to_lines, ctx)
   -- Get text_len from item_to_lines if combo exists
   local combo_text_len = nil

@@ -155,8 +155,11 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   end
 
   -- 5. Directory path (dimmed)
-  if icon and #filename > 0 and #dir_path > 0 then
-    local prefix_len = #icon + 1 + #filename + 1
+  if #filename > 0 and #dir_path > 0 then
+    local prefix_len = #filename + 1 -- filename bytes + space
+    if icon then
+      prefix_len = prefix_len + #icon + 1 -- if icon add icon bytes + space
+    end
     vim.api.nvim_buf_add_highlight(
       buf,
       ns_id,
