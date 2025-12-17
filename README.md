@@ -170,6 +170,7 @@ require('fff').setup({
       debug = 'Comment',
       combo_header = 'Number',
       scrollbar = 'Comment', -- Highlight for scrollbar thumb (track uses border)
+      directory_path = 'Comment', -- Highlight for directory path in file list
       -- Multi-select highlights
       selected = 'FFFSelected',
       selected_active = 'FFFSelectedActive',
@@ -206,6 +207,10 @@ require('fff').setup({
       db_path = vim.fn.stdpath('data') .. '/fff_queries',
       min_combo_count = 3, -- file will get a boost if it was selected 3 in a row times per specific query
       combo_boost_score_multiplier = 100, -- Score multiplier for combo matches
+    },
+    -- Git integration
+    git = {
+      status_text_color = false, -- Apply git status colors to filename text (default: false, only sign column)
     },
     debug = {
       enabled = false, -- Set to true to show scores in the UI
@@ -262,6 +267,59 @@ Select multiple files and send them to Neovim's quickfix list (keymaps are confi
 
 - `<Tab>` - Toggle selection for the current file (shows thick border `▊` in signcolumn)
 - `<C-q>` - Send selected files to quickfix list and close picker
+
+#### Git Status Highlighting
+
+FFF integrates with git to show file status through sign column indicators (enabled by default) and optional filename text coloring.
+
+**Sign Column Indicators** (enabled by default) - Border characters shown in the sign column:
+```lua
+hl = {
+  git_sign_staged = 'FFFGitSignStaged',
+  git_sign_modified = 'FFFGitSignModified',
+  git_sign_deleted = 'FFFGitSignDeleted',
+  git_sign_renamed = 'FFFGitSignRenamed',
+  git_sign_untracked = 'FFFGitSignUntracked',
+  git_sign_ignored = 'FFFGitSignIgnored',
+}
+```
+
+**Text Highlights** (opt-in) - Apply colors to filenames based on git status:
+
+To enable git status text coloring, set `git.status_text_color = true`:
+```lua
+require('fff').setup({
+  git = {
+    status_text_color = true, -- Enable git status colors on filename text
+  },
+  hl = {
+    git_staged = 'FFFGitStaged',       -- Files staged for commit
+    git_modified = 'FFFGitModified',   -- Modified unstaged files
+    git_deleted = 'FFFGitDeleted',     -- Deleted files
+    git_renamed = 'FFFGitRenamed',     -- Renamed files
+    git_untracked = 'FFFGitUntracked', -- New untracked files
+    git_ignored = 'FFFGitIgnored',     -- Git-ignored files
+  }
+})
+```
+
+The plugin provides sensible default highlight groups that link to common git highlight groups (e.g., GitSignsAdd, GitSignsChange). You can override these with your own custom highlight groups to match your colorscheme.
+
+**Example - Custom Bright Colors for Text:**
+```lua
+vim.api.nvim_set_hl(0, 'CustomGitModified', { fg = '#FFA500' })
+vim.api.nvim_set_hl(0, 'CustomGitUntracked', { fg = '#00FF00' })
+
+require('fff').setup({
+  git = {
+    status_text_color = true,
+  },
+  hl = {
+    git_modified = 'CustomGitModified',
+    git_untracked = 'CustomGitUntracked',
+  }
+})
+```
 
 
 ### Troubleshooting

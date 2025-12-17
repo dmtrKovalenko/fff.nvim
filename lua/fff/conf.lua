@@ -157,6 +157,7 @@ local function init()
       debug = 'Comment',
       combo_header = 'Number',
       scrollbar = 'Comment',
+      directory_path = 'Comment', -- Highlight for directory path in file list
       -- Multi-select highlights
       selected = 'FFFSelected',
       selected_active = 'FFFSelectedActive',
@@ -191,6 +192,9 @@ local function init()
       db_path = vim.fn.stdpath('data') .. '/fff_queries',
       min_combo_count = 3, -- Minimum selections before combo boost applies (3 = boost starts on 3rd selection)
       combo_boost_score_multiplier = 100, -- Score multiplier for combo matches (files repeatedly opened with same query)
+    },
+    git = {
+      status_text_color = false, -- Apply git status colors to filename text (default: false, only sign column)
     },
     debug = {
       enabled = false, -- Set to true to show scores in the UI

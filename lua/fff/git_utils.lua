@@ -72,9 +72,9 @@ end
 --- Get highlight group for git status text
 --- @param git_status string Git status
 --- @return string Highlight group name
-function M.get_highlight(git_status)
+function M.get_text_highlight(git_status)
   ensure_cache()
-  return highlights_cache[git_status] or ''
+  return highlights_cache and highlights_cache[git_status] or ''
 end
 
 --- Get border highlight group for git status
@@ -82,7 +82,7 @@ end
 --- @return string Highlight group name
 function M.get_border_highlight(git_status)
   ensure_cache()
-  return border_highlights_cache[git_status] or ''
+  return border_highlights_cache and border_highlights_cache[git_status] or ''
 end
 
 --- Get selected border highlight group for git status
@@ -90,7 +90,7 @@ end
 --- @return string Highlight group name
 function M.get_border_highlight_selected(git_status)
   ensure_cache()
-  return border_highlights_selected_cache[git_status] or ''
+  return border_highlights_selected_cache and border_highlights_selected_cache[git_status] or ''
 end
 
 function M.get_border_char(git_status) return M.border_chars[git_status] or '' end
