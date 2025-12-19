@@ -3,8 +3,6 @@ local M = {}
 local conf = require('fff.conf')
 local file_picker = require('fff.file_picker')
 local preview = require('fff.file_picker.preview')
-local icons = require('fff.file_picker.icons')
-local git_utils = require('fff.git_utils')
 local utils = require('fff.utils')
 local location_utils = require('fff.location_utils')
 local combo_renderer = require('fff.combo_renderer')
@@ -273,6 +271,9 @@ M.state = {
   },
 
   config = nil,
+
+  -- Custom renderer (optional, defaults to file_renderer if not provided)
+  renderer = nil,
 
   ns_id = nil,
 
@@ -1038,53 +1039,41 @@ local function scroll_to_bottom()
   end)
 end
 
-function M.render_list()
-  if not M.state.active then return end
-
+--- Build rendering context with all necessary data
+--- @return table Context object with items, config, dimensions, combo info, etc.
+local function build_render_context()
   local config = conf.get()
   local items = M.state.filtered_items
-  local max_path_width = config.ui and config.ui.max_path_width or 80
-  local debug_enabled = config and config.debug and config.debug.show_scores
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
   local win_width = vim.api.nvim_win_get_width(M.state.list_win)
-  local empty_lines_needed = 0
-
-  local combo_boost_score_multiplier = config.history and config.history.combo_boost_multiplier or 100
-  local has_combo, combo_header_line, combo_header_text_len, combo_item_index = combo_renderer.detect_and_prepare(
-    items,
-    file_picker,
-    win_width,
-    combo_boost_score_multiplier,
-    -- disable rendering of (xn combo) if cycling through history or user wants to always show the last match
-    M.state.next_search_force_combo_boost or config.history.min_combo_count == 0
-  )
-  M.state.next_search_force_combo_boost = false -- effectively reset if set by the history recall
-
-  -- If combo was detected but we've navigated too far, hide it
-  if has_combo and not M.state.combo_visible then
-    has_combo = false
-    combo_item_index = nil
-  end
-
   local prompt_position = get_prompt_position()
 
-  -- All items in M.state.items should be displayed (already paginated)
-  local display_start = 1
-  local display_end = #items
-
-  -- Simple cursor validation
+  -- Cursor validation
   if M.state.cursor < 1 then
     M.state.cursor = 1
   elseif M.state.cursor > #items then
     M.state.cursor = #items
   end
 
-  local padded_lines = {}
-  local icon_data = {}
-  local path_data = {}
-  local item_to_lines = {} -- Maps item index to its line indices {first_line, last_line}
+  -- Combo detection
+  local combo_boost_score_multiplier = config.history and config.history.combo_boost_multiplier or 100
+  local has_combo, combo_header_line, combo_header_text_len, combo_item_index = combo_renderer.detect_and_prepare(
+    items,
+    file_picker,
+    win_width,
+    combo_boost_score_multiplier,
+    M.state.next_search_force_combo_boost or config.history.min_combo_count == 0
+  )
+  M.state.next_search_force_combo_boost = false
 
-  -- For bottom prompt, iterate in reverse order to render best results at bottom
+  if has_combo and not M.state.combo_visible then
+    has_combo = false
+    combo_item_index = nil
+  end
+
+  -- Determine iteration order
+  local display_start = 1
+  local display_end = #items
   local iter_start, iter_end, iter_step
   if prompt_position == 'bottom' then
     iter_start, iter_end, iter_step = display_end, display_start, -1
@@ -1092,289 +1081,187 @@ function M.render_list()
     iter_start, iter_end, iter_step = display_start, display_end, 1
   end
 
-  for i = iter_start, iter_end, iter_step do
-    local item = items[i]
-    local item_start_line = #padded_lines + 1
+  return {
+    config = config,
+    items = items,
+    cursor = M.state.cursor,
+    win_height = win_height,
+    win_width = win_width,
+    max_path_width = config.ui and config.ui.max_path_width or 80,
+    debug_enabled = config and config.debug and config.debug.show_scores,
+    prompt_position = prompt_position,
+    has_combo = has_combo,
+    combo_header_line = combo_header_line,
+    combo_header_text_len = combo_header_text_len,
+    combo_item_index = combo_item_index,
+    display_start = display_start,
+    display_end = display_end,
+    iter_start = iter_start,
+    iter_end = iter_end,
+    iter_step = iter_step,
+    renderer = M.state.renderer, -- Custom renderer (if provided)
+  }
+end
 
-    -- For combo items, insert header first as a padded line
-    if has_combo and combo_item_index and i == combo_item_index then table.insert(padded_lines, combo_header_line) end
+--- Generate all display lines
+--- Uses renderer.render_line for each item
+--- @param ctx table Render context
+--- @return table lines Array of padded line strings
+--- @return table item_to_lines Mapping of item index to {first, last} line indices
+local function generate_item_lines(ctx)
+  local lines = {}
+  local item_to_lines = {}
 
-    local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
-    icon_data[i] = { icon, icon_hl_group }
+  -- Add format_file_display to context for renderers
+  ctx.format_file_display = format_file_display
 
-    local frecency = ''
-    if debug_enabled then
-      local total_frecency = (item.total_frecency_score or 0)
-      local access_frecency = (item.access_frecency_score or 0)
-      local mod_frecency = (item.modification_frecency_score or 0)
+  -- Use custom renderer if provided, otherwise use default file_renderer
+  local renderer = ctx.renderer
+  if not renderer then renderer = require('fff.file_renderer') end
 
-      if total_frecency > 0 then
-        local indicator = ''
-        if mod_frecency >= 6 then
-          indicator = '🔥'
-        elseif access_frecency >= 4 then
-          indicator = '⭐'
-        elseif total_frecency >= 3 then
-          indicator = '✨'
-        elseif total_frecency >= 1 then
-          indicator = '•'
-        end
-        frecency = string.format(' %s%d', indicator, total_frecency)
-      end
+  for i = ctx.iter_start, ctx.iter_end, ctx.iter_step do
+    local item = ctx.items[i]
+    local item_start_line = #lines + 1
+
+    -- Render item lines using renderer.render_line
+    local item_lines = renderer.render_line(item, ctx, i)
+
+    -- Add rendered lines
+    for _, line in ipairs(item_lines) do
+      table.insert(lines, line)
     end
 
-    local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
-    local available_width = math.max(max_path_width - icon_width - #frecency, 40)
-
-    local filename, dir_path = format_file_display(item, available_width)
-    path_data[i] = { filename, dir_path }
-
-    local line = icon and string.format('%s %s %s%s', icon, filename, dir_path, frecency)
-      or string.format('%s %s%s', filename, dir_path, frecency)
-
-    local line_len = vim.fn.strdisplaywidth(line)
-    local padding = math.max(0, win_width - line_len + 5)
-    table.insert(padded_lines, line .. string.rep(' ', padding))
-
     -- Record line range for this item
-    local item_end_line = #padded_lines
+    local item_end_line = #lines
     item_to_lines[i] = {
       first = item_start_line,
       last = item_end_line,
     }
   end
 
-  -- Handle bottom positioning: add empty lines at the top
-  local empty_line_offset = 0
-  if prompt_position == 'bottom' then
-    local total_content_lines = #padded_lines
-    empty_lines_needed = math.max(0, win_height - total_content_lines)
+  return lines, item_to_lines
+end
 
-    if empty_lines_needed > 0 then
-      -- Insert empty lines at the beginning
-      for i = empty_lines_needed, 1, -1 do
-        table.insert(padded_lines, 1, string.rep(' ', win_width + 5))
-      end
-      empty_line_offset = empty_lines_needed
+--- Apply bottom padding for bottom prompt position
+--- Adds empty lines at the top and adjusts all line indices
+--- @param lines table Array of line strings (mutated in place)
+--- @param item_to_lines table Item to lines mapping (mutated in place)
+--- @param ctx table Render context
+local function apply_bottom_padding(lines, item_to_lines, ctx)
+  if ctx.prompt_position ~= 'bottom' then return end
 
-      -- Adjust item_to_lines mapping
-      for i = display_start, display_end do
-        if item_to_lines[i] then
-          item_to_lines[i].first = item_to_lines[i].first + empty_line_offset
-          item_to_lines[i].last = item_to_lines[i].last + empty_line_offset
-        end
+  local total_content_lines = #lines
+  local empty_lines_needed = math.max(0, ctx.win_height - total_content_lines)
+
+  if empty_lines_needed > 0 then
+    -- Insert empty lines at the beginning
+    for i = empty_lines_needed, 1, -1 do
+      table.insert(lines, 1, string.rep(' ', ctx.win_width + 5))
+    end
+
+    -- Adjust item_to_lines mapping
+    for i = ctx.display_start, ctx.display_end do
+      if item_to_lines[i] then
+        item_to_lines[i].first = item_to_lines[i].first + empty_lines_needed
+        item_to_lines[i].last = item_to_lines[i].last + empty_lines_needed
       end
     end
   end
+end
 
-  -- Calculate cursor line based on current item
+--- Update buffer content and position cursor
+--- @param lines table Array of line strings
+--- @param item_to_lines table Item to lines mapping
+--- @param ctx table Render context
+local function update_buffer_and_cursor(lines, item_to_lines, ctx)
+  -- Calculate cursor line position
   local cursor_line = 0
-  if #items > 0 and M.state.cursor >= 1 and M.state.cursor <= #items then
-    local cursor_item = item_to_lines[M.state.cursor]
+  if #ctx.items > 0 and ctx.cursor >= 1 and ctx.cursor <= #ctx.items then
+    local cursor_item = item_to_lines[ctx.cursor]
     if cursor_item then cursor_line = cursor_item.last end
   end
 
+  -- Update buffer
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', true)
-  vim.api.nvim_buf_set_lines(M.state.list_buf, 0, -1, false, padded_lines)
+  vim.api.nvim_buf_set_lines(M.state.list_buf, 0, -1, false, lines)
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
 
+  -- Clear existing highlights
   vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
 
-  -- Set cursor position
-  if #items > 0 and cursor_line > 0 and cursor_line <= #padded_lines then
+  -- Position cursor
+  if #ctx.items > 0 and cursor_line > 0 and cursor_line <= #lines then
     vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
   end
+end
 
-  -- Apply highlighting to all items
-  if #items > 0 then
-    for i = display_start, display_end do
-      local item = items[i]
-      local item_lines = item_to_lines[i]
-      if item_lines then
-        local is_cursor_item = (M.state.cursor == i)
+--- Apply all highlights using renderer.apply_highlights
+--- @param lines table Array of line strings
+--- @param item_to_lines table Item to lines mapping
+--- @param ctx table Render context
+local function apply_all_highlights(lines, item_to_lines, ctx)
+  ctx.selected_files = M.state.selected_files
+  ctx.query = M.state.query
 
-        -- Highlight only the content line (last line), not the combo header
-        if is_cursor_item then
-          local content_line = item_lines.last
-          -- Highlight entire line and extend to EOL
-          vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, content_line - 1, 0, {
-            end_col = 0,
-            end_row = content_line,
-            hl_group = M.state.config.hl.active_file,
-            hl_eol = true,
-            priority = 100,
-          })
-        end
+  local renderer = ctx.renderer
+  if not renderer then renderer = require('fff.file_renderer') end
 
-        -- Now apply file-specific highlights to the last line
-        local line_idx = item_lines.last
-        local line_content = padded_lines[line_idx]
+  for i = ctx.display_start, ctx.display_end do
+    local item = ctx.items[i]
+    local item_lines = item_to_lines[i]
+    if not item_lines then goto continue end
 
-        if line_content then
-          local icon, icon_hl_group = unpack(icon_data[i])
-          local filename, dir_path = unpack(path_data[i])
+    local line_idx = item_lines.last
+    local line_content = lines[line_idx]
 
-          local score = file_picker.get_file_score(i)
-          local is_current_file = score and score.current_file_penalty and score.current_file_penalty < 0
+    if not line_content then goto continue end
 
-          -- Icon highlighting
-          if icon and icon_hl_group and vim.fn.strdisplaywidth(icon) > 0 then
-            local icon_highlight = is_current_file and 'Comment' or icon_hl_group
-            vim.api.nvim_buf_add_highlight(
-              M.state.list_buf,
-              M.state.ns_id,
-              icon_highlight,
-              line_idx - 1,
-              0,
-              vim.fn.strdisplaywidth(icon)
-            )
-          end
+    -- Apply highlights using renderer.apply_highlights
+    renderer.apply_highlights(item, ctx, i, M.state.list_buf, M.state.ns_id, line_idx, line_content)
+    ::continue::
+  end
+end
 
-          -- Highlights the text if configured
-          if config.git and config.git.status_text_color and icon and #filename > 0 then
-            local icon_byte_len = #icon
-            local filename_start = icon_byte_len + 1 -- +1 for space after icon
-            local filename_end = filename_start + #filename -- length is fine as sane file system doesn't allow unicode in paths
-
-            local git_text_hl = item.git_status and git_utils.get_text_highlight(item.git_status) or nil
-            if git_text_hl and git_text_hl ~= '' and not is_current_file then
-              vim.api.nvim_buf_add_highlight(
-                M.state.list_buf,
-                M.state.ns_id,
-                git_text_hl,
-                line_idx - 1,
-                filename_start,
-                filename_end
-              )
-            end
-          end
-
-          -- Frecency highlighting
-          if debug_enabled then
-            local star_start, star_end = line_content:find('⭐%d+')
-            if star_start then
-              vim.api.nvim_buf_add_highlight(
-                M.state.list_buf,
-                M.state.ns_id,
-                M.state.config.hl.frecency,
-                line_idx - 1,
-                star_start - 1,
-                star_end
-              )
-            end
-          end
-
-          -- Directory path highlighting
-          if #filename > 0 and #dir_path > 0 then
-            local prefix_len = #filename + 1 -- filename bytes + space
-            if icon then
-                prefix_len = prefix_len + #icon + 1 -- if icon add icon bytes + space
-            end
-            vim.api.nvim_buf_add_highlight(
-              M.state.list_buf,
-              M.state.ns_id,
-              config.hl.directory_path or 'Comment',
-              line_idx - 1,
-              prefix_len,
-              prefix_len + #dir_path
-            )
-          end
-
-          if is_current_file then
-            if not is_cursor_item then
-              vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, 'Comment', line_idx - 1, 0, -1)
-            end
-
-            local virt_text_hl = is_cursor_item and M.state.config.hl.active_file or 'Comment'
-            vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
-              virt_text = { { ' (current)', virt_text_hl } },
-              virt_text_pos = 'right_align',
-            })
-          end
-
-          if item.git_status and git_utils.should_show_border(item.git_status) then
-            local border_char = git_utils.get_border_char(item.git_status)
-            local border_hl
-
-            if is_cursor_item then
-              -- When selected, create a combined highlight: border color on cursor background
-              local base_hl = git_utils.get_border_highlight(item.git_status)
-              if base_hl and base_hl ~= '' then
-                -- Get the foreground color from the border highlight
-                local border_fg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(base_hl)), 'fg')
-                -- Get the background from cursor highlight
-                local cursor_bg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(M.state.config.hl.active_file)), 'bg')
-
-                -- Create temporary highlight group
-                local temp_hl_name = 'FFFGitBorderSelected_' .. i
-                if border_fg ~= '' and cursor_bg ~= '' then
-                  vim.api.nvim_set_hl(0, temp_hl_name, { fg = border_fg, bg = cursor_bg })
-                  border_hl = temp_hl_name
-                else
-                  border_hl = git_utils.get_border_highlight_selected(item.git_status)
-                end
-              else
-                border_hl = M.state.config.hl.active_file
-              end
-            else
-              border_hl = git_utils.get_border_highlight(item.git_status)
-            end
-
-            if border_hl and border_hl ~= '' then
-              vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
-                sign_text = border_char,
-                sign_hl_group = border_hl,
-                priority = 1000,
-              })
-            end
-          elseif is_cursor_item then
-            vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
-              sign_text = ' ',
-              sign_hl_group = M.state.config.hl.active_file,
-              priority = 1000,
-            })
-          end
-
-          if M.state.selected_files[item.path] then
-            local selection_hl = is_cursor_item and M.state.config.hl.selected_active or M.state.config.hl.selected
-
-            vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
-              sign_text = '▊',
-              sign_hl_group = selection_hl,
-              priority = 1001, -- Higher than git status (1000)
-            })
-          end
-
-          local match_start, match_end = string.find(line_content, M.state.query, 1)
-          if match_start and match_end then
-            vim.api.nvim_buf_add_highlight(
-              M.state.list_buf,
-              M.state.ns_id,
-              config.hl.matched or 'IncSearch',
-              line_idx - 1,
-              match_start - 1,
-              match_end
-            )
-          end
-        end
-      end
-    end
-
-    combo_renderer.render_highlights_and_overlays(
-      combo_item_index,
-      combo_header_text_len,
-      M.state.list_buf,
-      M.state.list_win,
-      M.state.ns_id,
-      M.state.config.hl.border,
-      item_to_lines,
-      prompt_position
-    )
+-- Renders all virtual buffer overalys
+local function finalize_render(item_to_lines, ctx)
+  -- Get text_len from item_to_lines if combo exists
+  local combo_text_len = nil
+  if ctx.combo_item_index and item_to_lines[ctx.combo_item_index] then
+    combo_text_len = item_to_lines[ctx.combo_item_index].combo_header_text_len
   end
 
-  -- Render scrollbar (will be created lazily if needed)
-  local prompt_position = get_prompt_position()
-  scrollbar.render(M.state.layout, M.state.config, M.state.list_win, M.state.pagination, prompt_position)
+  -- Render combo overlays
+  local combo_was_hidden = combo_renderer.render_highlights_and_overlays(
+    ctx.combo_item_index,
+    combo_text_len or ctx.combo_header_text_len,
+    M.state.list_buf,
+    M.state.list_win,
+    M.state.ns_id,
+    ctx.config.hl.border,
+    item_to_lines,
+    ctx.prompt_position
+  )
+
+  -- Handle combo hiding with scroll adjustment
+  if combo_was_hidden and ctx.prompt_position == 'bottom' then scroll_to_bottom() end
+
+  -- Render scrollbar
+  scrollbar.render(M.state.layout, ctx.config, M.state.list_win, M.state.pagination, ctx.prompt_position)
+end
+
+function M.render_list()
+  if not M.state.active then return end
+
+  local ctx = build_render_context()
+  local lines, item_to_lines = generate_item_lines(ctx)
+
+  apply_bottom_padding(lines, item_to_lines, ctx)
+  update_buffer_and_cursor(lines, item_to_lines, ctx)
+
+  if #ctx.items > 0 then apply_all_highlights(lines, item_to_lines, ctx) end
+
+  -- 6. Finalize with combo overlays and scrollbar
+  finalize_render(item_to_lines, ctx)
 end
 
 function M.update_preview()
@@ -2101,11 +1988,12 @@ end
 --- @param opts.layout.prompt_position? string|function Prompt position: 'top'|'bottom' or function(terminal_width, terminal_height): string (default: 'bottom')
 --- @param opts.layout.preview_position? string|function Preview position: 'left'|'right'|'top'|'bottom' or function(terminal_width, terminal_height): string (default: 'right')
 --- @param opts.layout.preview_size? number|function Preview size as ratio (0.0-1.0) or function(terminal_width, terminal_height): number (default: 0.5)
+--- @param opts.renderer? table Custom renderer implementing {render_line, apply_highlights} interface (default: file_renderer)
 function M.open(opts)
   if M.state.active then return end
 
-  -- Initialize selection state
   M.state.selected_files = {}
+  M.state.renderer = opts and opts.renderer or nil
 
   local merged_config, base_path = initialize_picker(opts)
   if not merged_config then return end
