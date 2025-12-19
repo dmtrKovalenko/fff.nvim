@@ -2,7 +2,7 @@ local M = {}
 local system = require('fff.utils.system')
 local fs_utils = require('fff.utils.fs')
 
-local GITHUB_REPO = 'dmtrKovalenko/fff.nvim'
+local GITHUB_REPO = 'madmaxieee/fff.nvim'
 
 local function get_current_version(plugin_dir, callback)
   vim.system({ 'git', 'rev-parse', '--short', 'HEAD' }, { cwd = plugin_dir }, function(result)
