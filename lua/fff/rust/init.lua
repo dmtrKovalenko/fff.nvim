@@ -37,6 +37,7 @@ local function try_load_library()
     local stat = vim.uv.fs_stat(actual_path)
     if stat and stat.type == 'file' then
       local loader, err = package.loadlib(actual_path, 'luaopen_fff_nvim')
+      if err then return nil, string.format('Error loading library from %s: %s', actual_path, err) end
       if loader then return loader() end
     end
   end
@@ -44,12 +45,13 @@ local function try_load_library()
 end
 
 local backend, load_err = try_load_library()
-if not backend then
+if not backend or load_err then
   local err_msg = string.format(
-    'Failed to load fff rust backend.\nError: %s\nSearched paths:\n%s\nMake sure binary exists with `cargo build --release`',
+    'Failed to load fff rust backend.\nError: %s\nSearched paths:\n%s\nMake sure binary exists or make it exists using \n `:lua require("fff.download").download_or_build_binary()`\nor\n`cargo build --release`\n(and rerun neovim after)',
     tostring(load_err),
     vim.inspect(paths)
   )
+
   error(err_msg)
 end
 

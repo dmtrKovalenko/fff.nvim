@@ -1,6 +1,5 @@
 local M = {}
 local system = require('fff.utils.system')
-local uv = vim and vim.uv or require('luv')
 
 local GITHUB_REPO = 'dmtrKovalenko/fff.nvim'
 
@@ -24,7 +23,7 @@ end
 
 local function binary_exists(plugin_dir)
   local binary_path = get_binary_path(plugin_dir)
-  local stat = uv.fs_stat(binary_path)
+  local stat = vim.uv.fs_stat(binary_path)
   return stat and stat.type == 'file'
 end
 
@@ -32,9 +31,10 @@ local function download_file(url, output_path, opts, callback)
   opts = opts or {}
 
   local dir = vim.fn.fnamemodify(output_path, ':h')
-  uv.fs_mkdir(dir, 493, function(err) -- 493 = 0755 octal
-    if err and not err:match('EEXIST') then
-      callback(false, 'Failed to create directory: ' .. err)
+
+  mkdir_recursive(dir, function(mkdir_ok, mkdir_err)
+    if not mkdir_ok then
+      callback(false, mkdir_err)
       return
     end
 
@@ -89,7 +89,7 @@ local function download_from_github(version, binary_path, opts, callback)
     local ok, err_msg = pcall(function() package.loadlib(binary_path, 'luaopen_fff_nvim') end)
 
     if not ok then
-      uv.fs_unlink(binary_path)
+      vim.uv.fs_unlink(binary_path)
       callback(false, 'Downloaded binary is not valid: ' .. (err_msg or 'unknown error'))
       return
     end
