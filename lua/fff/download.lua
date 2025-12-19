@@ -1,5 +1,6 @@
 local M = {}
 local system = require('fff.utils.system')
+local fs_utils = require('fff.utils.fs')
 
 local GITHUB_REPO = 'dmtrKovalenko/fff.nvim'
 
@@ -31,8 +32,7 @@ local function download_file(url, output_path, opts, callback)
   opts = opts or {}
 
   local dir = vim.fn.fnamemodify(output_path, ':h')
-
-  mkdir_recursive(dir, function(mkdir_ok, mkdir_err)
+  fs_utils.mkdir_recursive(dir, function(mkdir_ok, mkdir_err)
     if not mkdir_ok then
       callback(false, mkdir_err)
       return
