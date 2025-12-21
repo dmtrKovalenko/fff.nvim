@@ -1,19 +1,5 @@
 local M = {}
 
-M.highlights = {
-  untracked = 'FFFGitUntracked',
-  modified = 'FFFGitModified',
-  deleted = 'FFFGitDeleted',
-  renamed = 'FFFGitRenamed',
-  staged_new = 'FFFGitStaged',
-  staged_modified = 'FFFGitStaged',
-  staged_deleted = 'FFFGitStaged',
-  ignored = 'FFFGitIgnored',
-  clean = '',
-  clear = '',
-  unknown = 'FFFGitUntracked',
-}
-
 -- git signs like borders
 M.border_chars = {
   untracked = '┆', -- Dotted vertical line
@@ -29,39 +15,83 @@ M.border_chars = {
   clear = '',
 }
 
-M.border_highlights = {
-  untracked = 'FFFGitSignUntracked',
-  modified = 'FFFGitSignModified',
-  deleted = 'FFFGitSignDeleted',
-  renamed = 'FFFGitSignRenamed',
-  staged_new = 'FFFGitSignStaged',
-  staged_modified = 'FFFGitSignStaged',
-  staged_deleted = 'FFFGitSignStaged',
-  ignored = 'FFFGitSignIgnored',
-  clean = '',
-  clear = '',
-  unknown = 'FFFGitSignUntracked',
-}
+-- Cache for config-based highlight mappings
+local highlights_cache = nil
+local border_highlights_cache = nil
+local border_highlights_selected_cache = nil
 
-M.border_highlights_selected = {
-  untracked = 'FFFGitSignUntrackedSelected',
-  modified = 'FFFGitSignModifiedSelected',
-  deleted = 'FFFGitSignDeletedSelected',
-  renamed = 'FFFGitSignRenamedSelected',
-  staged_new = 'FFFGitSignStagedSelected',
-  staged_modified = 'FFFGitSignStagedSelected',
-  staged_deleted = 'FFFGitSignStagedSelected',
-  ignored = 'FFFGitSignIgnoredSelected',
-  clean = '',
-  clear = '',
-  unknown = 'FFFGitSignUntrackedSelected',
-}
+--- Build and cache highlight mappings from config
+local function ensure_cache()
+  if highlights_cache then return end
 
-function M.get_highlight(git_status) return M.highlights[git_status] or '' end
+  local config = require('fff.conf').get()
 
-function M.get_border_highlight(git_status) return M.border_highlights[git_status] or '' end
+  highlights_cache = {
+    untracked = config.hl.git_untracked,
+    modified = config.hl.git_modified,
+    deleted = config.hl.git_deleted,
+    renamed = config.hl.git_renamed,
+    staged_new = config.hl.git_staged,
+    staged_modified = config.hl.git_staged,
+    staged_deleted = config.hl.git_staged,
+    ignored = config.hl.git_ignored,
+    clean = '',
+    clear = '',
+    unknown = config.hl.git_untracked,
+  }
 
-function M.get_border_highlight_selected(git_status) return M.border_highlights_selected[git_status] or '' end
+  border_highlights_cache = {
+    untracked = config.hl.git_sign_untracked,
+    modified = config.hl.git_sign_modified,
+    deleted = config.hl.git_sign_deleted,
+    renamed = config.hl.git_sign_renamed,
+    staged_new = config.hl.git_sign_staged,
+    staged_modified = config.hl.git_sign_staged,
+    staged_deleted = config.hl.git_sign_staged,
+    ignored = config.hl.git_sign_ignored,
+    clean = '',
+    clear = '',
+    unknown = config.hl.git_sign_untracked,
+  }
+
+  border_highlights_selected_cache = {
+    untracked = config.hl.git_sign_untracked_selected,
+    modified = config.hl.git_sign_modified_selected,
+    deleted = config.hl.git_sign_deleted_selected,
+    renamed = config.hl.git_sign_renamed_selected,
+    staged_new = config.hl.git_sign_staged_selected,
+    staged_modified = config.hl.git_sign_staged_selected,
+    staged_deleted = config.hl.git_sign_staged_selected,
+    ignored = config.hl.git_sign_ignored_selected,
+    clean = '',
+    clear = '',
+    unknown = config.hl.git_sign_untracked_selected,
+  }
+end
+
+--- Get highlight group for git status text
+--- @param git_status string Git status
+--- @return string Highlight group name
+function M.get_text_highlight(git_status)
+  ensure_cache()
+  return highlights_cache and highlights_cache[git_status] or ''
+end
+
+--- Get border highlight group for git status
+--- @param git_status string Git status
+--- @return string Highlight group name
+function M.get_border_highlight(git_status)
+  ensure_cache()
+  return border_highlights_cache and border_highlights_cache[git_status] or ''
+end
+
+--- Get selected border highlight group for git status
+--- @param git_status string Git status
+--- @return string Highlight group name
+function M.get_border_highlight_selected(git_status)
+  ensure_cache()
+  return border_highlights_selected_cache and border_highlights_selected_cache[git_status] or ''
+end
 
 function M.get_border_char(git_status) return M.border_chars[git_status] or '' end
 
@@ -110,11 +140,11 @@ function M.setup_highlights()
     { 'FFFGitSignIgnored', 'FFFGitSignIgnoredSelected', '#4B5563', 8 },
   }
 
+  local visual_bg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'gui')
+  local visual_bg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'cterm')
+
   for _, hl in ipairs(git_highlights) do
     local _, selected_hl, gui_fg, cterm_fg = hl[1], hl[2], hl[3], hl[4]
-
-    local visual_bg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'gui')
-    local visual_bg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'cterm')
 
     local gui_bg = visual_bg_gui ~= '' and visual_bg_gui or 'NONE'
     local cterm_bg = visual_bg_cterm ~= '' and visual_bg_cterm or 'NONE'
@@ -130,6 +160,37 @@ function M.setup_highlights()
       )
     )
   end
+
+  -- Selection highlight - use Directory/Number colors (better than green 'Added')
+  vim.cmd('highlight default link FFFSelected Directory')
+
+  local dir_fg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Directory')), 'fg', 'gui')
+  local dir_fg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Directory')), 'fg', 'cterm')
+
+  if dir_fg_gui == '' or dir_fg_gui == '-1' then
+    -- Directory not defined, try Number
+    dir_fg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Number')), 'fg', 'gui')
+    dir_fg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Number')), 'fg', 'cterm')
+  end
+
+  -- Fallback to blue if neither Directory nor Number have colors
+  local is_dark_bg = vim.o.background == 'dark'
+  local gui_fg = dir_fg_gui ~= '' and dir_fg_gui or (is_dark_bg and '#60A5FA' or '#0369A1')
+  local cterm_fg = dir_fg_cterm ~= '' and dir_fg_cterm or (is_dark_bg and '12' or '4')
+
+  local gui_bg = visual_bg_gui ~= '' and visual_bg_gui or 'NONE'
+  local cterm_bg = visual_bg_cterm ~= '' and visual_bg_cterm or 'NONE'
+
+  -- Create combined highlight: Directory/Number foreground + Visual background
+  vim.cmd(
+    string.format(
+      'highlight default FFFSelectedActive guifg=%s guibg=%s ctermfg=%s ctermbg=%s',
+      gui_fg,
+      gui_bg,
+      cterm_fg,
+      cterm_bg
+    )
+  )
 end
 
 return M

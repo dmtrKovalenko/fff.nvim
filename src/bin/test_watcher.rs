@@ -156,7 +156,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let timestamp = chrono::Local::now().format("%H:%M:%S");
             let file_picker = FILE_PICKER.read().unwrap();
             let files = file_picker.as_ref().unwrap().get_files();
-            let search_results = FilePicker::fuzzy_search(files, "rs", 5, 2, None, false);
+            let search_results = FilePicker::fuzzy_search(
+                files,
+                "rs",
+                fff_nvim::file_picker::FuzzySearchOptions {
+                    max_threads: 2,
+                    current_file: None,
+                    project_path: None,
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: fff_nvim::types::PaginationArgs {
+                        offset: 0,
+                        limit: 5,
+                    },
+                },
+            );
 
             println!(
                 "🔍 [{}] Search test 'rs': {} matches",

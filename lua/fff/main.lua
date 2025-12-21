@@ -10,12 +10,13 @@ M.state = { initialized = false }
 function M.setup(config) vim.g.fff = config end
 
 --- Find files in current directory
-function M.find_files()
+--- @param opts? table Optional configuration {renderer = custom_renderer}
+function M.find_files(opts)
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
   if picker_ok then
-    picker_ui.open()
+    picker_ui.open(opts)
   else
-    vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
+    vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
   end
 end
 
@@ -53,8 +54,12 @@ end
 --- @return table List of matching files
 function M.search(query, max_results)
   local fuzzy = require('fff.core').ensure_initialized()
-  max_results = max_results or require('fff.config').get().max_results
-  local ok, search_result = pcall(fuzzy.fuzzy_search_files, query, max_results, nil, nil)
+  local config = require('fff.conf').get()
+  max_results = max_results or config.max_results
+  local combo_boost_score_multiplier = config.history and config.history.combo_boost_score_multiplier or 100
+  local min_combo_count = config.history and config.history.min_combo_count or 3
+  local ok, search_result =
+    pcall(fuzzy.fuzzy_search_files, query, max_results, nil, nil, false, combo_boost_score_multiplier, min_combo_count)
   if ok and search_result.items then return search_result.items end
   return {}
 end

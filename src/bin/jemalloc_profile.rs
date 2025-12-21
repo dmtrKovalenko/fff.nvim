@@ -86,10 +86,18 @@ fn test_search_memory_pattern(
                 let search_result = FilePicker::fuzzy_search(
                     picker.get_files(),
                     &query,
-                    50 + (i % 50), // Vary result count
-                    1 + (i % 4),   // Vary thread count
-                    None,
-                    false, // prompt_position not relevant for test
+                    fff_nvim::file_picker::FuzzySearchOptions {
+                        max_threads: 1 + (i % 4),
+                        current_file: None,
+                        project_path: None,
+                        last_same_query_match: None,
+                        combo_boost_score_multiplier: 100,
+                        min_combo_count: 3,
+                        pagination: fff_nvim::types::PaginationArgs {
+                            offset: 0,
+                            limit: 50 + (i % 50),
+                        },
+                    },
                 );
                 (search_result.items.len(), search_result.total_matched)
             } else {

@@ -16,7 +16,7 @@ local function setup_global_autocmds(config)
   local group = vim.api.nvim_create_augroup('fff_file_tracking', { clear = true })
 
   if config.frecency.enabled then
-    vim.api.nvim_create_autocmd({ 'BufReadPost' }, {
+    vim.api.nvim_create_autocmd({ 'BufEnter' }, {
       group = group,
       desc = 'Track file access for FFF frecency',
       callback = function(args)
@@ -28,11 +28,7 @@ local function setup_global_autocmds(config)
 
           vim.uv.fs_realpath(file_path, function(rp_err, real_path)
             if rp_err or not real_path then return end
-            local ok, track_err = pcall(fuzzy.track_access, real_path)
-
-            if not ok then
-              vim.notify('FFF: Failed to track file access: ' .. tostring(track_err), vim.log.levels.ERROR)
-            end
+            pcall(fuzzy.track_access, real_path)
           end)
         end)
       end,
@@ -47,9 +43,14 @@ local function setup_global_autocmds(config)
       local new_cwd = vim.v.event.cwd
       if state.initialized and new_cwd and new_cwd ~= config.base_path then
         vim.schedule(function()
-          local picker = require('fff.main')
-          local ok, err = pcall(picker.change_indexing_directory, new_cwd)
+          -- Delay require to avoid circular dependency: core -> main -> picker_ui -> file_picker -> core
+          local ok, picker = pcall(require, 'fff.main')
           if not ok then
+            vim.notify('FFF: Failed to load main module: ' .. tostring(picker), vim.log.levels.ERROR)
+            return
+          end
+          local change_ok, err = pcall(picker.change_indexing_directory, new_cwd)
+          if not change_ok then
             vim.notify('FFF: Failed to change indexing directory: ' .. tostring(err), vim.log.levels.ERROR)
           end
         end)
@@ -82,9 +83,11 @@ M.ensure_initialized = function()
     end
   end
 
-  local db_path = config.frecency.db_path or (vim.fn.stdpath('cache') .. '/fff_nvim')
-  local ok, result = pcall(fuzzy.init_db, db_path, true)
-  if not ok then vim.notify('Failed to initialize frecency database: ' .. result, vim.log.levels.WARN) end
+  local frecency_db_path = config.frecency.db_path or (vim.fn.stdpath('cache') .. '/fff_frecency')
+  local history_db_path = config.history.db_path or (vim.fn.stdpath('data') .. '/fff_history')
+
+  local ok, result = pcall(fuzzy.init_db, frecency_db_path, history_db_path, true)
+  if not ok then vim.notify('Failed to databases: ' .. result, vim.log.levels.WARN) end
 
   ok, result = pcall(fuzzy.init_file_picker, config.base_path)
   if not ok then

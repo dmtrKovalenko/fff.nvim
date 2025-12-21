@@ -1,3 +1,5 @@
+use std::path::StripPrefixError;
+
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
@@ -33,6 +35,12 @@ pub enum Error {
     DbCommit(#[source] heed::Error),
     #[error("Failed to start file system watcher: {0}")]
     FileSystemWatch(#[from] notify::Error),
+
+    #[error("Expected a path to be child of another path: {0}")]
+    StripPrefixError(#[from] StripPrefixError),
+
+    #[error("libgit2 error occurred: {0}")]
+    Git(#[from] git2::Error),
 }
 
 impl From<Error> for mlua::Error {
@@ -43,3 +51,5 @@ impl From<Error> for mlua::Error {
         mlua::Error::RuntimeError(string_value)
     }
 }
+
+pub type Result<T> = std::result::Result<T, Error>;
