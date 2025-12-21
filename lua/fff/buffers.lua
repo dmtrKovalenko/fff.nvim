@@ -511,7 +511,7 @@ function M.render_list()
   -- Format each buffer line
   for i = 1, display_count do
     local item = items[i]
-    local icon, icon_hl = icons.get_icon_display(item.name, item.extension, false)
+    local icon, icon_hl = icons.get_icon(item.name, item.extension, false)
 
     -- Build the line: [bufnr] status icon name flags path
     local bufnr_str = string.format('[%d]', item.bufnr)
