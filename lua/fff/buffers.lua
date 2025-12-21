@@ -200,7 +200,7 @@ end
 
 function M.is_preview_enabled()
   local preview_state = nil
-  if M and M.state and M.state.config then
+  if M.state.config and M.state.config.preview then
     preview_state = M.state.config.preview
   end
   if not preview_state then
