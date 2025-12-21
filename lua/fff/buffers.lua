@@ -44,8 +44,8 @@ function M.get_listed_buffers()
   local buffers = {}
   for bufnr = 1, vim.fn.bufnr('$') do
     if vim.fn.buflisted(bufnr) == 1 then
-      local buftype = vim.api.nvim_buf_get_option(bufnr, 'filetype')
-      if buftype ~= 'qf' then
+      local buftype = vim.api.nvim_buf_get_option(bufnr, 'buftype')
+      if buftype ~= 'quickfix' then
         table.insert(buffers, bufnr)
       end
     end
@@ -69,7 +69,7 @@ end
 --- @param bufnr number Buffer number
 --- @return table Buffer info table compatible with picker
 function M.format_buffer(bufnr)
-  local bufinfo = vim.fn.getbufinfo(bufnr)[1]
+  local bufinfo = (vim.fn.getbufinfo(bufnr) or {})[1]
   local name = vim.api.nvim_buf_get_name(bufnr)
   local modified = vim.api.nvim_buf_get_option(bufnr, 'modified')
   local readonly = not vim.api.nvim_buf_get_option(bufnr, 'modifiable')
@@ -198,7 +198,7 @@ local function get_prompt_position()
   return 'bottom'
 end
 
-function M.enabled_preview()
+function M.is_preview_enabled()
   local preview_state = nil
   if M and M.state and M.state.config then
     preview_state = M.state.config.preview
@@ -241,8 +241,8 @@ function M.create_ui()
   if type(preview_size_ratio) == 'function' then
     preview_size_ratio = preview_size_ratio(terminal_width, terminal_height)
   end
-  local preview_width = M.enabled_preview() and math.floor(width * preview_size_ratio) or 0
-  local list_width = width - preview_width - (M.enabled_preview() and 3 or 0)
+  local preview_width = M.is_preview_enabled() and math.floor(width * preview_size_ratio) or 0
+  local list_width = width - preview_width - (M.is_preview_enabled() and 3 or 0)
 
   -- Create buffers
   M.state.input_buf = vim.api.nvim_create_buf(false, true)
@@ -251,7 +251,7 @@ function M.create_ui()
   M.state.list_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_option(M.state.list_buf, 'bufhidden', 'wipe')
 
-  if M.enabled_preview() then
+  if M.is_preview_enabled() then
     M.state.preview_buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_option(M.state.preview_buf, 'bufhidden', 'wipe')
   end
@@ -274,7 +274,7 @@ function M.create_ui()
   })
 
   -- Create preview window
-  if M.enabled_preview() then
+  if M.is_preview_enabled() then
     M.state.preview_win = vim.api.nvim_open_win(M.state.preview_buf, false, {
       relative = 'editor',
       width = preview_width,
@@ -309,7 +309,7 @@ function M.create_ui()
 
   vim.api.nvim_set_current_win(M.state.input_win)
 
-  if M.enabled_preview() then
+  if M.is_preview_enabled() then
     preview.set_preview_window(M.state.preview_win)
   end
 
@@ -319,7 +319,7 @@ end
 function M.setup_buffers()
   vim.api.nvim_buf_set_name(M.state.input_buf, 'fff buffer search')
   vim.api.nvim_buf_set_name(M.state.list_buf, 'fff buffer list')
-  if M.enabled_preview() then
+  if M.is_preview_enabled() then
     vim.api.nvim_buf_set_name(M.state.preview_buf, 'fff buffer preview')
   end
 
@@ -331,7 +331,7 @@ function M.setup_buffers()
   vim.api.nvim_buf_set_option(M.state.list_buf, 'filetype', 'fff_buffer_list')
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
 
-  if M.enabled_preview() then
+  if M.is_preview_enabled() then
     vim.api.nvim_buf_set_option(M.state.preview_buf, 'buftype', 'nofile')
     vim.api.nvim_buf_set_option(M.state.preview_buf, 'filetype', 'fff_buffer_preview')
     vim.api.nvim_buf_set_option(M.state.preview_buf, 'modifiable', false)
@@ -353,7 +353,7 @@ function M.setup_windows()
   vim.api.nvim_win_set_option(M.state.list_win, 'signcolumn', 'yes:1')
   vim.api.nvim_win_set_option(M.state.list_win, 'winhighlight', win_hl)
 
-  if M.enabled_preview() then
+  if M.is_preview_enabled() then
     vim.api.nvim_win_set_option(M.state.preview_win, 'wrap', false)
     vim.api.nvim_win_set_option(M.state.preview_win, 'cursorline', false)
     vim.api.nvim_win_set_option(M.state.preview_win, 'number', false)
@@ -597,7 +597,7 @@ function M.render_list()
 end
 
 function M.update_preview()
-  if not M.enabled_preview() then
+  if not M.is_preview_enabled() then
     return
   end
   if not M.state.active then
@@ -640,7 +640,7 @@ function M.clear_preview()
   if not M.state.active then
     return
   end
-  if not M.enabled_preview() then
+  if not M.is_preview_enabled() then
     return
   end
 
@@ -802,7 +802,7 @@ function M.close()
   end
 
   local buffers = { M.state.input_buf, M.state.list_buf }
-  if M.enabled_preview() then
+  if M.is_preview_enabled() then
     table.insert(buffers, M.state.preview_buf)
   end
 
