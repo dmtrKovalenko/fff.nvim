@@ -843,9 +843,13 @@ function M.open(opts)
   local config = conf.get()
   local merged_config = vim.tbl_deep_extend('force', config or {}, opts or {})
 
-  -- Override title and prompt for buffers
-  merged_config.title = opts and opts.title or 'Buffers'
-  merged_config.prompt = opts and opts.prompt or '🦆 '
+  -- Set default title and prompt for buffers if not already set
+  if merged_config.title == nil then
+    merged_config.title = 'Buffers'
+  end
+  if merged_config.prompt == nil then
+    merged_config.prompt = '🦆 '
+  end
 
   M.state.config = merged_config
   M.state.active = true
