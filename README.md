@@ -1,5 +1,5 @@
 <p align="center">
-  <h2 align="center">FFF.nvim</h2>
+  <h2 align="center">FFF.nvim + Buffers Support</h2>
 </p>
 
 <p align="center">
