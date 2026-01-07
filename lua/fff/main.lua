@@ -222,6 +222,19 @@ function M.buffers(opts)
   end
 end
 
+--- Open the colors picker (similar to fzf.vim :Colors)
+--- Lists available colorschemes with fuzzy search and live preview
+--- @param opts? table Optional configuration to override defaults
+--- @param opts.bang? boolean If true, fullscreen mode (no live preview, like fzf.vim)
+function M.colors(opts)
+  local colors_ok, colors = pcall(require, 'fff.colors')
+  if colors_ok then
+    colors.open(opts)
+  else
+    vim.notify('Failed to load colors picker: ' .. tostring(colors), vim.log.levels.ERROR)
+  end
+end
+
 --- Opens the file under the cursor with an optional callback if the only file
 --- is found and we are about to inline open it
 --- @param open_cb function|nil Optional callback function to execute after opening the file

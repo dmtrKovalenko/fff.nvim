@@ -6,6 +6,7 @@ Table of Contents                                 *fff.nvim-table-of-contents*
   - Features                                               |fff.nvim-features|
   - Installation                                       |fff.nvim-installation|
   - Buffer Picker                                   |fff.nvim-buffer-picker|
+  - Colors Picker                                   |fff.nvim-colors-picker|
 FFF.nvimFinally a smart fuzzy file picker for neovim.
 
 
@@ -27,6 +28,7 @@ FEATURES                                                   *fff.nvim-features*
 - Git status integration allowing to take advantage of last modified times within a worktree
 - Separate file index maintained by a dedicated backend allows <10 milliseconds search time for 50k files codebase
 - Buffer picker - quickly switch between open buffers (similar to fzf.vim's :Buffers)
+- Colors picker - browse and switch colorschemes with live preview (similar to fzf.vim's :Colors)
 - Display images in previews (for now requires snacks.nvim)
 - Smart in a plenty of different ways hopefully helpful for your workflow
 - This plugin initializes itself lazily by default
@@ -256,6 +258,7 @@ AVAILABLE METHODS
     require('fff').find_files()                         -- Find files in current directory
     require('fff').find_in_git_root()                   -- Find files in the current git repository
     require('fff').buffers()                            -- Open buffer picker (similar to fzf.vim :Buffers)
+    require('fff').colors()                             -- Open colors picker (similar to fzf.vim :Colors)
     require('fff').scan_files()                         -- Trigger rescan of files in the current directory
     require('fff').refresh_git_status()                 -- Refresh git status for the active file lock
     require('fff').find_files_in_dir(path)              -- Find files in a specific directory
@@ -269,6 +272,7 @@ FFF.nvim provides several commands for interacting with the file picker:
 
 - `:FFFFind [path|query]` - Open file picker. Optional: provide directory path or search query
 - `:FFFBuffers` - Open buffer picker to browse and switch between open buffers
+- `:Colors` - Open colors picker to browse and switch colorschemes with live preview
 - `:FFFScan` - Manually trigger a rescan of files in the current directory
 - `:FFFRefreshGit` - Manually refresh git status for all files
 - `:FFFClearCache [all|frecency|files]` - Clear various caches
@@ -308,6 +312,35 @@ Example keybinding:
     vim.keymap.set('n', '<leader>b', function()
       require('fff').buffers()
     end, { desc = 'FFF Buffers' })
+<
+
+
+COLORS PICKER                                         *fff.nvim-colors-picker*
+
+The colors picker (`:Colors`) provides a fast way to browse and switch
+colorschemes, similar to fzf.vim's `:Colors` command.
+
+Features:
+- Lists all available colorschemes from runtimepath and packages
+- Live preview as you navigate (colorscheme changes while browsing)
+- Current colorscheme shown at the top with `*` indicator
+- Fuzzy search to filter colorschemes
+- Restores original colorscheme if you cancel (press `<Esc>`)
+
+Keybindings in colors picker:
+
+  Key              Action~
+  `<CR>`             Apply selected colorscheme
+  `<Esc>`            Cancel and restore original colorscheme
+  `<Up>` / `<C-p>`   Move selection up (and preview)
+  `<Down>` / `<C-n>` Move selection down (and preview)
+
+Example keybinding:
+
+>lua
+    vim.keymap.set('n', '<leader>c', function()
+      require('fff').colors()
+    end, { desc = 'FFF Colors' })
 <
 
 

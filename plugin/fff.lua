@@ -64,6 +64,16 @@ end, {
   desc = 'Browse and switch between open buffers with FFF',
 })
 
+vim.api.nvim_create_user_command('Colors', function(opts)
+  local fff = require('fff')
+  fff.colors({
+    bang = opts.bang,
+  })
+end, {
+  bang = true,
+  desc = 'Browse and switch colorschemes with live preview (like fzf.vim :Colors)',
+})
+
 vim.api.nvim_create_user_command('FFFRefreshGit', function() require('fff').refresh_git_status() end, {
   desc = 'Manually refresh git status for all files',
 })
