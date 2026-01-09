@@ -155,7 +155,7 @@ pub fn fuzzy_search_files(
         Option<usize>,
     ),
 ) -> LuaResult<LuaValue> {
-    let Some(ref mut picker) = *FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)? else {
+    let Some(ref picker) = *FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)? else {
         return Err(Error::FilePickerMissing)?;
     };
 
