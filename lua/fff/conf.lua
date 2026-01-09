@@ -123,7 +123,6 @@ local function init()
       imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
       line_numbers = false,
       wrap_lines = false,
-      show_file_info = true,
       filetypes = {
         svg = { wrap_lines = true },
         markdown = { wrap_lines = true },
@@ -199,6 +198,7 @@ local function init()
     debug = {
       enabled = false, -- Set to true to show scores in the UI
       show_scores = false,
+      show_file_info = false, -- Show file info panel in preview
     },
     logging = {
       enabled = true,

@@ -299,7 +299,7 @@ function M.create_ui()
     combo_renderer.init(M.state.ns_id)
   end
 
-  local debug_enabled_in_preview = M.enabled_preview() and config and config.debug and config.debug.show_scores
+  local debug_enabled_in_preview = M.enabled_preview() and config and config.debug and config.debug.show_file_info
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
