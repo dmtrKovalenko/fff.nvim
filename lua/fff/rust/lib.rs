@@ -1,3 +1,4 @@
+use crate::db_healthcheck::DbHealthChecker;
 use crate::error::Error;
 use crate::file_picker::{FilePicker, FuzzySearchOptions};
 use crate::frecency::FrecencyTracker;
@@ -10,6 +11,7 @@ use std::sync::RwLock;
 use std::time::Duration;
 
 mod background_watcher;
+mod db_healthcheck;
 mod error;
 pub mod file_picker;
 mod frecency;
@@ -381,6 +383,111 @@ pub fn init_tracing(
         .map_err(|e| LuaError::RuntimeError(format!("Failed to initialize tracing: {}", e)))
 }
 
+/// Returns health check information including version, git2 status, and repository detection
+pub fn health_check(lua: &Lua, test_path: Option<String>) -> LuaResult<LuaValue> {
+    let table = lua.create_table()?;
+    table.set("version", env!("CARGO_PKG_VERSION"))?;
+
+    let test_path = test_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let git_info = lua.create_table()?;
+    let git_version = git2::Version::get();
+    let (major, minor, rev) = git_version.libgit2_version();
+    let libgit2_version_str = format!("{}.{}.{}", major, minor, rev);
+
+    match git2::Repository::discover(&test_path) {
+        Ok(repo) => {
+            git_info.set("available", true)?;
+            git_info.set("repository_found", true)?;
+            if let Some(workdir) = repo.workdir() {
+                git_info.set("workdir", workdir.to_string_lossy().to_string())?;
+            }
+            // Get git2 version info
+            git_info.set("libgit2_version", libgit2_version_str.clone())?;
+        }
+        Err(e) => {
+            git_info.set("available", true)?;
+            git_info.set("repository_found", false)?;
+            git_info.set("error", e.message().to_string())?;
+            git_info.set("libgit2_version", libgit2_version_str)?;
+        }
+    }
+    table.set("git", git_info)?;
+
+    // Check file picker status
+    let picker_info = lua.create_table()?;
+    match FILE_PICKER.read() {
+        Ok(guard) => {
+            if let Some(ref picker) = *guard {
+                picker_info.set("initialized", true)?;
+                picker_info.set(
+                    "base_path",
+                    picker.base_path().to_string_lossy().to_string(),
+                )?;
+                picker_info.set("is_scanning", picker.is_scan_active())?;
+                let progress = picker.get_scan_progress();
+                picker_info.set("indexed_files", progress.scanned_files_count)?;
+            } else {
+                picker_info.set("initialized", false)?;
+            }
+        }
+        Err(_) => {
+            picker_info.set("initialized", false)?;
+            picker_info.set("error", "Failed to acquire file picker lock")?;
+        }
+    }
+    table.set("file_picker", picker_info)?;
+
+    let frecency_info = lua.create_table()?;
+    match FRECENCY.read() {
+        Ok(guard) => {
+            frecency_info.set("initialized", guard.is_some())?;
+
+            if let Some(ref frecency) = *guard {
+                match frecency.get_lua_helthcheckh(lua) {
+                    Ok(healthcheck_table) => {
+                        frecency_info.set("db_healthcheck", healthcheck_table)?;
+                    }
+                    Err(e) => {
+                        frecency_info.set("db_healthcheck_error", e.to_string())?;
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            frecency_info.set("initialized", false)?;
+            frecency_info.set("error", "Failed to acquire frecency lock")?;
+        }
+    }
+    table.set("frecency", frecency_info)?;
+
+    let query_tracker_info = lua.create_table()?;
+    match QUERY_TRACKER.read() {
+        Ok(guard) => {
+            query_tracker_info.set("initialized", guard.is_some())?;
+            if let Some(ref query_history) = *guard {
+                match query_history.get_lua_helthcheckh(lua) {
+                    Ok(healthcheck_table) => {
+                        query_tracker_info.set("db_healthcheck", healthcheck_table)?;
+                    }
+                    Err(e) => {
+                        query_tracker_info.set("db_healthcheck_error", e.to_string())?;
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            query_tracker_info.set("initialized", false)?;
+            query_tracker_info.set("error", "Failed to acquire query tracker lock")?;
+        }
+    }
+    table.set("query_tracker", query_tracker_info)?;
+
+    Ok(LuaValue::Table(table))
+}
+
 fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
     let exports = lua.create_table()?;
     exports.set("init_db", lua.create_function(init_db)?)?;
@@ -427,6 +534,7 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
         "get_historical_query",
         lua.create_function(get_historical_query)?,
     )?;
+    exports.set("health_check", lua.create_function(health_check)?)?;
 
     Ok(exports)
 }
