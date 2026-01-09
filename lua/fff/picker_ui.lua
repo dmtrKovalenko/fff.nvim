@@ -8,6 +8,36 @@ local location_utils = require('fff.location_utils')
 local combo_renderer = require('fff.combo_renderer')
 local scrollbar = require('fff.scrollbar')
 
+local BORDER_PRESETS = {
+  single = { '┌', '─', '┐', '│', '┘', '─', '└', '│' },
+  double = { '╔', '═', '╗', '║', '╝', '═', '╚', '║' },
+  rounded = { '╭', '─', '╮', '│', '╯', '─', '╰', '│' },
+  solid = { '▛', '▀', '▜', '▐', '▟', '▄', '▙', '▌' },
+  shadow = { '', '', ' ', ' ', ' ', ' ', ' ', '' },
+  none = { '', '', '', '', '', '', '', '' },
+}
+
+local T_JUNCTION_PRESETS = {
+  single = { '├', '┤' },
+  double = { '╠', '╣' },
+  rounded = { '├', '┤' }, -- Rounded only affects corners
+  solid = { '▌', '▐' },
+  shadow = { '', '' },
+  none = { '', '' },
+}
+
+--- Get border characters from vim.o.winborder for custom connected borders
+--- @return table Array of 8 border characters
+--- @return table Array of 2 T-junction characters (left, right)
+local function get_border_chars()
+  local winborder = vim.o.winborder or 'single'
+
+  if BORDER_PRESETS[winborder] then return BORDER_PRESETS[winborder], T_JUNCTION_PRESETS[winborder] end
+
+  -- Fallback to single for unknown border styles
+  return BORDER_PRESETS.single, T_JUNCTION_PRESETS.single
+end
+
 local function get_prompt_position()
   local config = M.state.config
 
@@ -405,7 +435,7 @@ function M.create_ui()
     M.state.file_info_buf = nil
   end
 
-  -- Create list window with conditional title based on prompt position
+  local border_chars, t_junctions = get_border_chars()
   local list_window_config = {
     relative = 'editor',
     width = layout.list_width,
@@ -414,8 +444,20 @@ function M.create_ui()
     row = layout.list_row,
     -- To make the input feel connected with the picker, we customize the
     -- respective corner border characters based on prompt_position
-    border = prompt_position == 'bottom' and { '┌', '─', '┐', '│', '', '', '', '│' }
-      or { '├', '─', '┤', '│', '┘', '─', '└', '│' },
+    -- When prompt at bottom: list has top border + sides, no bottom (connects to input below)
+    -- When prompt at top: list has sides + bottom with T-junctions at top (connects to input above)
+    border = prompt_position == 'bottom'
+        and { border_chars[1], border_chars[2], border_chars[3], border_chars[4], '', '', '', border_chars[8] }
+      or {
+        t_junctions[1],
+        border_chars[2],
+        t_junctions[2],
+        border_chars[4],
+        border_chars[5],
+        border_chars[6],
+        border_chars[7],
+        border_chars[8],
+      },
     style = 'minimal',
   }
 
@@ -436,7 +478,6 @@ function M.create_ui()
       height = layout.file_info.height,
       col = layout.file_info.col,
       row = layout.file_info.row,
-      border = 'single',
       style = 'minimal',
       title = ' File Info ',
       title_pos = 'left',
@@ -453,14 +494,12 @@ function M.create_ui()
       height = layout.preview.height,
       col = layout.preview.col,
       row = layout.preview.row,
-      border = 'single',
       style = 'minimal',
       title = ' Preview ',
       title_pos = 'left',
     })
   end
 
-  -- Create input window with conditional title based on prompt position
   local input_window_config = {
     relative = 'editor',
     width = layout.input_width,
@@ -469,12 +508,21 @@ function M.create_ui()
     row = layout.input_row,
     -- To make the input feel connected with the picker, we customize the
     -- respective corner border characters based on prompt_position
-    border = prompt_position == 'bottom' and { '├', '─', '┤', '│', '┘', '─', '└', '│' }
-      or { '┌', '─', '┐', '│', '', '', '', '│' },
+    -- if prompt at bottom: input has T-junctions at top (connects to list above), full bottom border
+    -- if prompt at top: input has top border + sides, no bottom (connects to list below)
+    border = prompt_position == 'bottom' and {
+      t_junctions[1],
+      border_chars[2],
+      t_junctions[2],
+      border_chars[4],
+      border_chars[5],
+      border_chars[6],
+      border_chars[7],
+      border_chars[8],
+    } or { border_chars[1], border_chars[2], border_chars[3], border_chars[4], '', '', '', border_chars[8] },
     style = 'minimal',
   }
 
-  -- Add title if prompt is at top - title appears above the prompt
   if prompt_position == 'top' then
     input_window_config.title = title
     input_window_config.title_pos = 'left'
@@ -1154,12 +1202,10 @@ local function apply_bottom_padding(lines, item_to_lines, ctx)
   local empty_lines_needed = math.max(0, ctx.win_height - total_content_lines)
 
   if empty_lines_needed > 0 then
-    -- Insert empty lines at the beginning
-    for i = empty_lines_needed, 1, -1 do
+    for _ = empty_lines_needed, 1, -1 do
       table.insert(lines, 1, string.rep(' ', ctx.win_width + 5))
     end
 
-    -- Adjust item_to_lines mapping
     for i = ctx.display_start, ctx.display_end do
       if item_to_lines[i] then
         item_to_lines[i].first = item_to_lines[i].first + empty_lines_needed
@@ -1174,22 +1220,18 @@ end
 --- @param item_to_lines table Item to lines mapping
 --- @param ctx table Render context
 local function update_buffer_and_cursor(lines, item_to_lines, ctx)
-  -- Calculate cursor line position
   local cursor_line = 0
   if #ctx.items > 0 and ctx.cursor >= 1 and ctx.cursor <= #ctx.items then
     local cursor_item = item_to_lines[ctx.cursor]
     if cursor_item then cursor_line = cursor_item.last end
   end
 
-  -- Update buffer
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', true)
   vim.api.nvim_buf_set_lines(M.state.list_buf, 0, -1, false, lines)
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
 
-  -- Clear existing highlights
   vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
 
-  -- Position cursor
   if #ctx.items > 0 and cursor_line > 0 and cursor_line <= #lines then
     vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
   end
@@ -1216,21 +1258,17 @@ local function apply_all_highlights(lines, item_to_lines, ctx)
 
     if not line_content then goto continue end
 
-    -- Apply highlights using renderer.apply_highlights
     renderer.apply_highlights(item, ctx, i, M.state.list_buf, M.state.ns_id, line_idx, line_content)
     ::continue::
   end
 end
 
--- Renders all virtual buffer overalys
 local function finalize_render(item_to_lines, ctx)
-  -- Get text_len from item_to_lines if combo exists
   local combo_text_len = nil
   if ctx.combo_item_index and item_to_lines[ctx.combo_item_index] then
     combo_text_len = item_to_lines[ctx.combo_item_index].combo_header_text_len
   end
 
-  -- Render combo overlays
   local combo_was_hidden = combo_renderer.render_highlights_and_overlays(
     ctx.combo_item_index,
     combo_text_len or ctx.combo_header_text_len,
@@ -1239,13 +1277,13 @@ local function finalize_render(item_to_lines, ctx)
     M.state.ns_id,
     ctx.config.hl.border,
     item_to_lines,
-    ctx.prompt_position
+    ctx.prompt_position,
+    #ctx.items
   )
 
-  -- Handle combo hiding with scroll adjustment
+  -- it's important part of functionality when user scrolls to the middle of the page we hide
+  -- the combo overlay which leaves the gap of the internal neovim buffer, so scroll to show last item
   if combo_was_hidden and ctx.prompt_position == 'bottom' then scroll_to_bottom() end
-
-  -- Render scrollbar
   scrollbar.render(M.state.layout, ctx.config, M.state.list_win, M.state.pagination, ctx.prompt_position)
 end
 
@@ -1661,7 +1699,7 @@ function M.toggle_select()
 
   M.render_list()
 
-  -- only when selecting the element not deslecting
+  -- only when selecting the element not deselecting
   if not was_selected then
     if get_prompt_position() == 'bottom' then
       M.move_up()
