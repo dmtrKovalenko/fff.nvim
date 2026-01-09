@@ -1,3 +1,4 @@
+use crate::db_healthcheck::DbHealthChecker;
 use crate::{error::Error, git::is_modified_status};
 use heed::{Database, Env, EnvOpenOptions};
 use heed::{
@@ -25,6 +26,19 @@ const MODIFICATION_THRESHOLDS: [(i64, u64); 5] = [
     (2, 60 * 60 * 24),     // 1 day
     (1, 60 * 60 * 24 * 7), // 1 week
 ];
+
+impl DbHealthChecker for FrecencyTracker {
+    fn get_env(&self) -> &heed::Env {
+        &self.env
+    }
+
+    fn count_entries(&self) -> Result<Vec<(&'static str, u64)>, Error> {
+        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
+        let count = self.db.len(&rtxn).map_err(Error::DbRead)?;
+
+        Ok(vec![("absolute_frecency_entries", count)])
+    }
+}
 
 impl FrecencyTracker {
     pub fn new(db_path: &str, use_unsafe_no_lock: bool) -> Result<Self, Error> {
