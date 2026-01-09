@@ -479,6 +479,7 @@ function M.create_ui()
       col = layout.file_info.col,
       row = layout.file_info.row,
       style = 'minimal',
+      border = border_chars,
       title = ' File Info ',
       title_pos = 'left',
     })
@@ -495,6 +496,7 @@ function M.create_ui()
       col = layout.preview.col,
       row = layout.preview.row,
       style = 'minimal',
+      border = border_chars,
       title = ' Preview ',
       title_pos = 'left',
     })
@@ -610,49 +612,43 @@ function M.setup_windows()
   end
 
   local picker_group = vim.api.nvim_create_augroup('fff_picker_focus', { clear = true })
-  local picker_windows = nil
 
-  if M.enabled_preview() then
-    picker_windows = { M.state.input_win, M.state.preview_win, M.state.list_win }
-  else
-    picker_windows = { M.state.input_win, M.state.list_win }
+  --- Check if a window is one of the picker windows
+  --- @param win number Window handle to check
+  --- @return boolean
+  local function is_picker_window(win)
+    if not win or not vim.api.nvim_win_is_valid(win) then return false end
+
+    local picker_windows = { M.state.input_win, M.state.list_win }
+    if M.state.preview_win then table.insert(picker_windows, M.state.preview_win) end
+    if M.state.file_info_win then table.insert(picker_windows, M.state.file_info_win) end
+
+    for _, picker_win in ipairs(picker_windows) do
+      if picker_win and vim.api.nvim_win_is_valid(picker_win) and win == picker_win then return true end
+    end
+
+    return false
   end
-
-  if M.state.preview_win then table.insert(picker_windows, M.state.preview_win) end
-  if M.state.file_info_win then table.insert(picker_windows, M.state.file_info_win) end
 
   vim.api.nvim_create_autocmd('WinLeave', {
     group = picker_group,
     callback = function()
       if not M.state.active then return end
 
-      local current_win = vim.api.nvim_get_current_win()
-      local is_picker_window = false
-      for _, win in ipairs(picker_windows) do
-        if win and vim.api.nvim_win_is_valid(win) and current_win == win then
-          is_picker_window = true
-          break
-        end
-      end
+      local leaving_win = vim.api.nvim_get_current_win()
 
-      -- if we current focused on picker window and leaving it
-      if is_picker_window then
-        vim.defer_fn(function()
-          if not M.state.active then return end
+      -- Only care if we're leaving a picker window
+      if not is_picker_window(leaving_win) then return end
 
-          local new_win = vim.api.nvim_get_current_win()
-          local entering_picker_window = false
+      -- Schedule check to allow the window switch to complete
+      vim.schedule(function()
+        if not M.state.active then return end
 
-          for _, win in ipairs(picker_windows) do
-            if win and vim.api.nvim_win_is_valid(win) and new_win == win then
-              entering_picker_window = true
-              break
-            end
-          end
+        local new_win = vim.api.nvim_get_current_win()
 
-          if not entering_picker_window then M.close() end
-        end, 10)
-      end
+        -- Close picker only if we moved to a non-picker window
+        if not is_picker_window(new_win) then M.close() end
+      end)
     end,
     desc = 'Close picker when focus leaves picker windows',
   })
@@ -674,44 +670,104 @@ local function set_keymap(mode, keys, handler, opts)
   end
 end
 
+function M.focus_list_win()
+  if not M.state.active then return end
+  if not M.state.list_win or not vim.api.nvim_win_is_valid(M.state.list_win) then return end
+
+  vim.cmd('stopinsert')
+  vim.api.nvim_set_current_win(M.state.list_win)
+end
+
+function M.focus_preview_win()
+  if not M.state.active then return end
+  if not M.state.preview_win or not vim.api.nvim_win_is_valid(M.state.preview_win) then return end
+
+  vim.cmd('stopinsert')
+  vim.api.nvim_set_current_win(M.state.preview_win)
+end
+
+local function move_list_cursor(direction)
+  if not M.state.active then return end
+
+  local items = M.state.filtered_items
+  if #items == 0 then return end
+
+  local new_cursor = M.state.cursor + direction
+  new_cursor = math.max(1, math.min(new_cursor, #items))
+
+  if new_cursor ~= M.state.cursor then
+    M.state.cursor = new_cursor
+    M.render_list()
+    M.update_preview()
+    M.update_status()
+  end
+end
+
 function M.setup_keymaps()
   local keymaps = M.state.config.keymaps
-
   local input_opts = { buffer = M.state.input_buf, noremap = true, silent = true }
-
-  set_keymap('i', keymaps.close, M.close, input_opts)
-  set_keymap('i', keymaps.select, M.select, input_opts)
-  set_keymap('i', keymaps.select_split, function() M.select('split') end, input_opts)
-  set_keymap('i', keymaps.select_vsplit, function() M.select('vsplit') end, input_opts)
-  set_keymap('i', keymaps.select_tab, function() M.select('tab') end, input_opts)
-  set_keymap('i', keymaps.move_up, M.move_up, input_opts)
-  set_keymap('i', keymaps.move_down, M.move_down, input_opts)
-  set_keymap('i', keymaps.preview_scroll_up, M.scroll_preview_up, input_opts)
-  set_keymap('i', keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
-  set_keymap('i', keymaps.toggle_debug, M.toggle_debug, input_opts)
-  set_keymap('i', keymaps.cycle_previous_query, M.recall_query_from_history, input_opts)
-  set_keymap('i', keymaps.toggle_select, M.toggle_select, input_opts)
-  set_keymap('i', keymaps.send_to_quickfix, M.send_to_quickfix, input_opts)
-
   local list_opts = { buffer = M.state.list_buf, noremap = true, silent = true }
 
-  set_keymap('n', keymaps.close, M.focus_input_win, list_opts)
+  vim.keymap.set('i', '<C-w>', function()
+    local col = vim.fn.col('.') - 1
+    local line = vim.fn.getline('.')
+    local prompt_len = #M.state.config.prompt
+    if col <= prompt_len then return '' end
+    local text_part = line:sub(prompt_len + 1, col)
+    local after_cursor = line:sub(col + 1)
+    local new_text = text_part:gsub('%S*%s*$', '')
+    local new_line = M.state.config.prompt .. new_text .. after_cursor
+    local new_col = prompt_len + #new_text
+    vim.fn.setline('.', new_line)
+    vim.fn.cursor(vim.fn.line('.'), new_col + 1)
+    return ''
+  end, input_opts)
+
+  set_keymap('i', keymaps.move_up, M.move_up, input_opts)
+  set_keymap('i', keymaps.move_down, M.move_down, input_opts)
+  set_keymap('i', keymaps.cycle_previous_query, M.recall_query_from_history, input_opts)
+  set_keymap('n', 'j', M.move_down, input_opts)
+  set_keymap('n', 'k', M.move_up, input_opts)
+  set_keymap('n', keymaps.focus_list, M.focus_list_win, input_opts)
+  set_keymap('n', keymaps.focus_preview, M.focus_preview_win, input_opts)
+
+  -- Input buffer: both modes
+  set_keymap({ 'i', 'n' }, keymaps.close, M.close, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.select, M.select, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.select_split, function() M.select('split') end, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.select_vsplit, function() M.select('vsplit') end, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.select_tab, function() M.select('tab') end, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.preview_scroll_up, M.scroll_preview_up, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.toggle_debug, M.toggle_debug, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.toggle_select, M.toggle_select, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.send_to_quickfix, M.send_to_quickfix, input_opts)
+
+  -- List buffer
+  set_keymap('n', keymaps.close, M.close, list_opts)
+  set_keymap('n', 'q', M.close, list_opts)
+  set_keymap('n', 'j', function() move_list_cursor(1) end, list_opts)
+  set_keymap('n', 'k', function() move_list_cursor(-1) end, list_opts)
+  set_keymap('n', 'i', M.focus_input_win, list_opts)
+  set_keymap('n', keymaps.focus_preview, M.focus_preview_win, list_opts)
   set_keymap('n', keymaps.select, M.select, list_opts)
   set_keymap('n', keymaps.select_split, function() M.select('split') end, list_opts)
   set_keymap('n', keymaps.select_vsplit, function() M.select('vsplit') end, list_opts)
   set_keymap('n', keymaps.select_tab, function() M.select('tab') end, list_opts)
-  set_keymap('n', keymaps.move_up, M.move_up, list_opts)
-  set_keymap('n', keymaps.move_down, M.move_down, list_opts)
   set_keymap('n', keymaps.preview_scroll_up, M.scroll_preview_up, list_opts)
   set_keymap('n', keymaps.preview_scroll_down, M.scroll_preview_down, list_opts)
   set_keymap('n', keymaps.toggle_debug, M.toggle_debug, list_opts)
   set_keymap('n', keymaps.toggle_select, M.toggle_select, list_opts)
   set_keymap('n', keymaps.send_to_quickfix, M.send_to_quickfix, list_opts)
 
+  -- Preview buffer
   if M.state.preview_buf then
     local preview_opts = { buffer = M.state.preview_buf, noremap = true, silent = true }
 
-    set_keymap('n', keymaps.close, M.focus_input_win, preview_opts)
+    set_keymap('n', keymaps.close, M.close, preview_opts)
+    set_keymap('n', 'q', M.close, preview_opts)
+    set_keymap('n', 'i', M.focus_input_win, preview_opts)
+    set_keymap('n', keymaps.focus_list, M.focus_list_win, preview_opts)
     set_keymap('n', keymaps.select, M.select, preview_opts)
     set_keymap('n', keymaps.select_split, function() M.select('split') end, preview_opts)
     set_keymap('n', keymaps.select_vsplit, function() M.select('vsplit') end, preview_opts)
@@ -720,26 +776,6 @@ function M.setup_keymaps()
     set_keymap('n', keymaps.toggle_select, M.toggle_select, preview_opts)
     set_keymap('n', keymaps.send_to_quickfix, M.send_to_quickfix, preview_opts)
   end
-
-  vim.keymap.set('i', '<C-w>', function()
-    local col = vim.fn.col('.') - 1
-    local line = vim.fn.getline('.')
-    local prompt_len = #M.state.config.prompt
-
-    if col <= prompt_len then return '' end
-
-    local text_part = line:sub(prompt_len + 1, col)
-    local after_cursor = line:sub(col + 1)
-
-    local new_text = text_part:gsub('%S*%s*$', '')
-    local new_line = M.state.config.prompt .. new_text .. after_cursor
-    local new_col = prompt_len + #new_text
-
-    vim.fn.setline('.', new_line)
-    vim.fn.cursor(vim.fn.line('.'), new_col + 1)
-
-    return '' -- Return empty string to prevent default <C-w> behavior
-  end, input_opts)
 
   vim.api.nvim_buf_attach(M.state.input_buf, false, {
     on_lines = function()
@@ -785,7 +821,6 @@ function M.toggle_debug()
   end
 end
 
---- Handle input change
 function M.on_input_change()
   if not M.state.active then return end
 

@@ -143,6 +143,8 @@ local function init()
       cycle_previous_query = '<C-Up>',
       toggle_select = '<Tab>',
       send_to_quickfix = '<C-q>',
+      focus_list = '<leader>l',
+      focus_preview = '<leader>p',
     },
     hl = {
       border = 'FloatBorder',
