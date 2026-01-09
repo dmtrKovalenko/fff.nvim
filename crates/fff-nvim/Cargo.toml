@@ -32,6 +32,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
+fff-core = { path = "../fff-core" }
 fff-query-parser = { path = "../fff-query-parser" }
 
 # External dependencies

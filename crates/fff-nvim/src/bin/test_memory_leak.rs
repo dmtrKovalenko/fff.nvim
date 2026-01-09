@@ -1,4 +1,5 @@
-use fff_nvim::{FILE_PICKER, file_picker::FilePicker};
+use fff_core::file_picker::FilePicker;
+use fff_core::{FILE_PICKER, FuzzySearchOptions, PaginationArgs, QueryParser};
 use std::env;
 use std::io::{self, Write};
 use std::thread;
@@ -196,20 +197,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let max_threads = 1 + (search_count % 8); // Vary thread count
 
         let search_start = Instant::now();
+        let parser = QueryParser::default();
         let (result_count, search_duration) = {
             let file_picker_guard = FILE_PICKER.read().unwrap();
             if let Some(ref picker) = *file_picker_guard {
+                let parsed = parser.parse(query);
                 let search_result = FilePicker::fuzzy_search(
                     picker.get_files(),
                     query,
-                    fff_nvim::file_picker::FuzzySearchOptions {
+                    parsed,
+                    FuzzySearchOptions {
                         max_threads,
                         current_file: None,
                         project_path: None,
                         last_same_query_match: None,
                         combo_boost_score_multiplier: 100,
                         min_combo_count: 3,
-                        pagination: fff_nvim::types::PaginationArgs {
+                        pagination: PaginationArgs {
                             offset: 0,
                             limit: max_results,
                         },

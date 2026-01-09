@@ -1,57 +1,37 @@
-use std::path::StripPrefixError;
+//! Error handling for fff-nvim
+//!
+//! This module provides utilities for converting fff_core errors to mlua errors.
 
-#[derive(thiserror::Error, Debug)]
-#[non_exhaustive]
-pub enum Error {
-    #[error("Thread panicked")]
-    ThreadPanic,
-    #[error("Invalid path {0}")]
-    InvalidPath(std::path::PathBuf),
-    #[error("File picker not initialized")]
-    FilePickerMissing,
-    #[error("Failed to acquire lock for frecency")]
-    AcquireFrecencyLock,
-    #[error("Failed to acquire lock for items by provider")]
-    AcquireItemLock,
-    #[error("Failed to acquire lock for path cache")]
-    AcquirePathCacheLock,
-    #[error("Failed to create directory: {0}")]
-    CreateDir(#[from] std::io::Error),
-    #[error("Failed to open frecency database env: {0}")]
-    EnvOpen(#[source] heed::Error),
-    #[error("Failed to create frecency database: {0}")]
-    DbCreate(#[source] heed::Error),
-    #[error("Failed to clear stale readers for frecency database: {0}")]
-    DbClearStaleReaders(#[source] heed::Error),
+use fff_core::Error as CoreError;
 
-    #[error("Failed to start read transaction for frecency database: {0}")]
-    DbStartReadTxn(#[source] heed::Error),
-    #[error("Failed to start write transaction for frecency database: {0}")]
-    DbStartWriteTxn(#[source] heed::Error),
-
-    #[error("Failed to read from frecency database: {0}")]
-    DbRead(#[source] heed::Error),
-    #[error("Failed to write to frecency database: {0}")]
-    DbWrite(#[source] heed::Error),
-    #[error("Failed to commit write transaction to frecency database: {0}")]
-    DbCommit(#[source] heed::Error),
-    #[error("Failed to start file system watcher: {0}")]
-    FileSystemWatch(#[from] notify::Error),
-
-    #[error("Expected a path to be child of another path: {0}")]
-    StripPrefixError(#[from] StripPrefixError),
-
-    #[error("libgit2 error occurred: {0}")]
-    Git(#[from] git2::Error),
+/// Convert a fff_core::Error to mlua::Error
+///
+/// This function is used because we can't implement From<CoreError> for mlua::Error
+/// due to Rust's orphan rules (both types are foreign to this crate).
+pub fn to_lua_error(err: CoreError) -> mlua::Error {
+    let string_value = err.to_string();
+    ::tracing::error!(string_value);
+    mlua::Error::RuntimeError(string_value)
 }
 
-impl From<Error> for mlua::Error {
-    fn from(value: Error) -> Self {
-        let string_value = value.to_string();
+/// Extension trait for Result<T, fff_core::Error> to convert to LuaResult<T>
+pub trait IntoLuaResult<T> {
+    fn into_lua_result(self) -> mlua::Result<T>;
+}
 
-        ::tracing::error!(string_value);
-        mlua::Error::RuntimeError(string_value)
+impl<T> IntoLuaResult<T> for Result<T, CoreError> {
+    fn into_lua_result(self) -> mlua::Result<T> {
+        self.map_err(to_lua_error)
     }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+/// Extension trait for Result<T, PoisonError> to convert to Result<T, CoreError>
+pub trait IntoCoreError<T> {
+    fn with_lock_error(self, err: CoreError) -> Result<T, CoreError>;
+}
+
+impl<T, G> IntoCoreError<T> for Result<T, std::sync::PoisonError<G>> {
+    fn with_lock_error(self, err: CoreError) -> Result<T, CoreError> {
+        self.map_err(|_| err)
+    }
+}

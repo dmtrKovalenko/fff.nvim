@@ -4,56 +4,62 @@ use crate::{
     sort_buffer::{sort_by_key_with_buffer, sort_with_buffer},
     types::{FileItem, Score, ScoringContext},
 };
-use fff_query_parser::{Constraint, FuzzyQuery, GitStatusFilter, QueryParser};
+use fff_query_parser::{Constraint, FuzzyQuery, GitStatusFilter};
 use neo_frizbee::Scoring;
 use rayon::prelude::*;
+use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::path::MAIN_SEPARATOR;
 use zlob::{ZlobFlags, zlob_match_paths};
 
-/// Precompute glob matches for all patterns, returning sets of matching path indices
-fn precompute_glob_matches<'a>(
-    constraints: &[Constraint<'a>],
-    paths: &[&str],
-) -> Vec<(bool, HashSet<usize>)> {
-    let mut results = Vec::new();
-    collect_glob_indices(constraints, paths, &mut results, false);
-    results
+/// Check if file extension matches (without allocation)
+#[inline]
+fn file_has_extension(file_name: &str, ext: &str) -> bool {
+    // Check if file ends with ".ext"
+    if file_name.len() <= ext.len() + 1 {
+        return false;
+    }
+    let start = file_name.len() - ext.len() - 1;
+    file_name.as_bytes().get(start) == Some(&b'.')
+        && file_name[start + 1..].eq_ignore_ascii_case(ext)
 }
 
-fn collect_glob_indices<'a>(
-    constraints: &[Constraint<'a>],
-    paths: &[&str],
-    results: &mut Vec<(bool, HashSet<usize>)>,
-    is_negated: bool,
-) {
-    for constraint in constraints {
-        match constraint {
-            Constraint::Glob(pattern) => {
-                if let Ok(Some(matches)) = zlob_match_paths(pattern, paths, ZlobFlags::RECOMMENDED) {
-                    // Convert matched paths to indices
-                    let matched_set: HashSet<&str> = matches.into_iter().collect();
-                    let indices: HashSet<usize> = paths
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, p)| matched_set.contains(*p))
-                        .map(|(i, _)| i)
-                        .collect();
-                    results.push((is_negated, indices));
-                } else {
-                    // No matches - empty set
-                    results.push((is_negated, HashSet::new()));
-                }
+/// Check if path contains segment (without allocation)
+#[inline]
+fn path_contains_segment(path: &str, segment: &str) -> bool {
+    // Check for /segment/ anywhere or segment/ at start
+    let path_bytes = path.as_bytes();
+    let segment_len = segment.len();
+    
+    // Check segment/ at start
+    if path.len() > segment_len 
+        && path_bytes.get(segment_len) == Some(&b'/')
+        && path[..segment_len].eq_ignore_ascii_case(segment) 
+    {
+        return true;
+    }
+    
+    // Check /segment/ anywhere using byte scanning
+    if path.len() < segment_len + 2 {
+        return false;
+    }
+    
+    for i in 0..path.len().saturating_sub(segment_len + 1) {
+        if path_bytes[i] == b'/' {
+            let start = i + 1;
+            let end = start + segment_len;
+            if end < path.len() 
+                && path_bytes[end] == b'/'
+                && path[start..end].eq_ignore_ascii_case(segment)
+            {
+                return true;
             }
-            Constraint::Not(inner) => {
-                collect_glob_indices(&[inner.as_ref().clone()], paths, results, !is_negated);
-            }
-            _ => {}
         }
     }
+    false
 }
 
-/// Check if a file at given index matches a constraint (single-pass friendly)
+/// Check if a file at given index matches a constraint (single-pass friendly, allocation-free)
 #[inline]
 fn file_matches_constraint_at_index(
     file: &FileItem,
@@ -64,84 +70,118 @@ fn file_matches_constraint_at_index(
     negate: bool,
 ) -> bool {
     let matches = match constraint {
-        Constraint::Extension(ext) => {
-            let suffix = format!(".{}", ext);
-            file.file_name.ends_with(&suffix)
-        }
+        Constraint::Extension(ext) => file_has_extension(&file.file_name, ext),
         Constraint::Glob(_) => {
             // Use precomputed glob results
-            let result = glob_results.get(*glob_idx).map(|(is_neg, set)| {
-                let matched = set.contains(&file_index);
-                if *is_neg { !matched } else { matched }
-            }).unwrap_or(true);
+            let result = glob_results
+                .get(*glob_idx)
+                .map(|(is_neg, set)| {
+                    let matched = set.contains(&file_index);
+                    if *is_neg { !matched } else { matched }
+                })
+                .unwrap_or(true);
             *glob_idx += 1;
             return if negate { !result } else { result };
         }
-        Constraint::PathSegment(segment) => {
-            let segment_with_slashes = format!("/{}/", segment);
-            let segment_prefix = format!("{}/", segment);
-            file.relative_path.contains(&segment_with_slashes)
-                || file.relative_path.starts_with(&segment_prefix)
-        }
-        Constraint::GitStatus(status_filter) => {
-            match (file.git_status, status_filter) {
-                (Some(status), GitStatusFilter::Modified) => is_modified_status(status),
-                (Some(status), GitStatusFilter::Untracked) => status.contains(git2::Status::WT_NEW),
-                (Some(status), GitStatusFilter::Staged) => {
-                    status.intersects(
-                        git2::Status::INDEX_NEW
-                            | git2::Status::INDEX_MODIFIED
-                            | git2::Status::INDEX_DELETED
-                            | git2::Status::INDEX_RENAMED
-                            | git2::Status::INDEX_TYPECHANGE,
-                    )
-                }
-                (Some(status), GitStatusFilter::Unmodified) => status.is_empty(),
-                (None, GitStatusFilter::Unmodified) => true,
-                (None, _) => false,
-            }
-        }
+        Constraint::PathSegment(segment) => path_contains_segment(&file.relative_path, segment),
+        Constraint::GitStatus(status_filter) => match (file.git_status, status_filter) {
+            (Some(status), GitStatusFilter::Modified) => is_modified_status(status),
+            (Some(status), GitStatusFilter::Untracked) => status.contains(git2::Status::WT_NEW),
+            (Some(status), GitStatusFilter::Staged) => status.intersects(
+                git2::Status::INDEX_NEW
+                    | git2::Status::INDEX_MODIFIED
+                    | git2::Status::INDEX_DELETED
+                    | git2::Status::INDEX_RENAMED
+                    | git2::Status::INDEX_TYPECHANGE,
+            ),
+            (Some(status), GitStatusFilter::Unmodified) => status.is_empty(),
+            (None, GitStatusFilter::Unmodified) => true,
+            (None, _) => false,
+        },
         Constraint::Not(inner) => {
-            return file_matches_constraint_at_index(file, file_index, inner, glob_results, glob_idx, !negate);
+            return file_matches_constraint_at_index(
+                file,
+                file_index,
+                inner,
+                glob_results,
+                glob_idx,
+                !negate,
+            );
         }
         Constraint::Text(text) => {
-            let text_lower = text.to_lowercase();
-            file.relative_path_lower.contains(&text_lower)
+            // Case-insensitive contains without allocation
+            file.relative_path_lower
+                .contains(&text.to_ascii_lowercase())
         }
         // Parts and Exclude are handled at a higher level
         Constraint::Parts(_) | Constraint::Exclude(_) | Constraint::FileType(_) => true,
     };
-    
+
     if negate { !matches } else { matches }
 }
 
 /// Apply constraint-based prefiltering in a single pass over all files.
 /// Returns a vector of indices into the original files slice that pass all constraints.
-/// Only applies constraints when there are 2+ components in the query.
+/// Multiple extension constraints (*.rs *.ts) are combined with OR logic.
 fn apply_constraints(
     files: &[FileItem],
     constraints: &[Constraint<'_>],
-    token_count: usize,
 ) -> Option<Vec<usize>> {
-    if token_count < 2 || constraints.is_empty() {
+    if constraints.is_empty() {
         return None;
     }
 
-    // Collect paths for glob matching (zlob is more efficient matching all paths at once)
-    let paths: Vec<&str> = files.iter().map(|f| f.relative_path.as_str()).collect();
-    
-    // Precompute glob matches
-    let glob_results = precompute_glob_matches(constraints, &paths);
+    // Separate extension constraints from other constraints
+    // Use SmallVec to avoid heap allocation for typical cases (few constraints)
+    let mut extensions: SmallVec<[&str; 8]> = SmallVec::new();
+    let mut other_constraints: SmallVec<[&Constraint<'_>; 8]> = SmallVec::new();
+
+    for constraint in constraints {
+        match constraint {
+            Constraint::Extension(ext) => extensions.push(ext),
+            _ => other_constraints.push(constraint),
+        }
+    }
+
+    // Only collect paths if we have glob constraints (expensive)
+    let has_globs = other_constraints
+        .iter()
+        .any(|c| matches!(c, Constraint::Glob(_) | Constraint::Not(_)));
+
+    let glob_results = if has_globs {
+        let paths: Vec<&str> = files.iter().map(|f| f.relative_path.as_str()).collect();
+        precompute_glob_matches_refs(&other_constraints, &paths)
+    } else {
+        Vec::new()
+    };
 
     // Single pass: check all constraints for each file
     let indices: Vec<usize> = files
         .iter()
         .enumerate()
         .filter(|(i, file)| {
+            // Check extension constraint (OR logic if multiple)
+            let ext_matches = if extensions.is_empty() {
+                true
+            } else {
+                extensions.iter().any(|ext| file_has_extension(&file.file_name, ext))
+            };
+
+            if !ext_matches {
+                return false;
+            }
+
+            // Check other constraints (AND logic)
             let mut glob_idx = 0;
-            // File must match ALL constraints
-            constraints.iter().all(|constraint| {
-                file_matches_constraint_at_index(file, *i, constraint, &glob_results, &mut glob_idx, false)
+            other_constraints.iter().all(|constraint| {
+                file_matches_constraint_at_index(
+                    file,
+                    *i,
+                    constraint,
+                    &glob_results,
+                    &mut glob_idx,
+                    false,
+                )
             })
         })
         .map(|(i, _)| i)
@@ -150,15 +190,63 @@ fn apply_constraints(
     Some(indices)
 }
 
+/// Precompute glob matches for constraint references
+fn precompute_glob_matches_refs<'a>(
+    constraints: &[&Constraint<'a>],
+    paths: &[&str],
+) -> Vec<(bool, HashSet<usize>)> {
+    let mut results = Vec::new();
+    for constraint in constraints {
+        collect_glob_indices_ref(constraint, paths, &mut results, false);
+    }
+    results
+}
+
+fn collect_glob_indices_ref<'a>(
+    constraint: &Constraint<'a>,
+    paths: &[&str],
+    results: &mut Vec<(bool, HashSet<usize>)>,
+    is_negated: bool,
+) {
+    match constraint {
+        Constraint::Glob(pattern) => {
+            if let Ok(Some(matches)) = zlob_match_paths(pattern, paths, ZlobFlags::RECOMMENDED) {
+                // Build a set of matched path pointers for O(1) lookup
+                let matched_set: HashSet<usize> = matches
+                    .iter()
+                    .map(|s| s.as_ptr() as usize)
+                    .collect();
+                
+                // Convert to indices using pointer comparison (no string comparison)
+                let indices: HashSet<usize> = paths
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| matched_set.contains(&(p.as_ptr() as usize)))
+                    .map(|(i, _)| i)
+                    .collect();
+                results.push((is_negated, indices));
+            } else {
+                results.push((is_negated, HashSet::new()));
+            }
+        }
+        Constraint::Not(inner) => {
+            collect_glob_indices_ref(inner, paths, results, !is_negated);
+        }
+        _ => {}
+    }
+}
+
 /// Match files against all fuzzy parts.
 /// Single part: use optimized batch matching.
 /// Multiple parts: each part must match, scores are summed (Nucleo-style).
+/// Parts with less than 2 characters are skipped.
 fn match_fuzzy_parts(
     fuzzy_parts: &[&str],
     working_files: &[&FileItem],
     options: &neo_frizbee::Config,
 ) -> Vec<neo_frizbee::Match> {
     if fuzzy_parts.is_empty() {
+        tracing::debug!("match_fuzzy_parts: empty fuzzy_parts, returning empty");
         return vec![];
     }
 
@@ -167,30 +255,80 @@ fn match_fuzzy_parts(
         .map(|f| f.relative_path_lower.as_str())
         .collect();
 
+    // Filter out parts that are too short (< 2 chars)
+    let valid_parts: Vec<&str> = fuzzy_parts.iter().copied().filter(|p| p.len() >= 2).collect();
+    
+    tracing::debug!(
+        original_parts = ?fuzzy_parts,
+        valid_parts = ?valid_parts,
+        haystack_size = haystack.len(),
+        "match_fuzzy_parts: filtering short parts"
+    );
+
+    if valid_parts.is_empty() {
+        tracing::debug!("match_fuzzy_parts: no valid parts after filtering, returning empty");
+        return vec![];
+    }
+
     // Single part - use optimized batch matching (original behavior)
-    if fuzzy_parts.len() == 1 {
-        return neo_frizbee::match_list(fuzzy_parts[0], &haystack, options);
+    if valid_parts.len() == 1 {
+        let matches = neo_frizbee::match_list(valid_parts[0], &haystack, options);
+        tracing::debug!(
+            part = %valid_parts[0],
+            match_count = matches.len(),
+            "match_fuzzy_parts: single part matching"
+        );
+        return matches;
     }
 
     // Multiple parts - match first part, then filter by remaining parts
-    let mut matches = neo_frizbee::match_list(fuzzy_parts[0], &haystack, options);
-    
-    for part in &fuzzy_parts[1..] {
+    let mut matches = neo_frizbee::match_list(valid_parts[0], &haystack, options);
+    tracing::debug!(
+        part = %valid_parts[0],
+        match_count = matches.len(),
+        "match_fuzzy_parts: first part matches"
+    );
+
+    for (i, part) in valid_parts[1..].iter().enumerate() {
+        let before_count = matches.len();
+        
+        // Create safe config for this part - max_typos must not exceed part length
+        // to avoid underflow in neo_frizbee's min_haystack_len calculation
+        let part_max_typos = options.max_typos.map(|t| t.min(part.len() as u16));
+        let part_options = neo_frizbee::Config {
+            prefilter: options.prefilter,
+            max_typos: part_max_typos,
+            sort: options.sort,
+            scoring: options.scoring.clone(),
+        };
+        
         matches = matches
             .into_iter()
             .filter_map(|mut m| {
                 let path = haystack.get(m.index as usize)?;
-                let part_matches = neo_frizbee::match_list(part, &[*path], options);
+                let part_matches = neo_frizbee::match_list(part, &[*path], &part_options);
                 let part_match = part_matches.first()?;
-                
+
                 // Sum scores
                 let total = (m.score as u32).saturating_add(part_match.score as u32);
                 m.score = total.min(u16::MAX as u32) as u16;
                 Some(m)
             })
             .collect();
-        
+
+        tracing::debug!(
+            part_index = i + 1,
+            part = %part,
+            before_count = before_count,
+            after_count = matches.len(),
+            "match_fuzzy_parts: additional part filtering"
+        );
+
         if matches.is_empty() {
+            tracing::debug!(
+                part = %part,
+                "match_fuzzy_parts: all matches filtered out by part"
+            );
             break;
         }
     }
@@ -206,54 +344,119 @@ pub fn match_and_score_files<'a>(
         return (vec![], vec![], 0);
     }
 
-    let parsed = parser.parse(context.query);
-    let token_count = context.query.split_whitespace().count();
+    // =========================================================================
+    // STEP 1: Use pre-parsed query from context
+    // =========================================================================
+    let parsed = &context.parsed_query;
 
+    tracing::debug!(
+        query = %context.raw_query,
+        parsed_is_some = parsed.is_some(),
+        constraints_count = parsed.as_ref().map(|p| p.constraints.len()).unwrap_or(0),
+        fuzzy_query = ?parsed.as_ref().map(|p| &p.fuzzy_query),
+        "STEP 1: Using pre-parsed query"
+    );
+
+    // =========================================================================
+    // STEP 2: Apply constraint prefiltering
+    // =========================================================================
     let (working_files, _file_indices): (Vec<&FileItem>, Option<Vec<usize>>) =
         match parsed.as_ref().and_then(|p| {
             if p.constraints.is_empty() {
+                tracing::debug!("STEP 2: No constraints to apply");
                 None
             } else {
-                apply_constraints(files, &p.constraints, token_count)
+                tracing::debug!(
+                    constraints = ?p.constraints,
+                    "STEP 2: Applying {} constraints",
+                    p.constraints.len()
+                );
+                apply_constraints(files, &p.constraints)
             }
         }) {
             Some(indices) if !indices.is_empty() => {
                 let filtered: Vec<&FileItem> = indices.iter().map(|&i| &files[i]).collect();
                 tracing::debug!(
-                    "Prefiltered {} files to {} using {} constraints",
-                    files.len(),
-                    filtered.len(),
-                    parsed.as_ref().map(|p| p.constraints.len()).unwrap_or(0)
+                    original_count = files.len(),
+                    filtered_count = filtered.len(),
+                    "STEP 2: Constraint filtering complete"
                 );
                 (filtered, Some(indices))
             }
             Some(_) => {
-                tracing::debug!("All files filtered out by constraints");
+                tracing::debug!("STEP 2: All files filtered out by constraints - returning empty");
                 return (vec![], vec![], 0);
             }
             None => {
+                tracing::debug!(
+                    file_count = files.len(),
+                    "STEP 2: No constraint filtering applied, using all files"
+                );
                 (files.iter().collect(), None)
             }
         };
 
-    let query_trimmed = context.query.trim();
-    let fuzzy_parts: &[&str] = match &parsed {
+    // =========================================================================
+    // STEP 3: Extract fuzzy parts
+    // =========================================================================
+    let query_trimmed: &str = context.raw_query.trim();
+    let single_part_storage: [&str; 1] = [query_trimmed];
+
+    let fuzzy_parts: &[&str] = match parsed {
         None => {
+            tracing::debug!(
+                query = %query_trimmed,
+                "STEP 3: No parsed result, using raw query as single fuzzy part"
+            );
             if query_trimmed.len() < 2 {
+                tracing::debug!("STEP 3: Query too short (<2 chars), returning frecency-sorted");
                 return score_filtered_by_frecency(&working_files, context);
             }
-            std::slice::from_ref(&query_trimmed)
+            &single_part_storage
         }
         Some(p) => match &p.fuzzy_query {
-            FuzzyQuery::Text(t) if t.len() >= 2 => std::slice::from_ref(t),
-            FuzzyQuery::Parts(parts) if !parts.is_empty() => parts.as_slice(),
-            _ => return score_filtered_by_frecency(&working_files, context),
+            FuzzyQuery::Text(t) if t.len() >= 2 => {
+                tracing::debug!(
+                    text = %t,
+                    "STEP 3: Single fuzzy text part"
+                );
+                std::slice::from_ref(t)
+            }
+            FuzzyQuery::Parts(parts) if !parts.is_empty() => {
+                tracing::debug!(
+                    parts = ?parts.as_slice(),
+                    "STEP 3: Multiple fuzzy parts"
+                );
+                parts.as_slice()
+            }
+            FuzzyQuery::Empty => {
+                tracing::debug!("STEP 3: No fuzzy query (constraint-only), returning frecency-sorted");
+                return score_filtered_by_frecency(&working_files, context);
+            }
+            other => {
+                tracing::debug!(
+                    fuzzy_query = ?other,
+                    "STEP 3: Fuzzy query too short or empty, returning frecency-sorted"
+                );
+                return score_filtered_by_frecency(&working_files, context);
+            }
         },
     };
 
-    let has_uppercase = fuzzy_parts.iter().any(|p| p.chars().any(|c| c.is_uppercase()));
+    tracing::debug!(
+        fuzzy_parts = ?fuzzy_parts,
+        working_files_count = working_files.len(),
+        "STEP 3 COMPLETE: Ready for fuzzy matching"
+    );
+
+    // =========================================================================
+    // STEP 4: Configure matcher
+    // =========================================================================
+    let has_uppercase = fuzzy_parts
+        .iter()
+        .any(|p| p.chars().any(|c| c.is_uppercase()));
     let query_contains_path_separator = fuzzy_parts.iter().any(|p| p.contains(MAIN_SEPARATOR));
-    
+
     let options = neo_frizbee::Config {
         prefilter: true,
         max_typos: Some(context.max_typos),
@@ -265,12 +468,15 @@ pub fn match_and_score_files<'a>(
         },
     };
 
+    // =========================================================================
+    // STEP 5: Fuzzy match (handles both single and multi-part uniformly)
+    // =========================================================================
     let path_matches = match_fuzzy_parts(fuzzy_parts, &working_files, &options);
-    
+
     tracing::debug!(
-        "Fuzzy match {:?}: {} results",
-        fuzzy_parts,
-        path_matches.len()
+        fuzzy_parts = ?fuzzy_parts,
+        match_count = path_matches.len(),
+        "STEP 5: Fuzzy matching complete"
     );
 
     let primary_text = fuzzy_parts[0]; // Use first part for filename matching
@@ -479,40 +685,6 @@ fn score_filtered_by_frecency<'a>(
     sort_and_paginate(results, context)
 }
 
-fn score_all_by_frecency<'a>(
-    files: &'a [FileItem],
-    context: &ScoringContext,
-) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
-    let results: Vec<_> = files
-        .par_iter()
-        .map(|file| {
-            let total_frecency_score = file.access_frecency_score as i32
-                + (file.modification_frecency_score as i32).saturating_mul(4);
-
-            let current_file_penalty =
-                calculate_current_file_penalty(file, total_frecency_score, context);
-            let total = total_frecency_score.saturating_add(current_file_penalty);
-
-            let score = Score {
-                total,
-                base_score: 0,
-                filename_bonus: 0,
-                distance_penalty: 0,
-                special_filename_bonus: 0,
-                combo_match_boost: 0,
-                current_file_penalty,
-                frecency_boost: total_frecency_score,
-                exact_match: false,
-                match_type: "frecency",
-            };
-
-            (file, score)
-        })
-        .collect();
-
-    sort_and_paginate(results, context)
-}
-
 #[inline]
 fn calculate_current_file_penalty(
     file: &FileItem,
@@ -658,7 +830,8 @@ mod tests {
             .collect();
 
         let context = ScoringContext {
-            query: "test",
+            raw_query: "test",
+            parsed_query: None,
             max_threads: 1,
             max_typos: 2,
             current_file: None,
@@ -706,7 +879,8 @@ mod tests {
             .collect();
 
         let context = ScoringContext {
-            query: "test",
+            raw_query: "test",
+            parsed_query: None,
             max_threads: 1,
             max_typos: 2,
             current_file: None,
@@ -752,7 +926,8 @@ mod tests {
             .collect();
 
         let context = ScoringContext {
-            query: "test",
+            raw_query: "test",
+            parsed_query: None,
             max_threads: 1,
             max_typos: 2,
             current_file: None,
@@ -777,5 +952,109 @@ mod tests {
         assert_eq!(items[0].relative_path, "file2.rs");
         assert_eq!(items[1].relative_path, "file1.rs");
         assert_eq!(items[2].relative_path, "file3.rs");
+    }
+}
+
+#[cfg(test)]
+mod multi_part_tests {
+    #[test]
+    fn test_single_path_matching() {
+        let path = "core_workflow_service/kafka_event_consumer/src/ai_part_extraction_request/ai_part_extraction_request_handler.rs";
+        
+        // Test with max_typos = 2 (safe for short needles)
+        let options = neo_frizbee::Config {
+            prefilter: true,
+            max_typos: Some(2),
+            sort: false,
+            ..Default::default()
+        };
+
+        // Test "aipart" matching
+        let matches = neo_frizbee::match_list("aipart", &[path], &options);
+        println!("'aipart' matches (max_typos=2): {:?}", matches);
+        assert!(!matches.is_empty(), "'aipart' should match the path");
+
+        // Test "core" matching  
+        let matches = neo_frizbee::match_list("core", &[path], &options);
+        println!("'core' matches (max_typos=2): {:?}", matches);
+        assert!(!matches.is_empty(), "'core' should match the path");
+
+        // Test "co" matching - need max_typos <= needle.len()
+        let co_options = neo_frizbee::Config {
+            max_typos: Some(2), // Safe: 2 <= len("co") = 2
+            ..options
+        };
+        let matches = neo_frizbee::match_list("co", &[path], &co_options);
+        println!("'co' matches (max_typos=2): {:?}", matches);
+        assert!(!matches.is_empty(), "'co' should match the path");
+    }
+
+    #[test]
+    fn test_lowercase_path_matching() {
+        // The actual paths are lowercased
+        let path = "core_workflow_service/kafka_event_consumer/src/ai_part_extraction_request/ai_part_extraction_request_handler.rs".to_lowercase();
+        
+        let options = neo_frizbee::Config {
+            prefilter: true,
+            max_typos: Some(2),
+            sort: false,
+            ..Default::default()
+        };
+
+        // Test "co" matching on lowercase path
+        let matches = neo_frizbee::match_list("co", &[path.as_str()], &options);
+        println!("'co' matches lowercase path (max_typos=2): {:?}", matches);
+        assert!(!matches.is_empty(), "'co' should match the lowercase path");
+
+        // Test "core" matching on lowercase path
+        let matches = neo_frizbee::match_list("core", &[path.as_str()], &options);
+        println!("'core' matches lowercase path (max_typos=2): {:?}", matches);
+        assert!(!matches.is_empty(), "'core' should match the lowercase path");
+    }
+}
+
+#[cfg(test)]
+mod constraint_helper_tests {
+    use super::*;
+
+    #[test]
+    fn test_file_has_extension() {
+        assert!(file_has_extension("file.rs", "rs"));
+        assert!(file_has_extension("file.RS", "rs")); // case-insensitive
+        assert!(file_has_extension("file.test.rs", "rs"));
+        assert!(file_has_extension("a.rs", "rs"));
+        
+        assert!(!file_has_extension("file.tsx", "rs"));
+        assert!(!file_has_extension("rs", "rs")); // too short
+        assert!(!file_has_extension(".rs", "rs")); // just extension
+        assert!(!file_has_extension("file.rsx", "rs")); // different extension
+        assert!(!file_has_extension("filers", "rs")); // no dot
+    }
+
+    #[test]
+    fn test_path_contains_segment() {
+        // Segment at start
+        assert!(path_contains_segment("src/lib.rs", "src"));
+        assert!(path_contains_segment("SRC/lib.rs", "src")); // case-insensitive
+        
+        // Segment in middle
+        assert!(path_contains_segment("app/src/lib.rs", "src"));
+        assert!(path_contains_segment("app/SRC/lib.rs", "src"));
+        
+        // Multiple levels
+        assert!(path_contains_segment("core/workflow/src/main.rs", "src"));
+        assert!(path_contains_segment("core/workflow/src/main.rs", "workflow"));
+        assert!(path_contains_segment("core/workflow/src/main.rs", "core"));
+        
+        // Should not match partial segments
+        assert!(!path_contains_segment("source/lib.rs", "src"));
+        assert!(!path_contains_segment("mysrc/lib.rs", "src"));
+        
+        // Should not match filename
+        assert!(!path_contains_segment("lib/src", "src"));
+        
+        // Edge cases
+        assert!(!path_contains_segment("", "src"));
+        assert!(!path_contains_segment("src", "src")); // no trailing slash
     }
 }

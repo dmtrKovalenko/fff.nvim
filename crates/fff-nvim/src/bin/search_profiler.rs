@@ -1,5 +1,5 @@
-use fff_nvim::FILE_PICKER;
-use fff_nvim::file_picker::FilePicker;
+use fff_core::file_picker::FilePicker;
+use fff_core::{FileItem, FuzzySearchOptions, PaginationArgs, QueryParser, FILE_PICKER};
 use std::time::{Duration, Instant};
 
 /// Wait for background scan to complete
@@ -58,7 +58,7 @@ fn init_file_picker(path: &str) -> Result<(), String> {
 }
 
 /// Get files snapshot from global state
-fn get_files() -> Result<Vec<fff_nvim::types::FileItem>, String> {
+fn get_files() -> Result<Vec<FileItem>, String> {
     let picker_guard = FILE_PICKER
         .read()
         .map_err(|_| "Failed to acquire read lock")?;
@@ -119,19 +119,22 @@ fn main() {
     for (name, query, iterations) in test_queries {
         let start = Instant::now();
         let mut match_count = 0;
+        let parser = QueryParser::default();
 
         for _ in 0..iterations {
+            let parsed = parser.parse(query);
             let results = FilePicker::fuzzy_search(
                 &files,
                 query,
-                fff_nvim::file_picker::FuzzySearchOptions {
+                parsed,
+                FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
-                    pagination: fff_nvim::types::PaginationArgs {
+                    pagination: PaginationArgs {
                         offset: 0,
                         limit: 100,
                     },

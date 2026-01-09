@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/fff-core",
     "crates/fff-nvim",
     "crates/fff-query-parser",
 ]
@@ -26,6 +27,7 @@ neo_frizbee = { version = "0.7.1" }
 notify = "8.1.0"
 notify-debouncer-full = "0.6"
 once_cell = "1.20.2"
+parking_lot = "0.12"
 pathdiff = "0.2.1"
 rayon = "1.8.0"
 smallvec = { version = "1.13", features = ["const_generics", "union"] }

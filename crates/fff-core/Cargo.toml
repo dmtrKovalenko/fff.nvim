@@ -1,0 +1,51 @@
+[package]
+name = "fff-core"
+version = "0.1.0"
+edition = "2024"
+description = "High-performance file finder core library"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[features]
+default = []
+# Enable C FFI exports
+ffi = []
+
+[dependencies]
+# Workspace dependencies
+ahash = { workspace = true }
+rayon = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Local crates
+fff-query-parser = { path = "../fff-query-parser" }
+
+# External dependencies
+blake3 = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+git2 = { workspace = true }
+glidesort = { workspace = true }
+heed = { workspace = true }
+ignore = { workspace = true }
+neo_frizbee = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-full = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
+pathdiff = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+smartstring = { version = "1.0.1", features = ["serde"] }
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zlob = { git = "https://github.com/dmtrKovalenko/zlob" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = { version = "0.8", features = ["small_rng"] }
+tempfile = "3.8"

@@ -1,5 +1,6 @@
 /// Simple search profiler that directly uses scan_filesystem without background thread overhead
-use fff_nvim::file_picker::FilePicker;
+use fff_core::file_picker::FilePicker;
+use fff_core::{FileItem, FuzzySearchOptions, PaginationArgs, QueryParser};
 use std::time::Instant;
 
 fn main() {
@@ -37,7 +38,7 @@ fn main() {
                 let relative_path = relative.to_string_lossy().into_owned();
                 let file_name = entry.file_name().to_string_lossy().into_owned();
 
-                files.push(fff_nvim::types::FileItem {
+                files.push(FileItem {
                     path,
                     relative_path_lower: relative_path.to_lowercase(),
                     relative_path,
@@ -87,17 +88,20 @@ fn main() {
         let mut match_count = 0;
 
         for _ in 0..iterations {
+            let parser = QueryParser::default();
+            let parsed = parser.parse(query);
             let results = FilePicker::fuzzy_search(
                 &files,
                 query,
-                fff_nvim::file_picker::FuzzySearchOptions {
+                parsed,
+                FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
-                    pagination: fff_nvim::types::PaginationArgs {
+                    pagination: PaginationArgs {
                         offset: 0,
                         limit: 100,
                     },

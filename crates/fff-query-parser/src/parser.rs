@@ -1,7 +1,8 @@
-use crate::ConstraintVec;
 use crate::config::ParserConfig;
 use crate::constraints::{Constraint, GitStatusFilter, TextPartsBuffer};
-use zlob::{ZlobFlags, has_wildcards};
+use crate::location::{parse_location, Location};
+use crate::ConstraintVec;
+use zlob::{has_wildcards, ZlobFlags};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
@@ -16,6 +17,8 @@ pub struct ParseResult<'a> {
     /// Parsed constraints (stack-allocated for ≤8 constraints)
     pub constraints: ConstraintVec<'a>,
     pub fuzzy_query: FuzzyQuery<'a>,
+    /// Parsed location (e.g., file:12:4 -> line 12, col 4)
+    pub location: Option<Location>,
 }
 
 /// Main query parser - zero-cost wrapper around configuration
@@ -36,7 +39,30 @@ impl<C: ParserConfig> QueryParser<C> {
         let query = query.trim();
 
         let whitespace_count = query.chars().filter(|c| c.is_whitespace()).count();
+
+        // Single token - check if it's a constraint or plain text
         if whitespace_count == 0 {
+            // Try to parse as constraint first
+            if let Some(constraint) = parse_token(query, config) {
+                constraints.push(constraint);
+                return Some(ParseResult {
+                    constraints,
+                    fuzzy_query: FuzzyQuery::Empty,
+                    location: None,
+                });
+            }
+
+            // Try to extract location from single token (e.g., "file:12")
+            let (query_without_loc, location) = parse_location(query);
+            if location.is_some() {
+                return Some(ParseResult {
+                    constraints,
+                    fuzzy_query: FuzzyQuery::Text(query_without_loc),
+                    location,
+                });
+            }
+
+            // Plain text single token - return None (caller handles as simple fuzzy match)
             return None;
         }
 
@@ -55,17 +81,44 @@ impl<C: ParserConfig> QueryParser<C> {
             }
         }
 
+        // Try to extract location from the last fuzzy token
+        // e.g., "search file:12" -> fuzzy="search file", location=Line(12)
+        let location = if !text_parts.is_empty() {
+            let last_idx = text_parts.len() - 1;
+            let (without_loc, loc) = parse_location(text_parts[last_idx]);
+            if loc.is_some() {
+                // Update the last part to be without the location suffix
+                text_parts[last_idx] = without_loc;
+                loc
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let fuzzy_query = if text_parts.is_empty() {
             FuzzyQuery::Empty
         } else if text_parts.len() == 1 {
-            FuzzyQuery::Text(text_parts[0])
+            // If the only remaining text is empty after location extraction, treat as Empty
+            if text_parts[0].is_empty() {
+                FuzzyQuery::Empty
+            } else {
+                FuzzyQuery::Text(text_parts[0])
+            }
         } else {
-            FuzzyQuery::Parts(text_parts)
+            // Filter out empty parts that might result from location extraction
+            if text_parts.iter().all(|p| p.is_empty()) {
+                FuzzyQuery::Empty
+            } else {
+                FuzzyQuery::Parts(text_parts)
+            }
         };
 
         Some(ParseResult {
             constraints,
             fuzzy_query,
+            location,
         })
     }
 }
@@ -82,6 +135,11 @@ fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constr
 
     match first_byte {
         b'*' if config.enable_extension() => {
+            // Ignore incomplete patterns like "*" or "*."
+            if token == "*" || token == "*." {
+                return None;
+            }
+
             // Try extension first (*.rs) - simple patterns without additional wildcards
             if let Some(constraint) = parse_extension(token) {
                 // Only return Extension if the rest doesn't have wildcards
@@ -297,6 +355,14 @@ mod tests {
     }
 
     #[test]
+    fn test_incomplete_patterns_ignored() {
+        let config = FilePickerConfig;
+        // Incomplete patterns should return None and be treated as noise
+        assert_eq!(parse_token("*", &config), None);
+        assert_eq!(parse_token("*.", &config), None);
+    }
+
+    #[test]
     fn test_parse_path_segment() {
         assert_eq!(
             parse_path_segment("/src/"),
@@ -328,7 +394,9 @@ mod tests {
     #[test]
     fn test_trailing_slash_in_query() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser.parse("www/ test");
+        let result = parser
+            .parse("www/ test")
+            .expect("Should parse multi-token query");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
             result.constraints[0],
@@ -364,7 +432,10 @@ mod tests {
     #[test]
     fn test_negation_text() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser.parse("!test");
+        // Need two tokens for parsing to return Some
+        let result = parser
+            .parse("!test foo")
+            .expect("Should parse multi-token query");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -377,7 +448,9 @@ mod tests {
     #[test]
     fn test_negation_extension() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser.parse("!*.rs");
+        let result = parser
+            .parse("!*.rs foo")
+            .expect("Should parse multi-token query");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -390,7 +463,9 @@ mod tests {
     #[test]
     fn test_negation_path_segment() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser.parse("!/src/");
+        let result = parser
+            .parse("!/src/ foo")
+            .expect("Should parse multi-token query");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -403,7 +478,9 @@ mod tests {
     #[test]
     fn test_negation_git_status() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser.parse("!status:modified");
+        let result = parser
+            .parse("!status:modified foo")
+            .expect("Should parse multi-token query");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {

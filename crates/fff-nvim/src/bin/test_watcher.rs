@@ -2,11 +2,13 @@
 #![allow(dead_code)]
 #![allow(clippy::enum_variant_names)]
 
-use fff_nvim::{FILE_PICKER, FRECENCY, file_picker::FilePicker, git::format_git_status};
+use fff_core::file_picker::FilePicker;
+use fff_core::git::format_git_status;
+use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, FILE_PICKER, FRECENCY};
 use std::env;
 use std::io::{self, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -15,7 +17,7 @@ fn cleanup_global_state() {
     {
         let mut file_picker = FILE_PICKER.write().unwrap();
         if let Some(mut picker) = file_picker.take() {
-            let _ = picker.stop_background_monitor();
+            picker.stop_background_monitor();
             drop(picker);
             println!("🧹 FilePicker cleaned up");
         }
@@ -156,17 +158,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let timestamp = chrono::Local::now().format("%H:%M:%S");
             let file_picker = FILE_PICKER.read().unwrap();
             let files = file_picker.as_ref().unwrap().get_files();
+            let parser = QueryParser::default();
+            let parsed = parser.parse("rs");
             let search_results = FilePicker::fuzzy_search(
                 files,
                 "rs",
-                fff_nvim::file_picker::FuzzySearchOptions {
+                parsed,
+                FuzzySearchOptions {
                     max_threads: 2,
                     current_file: None,
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
-                    pagination: fff_nvim::types::PaginationArgs {
+                    pagination: PaginationArgs {
                         offset: 0,
                         limit: 5,
                     },

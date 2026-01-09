@@ -1,8 +1,8 @@
-use crate::error::Error;
+use std::io;
 use std::path::Path;
 use tracing_appender::non_blocking;
 use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 static TRACING_INITIALIZED: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
     std::sync::OnceLock::new();
@@ -86,8 +86,8 @@ pub fn install_panic_hook() {
 /// * `log_level` - Log level (trace, debug, info, warn, error)
 ///
 /// # Returns
-/// * `Result<String, Error>` - Full path to the log file on success
-pub fn init_tracing(log_file_path: &str, log_level: Option<&str>) -> Result<String, Error> {
+/// * `Result<String, io::Error>` - Full path to the log file on success
+pub fn init_tracing(log_file_path: &str, log_level: Option<&str>) -> Result<String, io::Error> {
     // Install panic hook first (does nothing if already installed)
     install_panic_hook();
 

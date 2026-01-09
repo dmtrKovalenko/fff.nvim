@@ -144,21 +144,15 @@ pub fn shorten_path(strategy: PathShortenStrategy, max_size: usize, path: &Path)
     Ok(shortened)
 }
 
-impl TryFrom<mlua::Value> for PathShortenStrategy {
-    type Error = mlua::Error;
-
-    fn try_from(value: mlua::Value) -> std::result::Result<Self, Self::Error> {
-        let strategy = match value {
-            mlua::Value::String(ref s) => match s.to_str()?.as_ref() {
-                "middle_number" => PathShortenStrategy::MiddleNumber,
-                "middle" => PathShortenStrategy::Middle,
-                "end" => PathShortenStrategy::End,
-                _ => PathShortenStrategy::MiddleNumber,
-            },
+impl PathShortenStrategy {
+    /// Parse a strategy from a string name
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "middle_number" => PathShortenStrategy::MiddleNumber,
+            "middle" => PathShortenStrategy::Middle,
+            "end" => PathShortenStrategy::End,
             _ => PathShortenStrategy::MiddleNumber,
-        };
-
-        Ok(strategy)
+        }
     }
 }
 

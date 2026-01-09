@@ -13,23 +13,27 @@
 //!
 //! let parser = QueryParser::default();
 //!
-//! // Parse extension constraint
-//! let result = parser.parse("name *.rs");
+//! // Single-token queries return None (no parsing needed)
+//! let result = parser.parse("hello");
+//! assert!(result.is_none());
+//!
+//! // Multi-token queries are parsed
+//! let result = parser.parse("name *.rs").expect("Should parse");
 //! match &result.fuzzy_query {
 //!     FuzzyQuery::Text(text) => assert_eq!(*text, "name"),
 //!     _ => panic!("Expected text"),
 //! }
 //! assert!(matches!(result.constraints[0], Constraint::Extension("rs")));
 //!
-//! // Parse glob pattern
-//! let result = parser.parse("**/*.rs");
+//! // Parse glob pattern with text
+//! let result = parser.parse("**/*.rs foo").expect("Should parse");
 //! assert!(matches!(result.constraints[0], Constraint::Glob("**/*.rs")));
 //!
-//! // Parse negation (new!)
-//! let result = parser.parse("!*.rs");
+//! // Parse negation
+//! let result = parser.parse("!*.rs foo").expect("Should parse");
 //! match &result.constraints[0] {
 //!     Constraint::Not(inner) => {
-//!         assert!(matches!(**inner, Constraint::Extension("rs")));
+//!         assert!(matches!(inner.as_ref(), Constraint::Extension("rs")));
 //!     }
 //!     _ => panic!("Expected Not constraint"),
 //! }
@@ -37,10 +41,12 @@
 
 mod config;
 mod constraints;
+pub mod location;
 mod parser;
 
 pub use config::{FilePickerConfig, GrepConfig, ParserConfig};
 pub use constraints::{Constraint, GitStatusFilter};
+pub use location::Location;
 pub use parser::{FuzzyQuery, ParseResult, QueryParser};
 
 // Re-export SmallVec for convenience
@@ -57,22 +63,32 @@ mod tests {
     fn test_empty_query() {
         let parser = QueryParser::default();
         let result = parser.parse("");
-        assert!(result.constraints.is_empty());
-        assert!(matches!(result.fuzzy_query, FuzzyQuery::Empty));
+        // Empty query returns None (single-token behavior)
+        assert!(result.is_none());
     }
 
     #[test]
     fn test_whitespace_only() {
         let parser = QueryParser::default();
         let result = parser.parse("   ");
-        assert!(result.constraints.is_empty());
-        assert!(matches!(result.fuzzy_query, FuzzyQuery::Empty));
+        // Whitespace-only returns None
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_single_token() {
+        let parser = QueryParser::default();
+        let result = parser.parse("hello");
+        // Single token returns None (no parsing needed)
+        assert!(result.is_none());
     }
 
     #[test]
     fn test_simple_text() {
         let parser = QueryParser::default();
-        let result = parser.parse("hello world");
+        let result = parser
+            .parse("hello world")
+            .expect("Should parse multi-token");
 
         match &result.fuzzy_query {
             FuzzyQuery::Parts(parts) => {
@@ -89,18 +105,11 @@ mod tests {
     #[test]
     fn test_extension_only() {
         let parser = QueryParser::default();
-        let result = parser.parse("*.rs");
+        // Single constraint token - returns Some so constraint can be applied
+        let result = parser
+            .parse("*.rs")
+            .expect("Should parse single constraint");
         assert!(matches!(result.fuzzy_query, FuzzyQuery::Empty));
-        assert_eq!(result.constraints.len(), 1);
-        assert!(matches!(result.constraints[0], Constraint::Extension("rs")));
-    }
-
-    #[test]
-    fn test_extension_with_text() {
-        let parser = QueryParser::default();
-        let result = parser.parse("name *.rs");
-
-        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("name"));
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(result.constraints[0], Constraint::Extension("rs")));
     }
@@ -108,7 +117,9 @@ mod tests {
     #[test]
     fn test_glob_pattern() {
         let parser = QueryParser::default();
-        let result = parser.parse("**/*.rs");
+        let result = parser
+            .parse("**/*.rs foo")
+            .expect("Should parse multi-token");
         assert_eq!(result.constraints.len(), 1);
         // Glob patterns with ** are treated as globs, not extensions
         match &result.constraints[0] {
@@ -120,7 +131,7 @@ mod tests {
     #[test]
     fn test_negation_pattern() {
         let parser = QueryParser::default();
-        let result = parser.parse("!test");
+        let result = parser.parse("!test foo").expect("Should parse multi-token");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -133,7 +144,7 @@ mod tests {
     #[test]
     fn test_path_segment() {
         let parser = QueryParser::default();
-        let result = parser.parse("/src/");
+        let result = parser.parse("/src/ foo").expect("Should parse multi-token");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
             result.constraints[0],
@@ -144,7 +155,9 @@ mod tests {
     #[test]
     fn test_git_status() {
         let parser = QueryParser::default();
-        let result = parser.parse("status:modified");
+        let result = parser
+            .parse("status:modified foo")
+            .expect("Should parse multi-token");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
             result.constraints[0],
@@ -155,7 +168,9 @@ mod tests {
     #[test]
     fn test_file_type() {
         let parser = QueryParser::default();
-        let result = parser.parse("type:rust");
+        let result = parser
+            .parse("type:rust foo")
+            .expect("Should parse multi-token");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
             result.constraints[0],
@@ -166,7 +181,9 @@ mod tests {
     #[test]
     fn test_complex_query() {
         let parser = QueryParser::default();
-        let result = parser.parse("src name *.rs !test /lib/ status:modified");
+        let result = parser
+            .parse("src name *.rs !test /lib/ status:modified")
+            .expect("Should parse");
 
         // Verify we have fuzzy text
         match &result.fuzzy_query {
@@ -208,8 +225,27 @@ mod tests {
     #[test]
     fn test_no_heap_allocation_for_small_queries() {
         let parser = QueryParser::default();
-        let result = parser.parse("*.rs *.toml !test");
+        let result = parser
+            .parse("*.rs *.toml !test")
+            .expect("Should parse multi-token");
         // SmallVec should not have spilled to heap
         assert!(!result.constraints.spilled());
+    }
+
+    #[test]
+    fn test_many_fuzzy_parts() {
+        let parser = QueryParser::default();
+        let result = parser
+            .parse("one two three four five six")
+            .expect("Should parse");
+
+        match &result.fuzzy_query {
+            FuzzyQuery::Parts(parts) => {
+                assert_eq!(parts.len(), 6);
+                assert_eq!(parts[0], "one");
+                assert_eq!(parts[5], "six");
+            }
+            _ => panic!("Expected Parts fuzzy query"),
+        }
     }
 }

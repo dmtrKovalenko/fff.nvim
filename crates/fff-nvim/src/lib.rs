@@ -1,56 +1,46 @@
-use crate::db_healthcheck::DbHealthChecker;
-use crate::error::Error;
-use crate::file_picker::{FilePicker, FuzzySearchOptions};
-use crate::frecency::FrecencyTracker;
-use crate::query_tracker::QueryTracker;
-use crate::types::PaginationArgs;
+use fff_core::file_picker::FilePicker;
+use fff_core::frecency::FrecencyTracker;
+use fff_core::query_tracker::QueryTracker;
+use fff_core::{DbHealthChecker, Error, FuzzySearchOptions, PaginationArgs, QueryParser};
+use fff_core::{FILE_PICKER, FRECENCY, QUERY_TRACKER};
 use mlua::prelude::*;
-use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
 use std::time::Duration;
 
-mod background_watcher;
-mod db_healthcheck;
 mod error;
-pub mod file_picker;
-mod frecency;
-pub mod git;
-mod location;
 mod log;
-pub mod path_utils;
-pub mod query_tracker;
-pub mod score;
-mod sort_buffer;
-pub mod types;
+mod lua_types;
+
+use error::{IntoCoreError, IntoLuaResult};
 use mimalloc::MiMalloc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-pub static FRECENCY: Lazy<RwLock<Option<FrecencyTracker>>> = Lazy::new(|| RwLock::new(None));
-pub static FILE_PICKER: Lazy<RwLock<Option<FilePicker>>> = Lazy::new(|| RwLock::new(None));
-pub static QUERY_TRACKER: Lazy<RwLock<Option<QueryTracker>>> = Lazy::new(|| RwLock::new(None));
-
 pub fn init_db(
     _: &Lua,
     (frecency_db_path, history_db_path, use_unsafe_no_lock): (String, String, bool),
 ) -> LuaResult<bool> {
-    let mut frecency = FRECENCY.write().map_err(|_| Error::AcquireFrecencyLock)?;
+    let mut frecency = FRECENCY
+        .write()
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
     if frecency.is_some() {
         *frecency = None;
     }
-    *frecency = Some(FrecencyTracker::new(&frecency_db_path, use_unsafe_no_lock)?);
+    *frecency =
+        Some(FrecencyTracker::new(&frecency_db_path, use_unsafe_no_lock).into_lua_result()?);
     tracing::info!("Frecency database initialized at {}", frecency_db_path);
 
     let mut query_tracker = QUERY_TRACKER
         .write()
-        .map_err(|_| Error::AcquireFrecencyLock)?;
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
     if query_tracker.is_some() {
         *query_tracker = None;
     }
 
-    let tracker = QueryTracker::new(&history_db_path, use_unsafe_no_lock)?;
+    let tracker = QueryTracker::new(&history_db_path, use_unsafe_no_lock).into_lua_result()?;
     *query_tracker = Some(tracker);
     tracing::info!("Query tracker database initialized at {}", history_db_path);
 
@@ -58,7 +48,10 @@ pub fn init_db(
 }
 
 pub fn destroy_frecency_db(_: &Lua, _: ()) -> LuaResult<bool> {
-    let mut frecency = FRECENCY.write().map_err(|_| Error::AcquireFrecencyLock)?;
+    let mut frecency = FRECENCY
+        .write()
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
     *frecency = None;
     Ok(true)
 }
@@ -66,24 +59,30 @@ pub fn destroy_frecency_db(_: &Lua, _: ()) -> LuaResult<bool> {
 pub fn destroy_query_db(_: &Lua, _: ()) -> LuaResult<bool> {
     let mut query_tracker = QUERY_TRACKER
         .write()
-        .map_err(|_| Error::AcquireFrecencyLock)?;
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
     *query_tracker = None;
     Ok(true)
 }
 
 pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
-    let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
+    let mut file_picker = FILE_PICKER
+        .write()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
     if file_picker.is_some() {
         return Ok(false);
     }
 
-    let picker = FilePicker::new(base_path)?;
+    let picker = FilePicker::new(base_path).into_lua_result()?;
     *file_picker = Some(picker);
     Ok(true)
 }
 
 fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
-    let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
+    let mut file_picker = FILE_PICKER
+        .write()
+        .with_lock_error(Error::AcquireItemLock)?;
 
     // drop should clean it anyway but just to be extra sure
     if let Some(mut picker) = file_picker.take() {
@@ -126,12 +125,16 @@ pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<()> {
 }
 
 pub fn scan_files(_: &Lua, _: ()) -> LuaResult<()> {
-    let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
+    let mut file_picker = FILE_PICKER
+        .write()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
     let picker = file_picker
         .as_mut()
-        .ok_or_else(|| Error::FilePickerMissing)?;
+        .ok_or(Error::FilePickerMissing)
+        .into_lua_result()?;
 
-    picker.trigger_rescan()?;
+    picker.trigger_rescan().into_lua_result()?;
     ::tracing::info!("scan_files trigger_rescan completed");
     Ok(())
 }
@@ -157,8 +160,12 @@ pub fn fuzzy_search_files(
         Option<usize>,
     ),
 ) -> LuaResult<LuaValue> {
-    let Some(ref picker) = *FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)? else {
-        return Err(Error::FilePickerMissing)?;
+    let file_picker_guard = FILE_PICKER
+        .read()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
+    let Some(ref picker) = *file_picker_guard else {
+        return Err(error::to_lua_error(Error::FilePickerMissing));
     };
 
     let base_path = picker.base_path();
@@ -167,7 +174,8 @@ pub fn fuzzy_search_files(
     let last_same_query_entry = {
         let query_tracker = QUERY_TRACKER
             .read()
-            .map_err(|_| Error::AcquireFrecencyLock)?;
+            .with_lock_error(Error::AcquireFrecencyLock)
+            .into_lua_result()?;
 
         if query_tracker.as_ref().is_none() {
             tracing::warn!("Query tracker not initialized");
@@ -176,7 +184,8 @@ pub fn fuzzy_search_files(
         query_tracker
             .as_ref()
             .map(|tracker| tracker.get_last_query_entry(&query, base_path, min_combo_count))
-            .transpose()?
+            .transpose()
+            .into_lua_result()?
             .flatten()
     };
 
@@ -190,9 +199,14 @@ pub fn fuzzy_search_files(
         "Fuzzy search parameters"
     );
 
+    // Parse the query once at the API boundary
+    let parser = QueryParser::default();
+    let parsed = parser.parse(&query);
+
     let results = FilePicker::fuzzy_search(
         picker.get_files(),
         &query,
+        parsed,
         FuzzySearchOptions {
             max_threads,
             current_file: current_file.as_deref(),
@@ -207,7 +221,7 @@ pub fn fuzzy_search_files(
         },
     );
 
-    results.into_lua(lua)
+    lua_types::SearchResultLua::from(results).into_lua(lua)
 }
 
 pub fn track_access(_: &Lua, file_path: String) -> LuaResult<bool> {
@@ -215,25 +229,50 @@ pub fn track_access(_: &Lua, file_path: String) -> LuaResult<bool> {
 
     // Track access in frecency DB (expensive LMDB write, ~100-200ms)
     // Do this WITHOUT holding FILE_PICKER lock to avoid blocking searches
-    let Some(ref frecency) = *FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)? else {
+    let frecency_guard = FRECENCY
+        .read()
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
+    let Some(ref frecency) = *frecency_guard else {
         return Ok(false);
     };
-    frecency.track_access(file_path.as_path())?;
+    frecency
+        .track_access(file_path.as_path())
+        .into_lua_result()?;
+    drop(frecency_guard);
 
     // Quick lock to update single file's frecency score in picker
-    let Some(ref mut picker) = *FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)? else {
-        return Err(Error::FilePickerMissing)?;
+    let mut file_picker = FILE_PICKER
+        .write()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
+    let Some(ref mut picker) = *file_picker else {
+        return Err(error::to_lua_error(Error::FilePickerMissing));
     };
-    picker.update_single_file_frecency(&file_path, frecency)?;
+
+    let frecency_guard = FRECENCY
+        .read()
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
+    let Some(ref frecency) = *frecency_guard else {
+        return Ok(false);
+    };
+    picker
+        .update_single_file_frecency(&file_path, frecency)
+        .into_lua_result()?;
 
     Ok(true)
 }
 
 pub fn get_scan_progress(lua: &Lua, _: ()) -> LuaResult<LuaValue> {
-    let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
+    let file_picker = FILE_PICKER
+        .read()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
     let picker = file_picker
         .as_ref()
-        .ok_or_else(|| Error::FilePickerMissing)?;
+        .ok_or(Error::FilePickerMissing)
+        .into_lua_result()?;
     let progress = picker.get_scan_progress();
 
     let table = lua.create_table()?;
@@ -243,32 +282,51 @@ pub fn get_scan_progress(lua: &Lua, _: ()) -> LuaResult<LuaValue> {
 }
 
 pub fn is_scanning(_: &Lua, _: ()) -> LuaResult<bool> {
-    let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
+    let file_picker = FILE_PICKER
+        .read()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
     let picker = file_picker
         .as_ref()
-        .ok_or_else(|| Error::FilePickerMissing)?;
+        .ok_or(Error::FilePickerMissing)
+        .into_lua_result()?;
     Ok(picker.is_scan_active())
 }
 
 pub fn refresh_git_status(_: &Lua, _: ()) -> LuaResult<usize> {
-    FilePicker::refresh_git_status_global().map_err(Into::into)
+    FilePicker::refresh_git_status_global().into_lua_result()
 }
 
 pub fn update_single_file_frecency(_: &Lua, file_path: String) -> LuaResult<bool> {
-    let Some(ref frecency) = *FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)? else {
+    let frecency_guard = FRECENCY
+        .read()
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
+    let Some(ref frecency) = *frecency_guard else {
         return Ok(false);
     };
-    let Some(ref mut picker) = *FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)? else {
-        return Err(Error::FilePickerMissing)?;
+
+    let mut file_picker = FILE_PICKER
+        .write()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
+    let Some(ref mut picker) = *file_picker else {
+        return Err(error::to_lua_error(Error::FilePickerMissing));
     };
 
-    picker.update_single_file_frecency(&file_path, frecency)?;
+    picker
+        .update_single_file_frecency(&file_path, frecency)
+        .into_lua_result()?;
     Ok(true)
 }
 
 pub fn stop_background_monitor(_: &Lua, _: ()) -> LuaResult<bool> {
-    let Some(ref mut picker) = *FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)? else {
-        return Err(Error::FilePickerMissing)?;
+    let mut file_picker = FILE_PICKER
+        .write()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
+    let Some(ref mut picker) = *file_picker else {
+        return Err(error::to_lua_error(Error::FilePickerMissing));
     };
 
     picker.stop_background_monitor();
@@ -277,7 +335,10 @@ pub fn stop_background_monitor(_: &Lua, _: ()) -> LuaResult<bool> {
 }
 
 pub fn cleanup_file_picker(_: &Lua, _: ()) -> LuaResult<bool> {
-    let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
+    let mut file_picker = FILE_PICKER
+        .write()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
     if let Some(picker) = file_picker.take() {
         drop(picker);
         ::tracing::info!("FilePicker cleanup completed");
@@ -295,7 +356,11 @@ pub fn cancel_scan(_: &Lua, _: ()) -> LuaResult<bool> {
 pub fn track_query_completion(_: &Lua, (query, file_path): (String, String)) -> LuaResult<bool> {
     // Get the project path before spawning thread
     let project_path = {
-        let Some(ref picker) = *FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)? else {
+        let file_picker = FILE_PICKER
+            .read()
+            .with_lock_error(Error::AcquireItemLock)
+            .into_lua_result()?;
+        let Some(ref picker) = *file_picker else {
             return Ok(false);
         };
         picker.base_path().to_path_buf()
@@ -329,29 +394,38 @@ pub fn track_query_completion(_: &Lua, (query, file_path): (String, String)) -> 
 
 pub fn get_historical_query(_: &Lua, offset: usize) -> LuaResult<Option<String>> {
     let project_path = {
-        let Some(ref picker) = *FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)? else {
+        let file_picker = FILE_PICKER
+            .read()
+            .with_lock_error(Error::AcquireItemLock)
+            .into_lua_result()?;
+        let Some(ref picker) = *file_picker else {
             return Ok(None);
         };
         picker.base_path().to_path_buf()
     };
 
-    let Some(ref tracker) = *QUERY_TRACKER
+    let query_tracker = QUERY_TRACKER
         .read()
-        .map_err(|_| Error::AcquireFrecencyLock)?
-    else {
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
+    let Some(ref tracker) = *query_tracker else {
         return Ok(None);
     };
 
     tracker
         .get_historical_query(&project_path, offset)
-        .map_err(Into::into)
+        .into_lua_result()
 }
 
 pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool> {
-    let file_picker = FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)?;
+    let file_picker = FILE_PICKER
+        .read()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
     let picker = file_picker
         .as_ref()
-        .ok_or_else(|| Error::FilePickerMissing)?;
+        .ok_or(Error::FilePickerMissing)
+        .into_lua_result()?;
 
     let timeout_ms = timeout_ms.unwrap_or(500);
     let timeout_duration = Duration::from_millis(timeout_ms);
@@ -446,8 +520,14 @@ pub fn health_check(lua: &Lua, test_path: Option<String>) -> LuaResult<LuaValue>
             frecency_info.set("initialized", guard.is_some())?;
 
             if let Some(ref frecency) = *guard {
-                match frecency.get_lua_helthcheckh(lua) {
-                    Ok(healthcheck_table) => {
+                match frecency.get_health() {
+                    Ok(health) => {
+                        let healthcheck_table = lua.create_table()?;
+                        healthcheck_table.set("path", health.path)?;
+                        healthcheck_table.set("disk_size", health.disk_size)?;
+                        for (name, count) in health.entry_counts {
+                            healthcheck_table.set(name, count)?;
+                        }
                         frecency_info.set("db_healthcheck", healthcheck_table)?;
                     }
                     Err(e) => {
@@ -468,8 +548,14 @@ pub fn health_check(lua: &Lua, test_path: Option<String>) -> LuaResult<LuaValue>
         Ok(guard) => {
             query_tracker_info.set("initialized", guard.is_some())?;
             if let Some(ref query_history) = *guard {
-                match query_history.get_lua_helthcheckh(lua) {
-                    Ok(healthcheck_table) => {
+                match query_history.get_health() {
+                    Ok(health) => {
+                        let healthcheck_table = lua.create_table()?;
+                        healthcheck_table.set("path", health.path)?;
+                        healthcheck_table.set("disk_size", health.disk_size)?;
+                        for (name, count) in health.entry_counts {
+                            healthcheck_table.set(name, count)?;
+                        }
                         query_tracker_info.set("db_healthcheck", healthcheck_table)?;
                     }
                     Err(e) => {
@@ -493,12 +579,23 @@ pub fn shorten_path(
     (path, max_size, strategy): (String, usize, Option<mlua::Value>),
 ) -> LuaResult<String> {
     let strategy = strategy
-        .map(path_utils::PathShortenStrategy::try_from)
+        .map(|v| -> LuaResult<fff_core::PathShortenStrategy> {
+            match v {
+                mlua::Value::String(ref s) => {
+                    let name = s
+                        .to_str()
+                        .map(|s| s.to_owned())
+                        .unwrap_or_else(|_| "middle_number".to_string());
+                    Ok(fff_core::PathShortenStrategy::from_name(&name))
+                }
+                _ => Ok(fff_core::PathShortenStrategy::default()),
+            }
+        })
         .transpose()?
         .unwrap_or_default();
 
     let path = PathBuf::from(&path);
-    path_utils::shorten_path(strategy, max_size, &path).map_err(Into::into)
+    fff_core::shorten_path(strategy, max_size, &path).into_lua_result()
 }
 
 fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {

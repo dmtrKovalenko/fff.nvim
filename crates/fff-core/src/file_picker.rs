@@ -2,10 +2,10 @@ use crate::background_watcher::BackgroundWatcher;
 use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
-use crate::location::parse_location;
 use crate::query_tracker::QueryMatchEntry;
 use crate::score::match_and_score_files;
 use crate::types::{FileItem, PaginationArgs, ScoringContext, SearchResult};
+use fff_query_parser::ParseResult;
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
 use std::fmt::Debug;
@@ -175,14 +175,29 @@ impl FilePicker {
         Ok(picker)
     }
 
+    /// Perform fuzzy search on files with a pre-parsed query.
+    /// 
+    /// The query should be parsed using `QueryParser::parse()` before calling this function.
+    /// This allows the caller to handle location parsing and other preprocessing.
+    /// 
+    /// # Arguments
+    /// * `files` - Slice of files to search
+    /// * `query` - The raw query string (used for max_typos calculation and debugging)
+    /// * `parsed` - Pre-parsed query result (can be None for simple single-token queries)
+    /// * `options` - Search options including pagination, threading, and scoring parameters
+    /// 
+    /// # Returns
+    /// SearchResult containing matched files, scores, and location information
     pub fn fuzzy_search<'a>(
         files: &'a [FileItem],
         query: &'a str,
+        parsed: Option<ParseResult<'a>>,
         options: FuzzySearchOptions<'a>,
     ) -> SearchResult<'a> {
         let max_threads = options.max_threads.max(1);
         debug!(
             ?query,
+            parsed_is_some = parsed.is_some(),
             pagination = ?options.pagination,
             ?max_threads,
             current_file = ?options.current_file,
@@ -190,13 +205,26 @@ impl FilePicker {
         );
 
         let total_files = files.len();
-        let (query, location) = parse_location(query);
+        
+        // Extract location from parsed query
+        let location = parsed.as_ref().and_then(|p| p.location);
+        
+        // Get effective query for max_typos calculation (without location suffix)
+        let effective_query = match &parsed {
+            Some(p) => match &p.fuzzy_query {
+                fff_query_parser::FuzzyQuery::Text(t) => *t,
+                fff_query_parser::FuzzyQuery::Parts(parts) if !parts.is_empty() => parts[0],
+                _ => query.trim(),
+            },
+            None => query.trim(),
+        };
 
         // small queries with a large number of results can match absolutely everything
-        let max_typos = (query.len() as u16 / 4).clamp(2, 6);
+        let max_typos = (effective_query.len() as u16 / 4).clamp(2, 6);
 
         let context = ScoringContext {
-            query,
+            raw_query: query,
+            parsed_query: parsed,
             project_path: options.project_path,
             max_typos,
             max_threads,
@@ -209,7 +237,7 @@ impl FilePicker {
 
         let time = std::time::Instant::now();
 
-        // Match, score, and paginate files (all done in sort_and_truncate)
+        // Match, score, and paginate files (all done in match_and_score_files)
         let (items, scores, total_matched) = match_and_score_files(files, &context);
 
         debug!(
