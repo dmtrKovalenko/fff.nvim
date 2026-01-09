@@ -1,7 +1,7 @@
-use crate::ConstraintVec;
 use crate::config::ParserConfig;
 use crate::constraints::{Constraint, GitStatusFilter, TextPartsBuffer};
-use zlob::{ZlobFlags, has_wildcards};
+use crate::ConstraintVec;
+use zlob::{has_wildcards, ZlobFlags};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
@@ -36,7 +36,18 @@ impl<C: ParserConfig> QueryParser<C> {
         let query = query.trim();
 
         let whitespace_count = query.chars().filter(|c| c.is_whitespace()).count();
+
+        // Single token - check if it's a constraint or plain text
         if whitespace_count == 0 {
+            // Try to parse as constraint
+            if let Some(constraint) = parse_token(query, config) {
+                constraints.push(constraint);
+                return Some(ParseResult {
+                    constraints,
+                    fuzzy_query: FuzzyQuery::Empty,
+                });
+            }
+            // Plain text single token - return None (caller handles as simple fuzzy match)
             return None;
         }
 
@@ -328,7 +339,9 @@ mod tests {
     #[test]
     fn test_trailing_slash_in_query() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser.parse("www/ test");
+        let result = parser
+            .parse("www/ test")
+            .expect("Should parse multi-token query");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
             result.constraints[0],
@@ -364,7 +377,10 @@ mod tests {
     #[test]
     fn test_negation_text() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser.parse("!test");
+        // Need two tokens for parsing to return Some
+        let result = parser
+            .parse("!test foo")
+            .expect("Should parse multi-token query");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -377,7 +393,9 @@ mod tests {
     #[test]
     fn test_negation_extension() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser.parse("!*.rs");
+        let result = parser
+            .parse("!*.rs foo")
+            .expect("Should parse multi-token query");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -390,7 +408,9 @@ mod tests {
     #[test]
     fn test_negation_path_segment() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser.parse("!/src/");
+        let result = parser
+            .parse("!/src/ foo")
+            .expect("Should parse multi-token query");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -403,7 +423,9 @@ mod tests {
     #[test]
     fn test_negation_git_status() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser.parse("!status:modified");
+        let result = parser
+            .parse("!status:modified foo")
+            .expect("Should parse multi-token query");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
