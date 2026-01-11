@@ -8,6 +8,36 @@ local location_utils = require('fff.location_utils')
 local combo_renderer = require('fff.combo_renderer')
 local scrollbar = require('fff.scrollbar')
 
+local BORDER_PRESETS = {
+  single = { '┌', '─', '┐', '│', '┘', '─', '└', '│' },
+  double = { '╔', '═', '╗', '║', '╝', '═', '╚', '║' },
+  rounded = { '╭', '─', '╮', '│', '╯', '─', '╰', '│' },
+  solid = { '▛', '▀', '▜', '▐', '▟', '▄', '▙', '▌' },
+  shadow = { '', '', ' ', ' ', ' ', ' ', ' ', '' },
+  none = { '', '', '', '', '', '', '', '' },
+}
+
+local T_JUNCTION_PRESETS = {
+  single = { '├', '┤' },
+  double = { '╠', '╣' },
+  rounded = { '├', '┤' }, -- Rounded only affects corners
+  solid = { '▌', '▐' },
+  shadow = { '', '' },
+  none = { '', '' },
+}
+
+--- Get border characters from vim.o.winborder for custom connected borders
+--- @return table Array of 8 border characters
+--- @return table Array of 2 T-junction characters (left, right)
+local function get_border_chars()
+  local winborder = vim.o.winborder or 'single'
+
+  if BORDER_PRESETS[winborder] then return BORDER_PRESETS[winborder], T_JUNCTION_PRESETS[winborder] end
+
+  -- Fallback to single for unknown border styles
+  return BORDER_PRESETS.single, T_JUNCTION_PRESETS.single
+end
+
 local function get_prompt_position()
   local config = M.state.config
 
@@ -299,7 +329,7 @@ function M.create_ui()
     combo_renderer.init(M.state.ns_id)
   end
 
-  local debug_enabled_in_preview = M.enabled_preview() and config and config.debug and config.debug.show_scores
+  local debug_enabled_in_preview = M.enabled_preview() and config and config.debug and config.debug.show_file_info
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
@@ -405,7 +435,7 @@ function M.create_ui()
     M.state.file_info_buf = nil
   end
 
-  -- Create list window with conditional title based on prompt position
+  local border_chars, t_junctions = get_border_chars()
   local list_window_config = {
     relative = 'editor',
     width = layout.list_width,
@@ -414,8 +444,20 @@ function M.create_ui()
     row = layout.list_row,
     -- To make the input feel connected with the picker, we customize the
     -- respective corner border characters based on prompt_position
-    border = prompt_position == 'bottom' and { '┌', '─', '┐', '│', '', '', '', '│' }
-      or { '├', '─', '┤', '│', '┘', '─', '└', '│' },
+    -- When prompt at bottom: list has top border + sides, no bottom (connects to input below)
+    -- When prompt at top: list has sides + bottom with T-junctions at top (connects to input above)
+    border = prompt_position == 'bottom'
+        and { border_chars[1], border_chars[2], border_chars[3], border_chars[4], '', '', '', border_chars[8] }
+      or {
+        t_junctions[1],
+        border_chars[2],
+        t_junctions[2],
+        border_chars[4],
+        border_chars[5],
+        border_chars[6],
+        border_chars[7],
+        border_chars[8],
+      },
     style = 'minimal',
   }
 
@@ -436,8 +478,8 @@ function M.create_ui()
       height = layout.file_info.height,
       col = layout.file_info.col,
       row = layout.file_info.row,
-      border = 'single',
       style = 'minimal',
+      border = border_chars,
       title = ' File Info ',
       title_pos = 'left',
     })
@@ -453,14 +495,13 @@ function M.create_ui()
       height = layout.preview.height,
       col = layout.preview.col,
       row = layout.preview.row,
-      border = 'single',
       style = 'minimal',
+      border = border_chars,
       title = ' Preview ',
       title_pos = 'left',
     })
   end
 
-  -- Create input window with conditional title based on prompt position
   local input_window_config = {
     relative = 'editor',
     width = layout.input_width,
@@ -469,12 +510,21 @@ function M.create_ui()
     row = layout.input_row,
     -- To make the input feel connected with the picker, we customize the
     -- respective corner border characters based on prompt_position
-    border = prompt_position == 'bottom' and { '├', '─', '┤', '│', '┘', '─', '└', '│' }
-      or { '┌', '─', '┐', '│', '', '', '', '│' },
+    -- if prompt at bottom: input has T-junctions at top (connects to list above), full bottom border
+    -- if prompt at top: input has top border + sides, no bottom (connects to list below)
+    border = prompt_position == 'bottom' and {
+      t_junctions[1],
+      border_chars[2],
+      t_junctions[2],
+      border_chars[4],
+      border_chars[5],
+      border_chars[6],
+      border_chars[7],
+      border_chars[8],
+    } or { border_chars[1], border_chars[2], border_chars[3], border_chars[4], '', '', '', border_chars[8] },
     style = 'minimal',
   }
 
-  -- Add title if prompt is at top - title appears above the prompt
   if prompt_position == 'top' then
     input_window_config.title = title
     input_window_config.title_pos = 'left'
@@ -562,49 +612,43 @@ function M.setup_windows()
   end
 
   local picker_group = vim.api.nvim_create_augroup('fff_picker_focus', { clear = true })
-  local picker_windows = nil
 
-  if M.enabled_preview() then
-    picker_windows = { M.state.input_win, M.state.preview_win, M.state.list_win }
-  else
-    picker_windows = { M.state.input_win, M.state.list_win }
+  --- Check if a window is one of the picker windows
+  --- @param win number Window handle to check
+  --- @return boolean
+  local function is_picker_window(win)
+    if not win or not vim.api.nvim_win_is_valid(win) then return false end
+
+    local picker_windows = { M.state.input_win, M.state.list_win }
+    if M.state.preview_win then table.insert(picker_windows, M.state.preview_win) end
+    if M.state.file_info_win then table.insert(picker_windows, M.state.file_info_win) end
+
+    for _, picker_win in ipairs(picker_windows) do
+      if picker_win and vim.api.nvim_win_is_valid(picker_win) and win == picker_win then return true end
+    end
+
+    return false
   end
-
-  if M.state.preview_win then table.insert(picker_windows, M.state.preview_win) end
-  if M.state.file_info_win then table.insert(picker_windows, M.state.file_info_win) end
 
   vim.api.nvim_create_autocmd('WinLeave', {
     group = picker_group,
     callback = function()
       if not M.state.active then return end
 
-      local current_win = vim.api.nvim_get_current_win()
-      local is_picker_window = false
-      for _, win in ipairs(picker_windows) do
-        if win and vim.api.nvim_win_is_valid(win) and current_win == win then
-          is_picker_window = true
-          break
-        end
-      end
+      local leaving_win = vim.api.nvim_get_current_win()
 
-      -- if we current focused on picker window and leaving it
-      if is_picker_window then
-        vim.defer_fn(function()
-          if not M.state.active then return end
+      -- Only care if we're leaving a picker window
+      if not is_picker_window(leaving_win) then return end
 
-          local new_win = vim.api.nvim_get_current_win()
-          local entering_picker_window = false
+      -- Schedule check to allow the window switch to complete
+      vim.schedule(function()
+        if not M.state.active then return end
 
-          for _, win in ipairs(picker_windows) do
-            if win and vim.api.nvim_win_is_valid(win) and new_win == win then
-              entering_picker_window = true
-              break
-            end
-          end
+        local new_win = vim.api.nvim_get_current_win()
 
-          if not entering_picker_window then M.close() end
-        end, 10)
-      end
+        -- Close picker only if we moved to a non-picker window
+        if not is_picker_window(new_win) then M.close() end
+      end)
     end,
     desc = 'Close picker when focus leaves picker windows',
   })
@@ -626,44 +670,104 @@ local function set_keymap(mode, keys, handler, opts)
   end
 end
 
+function M.focus_list_win()
+  if not M.state.active then return end
+  if not M.state.list_win or not vim.api.nvim_win_is_valid(M.state.list_win) then return end
+
+  vim.cmd('stopinsert')
+  vim.api.nvim_set_current_win(M.state.list_win)
+end
+
+function M.focus_preview_win()
+  if not M.state.active then return end
+  if not M.state.preview_win or not vim.api.nvim_win_is_valid(M.state.preview_win) then return end
+
+  vim.cmd('stopinsert')
+  vim.api.nvim_set_current_win(M.state.preview_win)
+end
+
+local function move_list_cursor(direction)
+  if not M.state.active then return end
+
+  local items = M.state.filtered_items
+  if #items == 0 then return end
+
+  local new_cursor = M.state.cursor + direction
+  new_cursor = math.max(1, math.min(new_cursor, #items))
+
+  if new_cursor ~= M.state.cursor then
+    M.state.cursor = new_cursor
+    M.render_list()
+    M.update_preview()
+    M.update_status()
+  end
+end
+
 function M.setup_keymaps()
   local keymaps = M.state.config.keymaps
-
   local input_opts = { buffer = M.state.input_buf, noremap = true, silent = true }
-
-  set_keymap('i', keymaps.close, M.close, input_opts)
-  set_keymap('i', keymaps.select, M.select, input_opts)
-  set_keymap('i', keymaps.select_split, function() M.select('split') end, input_opts)
-  set_keymap('i', keymaps.select_vsplit, function() M.select('vsplit') end, input_opts)
-  set_keymap('i', keymaps.select_tab, function() M.select('tab') end, input_opts)
-  set_keymap('i', keymaps.move_up, M.move_up, input_opts)
-  set_keymap('i', keymaps.move_down, M.move_down, input_opts)
-  set_keymap('i', keymaps.preview_scroll_up, M.scroll_preview_up, input_opts)
-  set_keymap('i', keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
-  set_keymap('i', keymaps.toggle_debug, M.toggle_debug, input_opts)
-  set_keymap('i', keymaps.cycle_previous_query, M.recall_query_from_history, input_opts)
-  set_keymap('i', keymaps.toggle_select, M.toggle_select, input_opts)
-  set_keymap('i', keymaps.send_to_quickfix, M.send_to_quickfix, input_opts)
-
   local list_opts = { buffer = M.state.list_buf, noremap = true, silent = true }
 
-  set_keymap('n', keymaps.close, M.focus_input_win, list_opts)
+  vim.keymap.set('i', '<C-w>', function()
+    local col = vim.fn.col('.') - 1
+    local line = vim.fn.getline('.')
+    local prompt_len = #M.state.config.prompt
+    if col <= prompt_len then return '' end
+    local text_part = line:sub(prompt_len + 1, col)
+    local after_cursor = line:sub(col + 1)
+    local new_text = text_part:gsub('%S*%s*$', '')
+    local new_line = M.state.config.prompt .. new_text .. after_cursor
+    local new_col = prompt_len + #new_text
+    vim.fn.setline('.', new_line)
+    vim.fn.cursor(vim.fn.line('.'), new_col + 1)
+    return ''
+  end, input_opts)
+
+  set_keymap('i', keymaps.move_up, M.move_up, input_opts)
+  set_keymap('i', keymaps.move_down, M.move_down, input_opts)
+  set_keymap('i', keymaps.cycle_previous_query, M.recall_query_from_history, input_opts)
+  set_keymap('n', 'j', M.move_down, input_opts)
+  set_keymap('n', 'k', M.move_up, input_opts)
+  set_keymap('n', keymaps.focus_list, M.focus_list_win, input_opts)
+  set_keymap('n', keymaps.focus_preview, M.focus_preview_win, input_opts)
+
+  -- Input buffer: both modes
+  set_keymap({ 'i', 'n' }, keymaps.close, M.close, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.select, M.select, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.select_split, function() M.select('split') end, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.select_vsplit, function() M.select('vsplit') end, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.select_tab, function() M.select('tab') end, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.preview_scroll_up, M.scroll_preview_up, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.toggle_debug, M.toggle_debug, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.toggle_select, M.toggle_select, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.send_to_quickfix, M.send_to_quickfix, input_opts)
+
+  -- List buffer
+  set_keymap('n', keymaps.close, M.close, list_opts)
+  set_keymap('n', 'q', M.close, list_opts)
+  set_keymap('n', 'j', function() move_list_cursor(1) end, list_opts)
+  set_keymap('n', 'k', function() move_list_cursor(-1) end, list_opts)
+  set_keymap('n', 'i', M.focus_input_win, list_opts)
+  set_keymap('n', keymaps.focus_preview, M.focus_preview_win, list_opts)
   set_keymap('n', keymaps.select, M.select, list_opts)
   set_keymap('n', keymaps.select_split, function() M.select('split') end, list_opts)
   set_keymap('n', keymaps.select_vsplit, function() M.select('vsplit') end, list_opts)
   set_keymap('n', keymaps.select_tab, function() M.select('tab') end, list_opts)
-  set_keymap('n', keymaps.move_up, M.move_up, list_opts)
-  set_keymap('n', keymaps.move_down, M.move_down, list_opts)
   set_keymap('n', keymaps.preview_scroll_up, M.scroll_preview_up, list_opts)
   set_keymap('n', keymaps.preview_scroll_down, M.scroll_preview_down, list_opts)
   set_keymap('n', keymaps.toggle_debug, M.toggle_debug, list_opts)
   set_keymap('n', keymaps.toggle_select, M.toggle_select, list_opts)
   set_keymap('n', keymaps.send_to_quickfix, M.send_to_quickfix, list_opts)
 
+  -- Preview buffer
   if M.state.preview_buf then
     local preview_opts = { buffer = M.state.preview_buf, noremap = true, silent = true }
 
-    set_keymap('n', keymaps.close, M.focus_input_win, preview_opts)
+    set_keymap('n', keymaps.close, M.close, preview_opts)
+    set_keymap('n', 'q', M.close, preview_opts)
+    set_keymap('n', 'i', M.focus_input_win, preview_opts)
+    set_keymap('n', keymaps.focus_list, M.focus_list_win, preview_opts)
     set_keymap('n', keymaps.select, M.select, preview_opts)
     set_keymap('n', keymaps.select_split, function() M.select('split') end, preview_opts)
     set_keymap('n', keymaps.select_vsplit, function() M.select('vsplit') end, preview_opts)
@@ -672,26 +776,6 @@ function M.setup_keymaps()
     set_keymap('n', keymaps.toggle_select, M.toggle_select, preview_opts)
     set_keymap('n', keymaps.send_to_quickfix, M.send_to_quickfix, preview_opts)
   end
-
-  vim.keymap.set('i', '<C-w>', function()
-    local col = vim.fn.col('.') - 1
-    local line = vim.fn.getline('.')
-    local prompt_len = #M.state.config.prompt
-
-    if col <= prompt_len then return '' end
-
-    local text_part = line:sub(prompt_len + 1, col)
-    local after_cursor = line:sub(col + 1)
-
-    local new_text = text_part:gsub('%S*%s*$', '')
-    local new_line = M.state.config.prompt .. new_text .. after_cursor
-    local new_col = prompt_len + #new_text
-
-    vim.fn.setline('.', new_line)
-    vim.fn.cursor(vim.fn.line('.'), new_col + 1)
-
-    return '' -- Return empty string to prevent default <C-w> behavior
-  end, input_opts)
 
   vim.api.nvim_buf_attach(M.state.input_buf, false, {
     on_lines = function()
@@ -737,7 +821,6 @@ function M.toggle_debug()
   end
 end
 
---- Handle input change
 function M.on_input_change()
   if not M.state.active then return end
 
@@ -1154,12 +1237,10 @@ local function apply_bottom_padding(lines, item_to_lines, ctx)
   local empty_lines_needed = math.max(0, ctx.win_height - total_content_lines)
 
   if empty_lines_needed > 0 then
-    -- Insert empty lines at the beginning
-    for i = empty_lines_needed, 1, -1 do
+    for _ = empty_lines_needed, 1, -1 do
       table.insert(lines, 1, string.rep(' ', ctx.win_width + 5))
     end
 
-    -- Adjust item_to_lines mapping
     for i = ctx.display_start, ctx.display_end do
       if item_to_lines[i] then
         item_to_lines[i].first = item_to_lines[i].first + empty_lines_needed
@@ -1174,22 +1255,18 @@ end
 --- @param item_to_lines table Item to lines mapping
 --- @param ctx table Render context
 local function update_buffer_and_cursor(lines, item_to_lines, ctx)
-  -- Calculate cursor line position
   local cursor_line = 0
   if #ctx.items > 0 and ctx.cursor >= 1 and ctx.cursor <= #ctx.items then
     local cursor_item = item_to_lines[ctx.cursor]
     if cursor_item then cursor_line = cursor_item.last end
   end
 
-  -- Update buffer
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', true)
   vim.api.nvim_buf_set_lines(M.state.list_buf, 0, -1, false, lines)
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
 
-  -- Clear existing highlights
   vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
 
-  -- Position cursor
   if #ctx.items > 0 and cursor_line > 0 and cursor_line <= #lines then
     vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
   end
@@ -1216,21 +1293,17 @@ local function apply_all_highlights(lines, item_to_lines, ctx)
 
     if not line_content then goto continue end
 
-    -- Apply highlights using renderer.apply_highlights
     renderer.apply_highlights(item, ctx, i, M.state.list_buf, M.state.ns_id, line_idx, line_content)
     ::continue::
   end
 end
 
--- Renders all virtual buffer overalys
 local function finalize_render(item_to_lines, ctx)
-  -- Get text_len from item_to_lines if combo exists
   local combo_text_len = nil
   if ctx.combo_item_index and item_to_lines[ctx.combo_item_index] then
     combo_text_len = item_to_lines[ctx.combo_item_index].combo_header_text_len
   end
 
-  -- Render combo overlays
   local combo_was_hidden = combo_renderer.render_highlights_and_overlays(
     ctx.combo_item_index,
     combo_text_len or ctx.combo_header_text_len,
@@ -1239,13 +1312,13 @@ local function finalize_render(item_to_lines, ctx)
     M.state.ns_id,
     ctx.config.hl.border,
     item_to_lines,
-    ctx.prompt_position
+    ctx.prompt_position,
+    #ctx.items
   )
 
-  -- Handle combo hiding with scroll adjustment
+  -- it's important part of functionality when user scrolls to the middle of the page we hide
+  -- the combo overlay which leaves the gap of the internal neovim buffer, so scroll to show last item
   if combo_was_hidden and ctx.prompt_position == 'bottom' then scroll_to_bottom() end
-
-  -- Render scrollbar
   scrollbar.render(M.state.layout, ctx.config, M.state.list_win, M.state.pagination, ctx.prompt_position)
 end
 
@@ -1661,7 +1734,7 @@ function M.toggle_select()
 
   M.render_list()
 
-  -- only when selecting the element not deslecting
+  -- only when selecting the element not deselecting
   if not was_selected then
     if get_prompt_position() == 'bottom' then
       M.move_up()
