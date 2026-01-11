@@ -7,6 +7,10 @@ local conf = require('fff.conf')
 local preview = require('fff.file_picker.preview')
 local git_utils = require('fff.git_utils')
 
+-- Initialize preview module with config (required before using preview functions)
+local preview_config = conf.get().preview
+if preview_config then preview.setup(preview_config) end
+
 -- ============================================================================
 -- Git Files Retrieval
 -- ============================================================================
