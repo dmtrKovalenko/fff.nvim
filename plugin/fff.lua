@@ -74,6 +74,14 @@ end, {
   desc = 'Browse and switch colorschemes with live preview (like fzf.vim :Colors)',
 })
 
+vim.api.nvim_create_user_command('GFiles', function(opts)
+  local fff = require('fff')
+  fff.git_files()
+end, {
+  bang = true,
+  desc = 'Browse git status files with FFF (like fzf.vim :GFiles?)',
+})
+
 vim.api.nvim_create_user_command('FFFRefreshGit', function() require('fff').refresh_git_status() end, {
   desc = 'Manually refresh git status for all files',
 })

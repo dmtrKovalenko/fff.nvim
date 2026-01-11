@@ -235,6 +235,18 @@ function M.colors(opts)
   end
 end
 
+--- Open the git files picker (similar to fzf.vim :GFiles?)
+--- Lists git status files with fuzzy search and live preview
+--- @param opts? table Optional configuration to override defaults
+function M.git_files(opts)
+  local git_files_ok, git_files = pcall(require, 'fff.git_files')
+  if git_files_ok then
+    git_files.open(opts)
+  else
+    vim.notify('Failed to load git files picker: ' .. tostring(git_files), vim.log.levels.ERROR)
+  end
+end
+
 --- Opens the file under the cursor with an optional callback if the only file
 --- is found and we are about to inline open it
 --- @param open_cb function|nil Optional callback function to execute after opening the file

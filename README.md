@@ -83,6 +83,11 @@ FFF.nvim requires:
       function() require('fff').colors() end,
       desc = 'FFF Colors',
     },
+    {
+      "<leader>g",
+      function() require('fff').git_files() end,
+      desc = 'FFF Git Files',
+    },
   }
 }
 ```
@@ -128,6 +133,13 @@ vim.keymap.set(
   '<leader>c',
   function() require('fff').colors() end,
   { desc = 'FFF Colors' }
+)
+
+vim.keymap.set(
+  'n',
+  '<leader>g',
+  function() require('fff').git_files() end,
+  { desc = 'FFF Git Files' }
 )
 ```
 
@@ -259,6 +271,7 @@ require('fff').find_files()                         -- Find files in current dir
 require('fff').find_in_git_root()                   -- Find files in the current git repository
 require('fff').buffers()                            -- Open buffer picker (similar to fzf.vim :Buffers)
 require('fff').colors()                             -- Open colors picker (similar to fzf.vim :Colors)
+require('fff').git_files()                          -- Open git files picker (similar to fzf.vim :GFiles?)
 require('fff').scan_files()                         -- Trigger rescan of files in the current directory
 require('fff').refresh_git_status()                 -- Refresh git status for the active file lock
 require('fff').find_files_in_dir(path)              -- Find files in a specific directory
@@ -272,6 +285,7 @@ FFF.nvim provides several commands for interacting with the file picker:
 - `:FFFFind [path|query]` - Open file picker. Optional: provide directory path or search query
 - `:FFFBuffers` - Open buffer picker to browse and switch between open buffers
 - `:Colors` - Open colors picker to browse and switch colorschemes with live preview
+- `:GFiles` - Open git files picker to browse git status files (similar to fzf.vim :GFiles?)
 - `:FFFScan` - Manually trigger a rescan of files in the current directory
 - `:FFFRefreshGit` - Manually refresh git status for all files
 - `:FFFClearCache [all|frecency|files]` - Clear various caches
@@ -335,6 +349,41 @@ The colors picker (`:Colors`) provides a fast way to browse and switch colorsche
 ```lua
 vim.keymap.set('n', '<leader>c', function() require('fff').colors() end, { desc = 'FFF Colors' })
 ```
+
+#### Git Files Picker
+
+The git files picker (`:GFiles`) provides a fast way to browse files with git status, similar to fzf.vim's `:GFiles?` command.
+
+**Features:**
+- Lists all files with git status (modified, staged, untracked, deleted, etc.)
+- Git status indicators in sign column with color-coded git status
+- Live preview of file contents
+- Fuzzy search to filter files
+- Opens files in various split modes
+
+**Keybindings in git files picker:**
+
+| Key | Action |
+|-----|--------|
+| `<CR>` | Open file in current window |
+| `<C-s>` | Open file in horizontal split |
+| `<C-v>` | Open file in vertical split |
+| `<C-t>` | Open file in new tab |
+| `<Esc>` | Close picker |
+| `<Up>` / `<C-p>` | Move selection up |
+| `<Down>` / `<C-n>` | Move selection down |
+| `<C-u>` | Scroll preview up |
+| `<C-d>` | Scroll preview down |
+
+**Example keybinding:**
+
+```lua
+vim.keymap.set('n', '<leader>g', function() require('fff').git_files() end, { desc = 'FFF Git Files' })
+```
+
+**Usage:**
+
+Simply run `:GFiles` to open the git files picker. It will show all files that have changed according to `git status`. The picker displays git status for each file using visual indicators and colors.
 
 #### Multiple Key Bindings
 
