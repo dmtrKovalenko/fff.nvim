@@ -93,6 +93,7 @@ local function position_overlay_window(state_key, buf, width, row, col)
     row = row,
     col = col,
     style = 'minimal',
+    border = 'none',
     focusable = false,
     zindex = 250,
   }
@@ -106,15 +107,15 @@ local function position_overlay_window(state_key, buf, width, row, col)
   vim.api.nvim_win_set_option(overlay_state[state_key], 'winhl', 'Normal:Normal')
 end
 
-local function update_overlays(list_win, combo_header_line, border_hl, prompt_position)
+local function update_overlays(list_win, combo_header_line, border_hl)
   local list_config = vim.api.nvim_win_get_config(list_win)
-  -- combo_header_line is a 1-based buffer line index
-  -- list_config.row is the window position (includes border)
-  -- Buffer content starts at row + 1 (after top border)
-  -- For bottom prompt: overlay needs adjustment due to different border handling
-  -- For top prompt: use standard calculation
+  -- combo_header_line is a 1-based buffer line index (includes any padding offset)
+  -- list_config.row is where the window starts (0-based, at the top border)
+  -- Content starts at list_config.row + 1 (after the top border)
+  -- Buffer line 1 -> screen row (list_config.row + 1)
+  -- Buffer line N -> screen row (list_config.row + N)
+  -- Since combo_header_line is 1-based, the formula naturally works out
   local combo_header_row = list_config.row + combo_header_line
-  if prompt_position == 'bottom' then combo_header_row = combo_header_row - 1 end
 
   -- Skip update if position and highlight haven't changed
   if
@@ -185,7 +186,8 @@ function M.render_highlights_and_overlays(
   ns_id,
   border_hl,
   item_to_lines,
-  prompt_position
+  prompt_position,
+  total_items
 )
   local was_rendered_before = overlay_state.was_rendered
   local is_rendering_now = false
@@ -199,7 +201,13 @@ function M.render_highlights_and_overlays(
     else
       local combo_header_line_idx = combo_item_lines.first
       apply_header_highlights(list_buf, ns_id, combo_header_line_idx, text_len, border_hl)
-      update_overlays(list_win, combo_header_line_idx, border_hl, prompt_position)
+      if prompt_position == 'bottom' and total_items and total_items > 1 then
+        combo_header_line_idx = combo_header_line_idx - 1
+      end
+
+      -- when rendering items in the reverse order for some reason this makes the
+      -- indexing shifted by one in the internal list config, so just adjust for that
+      update_overlays(list_win, combo_header_line_idx, border_hl)
       is_rendering_now = true
     end
   end

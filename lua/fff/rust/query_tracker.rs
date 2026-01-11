@@ -1,3 +1,4 @@
+use crate::db_healthcheck::DbHealthChecker;
 use crate::error::Error;
 use heed::types::Bytes;
 use heed::{Database, Env, EnvOpenOptions};
@@ -32,6 +33,24 @@ pub struct QueryTracker {
     query_file_db: Database<Bytes, SerdeBincode<QueryMatchEntry>>,
     // Database for project_path -> VecDeque<HistoryEntry> mappings
     query_history_db: Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
+}
+
+impl DbHealthChecker for QueryTracker {
+    fn get_env(&self) -> &Env {
+        &self.env
+    }
+
+    fn count_entries(&self) -> Result<Vec<(&'static str, u64)>, Error> {
+        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
+
+        let count_queries = self.query_file_db.len(&rtxn).map_err(Error::DbRead)?;
+        let count_histories = self.query_history_db.len(&rtxn).map_err(Error::DbRead)?;
+
+        Ok(vec![
+            ("query_file_entries", count_queries),
+            ("query_history_entries", count_histories),
+        ])
+    }
 }
 
 impl QueryTracker {

@@ -2,7 +2,8 @@ name: Prebuild
 
 on:
   push:
-    branches: [main, feat/prebuild]
+    branches: [main]
+  pull_request:
 
 jobs:
   build:
@@ -61,9 +62,6 @@ jobs:
 
       - name: Install Rust
         run: |
-          # https://github.com/rust-cross/cargo-zigbuild/issues/327
-          rustup toolchain install nightly-2025-02-19
-          rustup default nightly-2025-02-19
           rustup target add ${{ matrix.target }}
 
       - name: Build for Linux
@@ -96,6 +94,7 @@ jobs:
     name: Release
     needs: build
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     permissions:
       contents: write
     steps:
@@ -132,4 +131,45 @@ jobs:
           prerelease: true
           generate_release_notes: false
           body: |
-           Nightly release from commit: ${{ github.sha }}
+            Nightly release from commit: ${{ github.sha }}
+
+  comment-on-pr:
+    name: Comment on PR
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Get short SHA
+        id: vars
+        run: echo "short_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Find existing comment
+        uses: peter-evans/find-comment@v3
+        id: find-comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "<!-- fff-nvim-build-comment -->"
+
+      - name: Create or update PR comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body: |
+            <!-- fff-nvim-build-comment -->
+            ## 🔨 Build Artifacts for your PR
+
+            You can test the prebuilt binaries if you use lazy.nvim right now.
+
+            ```lua
+            {
+              "dmtrKovalenko/fff.nvim",
+              tag = "${{ steps.vars.outputs.short_sha }}",
+            }
+            ```
+            ---
+            *Built from ${{ github.sha }}*
