@@ -35,31 +35,46 @@ function M.get_git_status_files(git_root)
 
   for line in handle:lines() do
     if line:len() >= 3 then
-      local status_code = line:sub(1, 2)
+      -- Git status format: XY filename
+      -- X = index status, Y = worktree status
+      local index_status = line:sub(1, 1)
+      local worktree_status = line:sub(2, 2)
       local filepath = line:sub(4)
+
+      -- Handle renamed files: R  old -> new
+      if index_status == 'R' or worktree_status == 'R' then
+        local arrow_pos = filepath:find(' %-> ')
+        if arrow_pos then
+          filepath = filepath:sub(arrow_pos + 4) -- Get the new filename
+        end
+      end
 
       -- Skip duplicates
       if not seen[filepath] then
         seen[filepath] = true
 
-        -- Parse git status code
+        -- Parse git status code (XY format)
+        -- X = staged (index), Y = unstaged (worktree)
         local git_status = 'unknown'
-        if status_code:match('[AM]%s') or status_code:match('%s[AM]') then
-          git_status = 'staged_new'
-        elseif status_code:match('[M]%s') or status_code:match('%s[M]') then
-          if status_code:match('[M]%s') then
-            git_status = 'staged_modified'
-          else
-            git_status = 'modified'
-          end
-        elseif status_code:match('D%s') or status_code:match('%sD') then
-          git_status = 'deleted'
-        elseif status_code:match('R%s') or status_code:match('%sR') then
-          git_status = 'renamed'
-        elseif status_code:match('??') then
+
+        if index_status == '?' and worktree_status == '?' then
           git_status = 'untracked'
-        elseif status_code:match('!!') then
+        elseif index_status == '!' and worktree_status == '!' then
           git_status = 'ignored'
+        elseif index_status == 'A' then
+          git_status = 'staged_new'
+        elseif index_status == 'M' then
+          git_status = 'staged_modified'
+        elseif index_status == 'D' then
+          git_status = 'staged_deleted'
+        elseif index_status == 'R' then
+          git_status = 'renamed'
+        elseif worktree_status == 'M' then
+          git_status = 'modified'
+        elseif worktree_status == 'D' then
+          git_status = 'deleted'
+        elseif worktree_status == 'A' then
+          git_status = 'untracked' -- Added in worktree only (like untracked)
         end
 
         local full_path = git_root .. '/' .. filepath
@@ -164,68 +179,148 @@ function M.create_ui()
 
   M.state.list_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_option(M.state.list_buf, 'bufhidden', 'wipe')
-  vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
 
   if M.is_preview_enabled() then
     M.state.preview_buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_option(M.state.preview_buf, 'bufhidden', 'wipe')
-    vim.api.nvim_buf_set_option(M.state.preview_buf, 'modifiable', false)
   end
 
-  -- Create input window
-  local input_height = prompt_position == 'bottom' and 1 or 1
-  local input_row = prompt_position == 'bottom' and row + height - input_height or row
-  local list_height = height - input_height - 1
-  local list_row = prompt_position == 'bottom' and row or row + input_height + 1
-
-  M.state.input_win = vim.api.nvim_open_win(M.state.input_buf, true, {
-    relative = 'editor',
-    width = list_width,
-    height = input_height,
-    row = input_row,
-    col = col,
-    border = 'single',
-    title = config.prompt or '🦆 ',
-    title_pos = 'left',
-    zindex = 101,
-  })
-
-  vim.api.nvim_win_set_option(M.state.input_win, 'wrap', false)
-  vim.api.nvim_win_set_option(M.state.input_win, 'list', false)
+  local list_height = height - 4 -- Account for borders and input
 
   -- Create list window
+  local list_row = prompt_position == 'bottom' and row + 1 or row + 3
   M.state.list_win = vim.api.nvim_open_win(M.state.list_buf, false, {
     relative = 'editor',
     width = list_width,
     height = list_height,
+    col = col + 1,
     row = list_row,
-    col = col,
-    border = 'single',
-    title = ' ' .. (config.title or 'Git Files') .. ' ',
-    title_pos = 'left',
-    zindex = 100,
+    border = prompt_position == 'bottom' and { '┌', '─', '┐', '│', '', '', '', '│' }
+      or { '├', '─', '┤', '│', '┘', '─', '└', '│' },
+    style = 'minimal',
+    title = prompt_position == 'bottom' and ' Git Files ' or nil,
+    title_pos = prompt_position == 'bottom' and 'left' or nil,
   })
-
-  vim.api.nvim_win_set_option(M.state.list_win, 'wrap', false)
 
   -- Create preview window if enabled
   if M.is_preview_enabled() then
     M.state.preview_win = vim.api.nvim_open_win(M.state.preview_buf, false, {
       relative = 'editor',
       width = preview_width,
-      height = height,
-      row = row,
-      col = col + list_width + 2,
+      height = height - 2,
+      col = col + list_width + 3,
+      row = row + 1,
       border = 'single',
+      style = 'minimal',
       title = ' Preview ',
       title_pos = 'left',
-      zindex = 100,
     })
+  end
 
-    vim.api.nvim_win_set_option(M.state.preview_win, 'wrap', config.preview.wrap_lines or false)
+  -- Create input window
+  local input_row = prompt_position == 'bottom' and row + list_height + 2 or row + 1
+  M.state.input_win = vim.api.nvim_open_win(M.state.input_buf, false, {
+    relative = 'editor',
+    width = list_width,
+    height = 1,
+    col = col + 1,
+    row = input_row,
+    border = prompt_position == 'bottom' and { '├', '─', '┤', '│', '┘', '─', '└', '│' }
+      or { '┌', '─', '┐', '│', '', '', '', '│' },
+    style = 'minimal',
+    title = prompt_position == 'top' and ' Git Files ' or nil,
+    title_pos = prompt_position == 'top' and 'left' or nil,
+  })
+
+  M.setup_buffers()
+  M.setup_windows()
+  M.setup_keymaps()
+
+  vim.api.nvim_set_current_win(M.state.input_win)
+
+  if M.is_preview_enabled() then
+    preview.set_preview_window(M.state.preview_win)
   end
 
   return true
+end
+
+function M.setup_buffers()
+  vim.api.nvim_buf_set_name(M.state.input_buf, 'fff git files search')
+  vim.api.nvim_buf_set_name(M.state.list_buf, 'fff git files list')
+  if M.is_preview_enabled() then
+    vim.api.nvim_buf_set_name(M.state.preview_buf, 'fff git files preview')
+  end
+
+  vim.api.nvim_buf_set_option(M.state.input_buf, 'buftype', 'prompt')
+  vim.api.nvim_buf_set_option(M.state.input_buf, 'filetype', 'fff_git_files_input')
+  vim.fn.prompt_setprompt(M.state.input_buf, M.state.config.prompt or '🦆 ')
+
+  vim.api.nvim_buf_set_option(M.state.list_buf, 'buftype', 'nofile')
+  vim.api.nvim_buf_set_option(M.state.list_buf, 'filetype', 'fff_git_files_list')
+  vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
+
+  if M.is_preview_enabled() then
+    vim.api.nvim_buf_set_option(M.state.preview_buf, 'buftype', 'nofile')
+    vim.api.nvim_buf_set_option(M.state.preview_buf, 'filetype', 'fff_git_files_preview')
+    vim.api.nvim_buf_set_option(M.state.preview_buf, 'modifiable', false)
+  end
+end
+
+function M.setup_windows()
+  local hl = M.state.config.hl
+  local win_hl = string.format('Normal:%s,FloatBorder:%s,FloatTitle:%s', hl.normal, hl.border, hl.title)
+
+  vim.api.nvim_win_set_option(M.state.input_win, 'wrap', false)
+  vim.api.nvim_win_set_option(M.state.input_win, 'cursorline', false)
+  vim.api.nvim_win_set_option(M.state.input_win, 'number', false)
+  vim.api.nvim_win_set_option(M.state.input_win, 'winhighlight', win_hl)
+
+  vim.api.nvim_win_set_option(M.state.list_win, 'wrap', false)
+  vim.api.nvim_win_set_option(M.state.list_win, 'cursorline', false)
+  vim.api.nvim_win_set_option(M.state.list_win, 'number', false)
+  vim.api.nvim_win_set_option(M.state.list_win, 'signcolumn', 'yes:1')
+  vim.api.nvim_win_set_option(M.state.list_win, 'winhighlight', win_hl)
+
+  if M.is_preview_enabled() then
+    vim.api.nvim_win_set_option(M.state.preview_win, 'wrap', M.state.config.preview.wrap_lines or false)
+    vim.api.nvim_win_set_option(M.state.preview_win, 'cursorline', false)
+    vim.api.nvim_win_set_option(M.state.preview_win, 'number', false)
+    vim.api.nvim_win_set_option(M.state.preview_win, 'winhighlight', win_hl)
+  end
+
+  -- Close picker when focus leaves
+  local picker_group = vim.api.nvim_create_augroup('fff_git_files_picker_focus', { clear = true })
+  local picker_windows = { M.state.input_win, M.state.list_win }
+  if M.state.preview_win then
+    table.insert(picker_windows, M.state.preview_win)
+  end
+
+  vim.api.nvim_create_autocmd('WinLeave', {
+    group = picker_group,
+    callback = function()
+      if not M.state.active then
+        return
+      end
+
+      local current_win = vim.api.nvim_get_current_win()
+      local is_picker_window = vim.tbl_contains(picker_windows, current_win)
+
+      if is_picker_window then
+        vim.defer_fn(function()
+          if not M.state.active then
+            return
+          end
+
+          local new_win = vim.api.nvim_get_current_win()
+          if not vim.tbl_contains(picker_windows, new_win) then
+            M.close()
+          end
+        end, 10)
+      end
+    end,
+    desc = 'Close git files picker when focus leaves',
+  })
 end
 
 function M.render_list()
@@ -233,49 +328,92 @@ function M.render_list()
     return
   end
 
-  vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', true)
+  local items = M.state.filtered_items
+  local win_height = vim.api.nvim_win_get_height(M.state.list_win)
+  local win_width = vim.api.nvim_win_get_width(M.state.list_win)
+  local display_count = math.min(#items, win_height)
+  local prompt_position = get_prompt_position()
 
-  local lines = {}
-  for i, item in ipairs(M.state.filtered_items) do
-    local is_cursor = i == M.state.cursor
-    local border_char = git_utils.get_border_char(item.git_status)
-    local relative = item.relative_path
+  local empty_lines_needed = 0
+  local cursor_line = 0
 
-    if border_char and border_char ~= '' then
-      relative = border_char .. ' ' .. relative
+  if #items > 0 then
+    if prompt_position == 'bottom' then
+      empty_lines_needed = win_height - display_count
+      cursor_line = empty_lines_needed + M.state.cursor
+    else
+      cursor_line = M.state.cursor
     end
-
-    table.insert(lines, relative)
+    cursor_line = math.max(1, math.min(cursor_line, win_height))
   end
 
+  local lines = {}
+
+  -- Add empty lines for bottom prompt position
+  if prompt_position == 'bottom' then
+    for _ = 1, empty_lines_needed do
+      table.insert(lines, string.rep(' ', win_width))
+    end
+  end
+
+  -- Format each git file line
+  for i = 1, display_count do
+    local item = items[i]
+    local border_char = git_utils.get_border_char(item.git_status)
+    local line = ''
+
+    if border_char and border_char ~= '' then
+      line = border_char .. ' ' .. item.relative_path
+    else
+      line = '  ' .. item.relative_path
+    end
+
+    -- Pad line
+    local line_len = vim.fn.strdisplaywidth(line)
+    local padding = math.max(0, win_width - line_len + 5)
+    table.insert(lines, line .. string.rep(' ', padding))
+  end
+
+  vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', true)
   vim.api.nvim_buf_set_lines(M.state.list_buf, 0, -1, false, lines)
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
 
   -- Clear all highlights
   vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
 
-  -- Apply git status highlights
-  for i, item in ipairs(M.state.filtered_items) do
-    local is_cursor = i == M.state.cursor
-    local border_hl = is_cursor
-        and git_utils.get_border_highlight_selected(item.git_status)
-        or git_utils.get_border_highlight(item.git_status)
-    local text_hl = git_utils.get_text_highlight(item.git_status)
+  if #items > 0 and cursor_line > 0 and cursor_line <= #lines then
+    vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
 
-    if is_cursor and (text_hl == '' or not text_hl) then
-      border_hl = 'CursorLine'
-    end
+    -- Highlight cursor line
+    vim.api.nvim_buf_add_highlight(
+      M.state.list_buf,
+      M.state.ns_id,
+      M.state.config.hl.active_file,
+      cursor_line - 1,
+      0,
+      -1
+    )
 
-    if border_hl and border_hl ~= '' then
-      vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, i - 1, 0, {
-        line_hl_group = border_hl,
-        priority = 10,
-      })
+    -- Apply git status highlights for each visible item
+    for i = 1, display_count do
+      local item = items[i]
+      local line_idx = empty_lines_needed + i
+      local is_cursor_line = line_idx == cursor_line
+
+      local border_hl = is_cursor_line
+          and git_utils.get_border_highlight_selected(item.git_status)
+          or git_utils.get_border_highlight(item.git_status)
+
+      -- Add sign for git status
+      if git_utils.should_show_border(item.git_status) then
+        vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
+          sign_text = git_utils.get_border_char(item.git_status),
+          sign_hl_group = border_hl,
+          priority = 1000,
+        })
+      end
     end
   end
-
-  -- Highlight cursor line
-  vim.api.nvim_win_set_cursor(M.state.list_win, { M.state.cursor, 0 })
 end
 
 function M.update_results()
@@ -320,26 +458,43 @@ function M.filter_results()
 end
 
 function M.update_preview()
-  if not M.state.active or not M.state.preview_win or not M.is_preview_enabled() then
+  if not M.is_preview_enabled() then
+    return
+  end
+  if not M.state.active then
     return
   end
 
   local items = M.state.filtered_items
   if #items == 0 or M.state.cursor > #items then
     M.clear_preview()
+    M.state.last_preview_file = nil
     return
   end
 
   local item = items[M.state.cursor]
-  if not item or item.path == M.state.last_preview_file then
+  if not item or item.path == '' then
+    M.clear_preview()
+    M.state.last_preview_file = nil
     return
   end
 
+  if M.state.last_preview_file == item.path then
+    return
+  end
+
+  preview.clear()
   M.state.last_preview_file = item.path
 
-  if not preview.preview(item.path, M.state.preview_buf) then
-    M.clear_preview()
-  end
+  -- Update preview window title
+  local title = string.format(' %s ', item.relative_path or item.name)
+  vim.api.nvim_win_set_config(M.state.preview_win, {
+    title = title,
+    title_pos = 'left',
+  })
+
+  preview.set_preview_window(M.state.preview_win)
+  preview.preview(item.path, M.state.preview_buf)
 end
 
 function M.clear_preview()
@@ -456,9 +611,16 @@ function M.on_input_changed()
     return
   end
 
-  local input_lines = vim.api.nvim_buf_get_lines(M.state.input_buf, 0, 1, false)
-  M.state.query = input_lines[1] or ''
+  local lines = vim.api.nvim_buf_get_lines(M.state.input_buf, 0, -1, false)
+  local prompt_len = #(M.state.config.prompt or '🦆 ')
+  local query = ''
 
+  local full_line = lines[1] or ''
+  if full_line:sub(1, prompt_len) == (M.state.config.prompt or '🦆 ') then
+    query = full_line:sub(prompt_len + 1)
+  end
+
+  M.state.query = query
   M.filter_results()
   M.render_list()
   M.update_preview()
@@ -539,6 +701,15 @@ function M.setup_keymaps()
   if keymaps.preview_scroll_down then
     vim.keymap.set('i', keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
   end
+
+  -- Handle input changes using buf_attach
+  vim.api.nvim_buf_attach(M.state.input_buf, false, {
+    on_lines = function()
+      vim.schedule(function()
+        M.on_input_changed()
+      end)
+    end,
+  })
 end
 
 --- Open the git files picker
@@ -587,17 +758,6 @@ function M.open(opts)
   M.render_list()
   M.update_preview()
   M.update_status()
-
-  M.setup_keymaps()
-
-  -- Set up autocmd for input changes
-  local group = vim.api.nvim_create_augroup('fff_git_files_picker_focus', { clear = true })
-  vim.api.nvim_create_autocmd('TextChangedI', {
-    group = group,
-    buffer = M.state.input_buf,
-    callback = M.on_input_changed,
-    desc = 'Update git files picker on input change',
-  })
 
   vim.cmd('startinsert!')
 end
