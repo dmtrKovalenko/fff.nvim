@@ -1752,22 +1752,20 @@ function M.send_to_quickfix()
   -- No need to filter for 'false' values because deselected files are removed from the table (set to nil)
   -- The pairs() iterator only iterates over keys that exist in the table
   -- So only selected files (value = true) will be collected here
-  local selected_paths = {}
+  local items_to_add = {}
   for path, _ in pairs(M.state.selected_files) do
-    table.insert(selected_paths, path)
+    table.insert(items_to_add, path)
   end
 
   -- If no selections, use current file under cursor
-  if #selected_paths == 0 then
-    local items = M.state.filtered_items
-    if #items > 0 and M.state.cursor <= #items then
-      local item = items[M.state.cursor]
-      if item and item.path then table.insert(selected_paths, item.path) end
+  if #items_to_add == 0 then
+    for _, item in ipairs(M.state.filtered_items) do
+      if item and item.path then table.insert(items_to_add, item.path) end
     end
   end
 
   -- Exit if still nothing to add
-  if #selected_paths == 0 then
+  if #items_to_add == 0 then
     vim.notify('No files to send to quickfix', vim.log.levels.WARN)
     return
   end
@@ -1777,7 +1775,7 @@ function M.send_to_quickfix()
 
   -- Build quickfix list entries
   local qf_list = {}
-  for _, path in ipairs(selected_paths) do
+  for _, path in ipairs(items_to_add) do
     table.insert(qf_list, {
       filename = path,
       lnum = 1,
@@ -1790,7 +1788,7 @@ function M.send_to_quickfix()
   vim.fn.setqflist(qf_list, 'r')
   vim.cmd('copen')
 
-  local count = #selected_paths
+  local count = #items_to_add
   vim.notify(string.format('Added %d file%s to quickfix list', count, count > 1 and 's' or ''), vim.log.levels.INFO)
 end
 
