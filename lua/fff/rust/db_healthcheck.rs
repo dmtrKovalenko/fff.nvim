@@ -27,3 +27,4 @@ pub trait DbHealthChecker {
         Ok(table)
     }
 }
+--

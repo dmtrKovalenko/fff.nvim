@@ -129,6 +129,12 @@ end
 --- @return string|nil File content or nil if failed
 function M.get_file_preview(file_path)
   local preview = require('fff.file_picker.preview')
+  local config = require('fff.conf').get()
+
+  -- Initialize preview module with config if not already done
+  if not preview.config then
+    preview.setup(config.preview or {})
+  end
 
   -- Create a temporary buffer to get the preview
   local temp_buf = vim.api.nvim_create_buf(false, true)
