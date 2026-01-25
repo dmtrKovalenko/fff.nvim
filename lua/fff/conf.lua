@@ -1,6 +1,6 @@
 local M = {}
 
----@class fff.conf.State
+--@class fff.conf.State
 local state = {
   ---@type table | nil
   config = nil,
@@ -113,6 +113,7 @@ local function init()
       prompt_position = 'bottom', -- or 'top'
       preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
       preview_size = 0.5,
+      show_scrollbar = true, -- Show scrollbar for pagination
     },
     preview = {
       enabled = true,
@@ -122,7 +123,6 @@ local function init()
       imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
       line_numbers = false,
       wrap_lines = false,
-      show_file_info = true,
       filetypes = {
         svg = { wrap_lines = true },
         markdown = { wrap_lines = true },
@@ -140,6 +140,11 @@ local function init()
       preview_scroll_up = '<C-u>',
       preview_scroll_down = '<C-d>',
       toggle_debug = '<F2>',
+      cycle_previous_query = '<C-Up>',
+      toggle_select = '<Tab>',
+      send_to_quickfix = '<C-q>',
+      focus_list = '<leader>l',
+      focus_preview = '<leader>p',
     },
     hl = {
       border = 'FloatBorder',
@@ -151,14 +156,51 @@ local function init()
       active_file = 'Visual',
       frecency = 'Number',
       debug = 'Comment',
+      combo_header = 'Number',
+      scrollbar = 'Comment',
+      directory_path = 'Comment', -- Highlight for directory path in file list
+      -- Multi-select highlights
+      selected = 'FFFSelected',
+      selected_active = 'FFFSelectedActive',
+      -- Git text highlights for file names
+      git_staged = 'FFFGitStaged',
+      git_modified = 'FFFGitModified',
+      git_deleted = 'FFFGitDeleted',
+      git_renamed = 'FFFGitRenamed',
+      git_untracked = 'FFFGitUntracked',
+      git_ignored = 'FFFGitIgnored',
+      -- Git sign/border highlights
+      git_sign_staged = 'FFFGitSignStaged',
+      git_sign_modified = 'FFFGitSignModified',
+      git_sign_deleted = 'FFFGitSignDeleted',
+      git_sign_renamed = 'FFFGitSignRenamed',
+      git_sign_untracked = 'FFFGitSignUntracked',
+      git_sign_ignored = 'FFFGitSignIgnored',
+      -- Git sign selected highlights
+      git_sign_staged_selected = 'FFFGitSignStagedSelected',
+      git_sign_modified_selected = 'FFFGitSignModifiedSelected',
+      git_sign_deleted_selected = 'FFFGitSignDeletedSelected',
+      git_sign_renamed_selected = 'FFFGitSignRenamedSelected',
+      git_sign_untracked_selected = 'FFFGitSignUntrackedSelected',
+      git_sign_ignored_selected = 'FFFGitSignIgnoredSelected',
     },
     frecency = {
       enabled = true,
       db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
     },
+    history = {
+      enabled = true,
+      db_path = vim.fn.stdpath('data') .. '/fff_queries',
+      min_combo_count = 3, -- Minimum selections before combo boost applies (3 = boost starts on 3rd selection)
+      combo_boost_score_multiplier = 100, -- Score multiplier for combo matches (files repeatedly opened with same query)
+    },
+    git = {
+      status_text_color = false, -- Apply git status colors to filename text (default: false, only sign column)
+    },
     debug = {
       enabled = false, -- Set to true to show scores in the UI
       show_scores = false,
+      show_file_info = false, -- Show file info panel in preview
     },
     logging = {
       enabled = true,

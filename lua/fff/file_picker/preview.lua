@@ -1,8 +1,35 @@
 local utils = require('fff.utils')
 local file_picker = require('fff.file_picker')
 local image = require('fff.file_picker.image')
+local location_utils = require('fff.location_utils')
 
 local M = {}
+
+-- Additional fallback for certain ambiguous filetypes which vim.filetype.match is not handling correctly
+local function get_fixed_filetype_detection(extension)
+  local extension_map = {
+    ts = 'typescript',
+    tex = 'latex',
+    md = 'markdown',
+    txt = 'text',
+  }
+
+  return extension_map[extension]
+end
+
+local function detect_filetype(file_path)
+  local has_plenary, plenary_filetype = pcall(require, 'plenary.filetype')
+  if has_plenary then
+    local detected = plenary_filetype.detect(file_path)
+    if detected and detected ~= '' then return detected end
+  end
+
+  local builtin_filetype = vim.filetype.match({ filename = file_path })
+  if builtin_filetype and builtin_filetype ~= '' then return builtin_filetype end
+
+  local extension = vim.fn.fnamemodify(file_path, ':e'):lower()
+  return get_fixed_filetype_detection(extension)
+end
 
 local function set_buffer_lines(bufnr, lines)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
@@ -115,12 +142,37 @@ local function read_file_streaming_async(file_path, bufnr, callback)
       return
     end
 
-    load_next_chunk_async(M.config.chunk_size, function(data, err)
+    -- Calculate initial chunk size based on location information
+    local initial_chunk_size = M.config.chunk_size
+    if M.state.location then
+      local target_line = location_utils.get_target_line(M.state.location)
+      if target_line then
+        -- Estimate bytes needed: assume ~100 bytes per line average
+        -- Add some buffer (50%) to account for variation in line lengths
+        local estimated_bytes = target_line * 100 * 1.5
+        -- Cap at reasonable maximum to avoid memory issues
+        local max_initial_chunk = M.config.max_size or (10 * 1024 * 1024) -- 10MB default
+        initial_chunk_size = math.min(estimated_bytes, max_initial_chunk)
+        -- Ensure we don't go below the standard chunk size
+        initial_chunk_size = math.max(initial_chunk_size, M.config.chunk_size)
+      end
+    end
+
+    load_next_chunk_async(initial_chunk_size, function(data, err)
       if data and data ~= '' then
         -- there seems to be no other way to append the buffer other than the lines :(
         local lines = vim.split(data, '\n', { plain = true })
         M.state.loaded_lines = #lines
         M.state.content_height = #lines
+
+        -- If we have a location and didn't load enough lines, try to load more
+        if M.state.location then
+          local target_line = location_utils.get_target_line(M.state.location)
+          if target_line and #lines < target_line and M.state.has_more_content then
+            -- Schedule additional loading after the initial callback
+            vim.schedule(function() ensure_content_loaded_async(target_line) end)
+          end
+        end
 
         callback(lines, err)
       else
@@ -213,11 +265,19 @@ M.state = {
   has_more_content = true,
   file_handle = nil,
   file_operation = nil, -- Ongoing file operation: {fd?: any, file_path?: string, position?: number}
+  location = nil, -- Current location data for highlighting
+  location_namespace = nil, -- Namespace for location highlighting
 }
 
 --- Setup preview configuration
 --- @param config table Configuration options
-function M.setup(config) M.config = config or {} end
+function M.setup(config)
+  M.config = config or {}
+  -- Create namespace for location highlighting
+  if not M.state.location_namespace then
+    M.state.location_namespace = vim.api.nvim_create_namespace('fff_preview_location')
+  end
+end
 
 --- Check if file is too big for initial preview (inspired by snacks.nvim)
 --- @param file_path string Path to the file
@@ -408,7 +468,7 @@ function M.get_file_info(file_path)
   }
 
   info.extension = vim.fn.fnamemodify(file_path, ':e'):lower()
-  info.filetype = vim.filetype.match({ filename = file_path }) or 'text'
+  info.filetype = detect_filetype(file_path) or 'text'
   info.size_formatted = utils.format_file_size(info.size)
   info.modified_formatted = os.date('%Y-%m-%d %H:%M:%S', info.modified)
   info.accessed_formatted = os.date('%Y-%m-%d %H:%M:%S', info.accessed)
@@ -517,6 +577,9 @@ function M.preview_file(file_path, bufnr)
 
       M.state.scroll_offset = 0
 
+      -- Apply location highlighting if available (delayed to ensure buffer is ready)
+      vim.schedule(function() M.apply_location_highlighting(bufnr) end)
+
       return true
     end
   end
@@ -552,6 +615,9 @@ function M.preview_file(file_path, bufnr)
 
       M.state.content_height = #content
       M.state.scroll_offset = 0
+
+      -- Apply location highlighting if available (delayed to ensure buffer is ready)
+      vim.schedule(function() M.apply_location_highlighting(bufnr) end)
     end
   end)
 
@@ -620,14 +686,15 @@ end
 function M.get_file_config(file_path)
   if not M.config or not M.config.filetypes then return {} end
 
-  local filetype = vim.filetype.match({ filename = file_path }) or 'text'
+  local filetype = detect_filetype(file_path) or 'text'
   return M.config.filetypes[filetype] or {}
 end
 
 --- @param file_path string Path to the file or directory
 --- @param bufnr number Buffer number for preview
+--- @param location table|nil Optional location data for highlighting
 --- @return boolean if the preview was successful
-function M.preview(file_path, bufnr)
+function M.preview(file_path, bufnr, location)
   if not file_path or file_path == '' then
     -- Don't immediately clear - let the previous content stay visible
     -- Only clear if we really need to show "No file selected"
@@ -648,6 +715,7 @@ function M.preview(file_path, bufnr)
 
   M.state.current_file = file_path
   M.state.bufnr = bufnr
+  M.state.location = location
 
   if image.is_image(file_path) then
     M.clear_buffer(bufnr)
@@ -682,9 +750,7 @@ function M.scroll(lines)
 
     if current_buffer_lines < buffer_needed and M.state.has_more_content then
       -- Load more content asynchronously but don't wait for it
-      ensure_content_loaded_async(target_line, function(success)
-        -- Content loaded in background, no need to recalculate scroll here
-      end)
+      ensure_content_loaded_async(target_line)
     end
   end
 
@@ -744,6 +810,10 @@ function M.clear_preview_visual_state(bufnr)
   -- Only clear visual state, don't affect buffer functionality
   -- Clear namespaces and extmarks for this buffer only
   vim.api.nvim_buf_clear_namespace(bufnr, -1, 0, -1)
+
+  -- Clear location highlights
+  if M.state.location_namespace then location_utils.clear_location_highlights(bufnr, M.state.location_namespace) end
+
   local wins = vim.fn.win_findbuf(bufnr)
 
   for _, win in ipairs(wins) do
@@ -790,6 +860,51 @@ function M.clear()
   M.state.current_file = nil
   M.state.scroll_offset = 0
   M.state.content_height = 0
+  M.state.location = nil
+end
+
+--- Apply location highlighting to the preview buffer
+--- @param bufnr number Buffer number
+function M.apply_location_highlighting(bufnr)
+  -- Ensure namespace is created
+  if not M.state.location_namespace then
+    M.state.location_namespace = vim.api.nvim_create_namespace('fff_preview_location')
+  end
+
+  -- Always clear previous location highlights first
+  if vim.api.nvim_buf_is_valid(bufnr) then
+    location_utils.clear_location_highlights(bufnr, M.state.location_namespace)
+  end
+
+  if not M.state.location then return end
+
+  -- Apply highlighting
+  location_utils.highlight_location(bufnr, M.state.location, M.state.location_namespace)
+
+  if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+    local target_line = location_utils.get_target_line(M.state.location)
+    if target_line then M.scroll_to_line(target_line) end
+  end
+end
+
+--- Scroll preview to a specific line
+--- @param line number Target line number (1-indexed)
+function M.scroll_to_line(line)
+  if not M.state.winid or not vim.api.nvim_win_is_valid(M.state.winid) then return end
+  if not M.state.bufnr or not vim.api.nvim_buf_is_valid(M.state.bufnr) then return end
+
+  local win_height = vim.api.nvim_win_get_height(M.state.winid)
+  local buffer_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
+  local target_line = math.max(1, math.min(line, buffer_lines))
+
+  local half_screen = math.floor(win_height / 2)
+  local new_offset = math.max(0, target_line - half_screen)
+
+  M.state.scroll_offset = new_offset
+  pcall(vim.api.nvim_win_call, M.state.winid, function()
+    vim.api.nvim_win_set_cursor(M.state.winid, { target_line, 0 })
+    vim.cmd('normal! zt')
+  end)
 end
 
 return M

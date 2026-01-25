@@ -10,12 +10,13 @@ M.state = { initialized = false }
 function M.setup(config) vim.g.fff = config end
 
 --- Find files in current directory
-function M.find_files()
+--- @param opts? table Optional configuration {renderer = custom_renderer}
+function M.find_files(opts)
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
   if picker_ok then
-    picker_ui.open()
+    picker_ui.open(opts)
   else
-    vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
+    vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
   end
 end
 
@@ -53,8 +54,12 @@ end
 --- @return table List of matching files
 function M.search(query, max_results)
   local fuzzy = require('fff.core').ensure_initialized()
-  max_results = max_results or require('fff.config').get().max_results
-  local ok, search_result = pcall(fuzzy.fuzzy_search_files, query, max_results, nil, nil)
+  local config = require('fff.conf').get()
+  max_results = max_results or config.max_results
+  local combo_boost_score_multiplier = config.history and config.history.combo_boost_score_multiplier or 100
+  local min_combo_count = config.history and config.history.min_combo_count or 3
+  local ok, search_result =
+    pcall(fuzzy.fuzzy_search_files, query, max_results, nil, nil, false, combo_boost_score_multiplier, min_combo_count)
   if ok and search_result.items then return search_result.items end
   return {}
 end
@@ -116,50 +121,6 @@ function M.get_preview(file_path)
   return table.concat(lines, '\n')
 end
 
-function M.health_check()
-  local health = {
-    ok = true,
-    messages = {},
-  }
-
-  if not require('fff.core').is_file_picker_initialized() then
-    health.ok = false
-    table.insert(health.messages, 'File picker not initialized')
-  else
-    table.insert(health.messages, '✓ File picker initialized')
-  end
-
-  local optional_deps = {
-    { cmd = 'git', desc = 'Git integration' },
-    { cmd = 'chafa', desc = 'Terminal graphics for image preview' },
-    { cmd = 'img2txt', desc = 'ASCII art for image preview' },
-    { cmd = 'viu', desc = 'Terminal images for image preview' },
-  }
-
-  for _, dep in ipairs(optional_deps) do
-    if vim.fn.executable(dep.cmd) == 0 then
-      table.insert(health.messages, string.format('Optional: %s not found (%s)', dep.cmd, dep.desc))
-    else
-      table.insert(health.messages, string.format('✓ %s found', dep.cmd))
-    end
-  end
-
-  if health.ok then
-    vim.notify('FFF health check passed ✓', vim.log.levels.INFO)
-  else
-    vim.notify('FFF health check failed ✗', vim.log.levels.ERROR)
-  end
-
-  for _, message in ipairs(health.messages) do
-    local level = message:match('^✓') and vim.log.levels.INFO
-      or message:match('^Optional:') and vim.log.levels.WARN
-      or vim.log.levels.ERROR
-    vim.notify(message, level)
-  end
-
-  return health
-end
-
 --- Find files in a specific directory
 --- @param directory string Directory path to search in
 function M.find_files_in_dir(directory)
@@ -204,6 +165,33 @@ function M.change_indexing_directory(new_path)
   local config = require('fff.conf').get()
   config.base_path = expanded_path
   return true
+end
+
+--- Opens the file under the cursor with an optional callback if the only file
+--- is found and we are about to inline open it
+--- @param open_cb function|nil Optional callback function to execute after opening the file
+function M.open_file_under_cursor(open_cb)
+  local filename = vim.fn.expand('<cfile>')
+  local full_path_with_suffix = vim.fn.expand('<cWORD>')
+
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  if not picker_ok then
+    vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
+    return
+  end
+
+  picker_ui.open_with_callback(full_path_with_suffix, function(files, metadata, location, get_file_score)
+    if #files == 1 or require('fff.file_picker').get_file_score(1).exact_match then
+      if open_cb and type(open_cb) == 'function' then open_cb(files[1].path) end
+      vim.api.nvim_command(string.format('e %s', vim.fn.fnameescape(files[1].path)))
+
+      if location then vim.schedule(function() require('fff.location_utils').jump_to_location(location) end) end
+
+      return true
+    else
+      return false -- Open UI with results
+    end
+  end)
 end
 
 return M

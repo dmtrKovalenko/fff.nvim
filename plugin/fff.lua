@@ -63,7 +63,7 @@ vim.api.nvim_create_user_command('FFFClearCache', function(opts) require('fff').
   desc = 'Clear FFF caches (all|frecency|files)',
 })
 
-vim.api.nvim_create_user_command('FFFHealth', function() require('fff').health_check() end, {
+vim.api.nvim_create_user_command('FFFHealth', function() vim.cmd('checkhealth fff') end, {
   desc = 'Check FFF health',
 })
 

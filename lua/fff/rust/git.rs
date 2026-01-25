@@ -1,9 +1,10 @@
+use crate::error::Result;
 use git2::{Repository, Status, StatusOptions};
 use std::{
     fmt::Debug,
     path::{Path, PathBuf},
 };
-use tracing::{debug, error, info};
+use tracing::debug;
 
 /// Represents a cache of a single git status query, if there is no
 /// status aka file is clear but it was specifically requested to updated
@@ -32,19 +33,12 @@ impl GitStatusCache {
             .and_then(|idx| self.0.get(idx).map(|(_, status)| *status))
     }
 
-    fn read_status_impl(repo: &Repository, status_options: &mut StatusOptions) -> Option<Self> {
-        let status_start = std::time::Instant::now();
-        info!("GIT: Reading git status");
-        let statuses = repo
-            .statuses(Some(status_options))
-            .map_err(|e| {
-                error!("Failed to get git statuses: {}", e);
-                e
-            })
-            .ok()?;
-        let status_time = status_start.elapsed();
-        let repo_path = repo.path().parent()?;
-        info!("GIT: Status query completed in {:?}", status_time);
+    #[tracing::instrument(skip(repo, status_options))]
+    fn read_status_impl(repo: &Repository, status_options: &mut StatusOptions) -> Result<Self> {
+        let statuses = repo.statuses(Some(status_options))?;
+        let Some(repo_path) = repo.workdir() else {
+            return Ok(Self(vec![])); // repo is bare
+        };
 
         let mut entries = Vec::with_capacity(statuses.len());
         for entry in &statuses {
@@ -54,7 +48,7 @@ impl GitStatusCache {
             }
         }
 
-        Some(Self(entries))
+        Ok(Self(entries))
     }
 
     pub fn read_git_status(
@@ -64,20 +58,42 @@ impl GitStatusCache {
         let git_workdir = git_workdir.as_ref()?;
         let repository = Repository::open(git_workdir).ok()?;
 
-        Self::read_status_impl(&repository, status_options)
+        let status = Self::read_status_impl(&repository, status_options);
+
+        match status {
+            Ok(status) => Some(status),
+            Err(e) => {
+                tracing::error!(?e, "Failed to read git status");
+
+                None
+            }
+        }
     }
 
+    #[tracing::instrument(skip(repo), level = tracing::Level::DEBUG)]
     pub fn git_status_for_paths<TPath: AsRef<Path> + Debug>(
         repo: &Repository,
         paths: &[TPath],
-    ) -> Option<Self> {
+    ) -> Result<Self> {
         if paths.is_empty() {
-            return None;
+            return Ok(Self(vec![]));
         }
 
-        debug!(?paths, "Git partial git status for paths");
-        let mut status_options = StatusOptions::new();
+        let Some(workdir) = repo.workdir() else {
+            return Ok(Self(vec![]));
+        };
 
+        // git pathspec is pretty slow and requires to walk the whole directory
+        // so for a single file which is the most general use case we query directly the file
+        if paths.len() == 1 {
+            let full_path = paths[0].as_ref();
+            let relative_path = full_path.strip_prefix(workdir)?;
+            let status = repo.status_file(relative_path)?;
+
+            return Ok(Self(vec![(full_path.to_path_buf(), status)]));
+        }
+
+        let mut status_options = StatusOptions::new();
         status_options
             .include_untracked(true)
             .recurse_untracked_dirs(true)
@@ -85,17 +101,16 @@ impl GitStatusCache {
             .include_unmodified(true);
 
         for path in paths {
-            status_options.pathspec(path.as_ref());
+            status_options.pathspec(path.as_ref().strip_prefix(workdir)?);
         }
 
-        let statuses = Self::read_status_impl(repo, &mut status_options)?;
+        let git_status_cache = Self::read_status_impl(repo, &mut status_options)?;
         debug!(
-            "Git partial status for paths {:?} returned {} entries",
-            statuses,
-            statuses.statuses_len()
+            status_len = git_status_cache.statuses_len(),
+            "Multiple files git status"
         );
 
-        Some(statuses)
+        Ok(git_status_cache)
     }
 }
 

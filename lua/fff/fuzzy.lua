@@ -33,4 +33,10 @@ M.cleanup_file_picker = rust_module.cleanup_file_picker
 M.init_tracing = rust_module.init_tracing
 M.wait_for_initial_scan = rust_module.wait_for_initial_scan
 
+-- Query tracking functions
+M.init_query_db = rust_module.init_query_db
+M.destroy_query_db = rust_module.destroy_query_db
+M.track_query_completion = rust_module.track_query_completion
+M.get_historical_query = rust_module.get_historical_query
+
 return M

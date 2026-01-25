@@ -1,4 +1,4 @@
-use fff_nvim::{file_picker::FilePicker, FILE_PICKER};
+use fff_nvim::{FILE_PICKER, file_picker::FilePicker};
 use std::env;
 use std::thread;
 use std::time::Duration;
@@ -28,11 +28,11 @@ fn get_mem_stat() -> Result<(usize, usize, usize), Box<dyn std::error::Error>> {
         for line in content.lines() {
             if line.starts_with("VmRSS:") {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    if let Ok(rss_kb) = parts[1].parse::<usize>() {
-                        let rss_bytes = rss_kb * 1024;
-                        return Ok((rss_bytes, rss_bytes, rss_bytes));
-                    }
+                if let Ok(rss_kb) = parts[1].parse::<usize>()
+                    && parts.len() >= 2
+                {
+                    let rss_bytes = rss_kb * 1024;
+                    return Ok((rss_bytes, rss_bytes, rss_bytes));
                 }
             }
         }
@@ -86,10 +86,18 @@ fn test_search_memory_pattern(
                 let search_result = FilePicker::fuzzy_search(
                     picker.get_files(),
                     &query,
-                    50 + (i % 50), // Vary result count
-                    1 + (i % 4),   // Vary thread count
-                    None,
-                    false, // prompt_position not relevant for test
+                    fff_nvim::file_picker::FuzzySearchOptions {
+                        max_threads: 1 + (i % 4),
+                        current_file: None,
+                        project_path: None,
+                        last_same_query_match: None,
+                        combo_boost_score_multiplier: 100,
+                        min_combo_count: 3,
+                        pagination: fff_nvim::types::PaginationArgs {
+                            offset: 0,
+                            limit: 50 + (i % 50),
+                        },
+                    },
                 );
                 (search_result.items.len(), search_result.total_matched)
             } else {
@@ -177,12 +185,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wait for initial scan
     println!("Waiting for file scan...");
     loop {
-        if let Ok(file_picker_guard) = FILE_PICKER.read() {
-            if let Some(ref picker) = *file_picker_guard {
-                if !picker.is_scan_active() && !picker.get_files().is_empty() {
-                    break;
-                }
-            }
+        if let Ok(file_picker_guard) = FILE_PICKER.read()
+            && let Some(ref picker) = *file_picker_guard
+            && !picker.is_scan_active()
+            && !picker.get_files().is_empty()
+        {
+            break;
         }
         thread::sleep(Duration::from_millis(100));
     }

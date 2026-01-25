@@ -140,7 +140,7 @@ function M.clear_buffer_images(bufnr)
   pcall(vim.api.nvim_buf_clear_namespace, bufnr, -1, 0, -1)
 end
 
---- Load metadat of the image, displays it and display image in paralallel
+--- Load metadata of the image, displays it and display image in paralallel
 --- Fully asynchronous
 --- @param file_path string Path to the image file
 --- @param bufnr number Buffer number to display in
@@ -223,6 +223,43 @@ function M.display_image(file_path, bufnr, max_width, max_height)
   end
 
   return false
+end
+
+--- Check image preview availability status
+--- @return table status { available: boolean, snacks_available: boolean, snacks_image_available: boolean, terminal_supported: boolean, error: string|nil }
+function M.get_preview_status()
+  local status = {
+    available = false,
+    snacks_available = false,
+    snacks_image_available = false,
+    terminal_supported = false,
+    error = nil,
+  }
+
+  local ok, snacks = pcall(require, 'snacks')
+  if not ok then
+    status.error = 'snacks.nvim not installed'
+    return status
+  end
+
+  status.snacks_available = true
+
+  if not snacks.image then
+    status.error = 'snacks.image module not available'
+    return status
+  end
+
+  status.snacks_image_available = true
+
+  if not snacks.image.supports_terminal or not snacks.image.supports_terminal() then
+    status.error = 'terminal does not support image display'
+    return status
+  end
+
+  status.terminal_supported = true
+  status.available = true
+
+  return status
 end
 
 return M
