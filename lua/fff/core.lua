@@ -31,9 +31,9 @@ local function setup_global_autocmds(config)
             local ok, track_err = pcall(fuzzy.track_access, real_path)
 
             if not ok then
-              vim.schedule(function()
-				  vim.notify('FFF: Failed to track file access: ' .. tostring(track_err), vim.log.levels.ERROR)
-			  end)
+              vim.schedule(
+                function() vim.notify('FFF: Failed to track file access: ' .. tostring(track_err), vim.log.levels.ERROR) end
+              )
             end
           end)
         end)
