@@ -1929,8 +1929,11 @@ local function get_current_file_cache(base_path)
   if not stat or stat.type ~= 'file' then return nil end
 
   local absolute_path = vim.fn.fnamemodify(current_file, ':p')
-  local relative_path =
-    vim.fn.fnamemodify(vim.fn.resolve(absolute_path), ':s?' .. vim.fn.escape(base_path, '\\') .. '/??')
+  local resolved_abs = vim.fn.resolve(absolute_path)
+  local resolved_base = vim.fn.resolve(base_path)
+  local escaped_base = resolved_base:gsub("([%%^$()%.%[%]*+%-?])", "%%%1")
+  local relative_path = resolved_abs:gsub('^' .. escaped_base .. '/', '')
+  if relative_path == '' or relative_path == resolved_abs then return nil end
   return relative_path
 end
 
