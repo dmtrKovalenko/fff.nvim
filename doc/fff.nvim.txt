@@ -1,4 +1,4 @@
-*fff.nvim.txt*        For Neovim >= 0.10.0        Last change: 2026 January 09
+*fff.nvim.txt*        For Neovim >= 0.10.0       Last change: 2026 February 07
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -9,8 +9,7 @@ FFF.nvimFinally a smart fuzzy file picker for neovim.
 
 
 
-
-**FFF** stands for ~freakin fast fuzzy file finder~ (pick 3) and it is an
+ **FFF** stands for ~freakin fast fuzzy file finder~ (pick 3) and it is an
 opinionated fuzzy file picker for neovim. Just for files, but we’ll try to
 solve file picking completely.
 
@@ -351,6 +350,23 @@ with your own custom highlight groups to match your colorscheme.
       }
     })
 <
+
+
+FILE FILTERING
+
+FFF.nvim respects `.gitignore` patterns automatically. To filter files from the
+picker without modifying `.gitignore`, create a `.ignore` file in your project
+root:
+
+>gitignore
+    # Exclude all markdown files
+    *.md
+    
+    # Exclude specific subdirectory
+    docs/archive/**/*.md
+<
+
+Run `:FFFScan` to force a rescan if needed.
 
 
 TROUBLESHOOTING ~
