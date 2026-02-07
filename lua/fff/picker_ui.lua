@@ -1931,7 +1931,10 @@ local function get_current_file_cache(base_path)
   local absolute_path = vim.fn.fnamemodify(current_file, ':p')
   local resolved_abs = vim.fn.resolve(absolute_path)
   local resolved_base = vim.fn.resolve(base_path)
-  local escaped_base = resolved_base:gsub("([%%^$()%.%[%]*+%-?])", "%%%1")
+
+  -- icloud direcrtoes on macos contain a lot of special characters that break
+  -- the fnamemodify which have to escaped with %
+  local escaped_base = resolved_base:gsub('([%%^$()%.%[%]*+%-?])', '%%%1')
   local relative_path = resolved_abs:gsub('^' .. escaped_base .. '/', '')
   if relative_path == '' or relative_path == resolved_abs then return nil end
   return relative_path
