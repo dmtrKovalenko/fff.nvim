@@ -7,6 +7,7 @@ local utils = require('fff.utils')
 local location_utils = require('fff.location_utils')
 local combo_renderer = require('fff.combo_renderer')
 local scrollbar = require('fff.scrollbar')
+local rust = require('fff.rust')
 
 local BORDER_PRESETS = {
   single = { '┌', '─', '┐', '│', '┘', '─', '└', '│' },
@@ -1055,38 +1056,9 @@ function M.render_debounced()
 end
 
 local function shrink_path(path, max_width)
-  if #path <= max_width then return path end
-
-  local segments = {}
-  for segment in path:gmatch('[^/]+') do
-    table.insert(segments, segment)
-  end
-
-  if #segments <= 2 then
-    return path -- Can't shrink further
-  end
-
-  local first = segments[1]
-  local last = segments[#segments]
-  local ellipsis = '../'
-
-  for middle_count = #segments - 2, 1, -1 do
-    local middle_parts = {}
-    local start_idx = 2
-    local end_idx = math.min(start_idx + middle_count - 1, #segments - 1)
-
-    for i = start_idx, end_idx do
-      table.insert(middle_parts, segments[i])
-    end
-
-    local middle = table.concat(middle_parts, '/')
-    if middle_count < #segments - 2 then middle = middle .. ellipsis end
-
-    local result = first .. '/' .. middle .. '/' .. last
-    if #result <= max_width then return result end
-  end
-
-  return first .. '/' .. ellipsis .. last
+  local config = conf.get()
+  local strategy = config.layout and config.layout.path_shorten_strategy or 'middle_number'
+  return rust.shorten_path(path, max_width, strategy)
 end
 
 local function format_file_display(item, max_width)
@@ -1098,10 +1070,11 @@ local function format_file_display(item, max_width)
     if parent_dir ~= '.' and parent_dir ~= '' then dir_path = parent_dir end
   end
 
-  local base_width = #filename + 1 -- filename + " "
-  local path_max_width = max_width - base_width
+  local filename_width = vim.fn.strdisplaywidth(filename)
+  local base_width = filename_width + 1 -- filename + " "
+  local path_max_width = math.max(max_width - base_width, 0)
 
-  if dir_path == '' then return filename, '' end
+  if dir_path == '' or path_max_width == 0 then return filename, '' end
   local display_path = shrink_path(dir_path, path_max_width)
 
   return filename, display_path
@@ -1130,6 +1103,11 @@ local function build_render_context()
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
   local win_width = vim.api.nvim_win_get_width(M.state.list_win)
   local prompt_position = get_prompt_position()
+
+  -- Get actual text offset (signcolumn + foldcolumn + line numbers)
+  local win_info = vim.fn.getwininfo(M.state.list_win)[1]
+  local text_offset = win_info and win_info.textoff or 2
+  local text_width = win_width - text_offset
 
   -- Cursor validation
   if M.state.cursor < 1 then
@@ -1170,7 +1148,7 @@ local function build_render_context()
     cursor = M.state.cursor,
     win_height = win_height,
     win_width = win_width,
-    max_path_width = config.ui and config.ui.max_path_width or 80,
+    max_path_width = text_width, -- Actual text area width (excluding signcolumn)
     debug_enabled = config and config.debug and config.debug.show_scores,
     prompt_position = prompt_position,
     has_combo = has_combo,
