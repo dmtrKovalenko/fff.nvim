@@ -321,6 +321,19 @@ require('fff').setup({
 })
 ```
 
+#### File Filtering
+
+FFF.nvim respects `.gitignore` patterns automatically. To filter files from the picker without modifying `.gitignore`, create a `.ignore` file in your project root:
+
+```gitignore
+# Exclude all markdown files
+*.md
+
+# Exclude specific subdirectory
+docs/archive/**/*.md
+```
+
+Run `:FFFScan` to force a rescan if needed.
 
 ### Troubleshooting
 
