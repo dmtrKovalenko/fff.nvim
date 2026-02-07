@@ -11,8 +11,7 @@
 		<img alt="Stars" src="https://img.shields.io/github/stars/dmtrKovalenko/fff.nvim?style=for-the-badge&logo=starship&color=C9CBFF&logoColor=D9E0EE&labelColor=302D41"></a>
 	<a href="https://github.com/dmtrKovalenko/fff.nvim/issues" style="text-decoration: none">
 		<img alt="Issues" src="https://img.shields.io/github/issues/dmtrKovalenko/fff.nvim?style=for-the-badge&logo=bilibili&color=F5E0DC&logoColor=D9E0EE&labelColor=302D41"></a>
-	<a href="https://github.com/dmtrKovalenko/fff.nvim/contributors" style="text-decoration: none">
-		<img alt="Contributors" src="https://img.shields.io/github/contributors/dmtrKovalenko/fff.nvim?color=%23DDB6F2&label=CONTRIBUTORS&logo=git&style=for-the-badge&logoColor=D9E0EE&labelColor=302D41"/></a>
+	<a href="https://github.com/dmtrKovalenko/fff.nvim/contributors" style="text-decoration: none"> <img alt="Contributors" src="https://img.shields.io/github/contributors/dmtrKovalenko/fff.nvim?color=%23DDB6F2&label=CONTRIBUTORS&logo=git&style=for-the-badge&logoColor=D9E0EE&labelColor=302D41"/></a>
 </p>
 
 **FFF** stands for ~freakin fast fuzzy file finder~ (pick 3) and it is an opinionated fuzzy file picker for neovim. Just for files, but we'll try to solve file picking completely.
@@ -124,6 +123,12 @@ require('fff').setup({
       preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
       preview_size = 0.5,
       show_scrollbar = true, -- Show scrollbar for pagination
+      -- How to shorten long directory paths in the file list:
+      -- 'middle_number' (default): uses dots for 1-3 hidden (a/./b, a/../b, a/.../b)
+      --                            and numbers for 4+ (a/.4./b, a/.5./b)
+      -- 'middle': always uses dots (a/./b, a/../b, a/.../b)
+      -- 'end': truncates from the end (home/user/projects)
+      path_shorten_strategy = 'middle_number',
     },
     preview = {
       enabled = true,
