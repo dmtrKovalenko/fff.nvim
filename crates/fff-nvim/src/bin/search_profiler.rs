@@ -1,5 +1,5 @@
 use fff_core::file_picker::FilePicker;
-use fff_core::{FileItem, FuzzySearchOptions, PaginationArgs, QueryParser, FILE_PICKER};
+use fff_core::{FILE_PICKER, FileItem, FuzzySearchOptions, PaginationArgs, QueryParser};
 use std::time::{Duration, Instant};
 
 /// Wait for background scan to complete

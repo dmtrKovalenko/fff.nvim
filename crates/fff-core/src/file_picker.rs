@@ -176,16 +176,16 @@ impl FilePicker {
     }
 
     /// Perform fuzzy search on files with a pre-parsed query.
-    /// 
+    ///
     /// The query should be parsed using `QueryParser::parse()` before calling this function.
     /// This allows the caller to handle location parsing and other preprocessing.
-    /// 
+    ///
     /// # Arguments
     /// * `files` - Slice of files to search
     /// * `query` - The raw query string (used for max_typos calculation and debugging)
     /// * `parsed` - Pre-parsed query result (can be None for simple single-token queries)
     /// * `options` - Search options including pagination, threading, and scoring parameters
-    /// 
+    ///
     /// # Returns
     /// SearchResult containing matched files, scores, and location information
     pub fn fuzzy_search<'a>(
@@ -205,10 +205,10 @@ impl FilePicker {
         );
 
         let total_files = files.len();
-        
+
         // Extract location from parsed query
         let location = parsed.as_ref().and_then(|p| p.location);
-        
+
         // Get effective query for max_typos calculation (without location suffix)
         let effective_query = match &parsed {
             Some(p) => match &p.fuzzy_query {

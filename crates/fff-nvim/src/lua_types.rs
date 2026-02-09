@@ -22,8 +22,8 @@ struct LuaPosition((i32, i32));
 impl IntoLua for LuaPosition {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let table = lua.create_table()?;
-        table.set("line", self.0 .0)?;
-        table.set("col", self.0 .1)?;
+        table.set("line", self.0.0)?;
+        table.set("col", self.0.1)?;
         Ok(LuaValue::Table(table))
     }
 }

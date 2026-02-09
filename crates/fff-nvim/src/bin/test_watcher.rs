@@ -4,11 +4,11 @@
 
 use fff_core::file_picker::FilePicker;
 use fff_core::git::format_git_status;
-use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, FILE_PICKER, FRECENCY};
+use fff_core::{FILE_PICKER, FRECENCY, FuzzySearchOptions, PaginationArgs, QueryParser};
 use std::env;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 

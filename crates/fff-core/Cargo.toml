@@ -10,9 +10,11 @@ path = "src/lib.rs"
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [features]
-default = []
+default = ["glob"]
 # Enable C FFI exports
 ffi = []
+# Enable glob pattern matching
+glob = ["fff-query-parser/glob", "dep:zlob"]
 
 [dependencies]
 # Workspace dependencies
@@ -23,7 +25,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff-query-parser = { path = "../fff-query-parser" }
+fff-query-parser = { path = "../fff-query-parser", default-features = false }
 
 # External dependencies
 blake3 = { workspace = true }
@@ -43,7 +45,11 @@ serde = { version = "1.0", features = ["derive"] }
 smartstring = { version = "1.0.1", features = ["serde"] }
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zlob = { git = "https://github.com/dmtrKovalenko/zlob" }
+zlob = { version = "1.2.2", optional = true }
+
+# Platform-specific: Use vendored OpenSSL on non-Windows (Linux, macOS)
+[target.'cfg(not(windows))'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

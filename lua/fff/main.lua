@@ -60,8 +60,16 @@ function M.search(query, max_results)
   local combo_boost_score_multiplier = config.history and config.history.combo_boost_score_multiplier or 100
   local min_combo_count = config.history and config.history.min_combo_count or 3
   -- Args: query, max_threads, current_file, combo_boost_score_multiplier, min_combo_count, offset, page_size
-  local ok, search_result =
-    pcall(fuzzy.fuzzy_search_files, query, max_threads, nil, combo_boost_score_multiplier, min_combo_count, 0, max_results)
+  local ok, search_result = pcall(
+    fuzzy.fuzzy_search_files,
+    query,
+    max_threads,
+    nil,
+    combo_boost_score_multiplier,
+    min_combo_count,
+    0,
+    max_results
+  )
   if ok and search_result.items then return search_result.items end
   return {}
 end

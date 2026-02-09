@@ -10,6 +10,8 @@ use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::path::MAIN_SEPARATOR;
+
+#[cfg(feature = "glob")]
 use zlob::{ZlobFlags, zlob_match_paths};
 
 /// Check if file extension matches (without allocation)
@@ -30,25 +32,25 @@ fn path_contains_segment(path: &str, segment: &str) -> bool {
     // Check for /segment/ anywhere or segment/ at start
     let path_bytes = path.as_bytes();
     let segment_len = segment.len();
-    
+
     // Check segment/ at start
-    if path.len() > segment_len 
+    if path.len() > segment_len
         && path_bytes.get(segment_len) == Some(&b'/')
-        && path[..segment_len].eq_ignore_ascii_case(segment) 
+        && path[..segment_len].eq_ignore_ascii_case(segment)
     {
         return true;
     }
-    
+
     // Check /segment/ anywhere using byte scanning
     if path.len() < segment_len + 2 {
         return false;
     }
-    
+
     for i in 0..path.len().saturating_sub(segment_len + 1) {
         if path_bytes[i] == b'/' {
             let start = i + 1;
             let end = start + segment_len;
-            if end < path.len() 
+            if end < path.len()
                 && path_bytes[end] == b'/'
                 && path[start..end].eq_ignore_ascii_case(segment)
             {
@@ -123,10 +125,7 @@ fn file_matches_constraint_at_index(
 /// Apply constraint-based prefiltering in a single pass over all files.
 /// Returns a vector of indices into the original files slice that pass all constraints.
 /// Multiple extension constraints (*.rs *.ts) are combined with OR logic.
-fn apply_constraints(
-    files: &[FileItem],
-    constraints: &[Constraint<'_>],
-) -> Option<Vec<usize>> {
+fn apply_constraints(files: &[FileItem], constraints: &[Constraint<'_>]) -> Option<Vec<usize>> {
     if constraints.is_empty() {
         return None;
     }
@@ -164,7 +163,9 @@ fn apply_constraints(
             let ext_matches = if extensions.is_empty() {
                 true
             } else {
-                extensions.iter().any(|ext| file_has_extension(&file.file_name, ext))
+                extensions
+                    .iter()
+                    .any(|ext| file_has_extension(&file.file_name, ext))
             };
 
             if !ext_matches {
@@ -209,14 +210,13 @@ fn collect_glob_indices_ref<'a>(
     is_negated: bool,
 ) {
     match constraint {
+        #[cfg(feature = "glob")]
         Constraint::Glob(pattern) => {
             if let Ok(Some(matches)) = zlob_match_paths(pattern, paths, ZlobFlags::RECOMMENDED) {
                 // Build a set of matched path pointers for O(1) lookup
-                let matched_set: HashSet<usize> = matches
-                    .iter()
-                    .map(|s| s.as_ptr() as usize)
-                    .collect();
-                
+                let matched_set: HashSet<usize> =
+                    matches.iter().map(|s| s.as_ptr() as usize).collect();
+
                 // Convert to indices using pointer comparison (no string comparison)
                 let indices: HashSet<usize> = paths
                     .iter()
@@ -228,6 +228,11 @@ fn collect_glob_indices_ref<'a>(
             } else {
                 results.push((is_negated, HashSet::new()));
             }
+        }
+        #[cfg(not(feature = "glob"))]
+        Constraint::Glob(_) => {
+            // Glob matching is disabled
+            results.push((is_negated, HashSet::new()));
         }
         Constraint::Not(inner) => {
             collect_glob_indices_ref(inner, paths, results, !is_negated);
@@ -256,8 +261,12 @@ fn match_fuzzy_parts(
         .collect();
 
     // Filter out parts that are too short (< 2 chars)
-    let valid_parts: Vec<&str> = fuzzy_parts.iter().copied().filter(|p| p.len() >= 2).collect();
-    
+    let valid_parts: Vec<&str> = fuzzy_parts
+        .iter()
+        .copied()
+        .filter(|p| p.len() >= 2)
+        .collect();
+
     tracing::debug!(
         original_parts = ?fuzzy_parts,
         valid_parts = ?valid_parts,
@@ -291,7 +300,7 @@ fn match_fuzzy_parts(
 
     for (i, part) in valid_parts[1..].iter().enumerate() {
         let before_count = matches.len();
-        
+
         // Create safe config for this part - max_typos must not exceed part length
         // to avoid underflow in neo_frizbee's min_haystack_len calculation
         let part_max_typos = options.max_typos.map(|t| t.min(part.len() as u16));
@@ -301,7 +310,7 @@ fn match_fuzzy_parts(
             sort: options.sort,
             scoring: options.scoring.clone(),
         };
-        
+
         matches = matches
             .into_iter()
             .filter_map(|mut m| {
@@ -430,7 +439,9 @@ pub fn match_and_score_files<'a>(
                 parts.as_slice()
             }
             FuzzyQuery::Empty => {
-                tracing::debug!("STEP 3: No fuzzy query (constraint-only), returning frecency-sorted");
+                tracing::debug!(
+                    "STEP 3: No fuzzy query (constraint-only), returning frecency-sorted"
+                );
                 return score_filtered_by_frecency(&working_files, context);
             }
             other => {
@@ -960,7 +971,7 @@ mod multi_part_tests {
     #[test]
     fn test_single_path_matching() {
         let path = "core_workflow_service/kafka_event_consumer/src/ai_part_extraction_request/ai_part_extraction_request_handler.rs";
-        
+
         // Test with max_typos = 2 (safe for short needles)
         let options = neo_frizbee::Config {
             prefilter: true,
@@ -974,7 +985,7 @@ mod multi_part_tests {
         println!("'aipart' matches (max_typos=2): {:?}", matches);
         assert!(!matches.is_empty(), "'aipart' should match the path");
 
-        // Test "core" matching  
+        // Test "core" matching
         let matches = neo_frizbee::match_list("core", &[path], &options);
         println!("'core' matches (max_typos=2): {:?}", matches);
         assert!(!matches.is_empty(), "'core' should match the path");
@@ -993,7 +1004,7 @@ mod multi_part_tests {
     fn test_lowercase_path_matching() {
         // The actual paths are lowercased
         let path = "core_workflow_service/kafka_event_consumer/src/ai_part_extraction_request/ai_part_extraction_request_handler.rs".to_lowercase();
-        
+
         let options = neo_frizbee::Config {
             prefilter: true,
             max_typos: Some(2),
@@ -1009,7 +1020,10 @@ mod multi_part_tests {
         // Test "core" matching on lowercase path
         let matches = neo_frizbee::match_list("core", &[path.as_str()], &options);
         println!("'core' matches lowercase path (max_typos=2): {:?}", matches);
-        assert!(!matches.is_empty(), "'core' should match the lowercase path");
+        assert!(
+            !matches.is_empty(),
+            "'core' should match the lowercase path"
+        );
     }
 }
 
@@ -1023,7 +1037,7 @@ mod constraint_helper_tests {
         assert!(file_has_extension("file.RS", "rs")); // case-insensitive
         assert!(file_has_extension("file.test.rs", "rs"));
         assert!(file_has_extension("a.rs", "rs"));
-        
+
         assert!(!file_has_extension("file.tsx", "rs"));
         assert!(!file_has_extension("rs", "rs")); // too short
         assert!(!file_has_extension(".rs", "rs")); // just extension
@@ -1036,23 +1050,26 @@ mod constraint_helper_tests {
         // Segment at start
         assert!(path_contains_segment("src/lib.rs", "src"));
         assert!(path_contains_segment("SRC/lib.rs", "src")); // case-insensitive
-        
+
         // Segment in middle
         assert!(path_contains_segment("app/src/lib.rs", "src"));
         assert!(path_contains_segment("app/SRC/lib.rs", "src"));
-        
+
         // Multiple levels
         assert!(path_contains_segment("core/workflow/src/main.rs", "src"));
-        assert!(path_contains_segment("core/workflow/src/main.rs", "workflow"));
+        assert!(path_contains_segment(
+            "core/workflow/src/main.rs",
+            "workflow"
+        ));
         assert!(path_contains_segment("core/workflow/src/main.rs", "core"));
-        
+
         // Should not match partial segments
         assert!(!path_contains_segment("source/lib.rs", "src"));
         assert!(!path_contains_segment("mysrc/lib.rs", "src"));
-        
+
         // Should not match filename
         assert!(!path_contains_segment("lib/src", "src"));
-        
+
         // Edge cases
         assert!(!path_contains_segment("", "src"));
         assert!(!path_contains_segment("src", "src")); // no trailing slash

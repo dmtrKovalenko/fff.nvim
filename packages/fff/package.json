@@ -23,7 +23,8 @@
     "postinstall": "bun ./scripts/postinstall.ts",
     "download": "bun ./scripts/cli.ts download",
     "test": "bun test src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "demo": "bun ./examples/search.ts"
   },
   "engines": {
     "bun": ">=1.0.0"

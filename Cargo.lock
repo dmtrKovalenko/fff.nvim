@@ -476,6 +476,7 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "once_cell",
+ "openssl",
  "parking_lot",
  "pathdiff",
  "rand",
@@ -2540,8 +2541,9 @@ dependencies = [
 
 [[package]]
 name = "zlob"
-version = "1.1.0"
-source = "git+https://github.com/dmtrKovalenko/zlob#dbd75b901ddd6d97eca1167ef4c34516e6467062"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b1cfddb931dc9644016bb068395aefc503faf2be7249edbe1399bcc893b8d55"
 dependencies = [
  "bindgen",
  "bitflags 2.9.1",

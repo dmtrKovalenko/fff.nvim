@@ -2,7 +2,22 @@ use crate::config::ParserConfig;
 use crate::constraints::{Constraint, GitStatusFilter, TextPartsBuffer};
 use crate::location::{parse_location, Location};
 use crate::ConstraintVec;
+
+#[cfg(feature = "glob")]
 use zlob::{has_wildcards, ZlobFlags};
+
+/// Check if token has glob wildcards (stub for when zlob is disabled)
+#[cfg(not(feature = "glob"))]
+#[inline]
+fn has_wildcards(_token: &str, _flags: u32) -> bool {
+    false
+}
+
+/// Dummy flags for when zlob is disabled
+#[cfg(not(feature = "glob"))]
+mod ZlobFlags {
+    pub const RECOMMENDED: u32 = 0;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]

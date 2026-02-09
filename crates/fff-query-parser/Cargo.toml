@@ -6,9 +6,13 @@ edition = "2024"
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = ["glob"]
+glob = ["dep:zlob"]
+
 [dependencies]
 smallvec = { workspace = true }
-zlob = { git = "https://github.com/dmtrKovalenko/zlob" }
+zlob = { version = "1.2.2", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

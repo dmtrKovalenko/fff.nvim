@@ -14,76 +14,98 @@ jobs:
     strategy:
       matrix:
         include:
-          ## Linux builds
-          # Glibc 2.21
+          ## Linux builds (using cargo-zigbuild)
+          # Glibc 2.17 (RHEL 7, CentOS 7 compatible)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            zigbuild_target: x86_64-unknown-linux-gnu.2.17
             artifact_name: target/x86_64-unknown-linux-gnu/release/libfff_nvim.so
+            ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
+            zigbuild_target: aarch64-unknown-linux-gnu.2.17
             artifact_name: target/aarch64-unknown-linux-gnu/release/libfff_nvim.so
-          # Musl 1.2.3
+            ext: so
+          # Musl (statically linked)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact_name: target/x86_64-unknown-linux-musl/release/libfff_nvim.so
+            ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             artifact_name: target/aarch64-unknown-linux-musl/release/libfff_nvim.so
+            ext: so
 
           ## macOS builds
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: target/x86_64-apple-darwin/release/libfff_nvim.dylib
+            ext: dylib
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: target/aarch64-apple-darwin/release/libfff_nvim.dylib
+            ext: dylib
 
-          ## Windows builds
+          ## Windows builds (temporarily skipped - OpenSSL cross-compilation issues)
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: target/x86_64-pc-windows-msvc/release/fff_nvim.dll
-          - os: windows-latest
+            ext: dll
+            skip: true
+          - os: ubuntu-latest
             target: aarch64-pc-windows-msvc
             artifact_name: target/aarch64-pc-windows-msvc/release/fff_nvim.dll
+            ext: dll
+            skip: true
 
     steps:
+      - name: Skip notice
+        if: matrix.skip
+        run: echo "Skipping ${{ matrix.target }} build (temporarily disabled)"
+
       - uses: actions/checkout@v4
+        if: ${{ !matrix.skip }}
         with:
           persist-credentials: false
 
       - name: Install Rust
-        run: |
-          rustup target add ${{ matrix.target }}
+        if: ${{ !matrix.skip }}
+        run: rustup target add ${{ matrix.target }}
 
-      - name: Install Zig (for zlob dependency)
+      - name: Install Zig
+        if: ${{ !matrix.skip }}
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.13.0
+          version: 0.15.2
+
+      - name: Install cargo-zigbuild
+        if: contains(matrix.os, 'ubuntu') && !matrix.skip
+        run: cargo install cargo-zigbuild
 
       - name: Build for Linux
-        if: contains(matrix.os, 'ubuntu')
+        if: contains(matrix.os, 'ubuntu') && !matrix.skip
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-          cross build --release --target ${{ matrix.target }} -p fff-nvim
-          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.so"
+          cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-nvim
+          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for macOS
-        if: contains(matrix.os, 'macos')
+        if: contains(matrix.os, 'macos') && !matrix.skip
         run: |
           MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-nvim
-          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.dylib"
+          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for Windows
-        if: contains(matrix.os, 'windows')
+        if: contains(matrix.os, 'windows') && !matrix.skip
         run: |
           cargo build --release --target ${{ matrix.target }} -p fff-nvim
-          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.dll"
+          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Upload artifacts
+        if: ${{ !matrix.skip }}
         uses: actions/upload-artifact@v4
         with:
           name: nvim-${{ matrix.target }}
-          path: ${{ matrix.target }}*
+          path: ${{ matrix.target }}.*
 
   build-c:
     name: Build C FFI ${{ matrix.target }}
@@ -96,10 +118,12 @@ jobs:
           ## Linux builds
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            zigbuild_target: x86_64-unknown-linux-gnu.2.17
             artifact_name: target/x86_64-unknown-linux-gnu/release/libfff_c.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
+            zigbuild_target: aarch64-unknown-linux-gnu.2.17
             artifact_name: target/aarch64-unknown-linux-gnu/release/libfff_c.so
             ext: so
           - os: ubuntu-latest
@@ -121,54 +145,66 @@ jobs:
             artifact_name: target/aarch64-apple-darwin/release/libfff_c.dylib
             ext: dylib
 
-          ## Windows builds
+          ## Windows builds (temporarily skipped - OpenSSL cross-compilation issues)
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: target/x86_64-pc-windows-msvc/release/fff_c.dll
             ext: dll
-          - os: windows-latest
+            skip: true
+          - os: ubuntu-latest
             target: aarch64-pc-windows-msvc
             artifact_name: target/aarch64-pc-windows-msvc/release/fff_c.dll
             ext: dll
+            skip: true
 
     steps:
+      - name: Skip notice
+        if: matrix.skip
+        run: echo "Skipping ${{ matrix.target }} build (temporarily disabled)"
+
       - uses: actions/checkout@v4
+        if: ${{ !matrix.skip }}
         with:
           persist-credentials: false
 
       - name: Install Rust
-        run: |
-          rustup target add ${{ matrix.target }}
+        if: ${{ !matrix.skip }}
+        run: rustup target add ${{ matrix.target }}
 
-      - name: Install Zig (for zlob dependency)
+      - name: Install Zig
+        if: ${{ !matrix.skip }}
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.13.0
+          version: 0.15.2
+
+      - name: Install cargo-zigbuild
+        if: contains(matrix.os, 'ubuntu') && !matrix.skip
+        run: cargo install cargo-zigbuild
 
       - name: Build for Linux
-        if: contains(matrix.os, 'ubuntu')
+        if: contains(matrix.os, 'ubuntu') && !matrix.skip
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-          cross build --release --target ${{ matrix.target }} -p fff-c
+          cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-c
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for macOS
-        if: contains(matrix.os, 'macos')
+        if: contains(matrix.os, 'macos') && !matrix.skip
         run: |
           MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-c
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for Windows
-        if: contains(matrix.os, 'windows')
+        if: contains(matrix.os, 'windows') && !matrix.skip
         run: |
           cargo build --release --target ${{ matrix.target }} -p fff-c
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Upload artifacts
+        if: ${{ !matrix.skip }}
         uses: actions/upload-artifact@v4
         with:
           name: c-lib-${{ matrix.target }}
-          path: c-lib-${{ matrix.target }}*
+          path: c-lib-${{ matrix.target }}.*
 
   release:
     name: Release
@@ -286,7 +322,7 @@ jobs:
             ```lua
             {
               "dmtrKovalenko/fff.nvim",
-              tag = "${{ steps.vars.outputs.short_sha }}",
+              tag: "${{ steps.vars.outputs.short_sha }}",
             }
             ```
 

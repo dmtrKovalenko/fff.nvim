@@ -2,7 +2,7 @@ use std::io;
 use std::path::Path;
 use tracing_appender::non_blocking;
 use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 static TRACING_INITIALIZED: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
     std::sync::OnceLock::new();
