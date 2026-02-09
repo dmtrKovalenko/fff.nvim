@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/fff-c",
     "crates/fff-core",
     "crates/fff-nvim",
     "crates/fff-query-parser",

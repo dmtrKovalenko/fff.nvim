@@ -1,0 +1,68 @@
+{
+  "name": "fff",
+  "version": "0.1.0",
+  "description": "High-performance fuzzy file finder for Bun - perfect for LLM agent tools",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    }
+  },
+  "bin": {
+    "fff": "./scripts/cli.ts"
+  },
+  "files": [
+    "src",
+    "bin",
+    "scripts"
+  ],
+  "scripts": {
+    "postinstall": "bun ./scripts/postinstall.ts",
+    "download": "bun ./scripts/cli.ts download",
+    "test": "bun test src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
+    "directory": "packages/fff"
+  },
+  "keywords": [
+    "file-finder",
+    "fuzzy-search",
+    "bun",
+    "ffi",
+    "llm-tools",
+    "agent-tools",
+    "fast",
+    "rust"
+  ],
+  "author": "Dmitry Kovalenko",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/dmtrKovalenko/fff.nvim/issues"
+  },
+  "homepage": "https://github.com/dmtrKovalenko/fff.nvim#readme",
+  "devDependencies": {
+    "@types/bun": "^1.3.8",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "bun": ">=1.0.0"
+  }
+}

@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
+  build-nvim:
+    name: Build Neovim ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -29,10 +29,6 @@ jobs:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             artifact_name: target/aarch64-unknown-linux-musl/release/libfff_nvim.so
-          # # Android (Termux)
-          # - os: ubuntu-latest
-          #   target: aarch64-linux-android
-          #   artifact_name: target/aarch64-linux-android/release/libfff_nvim.so
 
           ## macOS builds
           - os: macos-latest
@@ -55,50 +51,128 @@ jobs:
         with:
           persist-credentials: false
 
-      # - name: Set Rust toolchain
-      #   if: contains(matrix.target, 'linux')
-      #   # https://github.com/rust-cross/cargo-zigbuild/issues/327
-      #   run: echo -e '[toolchain]\nchannel = "nightly-2025-02-19"' > rust-toolchain.toml
-
       - name: Install Rust
         run: |
           rustup target add ${{ matrix.target }}
 
-      - name: Install Zig (for zlob)
-        if: contains(matrix.os, 'ubuntu')
+      - name: Install Zig (for zlob dependency)
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.13.0
 
       - name: Build for Linux
         if: contains(matrix.os, 'ubuntu')
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
-          cross build --release --target ${{ matrix.target }}
+          cross build --release --target ${{ matrix.target }} -p fff-nvim
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.so"
 
       - name: Build for macOS
         if: contains(matrix.os, 'macos')
         run: |
-          # Ventura (https://en.wikipedia.org/wiki/MacOS_version_history#Releases)
-          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }}
+          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-nvim
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.dylib"
 
       - name: Build for Windows
         if: contains(matrix.os, 'windows')
         run: |
-          cargo build --release --target ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }} -p fff-nvim
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.dll"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
+          name: nvim-${{ matrix.target }}
           path: ${{ matrix.target }}*
+
+  build-c:
+    name: Build C FFI ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          ## Linux builds
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: target/x86_64-unknown-linux-gnu/release/libfff_c.so
+            ext: so
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: target/aarch64-unknown-linux-gnu/release/libfff_c.so
+            ext: so
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: target/x86_64-unknown-linux-musl/release/libfff_c.so
+            ext: so
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact_name: target/aarch64-unknown-linux-musl/release/libfff_c.so
+            ext: so
+
+          ## macOS builds
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: target/x86_64-apple-darwin/release/libfff_c.dylib
+            ext: dylib
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: target/aarch64-apple-darwin/release/libfff_c.dylib
+            ext: dylib
+
+          ## Windows builds
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: target/x86_64-pc-windows-msvc/release/fff_c.dll
+            ext: dll
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: target/aarch64-pc-windows-msvc/release/fff_c.dll
+            ext: dll
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          rustup target add ${{ matrix.target }}
+
+      - name: Install Zig (for zlob dependency)
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Build for Linux
+        if: contains(matrix.os, 'ubuntu')
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+          cross build --release --target ${{ matrix.target }} -p fff-c
+          mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
+
+      - name: Build for macOS
+        if: contains(matrix.os, 'macos')
+        run: |
+          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-c
+          mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
+
+      - name: Build for Windows
+        if: contains(matrix.os, 'windows')
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p fff-c
+          mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-lib-${{ matrix.target }}
+          path: c-lib-${{ matrix.target }}*
 
   release:
     name: Release
-    needs: build
+    needs: [build-nvim, build-c]
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     permissions:
@@ -111,12 +185,44 @@ jobs:
         with:
           path: ./binaries
 
+      - name: Flatten and rename Neovim artifacts
+        working-directory: ./binaries
+        run: |
+          # Move nvim artifacts to root level with original naming
+          for dir in nvim-*/; do
+            target="${dir#nvim-}"
+            target="${target%/}"
+            for file in "$dir"*; do
+              if [ -f "$file" ]; then
+                filename=$(basename "$file")
+                mv "$file" "./$filename"
+              fi
+            done
+            rmdir "$dir" 2>/dev/null || true
+          done
+
+      - name: Flatten C library artifacts
+        working-directory: ./binaries
+        run: |
+          # Move c-lib artifacts to root level
+          for dir in c-lib-*/; do
+            for file in "$dir"*; do
+              if [ -f "$file" ]; then
+                filename=$(basename "$file")
+                mv "$file" "./$filename"
+              fi
+            done
+            rmdir "$dir" 2>/dev/null || true
+          done
+
       - name: Generate checksums
         working-directory: ./binaries
         run: |
-          ls -a 
-          for file in ./**/*; do
-            sha256sum "$file" > "${file}.sha256"
+          ls -la
+          for file in *; do
+            if [ -f "$file" ] && [[ ! "$file" == *.sha256 ]]; then
+              sha256sum "$file" > "${file}.sha256"
+            fi
           done
 
       - name: Prepare tag
@@ -132,16 +238,22 @@ jobs:
           name: "${{ steps.vars.outputs.tag }}"
           tag_name: "${{ steps.vars.outputs.tag }}"
           token: ${{ github.token }}
-          files: ./binaries/**/*
+          files: ./binaries/*
           draft: false
           prerelease: true
           generate_release_notes: false
           body: |
             Nightly release from commit: ${{ github.sha }}
 
+            ## Neovim Plugin
+            - `{target}.so` / `.dylib` / `.dll` - Lua module for Neovim
+
+            ## C FFI Library (for Bun/Node/Python)
+            - `c-lib-{target}.so` / `.dylib` / `.dll` - C FFI library
+
   comment-on-pr:
     name: Comment on PR
-    needs: build
+    needs: [build-nvim, build-c]
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     permissions:
@@ -167,15 +279,19 @@ jobs:
           edit-mode: replace
           body: |
             <!-- fff-nvim-build-comment -->
-            ## 🔨 Build Artifacts for your PR
+            ## Build Artifacts for your PR
 
-            You can test the prebuilt binaries if you use lazy.nvim right now.
-
+            ### Neovim Plugin
+            Test with lazy.nvim:
             ```lua
             {
               "dmtrKovalenko/fff.nvim",
               tag = "${{ steps.vars.outputs.short_sha }}",
             }
             ```
+
+            ### Bun/TypeScript Package
+            The `fff` npm package will download binaries from this release automatically.
+
             ---
             *Built from ${{ github.sha }}*
