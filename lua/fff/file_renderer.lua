@@ -83,8 +83,9 @@ function M.render_line(item, ctx, item_idx)
   end
 
   -- Format filename and path
+  -- Don't reserve space for frecency - path takes priority
   local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
-  local available_width = math.max(ctx.max_path_width - icon_width - #frecency, 40)
+  local available_width = math.max(ctx.max_path_width - icon_width, 40)
   local filename, dir_path = ctx.format_file_display(item, available_width)
 
   -- Build line

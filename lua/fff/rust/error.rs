@@ -13,6 +13,8 @@ pub enum Error {
     AcquireFrecencyLock,
     #[error("Failed to acquire lock for items by provider")]
     AcquireItemLock,
+    #[error("Failed to acquire lock for path cache")]
+    AcquirePathCacheLock,
     #[error("Failed to create directory: {0}")]
     CreateDir(#[from] std::io::Error),
     #[error("Failed to open frecency database env: {0}")]

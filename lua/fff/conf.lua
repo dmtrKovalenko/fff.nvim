@@ -114,6 +114,7 @@ local function init()
       preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
       preview_size = 0.5,
       show_scrollbar = true, -- Show scrollbar for pagination
+      path_shorten_strategy = 'middle_number', -- or 'middle', 'end'
     },
     preview = {
       enabled = true,

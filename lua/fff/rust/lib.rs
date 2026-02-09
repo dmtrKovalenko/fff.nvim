@@ -18,7 +18,7 @@ mod frecency;
 pub mod git;
 mod location;
 mod log;
-mod path_utils;
+pub mod path_utils;
 pub mod query_tracker;
 pub mod score;
 mod sort_buffer;
@@ -488,6 +488,19 @@ pub fn health_check(lua: &Lua, test_path: Option<String>) -> LuaResult<LuaValue>
     Ok(LuaValue::Table(table))
 }
 
+pub fn shorten_path(
+    _: &Lua,
+    (path, max_size, strategy): (String, usize, Option<mlua::Value>),
+) -> LuaResult<String> {
+    let strategy = strategy
+        .map(path_utils::PathShortenStrategy::try_from)
+        .transpose()?
+        .unwrap_or_default();
+
+    let path = PathBuf::from(&path);
+    path_utils::shorten_path(strategy, max_size, &path).map_err(Into::into)
+}
+
 fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
     let exports = lua.create_table()?;
     exports.set("init_db", lua.create_function(init_db)?)?;
@@ -535,6 +548,7 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
         lua.create_function(get_historical_query)?,
     )?;
     exports.set("health_check", lua.create_function(health_check)?)?;
+    exports.set("shorten_path", lua.create_function(shorten_path)?)?;
 
     Ok(exports)
 }
