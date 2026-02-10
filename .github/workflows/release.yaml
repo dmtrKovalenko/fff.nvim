@@ -46,7 +46,6 @@ jobs:
             artifact_name: target/aarch64-apple-darwin/release/libfff_nvim.dylib
             ext: dylib
 
-          ## Windows builds (temporarily skipped - OpenSSL cross-compilation issues)
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: target/x86_64-pc-windows-msvc/release/fff_nvim.dll
