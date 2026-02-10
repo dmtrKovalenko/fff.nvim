@@ -1,6 +1,7 @@
 {
   "name": "fff",
   "version": "0.1.0",
+  "nativeBinaryHash": "latest",
   "description": "High-performance fuzzy file finder for Bun - perfect for LLM agent tools",
   "type": "module",
   "main": "src/index.ts",

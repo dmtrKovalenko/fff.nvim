@@ -3,11 +3,18 @@
  * CLI tool for fff package management
  *
  * Usage:
- *   bunx fff download [version]  - Download native binary
- *   bunx fff info                - Show platform and binary info
+ *   bunx fff download [hash]    - Download native binary
+ *   bunx fff info               - Show platform and binary info
+ *   bunx fff check              - Check for updates
  */
 
-import { downloadBinary, binaryExists, getBinaryPath, findBinary } from "../src/download";
+import { 
+  downloadBinary, 
+  getBinaryPath, 
+  findBinary, 
+  getInstalledHash,
+  checkForUpdate 
+} from "../src/download";
 import { getTriple, getLibExtension, getLibFilename } from "../src/platform";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,26 +22,30 @@ import { fileURLToPath } from "node:url";
 const args = process.argv.slice(2);
 const command = args[0];
 
-async function getPackageVersion(): Promise<string> {
+interface PackageJson {
+  version: string;
+  nativeBinaryHash?: string;
+}
+
+async function getPackageInfo(): Promise<PackageJson> {
   const currentDir = dirname(fileURLToPath(import.meta.url));
   const packageJsonPath = join(currentDir, "..", "package.json");
   
   try {
-    const pkg = await Bun.file(packageJsonPath).json();
-    return pkg.version;
+    return await Bun.file(packageJsonPath).json();
   } catch {
-    return "unknown";
+    return { version: "unknown" };
   }
 }
 
 async function main() {
   switch (command) {
     case "download": {
-      const version = args[1];
+      const hash = args[1];
       console.log("fff: Downloading native library...");
       try {
-        await downloadBinary(version);
-        console.log("fff: Download complete!");
+        const resolvedHash = await downloadBinary(hash);
+        console.log(`fff: Download complete! (${resolvedHash})`);
       } catch (error) {
         console.error("fff: Download failed:", error);
         process.exit(1);
@@ -42,10 +53,33 @@ async function main() {
       break;
     }
 
+    case "check": {
+      console.log("fff: Checking for updates...");
+      try {
+        const { currentHash, latestHash, updateAvailable } = await checkForUpdate();
+        console.log(`  Installed: ${currentHash || "not installed"}`);
+        console.log(`  Latest:    ${latestHash}`);
+        if (updateAvailable) {
+          console.log("");
+          console.log("  Update available! Run: bunx fff download");
+        } else {
+          console.log("");
+          console.log("  You're up to date!");
+        }
+      } catch (error) {
+        console.error("fff: Failed to check for updates:", error);
+        process.exit(1);
+      }
+      break;
+    }
+
     case "info": {
-      const version = await getPackageVersion();
+      const pkg = await getPackageInfo();
+      const installedHash = getInstalledHash();
+      
       console.log("fff - Fast File Finder");
-      console.log(`Version: ${version}`);
+      console.log(`Package version: ${pkg.version}`);
+      console.log(`Configured hash: ${pkg.nativeBinaryHash || "latest"}`);
       console.log("");
       console.log("Platform Information:");
       console.log(`  Triple: ${getTriple()}`);
@@ -56,6 +90,9 @@ async function main() {
       const existing = findBinary();
       if (existing) {
         console.log(`  Found: ${existing}`);
+        if (installedHash) {
+          console.log(`  Hash: ${installedHash}`);
+        }
       } else {
         console.log(`  Not found`);
         console.log(`  Expected path: ${getBinaryPath()}`);
@@ -66,8 +103,8 @@ async function main() {
     case "version":
     case "--version":
     case "-v": {
-      const version = await getPackageVersion();
-      console.log(version);
+      const pkg = await getPackageInfo();
+      console.log(pkg.version);
       break;
     }
 
@@ -75,18 +112,20 @@ async function main() {
     case "--help":
     case "-h":
     default: {
-      const version = await getPackageVersion();
-      console.log(`fff - Fast File Finder CLI v${version}`);
+      const pkg = await getPackageInfo();
+      console.log(`fff - Fast File Finder CLI v${pkg.version}`);
       console.log("");
       console.log("Usage:");
-      console.log("  bunx fff download [version]  Download native binary");
-      console.log("  bunx fff info                Show platform and binary info");
-      console.log("  bunx fff version             Show version");
-      console.log("  bunx fff help                Show this help message");
+      console.log("  bunx fff download [hash]   Download native binary");
+      console.log("  bunx fff check             Check for updates");
+      console.log("  bunx fff info              Show platform and binary info");
+      console.log("  bunx fff version           Show version");
+      console.log("  bunx fff help              Show this help message");
       console.log("");
       console.log("Examples:");
-      console.log("  bunx fff download            Download latest binary");
-      console.log("  bunx fff download abc1234    Download specific version");
+      console.log("  bunx fff download          Download binary for configured hash");
+      console.log("  bunx fff download latest   Download latest release");
+      console.log("  bunx fff download abc1234  Download specific commit hash");
       break;
     }
   }

@@ -3,21 +3,25 @@
  * Postinstall script - automatically downloads the native binary
  */
 
-import { downloadBinary, binaryExists, findBinary } from "../src/download";
+import { downloadBinary, findBinary, getInstalledHash } from "../src/download";
 
 async function main() {
   // Check if binary already exists (dev build or previous download)
   const existing = findBinary();
   if (existing) {
+    const hash = getInstalledHash();
     console.log(`fff: Native library found at ${existing}`);
+    if (hash) {
+      console.log(`fff: Version: ${hash}`);
+    }
     return;
   }
 
   console.log("fff: Native library not found, downloading...");
 
   try {
-    await downloadBinary();
-    console.log("fff: Native library installed successfully!");
+    const hash = await downloadBinary();
+    console.log(`fff: Native library installed successfully! (${hash})`);
   } catch (error) {
     console.error("fff: Failed to download native library:", error);
     console.error("");

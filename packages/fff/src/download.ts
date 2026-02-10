@@ -1,22 +1,23 @@
 /**
  * Binary download utilities for fff
  *
- * Downloads prebuilt binaries from GitHub releases, similar to
- * how the Neovim Lua version handles binary distribution.
+ * Downloads prebuilt binaries from GitHub releases based on commit hash.
+ * The release tag corresponds to the short commit SHA (7 characters).
  */
 
-import { existsSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { getTriple, getLibExtension, getLibFilename } from "./platform";
 
 const GITHUB_REPO = "dmtrKovalenko/fff.nvim";
+const GITHUB_API = "https://api.github.com";
 
 /**
  * Get the current file's directory
  */
 function getCurrentDir(): string {
-  // Handle both file:// URLs and regular paths
   const url = import.meta.url;
   if (url.startsWith("file://")) {
     return dirname(fileURLToPath(url));
@@ -29,7 +30,6 @@ function getCurrentDir(): string {
  */
 function getPackageDir(): string {
   const currentDir = getCurrentDir();
-  // src/download.ts -> go up one level to package root
   return dirname(currentDir);
 }
 
@@ -37,7 +37,6 @@ function getPackageDir(): string {
  * Get the directory where binaries are stored
  */
 export function getBinDir(): string {
-  // When installed as a package, binaries go in the package's bin directory
   return join(getPackageDir(), "bin");
 }
 
@@ -50,6 +49,13 @@ export function getBinaryPath(): string {
 }
 
 /**
+ * Get path to the hash file that tracks which version is installed
+ */
+function getHashFilePath(): string {
+  return join(getBinDir(), ".hash");
+}
+
+/**
  * Check if the binary exists
  */
 export function binaryExists(): boolean {
@@ -57,13 +63,21 @@ export function binaryExists(): boolean {
 }
 
 /**
+ * Get the installed binary hash (if any)
+ */
+export function getInstalledHash(): string | null {
+  const hashFile = getHashFilePath();
+  if (existsSync(hashFile)) {
+    return readFileSync(hashFile, "utf-8").trim();
+  }
+  return null;
+}
+
+/**
  * Get the development binary path (for local development)
  */
 export function getDevBinaryPath(): string | null {
-  // Check for local cargo build
   const packageDir = getPackageDir();
-
-  // Try workspace root target directory (packages/fff -> fff.nvim root)
   const workspaceRoot = join(packageDir, "..", "..");
 
   const possiblePaths = [
@@ -84,55 +98,147 @@ export function getDevBinaryPath(): string | null {
  * Find the binary, checking both installed and dev paths
  */
 export function findBinary(): string | null {
-  // First check installed location
   const installedPath = getBinaryPath();
   if (existsSync(installedPath)) {
     return installedPath;
   }
-
-  // Then check dev location
   return getDevBinaryPath();
 }
 
 /**
- * Get the current package version from package.json
+ * Get the native binary hash from package.json
+ * This is the commit hash that corresponds to the release tag
  */
-async function getPackageVersion(): Promise<string> {
+async function getPackageHash(): Promise<string> {
   const packageDir = getPackageDir();
   const packageJsonPath = join(packageDir, "package.json");
 
   try {
     const pkg = await Bun.file(packageJsonPath).json();
-    // Use nativeVersion if specified, otherwise use package version
-    return pkg.nativeVersion || pkg.version;
+    return pkg.nativeBinaryHash || "latest";
   } catch {
     return "latest";
   }
 }
 
 /**
- * Download the binary from GitHub releases
+ * Fetch the latest release tag from GitHub
  */
-export async function downloadBinary(version?: string): Promise<void> {
-  const targetVersion = version || (await getPackageVersion());
+async function fetchLatestReleaseTag(): Promise<string> {
+  const url = `${GITHUB_API}/repos/${GITHUB_REPO}/releases/latest`;
+  
+  const response = await fetch(url, {
+    headers: {
+      "Accept": "application/vnd.github.v3+json",
+      "User-Agent": "fff-bun-client",
+    },
+  });
+
+  if (!response.ok) {
+    // If no "latest" release, try getting the most recent prerelease
+    const allReleasesUrl = `${GITHUB_API}/repos/${GITHUB_REPO}/releases`;
+    const allResponse = await fetch(allReleasesUrl, {
+      headers: {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "fff-bun-client",
+      },
+    });
+
+    if (!allResponse.ok) {
+      throw new Error(`Failed to fetch releases: ${allResponse.status}`);
+    }
+
+    const releases = await allResponse.json() as Array<{ tag_name: string }>;
+    if (releases.length === 0) {
+      throw new Error("No releases found");
+    }
+
+    return releases[0].tag_name;
+  }
+
+  const release = await response.json() as { tag_name: string };
+  return release.tag_name;
+}
+
+/**
+ * Resolve the hash to use for downloading
+ * If "latest", fetches the latest release tag from GitHub
+ */
+async function resolveHash(hash: string): Promise<string> {
+  if (hash === "latest") {
+    console.log("fff: Fetching latest release tag...");
+    return await fetchLatestReleaseTag();
+  }
+  return hash;
+}
+
+/**
+ * Download and verify checksum for a binary
+ */
+async function downloadWithChecksum(
+  binaryUrl: string,
+  checksumUrl: string,
+): Promise<Buffer> {
+  // Download binary
+  const binaryResponse = await fetch(binaryUrl);
+  if (!binaryResponse.ok) {
+    throw new Error(
+      `Failed to download binary: ${binaryResponse.status} ${binaryResponse.statusText}\nURL: ${binaryUrl}`,
+    );
+  }
+
+  const binaryBuffer = Buffer.from(await binaryResponse.arrayBuffer());
+
+  // Try to download and verify checksum
+  try {
+    const checksumResponse = await fetch(checksumUrl);
+    if (checksumResponse.ok) {
+      const checksumText = await checksumResponse.text();
+      // Format: "hash  filename" or just "hash"
+      const expectedHash = checksumText.trim().split(/\s+/)[0];
+      
+      const actualHash = createHash("sha256").update(binaryBuffer).digest("hex");
+      
+      if (actualHash !== expectedHash) {
+        throw new Error(
+          `Checksum mismatch!\nExpected: ${expectedHash}\nActual: ${actualHash}`,
+        );
+      }
+      console.log("fff: Checksum verified ✓");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("Checksum mismatch")) {
+      throw error;
+    }
+    // Checksum file not found, continue without verification
+    console.log("fff: Checksum file not available, skipping verification");
+  }
+
+  return binaryBuffer;
+}
+
+/**
+ * Download the binary from GitHub releases
+ * @param hash - The commit hash (release tag) to download, or "latest"
+ */
+export async function downloadBinary(hash?: string): Promise<string> {
+  const packageHash = hash || (await getPackageHash());
+  const resolvedHash = await resolveHash(packageHash);
+  
   const triple = getTriple();
   const ext = getLibExtension();
 
   // Binary name format: c-lib-{triple}.{ext}
   const binaryName = `c-lib-${triple}.${ext}`;
-  const url = `https://github.com/${GITHUB_REPO}/releases/download/${targetVersion}/${binaryName}`;
+  const baseUrl = `https://github.com/${GITHUB_REPO}/releases/download/${resolvedHash}`;
+  const binaryUrl = `${baseUrl}/${binaryName}`;
+  const checksumUrl = `${baseUrl}/${binaryName}.sha256`;
 
   console.log(`fff: Downloading native library for ${triple}...`);
-  console.log(`fff: URL: ${url}`);
+  console.log(`fff: Release: ${resolvedHash}`);
+  console.log(`fff: URL: ${binaryUrl}`);
 
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download binary: ${response.status} ${response.statusText}\n` +
-        `URL: ${url}\n` +
-        `Make sure version "${targetVersion}" exists and has binaries for ${triple}`,
-    );
-  }
+  const binaryBuffer = await downloadWithChecksum(binaryUrl, checksumUrl);
 
   const binDir = getBinDir();
   if (!existsSync(binDir)) {
@@ -140,8 +246,10 @@ export async function downloadBinary(version?: string): Promise<void> {
   }
 
   const binaryPath = getBinaryPath();
-  const buffer = await response.arrayBuffer();
-  writeFileSync(binaryPath, Buffer.from(buffer));
+  writeFileSync(binaryPath, binaryBuffer);
+
+  // Save the hash for future reference
+  writeFileSync(getHashFilePath(), resolvedHash);
 
   // Make executable on Unix
   if (process.platform !== "win32") {
@@ -149,19 +257,36 @@ export async function downloadBinary(version?: string): Promise<void> {
   }
 
   console.log(`fff: Binary downloaded to ${binaryPath}`);
+  return resolvedHash;
+}
+
+/**
+ * Check if an update is available
+ */
+export async function checkForUpdate(): Promise<{
+  currentHash: string | null;
+  latestHash: string;
+  updateAvailable: boolean;
+}> {
+  const currentHash = getInstalledHash();
+  const latestHash = await fetchLatestReleaseTag();
+  
+  return {
+    currentHash,
+    latestHash,
+    updateAvailable: currentHash !== latestHash,
+  };
 }
 
 /**
  * Ensure the binary exists, downloading if necessary
  */
 export async function ensureBinary(): Promise<string> {
-  // First check if binary already exists
   const existingPath = findBinary();
   if (existingPath) {
     return existingPath;
   }
 
-  // Download binary
   await downloadBinary();
   return getBinaryPath();
 }
