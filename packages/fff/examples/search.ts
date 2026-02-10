@@ -2,7 +2,9 @@
 /**
  * Interactive file finder demo
  * 
- * Usage: bun examples/search.ts [directory]
+ * Usage: 
+ *   bunx fff-demo [directory]
+ *   bun examples/search.ts [directory]
  * 
  * Indexes the specified directory (or cwd) and provides an interactive
  * search prompt with detailed metadata about results.

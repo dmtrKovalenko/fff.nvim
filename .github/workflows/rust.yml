@@ -15,22 +15,23 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
-      - name: Install Lua
-        if: matrix.os == 'macos-latest'
-        run: brew install lua
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      
+      # Zig is required to compile zlob
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
         with:
-          version: 0.13.0
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+          version: 0.15.2
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: true
           cache-on-failure: true
           cache-key: "v1-rust"
           components: rustfmt, clippy
-          target: wasm32-unknown-unknown
 
       - name: Run tests
         run: cargo test --verbose
@@ -53,13 +54,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      
+      # Zig is required to compile zlob
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
         with:
-          version: 0.13.0
+          version: 0.15.2
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
           components: clippy
+          
       - name: Run clippy
         run: cargo clippy -- -D warnings

@@ -5,7 +5,7 @@
  * The release tag corresponds to the short commit SHA (7 characters).
  */
 
-import { existsSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
@@ -34,6 +34,13 @@ function getPackageDir(): string {
 }
 
 /**
+ * Get the path to package.json
+ */
+function getPackageJsonPath(): string {
+  return join(getPackageDir(), "package.json");
+}
+
+/**
  * Get the directory where binaries are stored
  */
 export function getBinDir(): string {
@@ -49,13 +56,6 @@ export function getBinaryPath(): string {
 }
 
 /**
- * Get path to the hash file that tracks which version is installed
- */
-function getHashFilePath(): string {
-  return join(getBinDir(), ".hash");
-}
-
-/**
  * Check if the binary exists
  */
 export function binaryExists(): boolean {
@@ -63,14 +63,39 @@ export function binaryExists(): boolean {
 }
 
 /**
- * Get the installed binary hash (if any)
+ * Read package.json
  */
-export function getInstalledHash(): string | null {
-  const hashFile = getHashFilePath();
-  if (existsSync(hashFile)) {
-    return readFileSync(hashFile, "utf-8").trim();
+async function readPackageJson(): Promise<Record<string, unknown>> {
+  try {
+    return await Bun.file(getPackageJsonPath()).json();
+  } catch {
+    return {};
   }
-  return null;
+}
+
+/**
+ * Write package.json
+ */
+async function writePackageJson(pkg: Record<string, unknown>): Promise<void> {
+  const content = JSON.stringify(pkg, null, 2) + "\n";
+  writeFileSync(getPackageJsonPath(), content);
+}
+
+/**
+ * Get the installed binary hash from package.json
+ */
+export async function getInstalledHash(): Promise<string | null> {
+  const pkg = await readPackageJson();
+  return (pkg.nativeBinaryHash as string) || null;
+}
+
+/**
+ * Update the installed hash in package.json
+ */
+async function setInstalledHash(hash: string): Promise<void> {
+  const pkg = await readPackageJson();
+  pkg.nativeBinaryHash = hash;
+  await writePackageJson(pkg);
 }
 
 /**
@@ -103,22 +128,6 @@ export function findBinary(): string | null {
     return installedPath;
   }
   return getDevBinaryPath();
-}
-
-/**
- * Get the native binary hash from package.json
- * This is the commit hash that corresponds to the release tag
- */
-async function getPackageHash(): Promise<string> {
-  const packageDir = getPackageDir();
-  const packageJsonPath = join(packageDir, "package.json");
-
-  try {
-    const pkg = await Bun.file(packageJsonPath).json();
-    return pkg.nativeBinaryHash || "latest";
-  } catch {
-    return "latest";
-  }
 }
 
 /**
@@ -222,7 +231,8 @@ async function downloadWithChecksum(
  * @param hash - The commit hash (release tag) to download, or "latest"
  */
 export async function downloadBinary(hash?: string): Promise<string> {
-  const packageHash = hash || (await getPackageHash());
+  const currentHash = await getInstalledHash();
+  const packageHash = hash || currentHash || "latest";
   const resolvedHash = await resolveHash(packageHash);
   
   const triple = getTriple();
@@ -248,8 +258,8 @@ export async function downloadBinary(hash?: string): Promise<string> {
   const binaryPath = getBinaryPath();
   writeFileSync(binaryPath, binaryBuffer);
 
-  // Save the hash for future reference
-  writeFileSync(getHashFilePath(), resolvedHash);
+  // Save the hash to package.json
+  await setInstalledHash(resolvedHash);
 
   // Make executable on Unix
   if (process.platform !== "win32") {
@@ -268,7 +278,7 @@ export async function checkForUpdate(): Promise<{
   latestHash: string;
   updateAvailable: boolean;
 }> {
-  const currentHash = getInstalledHash();
+  const currentHash = await getInstalledHash();
   const latestHash = await fetchLatestReleaseTag();
   
   return {

@@ -1,7 +1,8 @@
 {
-  "name": "fff",
-  "version": "0.1.0",
-  "nativeBinaryHash": "latest",
+  "name": "@ff-labs/bun",
+  "version": "0.1.1",
+  "private": false,
+  "nativeBinaryHash": "6c641aa",
   "description": "High-performance fuzzy file finder for Bun - perfect for LLM agent tools",
   "type": "module",
   "main": "src/index.ts",
@@ -13,12 +14,14 @@
     }
   },
   "bin": {
-    "fff": "./scripts/cli.ts"
+    "fff": "./scripts/cli.ts",
+    "fff-demo": "./examples/search.ts"
   },
   "files": [
     "src",
     "bin",
-    "scripts"
+    "scripts",
+    "examples"
   ],
   "scripts": {
     "postinstall": "bun ./scripts/postinstall.ts",
@@ -56,6 +59,9 @@
   ],
   "author": "Dmitry Kovalenko",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "bugs": {
     "url": "https://github.com/dmtrKovalenko/fff.nvim/issues"
   },

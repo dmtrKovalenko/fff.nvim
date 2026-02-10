@@ -127,10 +127,10 @@ pub unsafe extern "C" fn fff_init(opts_json: *const c_char) -> *mut FffResult {
 #[unsafe(no_mangle)]
 pub extern "C" fn fff_destroy() -> *mut FffResult {
     // Clean up file picker
-    if let Ok(mut file_picker) = FILE_PICKER.write() {
-        if let Some(mut picker) = file_picker.take() {
-            picker.stop_background_monitor();
-        }
+    if let Ok(mut file_picker) = FILE_PICKER.write()
+        && let Some(mut picker) = file_picker.take()
+    {
+        picker.stop_background_monitor();
     }
 
     // Clean up frecency
@@ -167,10 +167,9 @@ pub unsafe extern "C" fn fff_search(
     let opts: SearchOptions = if opts_json.is_null() {
         SearchOptions::default()
     } else {
-        match unsafe { cstr_to_string(opts_json) }.and_then(|s| serde_json::from_str(&s).ok()) {
-            Some(o) => o,
-            None => SearchOptions::default(),
-        }
+        unsafe { cstr_to_string(opts_json) }
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
     };
 
     let file_picker_guard = match FILE_PICKER.read() {
@@ -471,10 +470,10 @@ pub unsafe extern "C" fn fff_track_query(
         Err(_) => return FffResult::ok_data("false"),
     };
 
-    if let Some(ref mut tracker) = *query_tracker {
-        if let Err(e) = tracker.track_query_completion(&query_str, &project_path, &file_path) {
-            return FffResult::err(&format!("Failed to track query: {}", e));
-        }
+    if let Some(ref mut tracker) = *query_tracker
+        && let Err(e) = tracker.track_query_completion(&query_str, &project_path, &file_path)
+    {
+        return FffResult::err(&format!("Failed to track query: {}", e));
     }
 
     FffResult::ok_data("true")
@@ -612,22 +611,22 @@ pub unsafe extern "C" fn fff_health_check(test_path: *const c_char) -> *mut FffR
                 "initialized".to_string(),
                 serde_json::Value::Bool(guard.is_some()),
             );
-            if let Some(ref frecency) = *guard {
-                if let Ok(health_data) = frecency.get_health() {
-                    let mut db_health = serde_json::Map::new();
-                    db_health.insert(
-                        "path".to_string(),
-                        serde_json::Value::String(health_data.path),
-                    );
-                    db_health.insert(
-                        "disk_size".to_string(),
-                        serde_json::Value::Number(health_data.disk_size.into()),
-                    );
-                    frecency_info.insert(
-                        "db_healthcheck".to_string(),
-                        serde_json::Value::Object(db_health),
-                    );
-                }
+            if let Some(ref frecency) = *guard
+                && let Ok(health_data) = frecency.get_health()
+            {
+                let mut db_health = serde_json::Map::new();
+                db_health.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(health_data.path),
+                );
+                db_health.insert(
+                    "disk_size".to_string(),
+                    serde_json::Value::Number(health_data.disk_size.into()),
+                );
+                frecency_info.insert(
+                    "db_healthcheck".to_string(),
+                    serde_json::Value::Object(db_health),
+                );
             }
         }
         Err(_) => {
@@ -647,22 +646,22 @@ pub unsafe extern "C" fn fff_health_check(test_path: *const c_char) -> *mut FffR
                 "initialized".to_string(),
                 serde_json::Value::Bool(guard.is_some()),
             );
-            if let Some(ref tracker) = *guard {
-                if let Ok(health_data) = tracker.get_health() {
-                    let mut db_health = serde_json::Map::new();
-                    db_health.insert(
-                        "path".to_string(),
-                        serde_json::Value::String(health_data.path),
-                    );
-                    db_health.insert(
-                        "disk_size".to_string(),
-                        serde_json::Value::Number(health_data.disk_size.into()),
-                    );
-                    query_info.insert(
-                        "db_healthcheck".to_string(),
-                        serde_json::Value::Object(db_health),
-                    );
-                }
+            if let Some(ref tracker) = *guard
+                && let Ok(health_data) = tracker.get_health()
+            {
+                let mut db_health = serde_json::Map::new();
+                db_health.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(health_data.path),
+                );
+                db_health.insert(
+                    "disk_size".to_string(),
+                    serde_json::Value::Number(health_data.disk_size.into()),
+                );
+                query_info.insert(
+                    "db_healthcheck".to_string(),
+                    serde_json::Value::Object(db_health),
+                );
             }
         }
         Err(_) => {

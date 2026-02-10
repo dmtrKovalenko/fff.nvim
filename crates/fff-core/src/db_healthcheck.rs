@@ -20,7 +20,7 @@ pub trait DbHealthChecker {
 
         let size = env
             .real_disk_size()
-            .map_err(|e| crate::error::Error::EnvOpen(e))?;
+            .map_err(crate::error::Error::EnvOpen)?;
         let path = env.path().to_string_lossy().to_string();
         let entry_counts = self.count_entries()?;
 

@@ -45,7 +45,7 @@ serde = { version = "1.0", features = ["derive"] }
 smartstring = { version = "1.0.1", features = ["serde"] }
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zlob = { version = "1.2.2", optional = true }
+zlob = { version = "1.2.8", optional = true }
 
 # Platform-specific: Use vendored OpenSSL on non-Windows (Linux, macOS)
 [target.'cfg(not(windows))'.dependencies]

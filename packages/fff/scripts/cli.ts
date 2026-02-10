@@ -75,11 +75,11 @@ async function main() {
 
     case "info": {
       const pkg = await getPackageInfo();
-      const installedHash = getInstalledHash();
+      const installedHash = await getInstalledHash();
       
       console.log("fff - Fast File Finder");
       console.log(`Package version: ${pkg.version}`);
-      console.log(`Configured hash: ${pkg.nativeBinaryHash || "latest"}`);
+      console.log(`Binary hash: ${installedHash || "not installed"}`);
       console.log("");
       console.log("Platform Information:");
       console.log(`  Triple: ${getTriple()}`);
@@ -90,9 +90,6 @@ async function main() {
       const existing = findBinary();
       if (existing) {
         console.log(`  Found: ${existing}`);
-        if (installedHash) {
-          console.log(`  Hash: ${installedHash}`);
-        }
       } else {
         console.log(`  Not found`);
         console.log(`  Expected path: ${getBinaryPath()}`);

@@ -9,7 +9,7 @@ async function main() {
   // Check if binary already exists (dev build or previous download)
   const existing = findBinary();
   if (existing) {
-    const hash = getInstalledHash();
+    const hash = await getInstalledHash();
     console.log(`fff: Native library found at ${existing}`);
     if (hash) {
       console.log(`fff: Version: ${hash}`);

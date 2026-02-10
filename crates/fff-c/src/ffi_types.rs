@@ -218,7 +218,7 @@ impl SearchResultJson {
             scores: result
                 .scores
                 .iter()
-                .map(|score| ScoreJson::from_score(score))
+                .map(ScoreJson::from_score)
                 .collect(),
             total_matched: result.total_matched,
             total_files: result.total_files,

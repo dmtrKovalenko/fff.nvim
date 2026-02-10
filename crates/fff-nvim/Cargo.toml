@@ -40,7 +40,7 @@ blake3 = "1.8.2"
 chrono = { version = "0.4", features = ["serde"] }
 ctrlc = "3.4.2"
 dirs = "5.0"
-git2 = "0.20.2"
+git2 = { workspace = true }
 glidesort = "0.1"
 heed = "0.22.0"
 ignore = "0.4.22"
@@ -50,13 +50,12 @@ neo_frizbee = { version = "0.7.1" }
 notify = "8.1.0"
 notify-debouncer-full = "0.6"
 once_cell = "1.20.2"
-openssl = { version = "0.10", features = ["vendored"] }
 pathdiff = "0.2.1"
 serde = { version = "1.0", features = ["derive"] }
 smartstring = { version = "1.0.1", features = ["serde"] }
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zlob = "1.2.3"
+zlob = "1.2.8"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -70,3 +69,8 @@ harness = false
 [[bench]]
 name = "query_tracker_bench"
 harness = false
+
+# Platform-specific: Use vendored OpenSSL on non-Windows (Linux, macOS)
+# On Windows, git2 uses the native SChannel TLS backend
+[target.'cfg(not(windows))'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }

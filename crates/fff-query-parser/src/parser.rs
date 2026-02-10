@@ -1,10 +1,10 @@
+use crate::ConstraintVec;
 use crate::config::ParserConfig;
 use crate::constraints::{Constraint, GitStatusFilter, TextPartsBuffer};
-use crate::location::{parse_location, Location};
-use crate::ConstraintVec;
+use crate::location::{Location, parse_location};
 
 #[cfg(feature = "glob")]
-use zlob::{has_wildcards, ZlobFlags};
+use zlob::{ZlobFlags, has_wildcards};
 
 /// Check if token has glob wildcards (stub for when zlob is disabled)
 #[cfg(not(feature = "glob"))]
