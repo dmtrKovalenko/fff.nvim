@@ -3,7 +3,7 @@
 //! These types use #[repr(C)] for C ABI compatibility and implement
 //! serde traits for JSON serialization.
 
-use std::ffi::{CString, c_char};
+use std::ffi::{c_char, CString};
 use std::ptr;
 
 use fff_core::git::format_git_status;
@@ -56,16 +56,13 @@ impl FffResult {
 pub struct InitOptions {
     /// Base directory to index (required)
     pub base_path: String,
-    /// Path to frecency database (optional, defaults to ~/.fff/frecency.mdb)
+    /// Path to frecency database (optional, omit to skip frecency initialization)
     pub frecency_db_path: Option<String>,
-    /// Path to query history database (optional, defaults to ~/.fff/history.mdb)
+    /// Path to query history database (optional, omit to skip query tracker initialization)
     pub history_db_path: Option<String>,
     /// Use unsafe no-lock mode for databases (optional, defaults to false)
     #[serde(default)]
     pub use_unsafe_no_lock: bool,
-    /// Skip database initialization entirely (optional, defaults to false)
-    #[serde(default)]
-    pub skip_databases: bool,
 }
 
 /// Search options (JSON-deserializable)

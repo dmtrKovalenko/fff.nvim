@@ -88,7 +88,6 @@ describe("FileFinder - Full Lifecycle", () => {
   test("init succeeds with valid path", () => {
     const result = FileFinder.init({
       basePath: testDir,
-      skipDatabases: true,
     });
 
     expect(result.ok).toBe(true);
@@ -184,7 +183,6 @@ describe("FileFinder - Full Lifecycle", () => {
 
     const result = FileFinder.init({
       basePath: testDir,
-      skipDatabases: true,
     });
     expect(result.ok).toBe(true);
     expect(FileFinder.isInitialized()).toBe(true);
@@ -232,7 +230,6 @@ describe("FileFinder - Error Handling", () => {
   test("init fails with invalid path", () => {
     const result = FileFinder.init({
       basePath: "/nonexistent/path/that/does/not/exist",
-      skipDatabases: true,
     });
 
     expect(result.ok).toBe(false);

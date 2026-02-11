@@ -25,14 +25,12 @@ export function err<T>(error: string): Result<T> {
 export interface InitOptions {
   /** Base directory to index (required) */
   basePath: string;
-  /** Path to frecency database (optional, defaults to ~/.fff/frecency.mdb) */
+  /** Path to frecency database (optional, omit to skip frecency initialization) */
   frecencyDbPath?: string;
-  /** Path to query history database (optional, defaults to ~/.fff/history.mdb) */
+  /** Path to query history database (optional, omit to skip query tracker initialization) */
   historyDbPath?: string;
   /** Use unsafe no-lock mode for databases (optional, defaults to false) */
   useUnsafeNoLock?: boolean;
-  /** Skip database initialization entirely (optional, defaults to false) */
-  skipDatabases?: boolean;
 }
 
 /**
@@ -212,7 +210,6 @@ export interface InitOptionsInternal {
   frecency_db_path?: string;
   history_db_path?: string;
   use_unsafe_no_lock: boolean;
-  skip_databases: boolean;
 }
 
 /**
@@ -238,7 +235,6 @@ export function toInternalInitOptions(opts: InitOptions): InitOptionsInternal {
     frecency_db_path: opts.frecencyDbPath,
     history_db_path: opts.historyDbPath,
     use_unsafe_no_lock: opts.useUnsafeNoLock ?? false,
-    skip_databases: opts.skipDatabases ?? false,
   };
 }
 

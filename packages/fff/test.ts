@@ -39,7 +39,6 @@ async function main() {
 
   const initResult = FileFinder.init({
     basePath: testDir,
-    skipDatabases: true, // Skip DB for simple test
   });
 
   if (!initResult.ok) {

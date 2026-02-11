@@ -88,7 +88,6 @@ async function main() {
   console.log(`${DIM}Initializing index for: ${targetDir}${RESET}`);
   const initResult = FileFinder.init({
     basePath: targetDir,
-    skipDatabases: true, // Skip frecency DB for demo simplicity
   });
 
   if (!initResult.ok) {

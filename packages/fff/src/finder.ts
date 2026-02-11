@@ -85,8 +85,8 @@ export class FileFinder {
    *   historyDbPath: "/custom/history.mdb",
    * });
    *
-   * // Minimal mode (no databases)
-   * FileFinder.init({ basePath: "/path/to/project", skipDatabases: true });
+   * // Minimal mode (no databases - just omit db paths)
+   * FileFinder.init({ basePath: "/path/to/project" });
    * ```
    */
   static init(options: InitOptions): Result<void> {
@@ -214,7 +214,7 @@ export class FileFinder {
    *
    * @param newPath - New directory path to index
    */
-  static restartIndex(newPath: string): Result<void> {
+  static reindex(newPath: string): Result<void> {
     if (!this.initialized) {
       return err("FileFinder not initialized. Call FileFinder.init() first.");
     }
@@ -297,7 +297,7 @@ export class FileFinder {
   static shortenPath(
     path: string,
     maxSize: number,
-    strategy: "middle_number" | "beginning" | "end" = "middle_number"
+    strategy: "middle_number" | "beginning" | "end" = "middle_number",
   ): Result<string> {
     return ffiShortenPath(path, maxSize, strategy);
   }

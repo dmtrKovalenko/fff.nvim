@@ -24,12 +24,17 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-/// Helper to convert C string to Rust string
-unsafe fn cstr_to_string(s: *const c_char) -> Option<String> {
+/// Helper to convert C string to Rust &str.
+///
+/// Returns `None` if the pointer is null or the string is not valid UTF-8.
+/// This is more efficient than `to_string_lossy()` as it returns a borrowed
+/// `&str` directly without `Cow` overhead, and avoids replacement character
+/// scanning since callers are expected to provide valid UTF-8.
+unsafe fn cstr_to_str<'a>(s: *const c_char) -> Option<&'a str> {
     if s.is_null() {
         None
     } else {
-        unsafe { CStr::from_ptr(s).to_str().ok().map(|s| s.to_string()) }
+        unsafe { CStr::from_ptr(s).to_str().ok() }
     }
 }
 
@@ -39,42 +44,23 @@ unsafe fn cstr_to_string(s: *const c_char) -> Option<String> {
 /// `opts_json` must be a valid null-terminated UTF-8 string
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fff_init(opts_json: *const c_char) -> *mut FffResult {
-    let opts_str = match unsafe { cstr_to_string(opts_json) } {
+    let opts_str = match unsafe { cstr_to_str(opts_json) } {
         Some(s) => s,
         None => return FffResult::err("Options JSON is null or invalid UTF-8"),
     };
 
-    let opts: InitOptions = match serde_json::from_str(&opts_str) {
+    let opts: InitOptions = match serde_json::from_str(opts_str) {
         Ok(o) => o,
         Err(e) => return FffResult::err(&format!("Failed to parse options: {}", e)),
     };
 
-    // Initialize databases if not skipped
-    if !opts.skip_databases {
-        let frecency_path = opts.frecency_db_path.unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".fff")
-                .join("frecency.mdb")
-                .to_string_lossy()
-                .to_string()
-        });
-
-        let history_path = opts.history_db_path.unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".fff")
-                .join("history.mdb")
-                .to_string_lossy()
-                .to_string()
-        });
-
+    // Initialize frecency tracker if path is provided
+    if let Some(frecency_path) = opts.frecency_db_path {
         // Ensure directory exists
         if let Some(parent) = PathBuf::from(&frecency_path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        // Initialize frecency tracker
         let mut frecency = match FRECENCY.write() {
             Ok(f) => f,
             Err(e) => return FffResult::err(&format!("Failed to acquire frecency lock: {}", e)),
@@ -85,8 +71,15 @@ pub unsafe extern "C" fn fff_init(opts_json: *const c_char) -> *mut FffResult {
             Err(e) => return FffResult::err(&format!("Failed to init frecency db: {}", e)),
         }
         drop(frecency);
+    }
 
-        // Initialize query tracker
+    // Initialize query tracker if path is provided
+    if let Some(history_path) = opts.history_db_path {
+        // Ensure directory exists
+        if let Some(parent) = PathBuf::from(&history_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
         let mut query_tracker = match QUERY_TRACKER.write() {
             Ok(q) => q,
             Err(e) => {
@@ -159,7 +152,7 @@ pub unsafe extern "C" fn fff_search(
     query: *const c_char,
     opts_json: *const c_char,
 ) -> *mut FffResult {
-    let query_str = match unsafe { cstr_to_string(query) } {
+    let query_str = match unsafe { cstr_to_str(query) } {
         Some(s) => s,
         None => return FffResult::err("Query is null or invalid UTF-8"),
     };
@@ -167,8 +160,8 @@ pub unsafe extern "C" fn fff_search(
     let opts: SearchOptions = if opts_json.is_null() {
         SearchOptions::default()
     } else {
-        unsafe { cstr_to_string(opts_json) }
-            .and_then(|s| serde_json::from_str(&s).ok())
+        unsafe { cstr_to_str(opts_json) }
+            .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default()
     };
 
@@ -194,7 +187,7 @@ pub unsafe extern "C" fn fff_search(
 
         query_tracker.as_ref().and_then(|tracker| {
             tracker
-                .get_last_query_entry(&query_str, base_path, min_combo_count)
+                .get_last_query_entry(query_str, base_path, min_combo_count)
                 .ok()
                 .flatten()
         })
@@ -202,11 +195,11 @@ pub unsafe extern "C" fn fff_search(
 
     // Parse the query
     let parser = QueryParser::default();
-    let parsed = parser.parse(&query_str);
+    let parsed = parser.parse(query_str);
 
     let results = FilePicker::fuzzy_search(
         picker.get_files(),
-        &query_str,
+        query_str,
         parsed,
         FuzzySearchOptions {
             max_threads: opts.max_threads.unwrap_or(0),
@@ -322,7 +315,7 @@ pub extern "C" fn fff_wait_for_scan(timeout_ms: u64) -> *mut FffResult {
 /// `new_path` must be a valid null-terminated UTF-8 string
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fff_restart_index(new_path: *const c_char) -> *mut FffResult {
-    let path_str = match unsafe { cstr_to_string(new_path) } {
+    let path_str = match unsafe { cstr_to_str(new_path) } {
         Some(s) => s,
         None => return FffResult::err("Path is null or invalid UTF-8"),
     };
@@ -367,7 +360,7 @@ pub unsafe extern "C" fn fff_restart_index(new_path: *const c_char) -> *mut FffR
 /// `file_path` must be a valid null-terminated UTF-8 string
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fff_track_access(file_path: *const c_char) -> *mut FffResult {
-    let path_str = match unsafe { cstr_to_string(file_path) } {
+    let path_str = match unsafe { cstr_to_str(file_path) } {
         Some(s) => s,
         None => return FffResult::err("File path is null or invalid UTF-8"),
     };
@@ -439,12 +432,12 @@ pub unsafe extern "C" fn fff_track_query(
     query: *const c_char,
     file_path: *const c_char,
 ) -> *mut FffResult {
-    let query_str = match unsafe { cstr_to_string(query) } {
+    let query_str = match unsafe { cstr_to_str(query) } {
         Some(s) => s,
         None => return FffResult::err("Query is null or invalid UTF-8"),
     };
 
-    let path_str = match unsafe { cstr_to_string(file_path) } {
+    let path_str = match unsafe { cstr_to_str(file_path) } {
         Some(s) => s,
         None => return FffResult::err("File path is null or invalid UTF-8"),
     };
@@ -471,7 +464,7 @@ pub unsafe extern "C" fn fff_track_query(
     };
 
     if let Some(ref mut tracker) = *query_tracker
-        && let Err(e) = tracker.track_query_completion(&query_str, &project_path, &file_path)
+        && let Err(e) = tracker.track_query_completion(query_str, &project_path, &file_path)
     {
         return FffResult::err(&format!("Failed to track query: {}", e));
     }
@@ -519,7 +512,7 @@ pub extern "C" fn fff_get_historical_query(offset: u64) -> *mut FffResult {
 /// `test_path` can be null or a valid null-terminated UTF-8 string
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fff_health_check(test_path: *const c_char) -> *mut FffResult {
-    let test_path = unsafe { cstr_to_string(test_path) }
+    let test_path = unsafe { cstr_to_str(test_path) }
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
@@ -689,14 +682,13 @@ pub unsafe extern "C" fn fff_shorten_path(
     max_size: u64,
     strategy: *const c_char,
 ) -> *mut FffResult {
-    let path_str = match unsafe { cstr_to_string(path) } {
+    let path_str = match unsafe { cstr_to_str(path) } {
         Some(s) => s,
         None => return FffResult::err("Path is null or invalid UTF-8"),
     };
 
-    let strategy_str =
-        unsafe { cstr_to_string(strategy) }.unwrap_or_else(|| "middle_number".to_string());
-    let strategy = fff_core::PathShortenStrategy::from_name(&strategy_str);
+    let strategy_str = unsafe { cstr_to_str(strategy) }.unwrap_or("middle_number");
+    let strategy = fff_core::PathShortenStrategy::from_name(strategy_str);
 
     match fff_core::shorten_path(strategy, max_size as usize, &PathBuf::from(path_str)) {
         Ok(shortened) => {

@@ -13,7 +13,6 @@ mimalloc.workspace = true
 once_cell.workspace = true
 tracing.workspace = true
 git2.workspace = true
-dirs.workspace = true
 
 fff-core = { path = "../fff-core" }
 fff-query-parser = { path = "../fff-query-parser" }

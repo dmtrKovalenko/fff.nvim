@@ -54,10 +54,9 @@ Initialize the file finder.
 ```typescript
 interface InitOptions {
   basePath: string;           // Directory to index (required)
-  frecencyDbPath?: string;    // Custom frecency DB path
-  historyDbPath?: string;     // Custom history DB path
+  frecencyDbPath?: string;    // Frecency DB path (omit to skip frecency)
+  historyDbPath?: string;     // History DB path (omit to skip query tracking)
   useUnsafeNoLock?: boolean;  // Faster but less safe DB mode
-  skipDatabases?: boolean;    // Skip frecency/history (simpler mode)
 }
 
 const result = FileFinder.init({ basePath: "/my/project" });
@@ -126,7 +125,7 @@ if (health.ok) {
 - `FileFinder.isScanning()` - Check scan status
 - `FileFinder.getScanProgress()` - Get scan progress
 - `FileFinder.waitForScan(timeoutMs)` - Wait for scan
-- `FileFinder.restartIndex(newPath)` - Change indexed directory
+- `FileFinder.reindex(newPath)` - Change indexed directory
 - `FileFinder.refreshGitStatus()` - Refresh git cache
 - `FileFinder.getHistoricalQuery(offset)` - Get past queries
 - `FileFinder.shortenPath(path, maxSize, strategy)` - Shorten paths
