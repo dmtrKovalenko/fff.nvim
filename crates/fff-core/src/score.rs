@@ -11,7 +11,6 @@ use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::path::MAIN_SEPARATOR;
 
-#[cfg(feature = "glob")]
 use zlob::{ZlobFlags, zlob_match_paths};
 
 /// Check if file extension matches (without allocation)
@@ -210,7 +209,6 @@ fn collect_glob_indices_ref<'a>(
     is_negated: bool,
 ) {
     match constraint {
-        #[cfg(feature = "glob")]
         Constraint::Glob(pattern) => {
             if let Ok(Some(matches)) = zlob_match_paths(pattern, paths, ZlobFlags::RECOMMENDED) {
                 // Build a set of matched path pointers for O(1) lookup
@@ -228,11 +226,6 @@ fn collect_glob_indices_ref<'a>(
             } else {
                 results.push((is_negated, HashSet::new()));
             }
-        }
-        #[cfg(not(feature = "glob"))]
-        Constraint::Glob(_) => {
-            // Glob matching is disabled
-            results.push((is_negated, HashSet::new()));
         }
         Constraint::Not(inner) => {
             collect_glob_indices_ref(inner, paths, results, !is_negated);

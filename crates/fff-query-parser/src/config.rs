@@ -1,16 +1,9 @@
 use crate::constraints::Constraint;
 
-/// Check if glob feature is available at runtime
-#[inline]
-pub const fn is_glob_available() -> bool {
-    cfg!(feature = "glob")
-}
-
 /// Parser configuration trait - allows different picker types to customize parsing
 pub trait ParserConfig {
-    /// Should parse glob patterns (e.g., **/*.rs)
     fn enable_glob(&self) -> bool {
-        is_glob_available()
+        true
     }
 
     /// Should parse extension shortcuts (e.g., *.rs)

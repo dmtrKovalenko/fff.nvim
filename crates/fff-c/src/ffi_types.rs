@@ -215,11 +215,7 @@ impl SearchResultJson {
                 .iter()
                 .map(|item| FileItemJson::from_file_item(item))
                 .collect(),
-            scores: result
-                .scores
-                .iter()
-                .map(ScoreJson::from_score)
-                .collect(),
+            scores: result.scores.iter().map(ScoreJson::from_score).collect(),
             total_matched: result.total_matched,
             total_files: result.total_files,
             location: result.location.as_ref().map(LocationJson::from_location),
