@@ -1,18 +1,20 @@
+use crate::path_shortening::shorten_path_with_cache;
+use error::{IntoCoreError, IntoLuaResult};
 use fff_core::file_picker::FilePicker;
 use fff_core::frecency::FrecencyTracker;
 use fff_core::query_tracker::QueryTracker;
 use fff_core::{DbHealthChecker, Error, FuzzySearchOptions, PaginationArgs, QueryParser};
 use fff_core::{FILE_PICKER, FRECENCY, QUERY_TRACKER};
+use mimalloc::MiMalloc;
 use mlua::prelude::*;
+use path_shortening::PathShortenStrategy;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 mod error;
 mod log;
 mod lua_types;
-
-use error::{IntoCoreError, IntoLuaResult};
-use mimalloc::MiMalloc;
+mod path_shortening;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -291,6 +293,18 @@ pub fn is_scanning(_: &Lua, _: ()) -> LuaResult<bool> {
         .ok_or(Error::FilePickerMissing)
         .into_lua_result()?;
     Ok(picker.is_scan_active())
+}
+
+pub fn get_git_root(_: &Lua, _: ()) -> LuaResult<Option<String>> {
+    let file_picker = FILE_PICKER
+        .read()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
+    let Some(ref picker) = *file_picker else {
+        return Ok(None);
+    };
+
+    Ok(picker.git_root().map(|p| p.to_string_lossy().into_owned()))
 }
 
 pub fn refresh_git_status(_: &Lua, _: ()) -> LuaResult<usize> {
@@ -579,23 +593,22 @@ pub fn shorten_path(
     (path, max_size, strategy): (String, usize, Option<mlua::Value>),
 ) -> LuaResult<String> {
     let strategy = strategy
-        .map(|v| -> LuaResult<fff_core::PathShortenStrategy> {
+        .map(|v| -> LuaResult<PathShortenStrategy> {
             match v {
                 mlua::Value::String(ref s) => {
                     let name = s
                         .to_str()
                         .map(|s| s.to_owned())
                         .unwrap_or_else(|_| "middle_number".to_string());
-                    Ok(fff_core::PathShortenStrategy::from_name(&name))
+                    Ok(PathShortenStrategy::from_name(&name))
                 }
-                _ => Ok(fff_core::PathShortenStrategy::default()),
+                _ => Ok(PathShortenStrategy::default()),
             }
         })
         .transpose()?
         .unwrap_or_default();
 
-    let path = PathBuf::from(&path);
-    fff_core::shorten_path(strategy, max_size, &path).into_lua_result()
+    shorten_path_with_cache(strategy, max_size, Path::new(&path)).map_err(LuaError::RuntimeError)
 }
 
 fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
@@ -622,6 +635,7 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
         "refresh_git_status",
         lua.create_function(refresh_git_status)?,
     )?;
+    exports.set("get_git_root", lua.create_function(get_git_root)?)?;
     exports.set(
         "stop_background_monitor",
         lua.create_function(stop_background_monitor)?,

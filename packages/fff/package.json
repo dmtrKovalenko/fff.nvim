@@ -1,8 +1,8 @@
 {
   "name": "@ff-labs/bun",
-  "version": "0.1.1",
+  "version": "0.1.37",
   "private": false,
-  "nativeBinaryHash": "6c641aa",
+  "nativeBinaryHash": "1537fc7",
   "description": "High-performance fuzzy file finder for Bun - perfect for LLM agent tools",
   "type": "module",
   "main": "src/index.ts",

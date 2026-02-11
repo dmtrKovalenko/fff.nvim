@@ -189,28 +189,6 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 });
 
-describe("FileFinder - Utilities (stateless)", () => {
-  test("shortenPath shortens long paths", () => {
-    const longPath = "/very/long/path/to/some/deeply/nested/file.ts";
-    const result = FileFinder.shortenPath(longPath, 20, "middle_number");
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.length).toBeLessThanOrEqual(25);
-    }
-  });
-
-  test("shortenPath handles short paths", () => {
-    const shortPath = "file.ts";
-    const result = FileFinder.shortenPath(shortPath, 50, "middle_number");
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value).toBe(shortPath);
-    }
-  });
-});
-
 describe("FileFinder - Error Handling", () => {
   test("search fails when not initialized", () => {
     FileFinder.destroy();

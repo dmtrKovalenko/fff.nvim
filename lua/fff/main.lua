@@ -1,6 +1,3 @@
--- PERF: By default, this plugin initializes itself lazily,
--- so we do not require any modules at the top of this module.
-
 local M = {}
 
 M.state = { initialized = false }
@@ -21,8 +18,10 @@ function M.find_files(opts)
 end
 
 function M.find_in_git_root()
-  local git_root = vim.fn.system('git rev-parse --show-toplevel 2>/dev/null'):gsub('\n', '')
-  if vim.v.shell_error ~= 0 then
+  local fuzzy = require('fff.core').ensure_initialized()
+  local ok, git_root = pcall(fuzzy.get_git_root)
+
+  if not ok or not git_root then
     vim.notify('Not in a git repository', vim.log.levels.WARN)
     return
   end

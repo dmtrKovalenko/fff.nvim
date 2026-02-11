@@ -39,4 +39,11 @@ M.destroy_query_db = rust_module.destroy_query_db
 M.track_query_completion = rust_module.track_query_completion
 M.get_historical_query = rust_module.get_historical_query
 
+-- Git functions
+M.get_git_root = rust_module.get_git_root
+
+-- Utility functions
+M.health_check = rust_module.health_check
+M.shorten_path = rust_module.shorten_path
+
 return M

@@ -30,7 +30,6 @@ pub static QUERY_TRACKER: Lazy<RwLock<Option<QueryTracker>>> = Lazy::new(|| RwLo
 pub use db_healthcheck::{DbHealth, DbHealthChecker};
 pub use error::{Error, Result};
 pub use file_picker::{FuzzySearchOptions, ScanProgress};
-pub use path_utils::{PathShortenStrategy, shorten_path};
 pub use types::{FileItem, PaginationArgs, Score, ScoringContext, SearchResult};
 
 // Re-export query parser types (including Location which moved there)

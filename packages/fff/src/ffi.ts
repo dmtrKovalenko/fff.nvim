@@ -77,10 +77,6 @@ const ffiDefinition = {
     args: [FFIType.cstring],
     returns: FFIType.ptr,
   },
-  fff_shorten_path: {
-    args: [FFIType.cstring, FFIType.u64, FFIType.cstring],
-    returns: FFIType.ptr,
-  },
 
   // Memory management
   fff_free_result: {
@@ -337,23 +333,6 @@ export function ffiHealthCheck(testPath: string): Result<unknown> {
     ptr(encodeString(testPath))
   );
   return parseResult<unknown>(resultPtr);
-}
-
-/**
- * Shorten path
- */
-export function ffiShortenPath(
-  path: string,
-  maxSize: number,
-  strategy: string
-): Result<string> {
-  const library = loadLibrary();
-  const resultPtr = library.symbols.fff_shorten_path(
-    ptr(encodeString(path)),
-    BigInt(maxSize),
-    ptr(encodeString(strategy))
-  );
-  return parseResult<string>(resultPtr);
 }
 
 /**

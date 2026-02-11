@@ -19,7 +19,6 @@ import {
   ffiTrackQuery,
   ffiGetHistoricalQuery,
   ffiHealthCheck,
-  ffiShortenPath,
   ensureLoaded,
   isAvailable,
 } from "./ffi";
@@ -285,21 +284,6 @@ export class FileFinder {
    */
   static healthCheck(testPath?: string): Result<HealthCheck> {
     return ffiHealthCheck(testPath || "") as Result<HealthCheck>;
-  }
-
-  /**
-   * Shorten a file path for display.
-   *
-   * @param path - Path to shorten
-   * @param maxSize - Maximum length
-   * @param strategy - Shortening strategy: 'middle_number', 'beginning', or 'end'
-   */
-  static shortenPath(
-    path: string,
-    maxSize: number,
-    strategy: "middle_number" | "beginning" | "end" = "middle_number",
-  ): Result<string> {
-    return ffiShortenPath(path, maxSize, strategy);
   }
 
   /**

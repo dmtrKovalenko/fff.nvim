@@ -128,7 +128,6 @@ if (health.ok) {
 - `FileFinder.reindex(newPath)` - Change indexed directory
 - `FileFinder.refreshGitStatus()` - Refresh git cache
 - `FileFinder.getHistoricalQuery(offset)` - Get past queries
-- `FileFinder.shortenPath(path, maxSize, strategy)` - Shorten paths
 - `FileFinder.destroy()` - Cleanup resources
 
 ## Result Types

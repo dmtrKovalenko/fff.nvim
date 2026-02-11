@@ -672,33 +672,6 @@ pub unsafe extern "C" fn fff_health_check(test_path: *const c_char) -> *mut FffR
     }
 }
 
-/// Shorten a file path for display
-///
-/// # Safety
-/// `path` and `strategy` must be valid null-terminated UTF-8 strings (strategy can be null)
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_shorten_path(
-    path: *const c_char,
-    max_size: u64,
-    strategy: *const c_char,
-) -> *mut FffResult {
-    let path_str = match unsafe { cstr_to_str(path) } {
-        Some(s) => s,
-        None => return FffResult::err("Path is null or invalid UTF-8"),
-    };
-
-    let strategy_str = unsafe { cstr_to_str(strategy) }.unwrap_or("middle_number");
-    let strategy = fff_core::PathShortenStrategy::from_name(strategy_str);
-
-    match fff_core::shorten_path(strategy, max_size as usize, &PathBuf::from(path_str)) {
-        Ok(shortened) => {
-            let json = serde_json::to_string(&shortened).unwrap_or_else(|_| "\"\"".to_string());
-            FffResult::ok_data(&json)
-        }
-        Err(e) => FffResult::err(&format!("Failed to shorten path: {}", e)),
-    }
-}
-
 /// Free a result returned by any fff_* function
 ///
 /// # Safety
