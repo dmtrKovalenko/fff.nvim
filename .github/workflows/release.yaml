@@ -50,6 +50,10 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact_name: target/x86_64-pc-windows-msvc/release/fff_nvim.dll
             ext: dll
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: target/aarch64-pc-windows-msvc/release/fff_nvim.dll
+            ext: dll
 
     steps:
       - uses: actions/checkout@v4
@@ -135,6 +139,10 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: target/x86_64-pc-windows-msvc/release/fff_c.dll
+            ext: dll
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: target/aarch64-pc-windows-msvc/release/fff_c.dll
             ext: dll
 
     steps:
