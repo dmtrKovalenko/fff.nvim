@@ -478,7 +478,7 @@ dependencies = [
  "glidesort",
  "heed",
  "ignore",
- "neo_frizbee",
+ "neo_frizbee 0.7.2",
  "notify",
  "notify-debouncer-full 0.7.0",
  "once_cell",
@@ -516,7 +516,7 @@ dependencies = [
  "ignore",
  "mimalloc",
  "mlua",
- "neo_frizbee",
+ "neo_frizbee 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "notify",
  "notify-debouncer-full 0.6.0",
  "once_cell",
@@ -1140,6 +1140,14 @@ dependencies = [
  "quote",
  "syn",
  "target-features",
+]
+
+[[package]]
+name = "neo_frizbee"
+version = "0.7.2"
+dependencies = [
+ "multiversion",
+ "rayon",
 ]
 
 [[package]]

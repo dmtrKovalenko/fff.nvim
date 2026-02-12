@@ -39,6 +39,8 @@ fn main() {
 
                 files.push(FileItem {
                     path,
+                    file_name_start_index: relative_path.len().saturating_sub(file_name.len())
+                        as u16,
                     relative_path_lower: relative_path.to_lowercase(),
                     relative_path,
                     file_name_lower: file_name.to_lowercase(),

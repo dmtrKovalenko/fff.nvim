@@ -11,6 +11,7 @@ pub struct FileItem {
     pub relative_path_lower: String,
     pub file_name: String,
     pub file_name_lower: String,
+    pub file_name_start_index: u16,
     pub size: u64,
     pub modified: u64,
     pub access_frecency_score: i64,

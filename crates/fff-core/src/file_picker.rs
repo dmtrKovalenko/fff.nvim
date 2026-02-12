@@ -78,6 +78,7 @@ impl FileItem {
         };
 
         Self {
+            file_name_start_index: relative_path.len().saturating_sub(name.len()) as u16,
             path,
             relative_path_lower: relative_path.to_lowercase(),
             relative_path,
