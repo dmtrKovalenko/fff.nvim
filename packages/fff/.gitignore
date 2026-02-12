@@ -1,0 +1,10 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Native binaries (downloaded at install)
+bin/*.dylib
+bin/*.so
+bin/*.dll

@@ -230,6 +230,7 @@ end
 function M.toggle_debug()
   local old_debug_state = state.config.debug.show_scores
   state.config.debug.show_scores = not state.config.debug.show_scores
+  state.config.debug.show_file_info = state.config.debug.show_scores
   local status = state.config.debug.show_scores and 'enabled' or 'disabled'
   vim.notify('FFF debug scores ' .. status, vim.log.levels.INFO)
   return old_debug_state ~= state.config.debug.show_scores

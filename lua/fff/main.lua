@@ -1,6 +1,3 @@
--- PERF: By default, this plugin initializes itself lazily,
--- so we do not require any modules at the top of this module.
-
 local M = {}
 
 M.state = { initialized = false }
@@ -21,8 +18,10 @@ function M.find_files(opts)
 end
 
 function M.find_in_git_root()
-  local git_root = vim.fn.system('git rev-parse --show-toplevel 2>/dev/null'):gsub('\n', '')
-  if vim.v.shell_error ~= 0 then
+  local fuzzy = require('fff.core').ensure_initialized()
+  local ok, git_root = pcall(fuzzy.get_git_root)
+
+  if not ok or not git_root then
     vim.notify('Not in a git repository', vim.log.levels.WARN)
     return
   end
@@ -56,10 +55,20 @@ function M.search(query, max_results)
   local fuzzy = require('fff.core').ensure_initialized()
   local config = require('fff.conf').get()
   max_results = max_results or config.max_results
+  local max_threads = config.max_threads or 4
   local combo_boost_score_multiplier = config.history and config.history.combo_boost_score_multiplier or 100
   local min_combo_count = config.history and config.history.min_combo_count or 3
-  local ok, search_result =
-    pcall(fuzzy.fuzzy_search_files, query, max_results, nil, nil, false, combo_boost_score_multiplier, min_combo_count)
+  -- Args: query, max_threads, current_file, combo_boost_score_multiplier, min_combo_count, offset, page_size
+  local ok, search_result = pcall(
+    fuzzy.fuzzy_search_files,
+    query,
+    max_threads,
+    nil,
+    combo_boost_score_multiplier,
+    min_combo_count,
+    0,
+    max_results
+  )
   if ok and search_result.items then return search_result.items end
   return {}
 end

@@ -41,11 +41,12 @@
           src = craneLib.cleanCargoSource ./.;
           strictDeps = true;
 
-          nativeBuildInputs = [ pkgs.pkg-config pkgs.perl ];
+          nativeBuildInputs = [ pkgs.pkg-config pkgs.perl pkgs.zig pkgs.llvmPackages.libclang.lib ];
           buildInputs = with pkgs; [
             # Add additional build inputs here
             openssl
           ];
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
         };
 
         my-crate = craneLib.buildPackage (
