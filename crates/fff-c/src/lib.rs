@@ -325,7 +325,7 @@ pub unsafe extern "C" fn fff_restart_index(new_path: *const c_char) -> *mut FffR
         return FffResult::err(&format!("Path does not exist: {}", path_str));
     }
 
-    let canonical_path = match path.canonicalize() {
+    let canonical_path = match fff_core::path_utils::canonicalize(&path) {
         Ok(p) => p,
         Err(e) => return FffResult::err(&format!("Failed to canonicalize path: {}", e)),
     };
@@ -442,7 +442,7 @@ pub unsafe extern "C" fn fff_track_query(
         None => return FffResult::err("File path is null or invalid UTF-8"),
     };
 
-    let file_path = match PathBuf::from(&path_str).canonicalize() {
+    let file_path = match fff_core::path_utils::canonicalize(path_str) {
         Ok(p) => p,
         Err(e) => return FffResult::err(&format!("Failed to canonicalize path: {}", e)),
     };

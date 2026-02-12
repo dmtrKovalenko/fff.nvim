@@ -14,6 +14,7 @@ blake3 = "1.8.2"
 chrono = { version = "0.4", features = ["serde"] }
 ctrlc = "3.4.2"
 dirs = "5.0"
+dunce = "1.0"
 # git2 - base config without TLS (each crate adds platform-specific TLS)
 git2 = { version = "0.20.2", default-features = false, features = [
   "vendored-libgit2",

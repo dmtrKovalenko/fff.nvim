@@ -1781,7 +1781,14 @@ function M.select(action)
 
   action = action or 'edit'
 
-  local relative_path = vim.fn.fnamemodify(item.path, ':.')
+  -- Strip Windows long path prefix (\\?\) if present.
+  -- These can surface from Rust's fs::canonicalize on Windows when LongPathsEnabled is set.
+  -- Neovim cannot open paths with this prefix. The Rust side uses dunce::canonicalize to avoid
+  -- producing these, but we strip defensively here as well.
+  local path = item.path
+  if vim.startswith(path, '\\\\?\\') then path = path:sub(5) end
+
+  local relative_path = vim.fn.fnamemodify(path, ':.')
   local location = M.state.location -- Capture location before closing
   local query = M.state.query -- Capture query before closing for tracking
 

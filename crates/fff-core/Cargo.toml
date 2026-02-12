@@ -49,6 +49,10 @@ zlob = { version = "1.2.8" }
 [target.'cfg(not(windows))'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 
+# Platform-specific: dunce for Windows to avoid \\?\ extended path prefix
+[target.'cfg(windows)'.dependencies]
+dunce = { workspace = true }
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = { version = "0.8", features = ["small_rng"] }

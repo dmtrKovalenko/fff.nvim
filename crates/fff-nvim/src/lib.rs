@@ -106,7 +106,7 @@ pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<()> {
         )));
     }
 
-    let canonical_path = path.canonicalize().map_err(|e| {
+    let canonical_path = fff_core::path_utils::canonicalize(&path).map_err(|e| {
         LuaError::RuntimeError(format!("Failed to canonicalize path '{}': {}", new_path, e))
     })?;
 
@@ -381,7 +381,7 @@ pub fn track_query_completion(_: &Lua, (query, file_path): (String, String)) -> 
     };
 
     // Canonicalize the file path before spawning thread
-    let file_path = match PathBuf::from(&file_path).canonicalize() {
+    let file_path = match fff_core::path_utils::canonicalize(&file_path) {
         Ok(path) => path,
         Err(e) => {
             tracing::warn!(?file_path, error = ?e, "Failed to canonicalize file path for tracking");
