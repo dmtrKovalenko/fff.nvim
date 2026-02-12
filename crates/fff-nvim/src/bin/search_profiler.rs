@@ -79,9 +79,8 @@ fn main() {
         return;
     }
 
-    let canonical_path = big_repo_path
-        .canonicalize()
-        .expect("Failed to canonicalize path");
+    let canonical_path =
+        fff_core::path_utils::canonicalize(&big_repo_path).expect("Failed to canonicalize path");
 
     eprintln!("Initializing FilePicker for: {:?}", canonical_path);
     init_file_picker(&canonical_path.to_string_lossy()).expect("Failed to init FilePicker");

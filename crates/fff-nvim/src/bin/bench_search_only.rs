@@ -13,9 +13,8 @@ fn main() {
         return;
     }
 
-    let canonical_path = big_repo_path
-        .canonicalize()
-        .expect("Failed to canonicalize path");
+    let canonical_path =
+        fff_core::path_utils::canonicalize(&big_repo_path).expect("Failed to canonicalize path");
 
     eprintln!("Loading files from: {:?}", canonical_path);
 

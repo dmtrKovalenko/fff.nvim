@@ -121,8 +121,7 @@ fn setup_once() -> Result<Vec<fff_nvim::types::FileItem>, String> {
         return Err("./big-repo directory does not exist. Run git clone https://github.com/torvalds/linux.git big-repo".to_string());
     }
 
-    let canonical_path = big_repo_path
-        .canonicalize()
+    let canonical_path = fff_core::path_utils::canonicalize(&big_repo_path)
         .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
     eprintln!("  Path: {:?}", canonical_path);
 
@@ -166,7 +165,7 @@ fn bench_indexing(c: &mut Criterion) {
         return;
     }
 
-    let canonical_path = match big_repo_path.canonicalize() {
+    let canonical_path = match fff_core::path_utils::canonicalize(&big_repo_path) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("⚠ Failed to canonicalize path: {}", e);
