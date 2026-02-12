@@ -47,7 +47,7 @@ mod parser;
 pub use config::{FilePickerConfig, GrepConfig, ParserConfig};
 pub use constraints::{Constraint, GitStatusFilter};
 pub use location::Location;
-pub use parser::{FuzzyQuery, FFFQuery, QueryParser};
+pub use parser::{FFFQuery, FuzzyQuery, QueryParser};
 
 // Re-export SmallVec for convenience
 pub use smallvec::SmallVec;

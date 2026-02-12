@@ -35,5 +35,5 @@ pub use types::{FileItem, PaginationArgs, Score, ScoringContext, SearchResult};
 
 // Re-export query parser types (including Location which moved there)
 pub use fff_query_parser::{
-    Constraint, FuzzyQuery, Location, FFFQuery, QueryParser, location::parse_location,
+    Constraint, FFFQuery, FuzzyQuery, Location, QueryParser, location::parse_location,
 };
