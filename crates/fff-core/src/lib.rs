@@ -4,6 +4,7 @@
 //! It maintains global state for the file picker, frecency tracker, and query tracker.
 
 mod background_watcher;
+pub mod constraints;
 mod db_healthcheck;
 mod error;
 pub mod file_picker;
@@ -34,5 +35,5 @@ pub use types::{FileItem, PaginationArgs, Score, ScoringContext, SearchResult};
 
 // Re-export query parser types (including Location which moved there)
 pub use fff_query_parser::{
-    Constraint, FuzzyQuery, Location, ParseResult, QueryParser, location::parse_location,
+    Constraint, FuzzyQuery, Location, FFFQuery, QueryParser, location::parse_location,
 };

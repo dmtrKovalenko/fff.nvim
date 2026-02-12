@@ -13,7 +13,7 @@ pub enum FuzzyQuery<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParseResult<'a> {
+pub struct FFFQuery<'a> {
     /// Parsed constraints (stack-allocated for ≤8 constraints)
     pub constraints: ConstraintVec<'a>,
     pub fuzzy_query: FuzzyQuery<'a>,
@@ -32,7 +32,7 @@ impl<C: ParserConfig> QueryParser<C> {
         Self { config }
     }
 
-    pub fn parse<'a>(&self, query: &'a str) -> Option<ParseResult<'a>> {
+    pub fn parse<'a>(&self, query: &'a str) -> Option<FFFQuery<'a>> {
         let query: &'a str = query;
         let config: &C = &self.config;
         let mut constraints = ConstraintVec::new();
@@ -45,7 +45,7 @@ impl<C: ParserConfig> QueryParser<C> {
             // Try to parse as constraint first
             if let Some(constraint) = parse_token(query, config) {
                 constraints.push(constraint);
-                return Some(ParseResult {
+                return Some(FFFQuery {
                     constraints,
                     fuzzy_query: FuzzyQuery::Empty,
                     location: None,
@@ -55,7 +55,7 @@ impl<C: ParserConfig> QueryParser<C> {
             // Try to extract location from single token (e.g., "file:12")
             let (query_without_loc, location) = parse_location(query);
             if location.is_some() {
-                return Some(ParseResult {
+                return Some(FFFQuery {
                     constraints,
                     fuzzy_query: FuzzyQuery::Text(query_without_loc),
                     location,
@@ -115,7 +115,7 @@ impl<C: ParserConfig> QueryParser<C> {
             }
         };
 
-        Some(ParseResult {
+        Some(FFFQuery {
             constraints,
             fuzzy_query,
             location,
@@ -176,7 +176,7 @@ fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constr
                     "type" if config.enable_type_filter() => {
                         return Some(Constraint::FileType(value));
                     }
-                    "status" if config.enable_git_status() => {
+                    "status" | "st" | "g" | "git" if config.enable_git_status() => {
                         return parse_git_status(value);
                     }
                     _ => {}
@@ -269,14 +269,13 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
                     "type" if config.enable_type_filter() => {
                         return Some(Constraint::FileType(value));
                     }
-                    "status" if config.enable_git_status() => {
+                    "status" | "gi" | "g" | "st" if config.enable_git_status() => {
                         return parse_git_status(value);
                     }
                     _ => {}
                 }
             }
 
-            // Try custom parsers
             config.parse_custom(token)
         }
     }

@@ -302,7 +302,7 @@ jobs:
             ```lua
             {
               "dmtrKovalenko/fff.nvim",
-              tag: "${{ steps.vars.outputs.short_sha }}",
+              tag = "${{ steps.vars.outputs.short_sha }}",
             }
             ```
 

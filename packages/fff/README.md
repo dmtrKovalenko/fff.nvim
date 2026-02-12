@@ -13,7 +13,7 @@ High-performance fuzzy file finder for Bun, powered by Rust. Perfect for LLM age
 ## Installation
 
 ```bash
-bun add fff
+bun add @ff-labs/bun
 ```
 
 The native binary will be downloaded automatically during installation.

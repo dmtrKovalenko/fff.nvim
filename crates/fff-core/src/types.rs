@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use crate::constraints::Constrainable;
 use crate::query_tracker::QueryMatchEntry;
-use fff_query_parser::{FuzzyQuery, Location, ParseResult};
+use fff_query_parser::{FFFQuery, FuzzyQuery, Location};
 
 #[derive(Debug, Clone)]
 pub struct FileItem {
@@ -16,6 +17,28 @@ pub struct FileItem {
     pub modification_frecency_score: i64,
     pub total_frecency_score: i64,
     pub git_status: Option<git2::Status>,
+}
+
+impl Constrainable for FileItem {
+    #[inline]
+    fn relative_path(&self) -> &str {
+        &self.relative_path
+    }
+
+    #[inline]
+    fn relative_path_lower(&self) -> &str {
+        &self.relative_path_lower
+    }
+
+    #[inline]
+    fn file_name(&self) -> &str {
+        &self.file_name
+    }
+
+    #[inline]
+    fn git_status(&self) -> Option<git2::Status> {
+        self.git_status
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +71,7 @@ pub struct ScoringContext<'a> {
     /// The original raw query string (for compatibility and debugging)
     pub raw_query: &'a str,
     /// Pre-parsed query containing constraints, fuzzy parts, and location
-    pub parsed_query: Option<ParseResult<'a>>,
+    pub parsed_query: Option<FFFQuery<'a>>,
     pub project_path: Option<&'a Path>,
     pub current_file: Option<&'a str>,
     pub max_typos: u16,

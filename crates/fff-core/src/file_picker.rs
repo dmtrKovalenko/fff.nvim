@@ -5,7 +5,7 @@ use crate::git::GitStatusCache;
 use crate::query_tracker::QueryMatchEntry;
 use crate::score::match_and_score_files;
 use crate::types::{FileItem, PaginationArgs, ScoringContext, SearchResult};
-use fff_query_parser::ParseResult;
+use fff_query_parser::FFFQuery;
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
 use std::fmt::Debug;
@@ -191,7 +191,7 @@ impl FilePicker {
     pub fn fuzzy_search<'a>(
         files: &'a [FileItem],
         query: &'a str,
-        parsed: Option<ParseResult<'a>>,
+        parsed: Option<FFFQuery<'a>>,
         options: FuzzySearchOptions<'a>,
     ) -> SearchResult<'a> {
         let max_threads = options.max_threads.max(1);
@@ -237,7 +237,6 @@ impl FilePicker {
 
         let time = std::time::Instant::now();
 
-        // Match, score, and paginate files (all done in match_and_score_files)
         let (items, scores, total_matched) = match_and_score_files(files, &context);
 
         debug!(

@@ -473,7 +473,7 @@ dependencies = [
  "ignore",
  "neo_frizbee",
  "notify",
- "notify-debouncer-full",
+ "notify-debouncer-full 0.7.0",
  "once_cell",
  "openssl",
  "parking_lot",
@@ -511,7 +511,7 @@ dependencies = [
  "mlua",
  "neo_frizbee",
  "notify",
- "notify-debouncer-full",
+ "notify-debouncer-full 0.6.0",
  "once_cell",
  "openssl",
  "pathdiff",
@@ -1137,9 +1137,9 @@ dependencies = [
 
 [[package]]
 name = "neo_frizbee"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b4421f748f561dd0bb677e46f2e6c1ed2c52ba7130349229a73445af5010d17"
+checksum = "8d53e16653662cf456e2b8048bc99db6ca15d971f3541f679269a23ed8a42acf"
 dependencies = [
  "multiversion",
  "rayon",
@@ -1190,6 +1190,19 @@ name = "notify-debouncer-full"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "375bd3a138be7bfeff3480e4a623df4cbfb55b79df617c055cd810ba466fa078"
+dependencies = [
+ "file-id",
+ "log",
+ "notify",
+ "notify-types",
+ "walkdir",
+]
+
+[[package]]
+name = "notify-debouncer-full"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c02b49179cfebc9932238d04d6079912d26de0379328872846118a0fa0dbb302"
 dependencies = [
  "file-id",
  "log",

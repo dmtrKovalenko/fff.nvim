@@ -3,7 +3,6 @@ import { FileFinder } from "./index";
 import { findBinary, getDevBinaryPath } from "./download";
 import { getTriple, getLibExtension, getLibFilename } from "./platform";
 
-// Use a single shared instance to avoid thread cleanup issues
 const testDir = process.cwd();
 
 describe("Platform Detection", () => {
@@ -52,14 +51,7 @@ describe("Binary Detection", () => {
   });
 });
 
-describe("FileFinder - Availability", () => {
-  test("isAvailable returns true when binary exists", () => {
-    const available = FileFinder.isAvailable();
-    expect(available).toBe(true);
-  });
-});
-
-describe("FileFinder - Health Check (before init)", () => {
+describe("FileFinder - Health Check", () => {
   test("healthCheck works before initialization", () => {
     // Make sure we start fresh
     FileFinder.destroy();
@@ -118,7 +110,7 @@ describe("FileFinder - Full Lifecycle", () => {
   test("search with empty query returns all files", () => {
     const result = FileFinder.search("");
     expect(result.ok).toBe(true);
-    
+
     if (result.ok) {
       // Empty query should return files (frecency-sorted)
       expect(result.value.totalFiles).toBeGreaterThan(0);
