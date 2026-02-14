@@ -79,6 +79,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bindet"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5afee99ef5f7527f3944f2bf4f5d443749fa47d43eb1d4f83a36e839be7900a3"
+
+[[package]]
 name = "bindgen"
 version = "0.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -468,6 +474,7 @@ name = "fff-core"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "bindet",
  "blake3",
  "chrono",
  "criterion",
@@ -476,8 +483,11 @@ dependencies = [
  "fff-query-parser",
  "git2",
  "glidesort",
+ "grep-matcher",
+ "grep-searcher",
  "heed",
  "ignore",
+ "memmap2",
  "neo_frizbee",
  "notify",
  "notify-debouncer-full 0.7.0",
@@ -487,6 +497,7 @@ dependencies = [
  "pathdiff",
  "rand",
  "rayon",
+ "regex",
  "serde",
  "smallvec",
  "smartstring",
@@ -645,6 +656,24 @@ dependencies = [
  "log",
  "regex-automata 0.4.9",
  "regex-syntax 0.8.5",
+]
+
+[[package]]
+name = "grep-matcher"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36d7b71093325ab22d780b40d7df3066ae4aebb518ba719d38c697a8228a8023"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "grep-searcher"
+version = "0.1.16"
+dependencies = [
+ "bstr",
+ "grep-matcher",
+ "memchr",
 ]
 
 [[package]]
@@ -1054,6 +1083,15 @@ name = "memchr"
 version = "2.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
+
+[[package]]
+name = "memmap2"
+version = "0.9.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "744133e4a0e0a658e1374cf3bf8e415c4052a15a111acd372764c55b4177d490"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "mimalloc"

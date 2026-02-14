@@ -226,6 +226,47 @@ pub fn fuzzy_search_files(
     lua_types::SearchResultLua::from(results).into_lua(lua)
 }
 
+#[allow(clippy::type_complexity)]
+pub fn live_grep(
+    lua: &Lua,
+    (query, page_index, page_size, max_file_size, max_matches_per_file, smart_case): (
+        String,
+        Option<usize>,
+        Option<usize>,
+        Option<u64>,
+        Option<usize>,
+        Option<bool>,
+    ),
+) -> LuaResult<LuaValue> {
+    let file_picker_guard = FILE_PICKER
+        .read()
+        .with_lock_error(Error::AcquireItemLock)
+        .into_lua_result()?;
+    let Some(ref picker) = *file_picker_guard else {
+        return Err(error::to_lua_error(Error::FilePickerMissing));
+    };
+
+    let parsed = fff_core::grep::parse_grep_query(&query);
+
+    let options = fff_core::GrepSearchOptions {
+        max_file_size: max_file_size.unwrap_or(10 * 1024 * 1024),
+        max_matches_per_file: max_matches_per_file.unwrap_or(200),
+        smart_case: smart_case.unwrap_or(true),
+        page_offset: page_index.unwrap_or(0),
+        page_limit: page_size.unwrap_or(50),
+    };
+
+    let result = fff_core::grep::grep_search(
+        picker.get_files(),
+        &query,
+        parsed,
+        &options,
+        &fff_core::MMAP_CACHE,
+    );
+
+    lua_types::GrepResultLua::from(result).into_lua(lua)
+}
+
 pub fn track_access(_: &Lua, file_path: String) -> LuaResult<bool> {
     let file_path = PathBuf::from(&file_path);
 
@@ -628,6 +669,7 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
         "fuzzy_search_files",
         lua.create_function(fuzzy_search_files)?,
     )?;
+    exports.set("live_grep", lua.create_function(live_grep)?)?;
     exports.set("track_access", lua.create_function(track_access)?)?;
     exports.set("cancel_scan", lua.create_function(cancel_scan)?)?;
     exports.set("get_scan_progress", lua.create_function(get_scan_progress)?)?;

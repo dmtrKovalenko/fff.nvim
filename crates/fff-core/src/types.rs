@@ -17,6 +17,9 @@ pub struct FileItem {
     pub modification_frecency_score: i64,
     pub total_frecency_score: i64,
     pub git_status: Option<git2::Status>,
+    /// Whether the file was detected as binary during filesystem scan.
+    /// Detected using `bindet` magic byte detection with NUL-byte fallback.
+    pub is_binary: bool,
 }
 
 impl Constrainable for FileItem {

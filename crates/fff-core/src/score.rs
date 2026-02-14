@@ -497,6 +497,7 @@ mod tests {
             modification_frecency_score: 0,
             total_frecency_score: 0,
             git_status: None,
+            is_binary: false,
         };
         let score_obj = Score {
             total: score,

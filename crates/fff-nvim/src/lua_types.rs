@@ -3,7 +3,7 @@
 //! This module provides IntoLua implementations for core types.
 
 use fff_core::git::format_git_status;
-use fff_core::{FileItem, Location, Score, SearchResult};
+use fff_core::{FileItem, GrepResult, Location, Score, SearchResult};
 use mlua::prelude::*;
 
 /// Wrapper for SearchResult that implements IntoLua
@@ -17,13 +17,24 @@ impl<'a> From<SearchResult<'a>> for SearchResultLua<'a> {
     }
 }
 
+/// Wrapper for GrepResult that implements IntoLua
+pub struct GrepResultLua<'a> {
+    inner: GrepResult<'a>,
+}
+
+impl<'a> From<GrepResult<'a>> for GrepResultLua<'a> {
+    fn from(inner: GrepResult<'a>) -> Self {
+        Self { inner }
+    }
+}
+
 struct LuaPosition((i32, i32));
 
 impl IntoLua for LuaPosition {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let table = lua.create_table()?;
-        table.set("line", self.0.0)?;
-        table.set("col", self.0.1)?;
+        table.set("line", self.0 .0)?;
+        table.set("col", self.0 .1)?;
         Ok(LuaValue::Table(table))
     }
 }
@@ -42,6 +53,7 @@ fn file_item_into_lua(item: &FileItem, lua: &Lua) -> LuaResult<LuaValue> {
     )?;
     table.set("total_frecency_score", item.total_frecency_score)?;
     table.set("git_status", format_git_status(item.git_status))?;
+    table.set("is_binary", item.is_binary)?;
     Ok(LuaValue::Table(table))
 }
 
@@ -100,6 +112,54 @@ impl IntoLua for SearchResultLua<'_> {
 
             table.set("location", location_table)?;
         }
+
+        Ok(LuaValue::Table(table))
+    }
+}
+
+impl IntoLua for GrepResultLua<'_> {
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+        let table = lua.create_table()?;
+
+        // Convert grep match items — each includes file metadata + match metadata
+        let items_table = lua.create_table()?;
+        for (i, m) in self.inner.matches.iter().enumerate() {
+            let item = lua.create_table()?;
+
+            // File metadata from the deduplicated files vec
+            let file = self.inner.files[m.file_index];
+            item.set("path", file.path.to_string_lossy().to_string())?;
+            item.set("relative_path", file.relative_path.as_str())?;
+            item.set("name", file.file_name.as_str())?;
+            item.set("is_binary", file.is_binary)?;
+            item.set("git_status", format_git_status(file.git_status))?;
+            item.set("size", file.size)?;
+            item.set("modified", file.modified)?;
+            item.set("total_frecency_score", file.total_frecency_score)?;
+
+            // Match metadata
+            item.set("line_number", m.line_number)?;
+            item.set("col", m.col)?;
+            item.set("byte_offset", m.byte_offset)?;
+            item.set("line_content", m.line_content.as_str())?;
+
+            // Match byte ranges within line_content
+            let ranges = lua.create_table()?;
+            for (j, &(start, end)) in m.match_byte_offsets.iter().enumerate() {
+                let range = lua.create_table()?;
+                range.set(1, start)?;
+                range.set(2, end)?;
+                ranges.set(j + 1, range)?;
+            }
+            item.set("match_ranges", ranges)?;
+
+            items_table.set(i + 1, item)?;
+        }
+        table.set("items", items_table)?;
+
+        table.set("total_matched", self.inner.total_match_count)?;
+        table.set("total_files_searched", self.inner.total_files_searched)?;
+        table.set("total_files", self.inner.total_files)?;
 
         Ok(LuaValue::Table(table))
     }

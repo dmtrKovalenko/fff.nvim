@@ -45,19 +45,13 @@ impl ParserConfig for FilePickerConfig {
     // All defaults enabled
 }
 
-/// Configuration for full-text search (grep) - limited constraints
+/// Configuration for full-text search (grep) - file constraints enabled for
+/// filtering which files to search, git status disabled since it's not useful
+/// when searching file contents.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GrepConfig;
 
 impl ParserConfig for GrepConfig {
-    fn enable_extension(&self) -> bool {
-        false
-    }
-
-    fn enable_glob(&self) -> bool {
-        false
-    }
-
     fn enable_path_segments(&self) -> bool {
         true
     }

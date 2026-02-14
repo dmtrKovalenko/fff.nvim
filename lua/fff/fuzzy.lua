@@ -42,6 +42,9 @@ M.get_historical_query = rust_module.get_historical_query
 -- Git functions
 M.get_git_root = rust_module.get_git_root
 
+-- Grep functions
+M.live_grep = rust_module.live_grep
+
 -- Utility functions
 M.health_check = rust_module.health_check
 M.shorten_path = rust_module.shorten_path

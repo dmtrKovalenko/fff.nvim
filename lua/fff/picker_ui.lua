@@ -6,6 +6,7 @@ local preview = require('fff.file_picker.preview')
 local utils = require('fff.utils')
 local location_utils = require('fff.location_utils')
 local combo_renderer = require('fff.combo_renderer')
+local list_renderer = require('fff.list_renderer')
 local scrollbar = require('fff.scrollbar')
 local rust = require('fff.rust')
 
@@ -320,6 +321,15 @@ M.state = {
   -- Uses Set pattern: selected items exist as keys with value true, deselected items are removed (nil)
   -- This allows O(1) lookup and automatic deduplication without needing to filter false values
   selected_files = {},
+
+  -- Grep mode: per-occurrence selection keyed by "path:line:col"
+  -- Values are the full item tables so quickfix can be built from selections alone (survives page changes)
+  selected_items = {},
+
+  -- Mode: nil or 'grep' — controls search/render/select behaviour
+  mode = nil,
+  -- Grep-specific config overrides (max_file_size, smart_case, etc.)
+  grep_config = nil,
 }
 
 function M.create_ui()
@@ -699,7 +709,11 @@ local function move_list_cursor(direction)
   if new_cursor ~= M.state.cursor then
     M.state.cursor = new_cursor
     M.render_list()
-    M.update_preview()
+    if M.state.mode == 'grep' then
+      M.update_preview_smart()
+    else
+      M.update_preview()
+    end
     M.update_status()
   end
 end
@@ -897,20 +911,37 @@ function M.update_results_sync()
     min_combo_override = 0 -- Force combo boost by setting min_combo_count to 0
   end
 
-  local results = file_picker.search_files_paginated(
-    M.state.query,
-    M.state.current_file_cache,
-    M.state.config.max_threads,
-    min_combo_override,
-    0,
-    page_size
-  )
+  local results
+  if M.state.mode == 'grep' then
+    if M.state.query == '' then
+      -- Empty query: show empty state (no search needed)
+      results = {}
+      M.state.pagination.total_matched = 0
+    else
+      -- Grep mode: use live_grep search
+      local grep = require('fff.grep')
+      local grep_result = grep.search(M.state.query, 0, page_size, M.state.grep_config)
+      results = grep_result.items or {}
+      M.state.pagination.total_matched = grep_result.total_matched or 0
+    end
+    M.state.location = nil -- Location comes from selected item, not query
+  else
+    -- File picker mode: use fuzzy search
+    results = file_picker.search_files_paginated(
+      M.state.query,
+      M.state.current_file_cache,
+      M.state.config.max_threads,
+      min_combo_override,
+      0,
+      page_size
+    )
 
-  -- Get location from search results
-  M.state.location = file_picker.get_search_location()
+    -- Get location from search results
+    M.state.location = file_picker.get_search_location()
 
-  local metadata = file_picker.get_search_metadata()
-  M.state.pagination.total_matched = metadata.total_matched
+    local metadata = file_picker.get_search_metadata()
+    M.state.pagination.total_matched = metadata.total_matched
+  end
 
   M.state.items = results
   M.state.filtered_items = results
@@ -926,28 +957,44 @@ end
 --- Load page with given page index
 function M.load_page_at_index(new_page_index, adjust_cursor_fn)
   local page_size = M.state.pagination.page_size
-  local total = M.state.pagination.total_matched
 
   -- Protect against division by zero
-  if page_size == 0 or total == 0 then return false end
+  if page_size == 0 then return false end
 
-  -- Calculate max page index
-  local max_page_index = math.max(0, math.ceil(total / page_size) - 1)
+  if M.state.mode ~= 'grep' then
+    local total = M.state.pagination.total_matched
+    if total == 0 then return false end
 
-  -- Clamp page_index to valid range
-  new_page_index = math.max(0, math.min(new_page_index, max_page_index))
+    -- Calculate max page index
+    local max_page_index = math.max(0, math.ceil(total / page_size) - 1)
+
+    -- Clamp page_index to valid range
+    new_page_index = math.max(0, math.min(new_page_index, max_page_index))
+  end
 
   local prompt_position = get_prompt_position()
 
-  local ok, results = pcall(
-    file_picker.search_files_paginated,
-    M.state.query,
-    M.state.current_file_cache,
-    M.state.config.max_threads,
-    nil, -- No combo boost override for page navigation
-    new_page_index,
-    page_size
-  )
+  local ok, results
+  if M.state.mode == 'grep' then
+    local grep = require('fff.grep')
+    ok, results = pcall(grep.search, M.state.query, new_page_index * page_size, page_size, M.state.grep_config)
+    if ok and results then
+      -- grep.search returns the full result table, extract items and update total
+      local grep_result = results
+      results = grep_result.items or {}
+      M.state.pagination.total_matched = grep_result.total_matched or 0
+    end
+  else
+    ok, results = pcall(
+      file_picker.search_files_paginated,
+      M.state.query,
+      M.state.current_file_cache,
+      M.state.config.max_threads,
+      nil, -- No combo boost override for page navigation
+      new_page_index,
+      page_size
+    )
+  end
 
   if not ok then
     vim.notify('Error in paginated search: ' .. tostring(results), vim.log.levels.ERROR)
@@ -959,8 +1006,11 @@ function M.load_page_at_index(new_page_index, adjust_cursor_fn)
 
   -- CRITICAL: Update total_matched from the latest search metadata
   -- This prevents stale total_matched values that can cause out-of-bounds pagination
-  local metadata = file_picker.get_search_metadata()
-  M.state.pagination.total_matched = metadata.total_matched
+  -- For grep, total_matched was already updated above when extracting grep_result.
+  if M.state.mode ~= 'grep' then
+    local metadata = file_picker.get_search_metadata()
+    M.state.pagination.total_matched = metadata.total_matched
+  end
 
   M.state.items = results
   M.state.filtered_items = results
@@ -998,17 +1048,26 @@ end
 --- Load next page (scroll down reached end)
 function M.load_next_page()
   local page_size = M.state.pagination.page_size
-  local total = M.state.pagination.total_matched
   local current_page = M.state.pagination.page_index
 
   -- Protect against division by zero
-  if page_size == 0 or total == 0 then return false end
+  if page_size == 0 then return false end
+
+  if M.state.mode == 'grep' then
+    -- Grep total_match_count is approximate (early termination), so we can't
+    -- reliably compute max_page_index. Instead, try loading the next page and
+    -- let load_page_at_index return false when #results == 0.
+    local new_page_index = current_page + 1
+    return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = 1 end)
+  end
+
+  local total = M.state.pagination.total_matched
+  if total == 0 then return false end
 
   local max_page_index = math.max(0, math.ceil(total / page_size) - 1)
   if current_page >= max_page_index then return false end
 
   local new_page_index = current_page + 1
-  local prompt_position = get_prompt_position()
 
   return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = 1 end)
 end
@@ -1043,6 +1102,35 @@ function M.update_preview_debounced()
       end
     end)
   )
+end
+
+--- Smart preview update for cursor movement.
+--- Same-file location changes are instant; file changes are debounced
+--- to avoid visible preview flicker when scrolling rapidly through grep results.
+function M.update_preview_smart()
+  if not M.enabled_preview() then return end
+  if not M.state.active then return end
+
+  local items = M.state.filtered_items
+  if #items == 0 or M.state.cursor > #items then
+    M.update_preview()
+    return
+  end
+
+  local item = items[M.state.cursor]
+  if not item then
+    M.update_preview()
+    return
+  end
+
+  -- Same file: update immediately (just scrolling/re-highlighting, no file I/O)
+  if M.state.last_preview_file == item.path then
+    M.update_preview()
+    return
+  end
+
+  -- Different file: debounce to avoid flicker during rapid scrolling
+  M.update_preview_debounced()
 end
 
 function M.render_debounced()
@@ -1095,6 +1183,74 @@ local function scroll_to_bottom()
   end)
 end
 
+--- Render the grep empty state: tips + bordered section of recent files.
+--- Called when grep mode has an empty query and no items.
+local function render_grep_empty_state(ctx)
+  local config = ctx.config
+  local win_width = ctx.win_width
+  local win_height = ctx.win_height
+  local prompt_position = ctx.prompt_position
+
+  local content = {}
+  local hl_cmds = {} -- { row (0-based), col_start, col_end, hl_group }
+
+  table.insert(content, '')
+  table.insert(content, '  Start typing to search file contents...')
+  table.insert(content, '')
+  table.insert(content, '  Tips:')
+  table.insert(content, '    "pattern *.rs"    search only in Rust files')
+  table.insert(content, '    "pattern /src/"   limit search to src/ directory')
+  table.insert(content, '    "!test pattern"   exclude test files')
+  table.insert(content, '')
+
+  table.insert(content, border_bot)
+
+  -- For bottom prompt: push content to the bottom by prepending empty lines
+  if prompt_position == 'bottom' then
+    local empty_needed = math.max(0, win_height - #content)
+    for _ = 1, empty_needed do
+      table.insert(content, 1, string.rep(' ', win_width + 5))
+      -- Shift all highlight rows
+      for _, h in ipairs(hl_cmds) do
+        h.row = h.row + 1
+      end
+    end
+  end
+
+  vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', true)
+  vim.api.nvim_buf_set_lines(M.state.list_buf, 0, -1, false, content)
+  vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
+
+  vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
+
+  -- Apply highlights
+  for _, h in ipairs(hl_cmds) do
+    pcall(vim.api.nvim_buf_add_highlight, M.state.list_buf, M.state.ns_id, h.hl, h.row, h.col_start, h.col_end)
+  end
+
+  local tip_offset = prompt_position == 'bottom' and math.max(0, win_height - #content + (win_height - #content)) or 0
+  for i = 0, #content - 1 do
+    local line = content[i + 1]
+    if
+      line and (line:match('^%s+Start typing') or line:match('^%s+Tips') or line:match('^%s+"') or line:match('^%s+!'))
+    then
+      pcall(vim.api.nvim_buf_add_highlight, M.state.list_buf, M.state.ns_id, 'Comment', i, 0, -1)
+    end
+    -- Dim border characters
+    if line and (line:match('^%s+[╭╰│]') or line:match('[╮╯│]%s*$')) then
+      pcall(
+        vim.api.nvim_buf_add_highlight,
+        M.state.list_buf,
+        M.state.ns_id,
+        config.hl.border or 'FloatBorder',
+        i,
+        0,
+        -1
+      )
+    end
+  end
+end
+
 --- Build rendering context with all necessary data
 --- @return table Context object with items, config, dimensions, combo info, etc.
 local function build_render_context()
@@ -1116,15 +1272,23 @@ local function build_render_context()
     M.state.cursor = #items
   end
 
-  -- Combo detection
+  -- Combo detection (only in file picker mode, not grep)
   local combo_boost_score_multiplier = config.history and config.history.combo_boost_multiplier or 100
-  local has_combo, combo_header_line, combo_header_text_len, combo_item_index = combo_renderer.detect_and_prepare(
-    items,
-    file_picker,
-    win_width,
-    combo_boost_score_multiplier,
-    M.state.next_search_force_combo_boost or config.history.min_combo_count == 0
-  )
+  local has_combo, combo_header_line, combo_header_text_len, combo_item_index
+  if M.state.mode == 'grep' then
+    has_combo = false
+    combo_header_line = nil
+    combo_header_text_len = nil
+    combo_item_index = nil
+  else
+    has_combo, combo_header_line, combo_header_text_len, combo_item_index = combo_renderer.detect_and_prepare(
+      items,
+      file_picker,
+      win_width,
+      combo_boost_score_multiplier,
+      M.state.next_search_force_combo_boost or config.history.min_combo_count == 0
+    )
+  end
   M.state.next_search_force_combo_boost = false
 
   if has_combo and not M.state.combo_visible then
@@ -1161,120 +1325,17 @@ local function build_render_context()
     iter_end = iter_end,
     iter_step = iter_step,
     renderer = M.state.renderer, -- Custom renderer (if provided)
+    query = M.state.query, -- Current search query (used by grep renderer for empty-state detection)
+    selected_files = M.state.selected_files, -- Selected files set (used by file renderer for selection markers)
+    selected_items = M.state.selected_items, -- Selected items map (used by grep renderer for per-occurrence markers)
+    mode = M.state.mode, -- Current mode (nil or 'grep')
+    format_file_display = format_file_display, -- Helper for renderers to format filename + dir path
   }
 end
 
---- Generate all display lines
---- Uses renderer.render_line for each item
---- @param ctx table Render context
---- @return table lines Array of padded line strings
---- @return table item_to_lines Mapping of item index to {first, last} line indices
-local function generate_item_lines(ctx)
-  local lines = {}
-  local item_to_lines = {}
-
-  -- Add format_file_display to context for renderers
-  ctx.format_file_display = format_file_display
-
-  -- Use custom renderer if provided, otherwise use default file_renderer
-  local renderer = ctx.renderer
-  if not renderer then renderer = require('fff.file_renderer') end
-
-  for i = ctx.iter_start, ctx.iter_end, ctx.iter_step do
-    local item = ctx.items[i]
-    local item_start_line = #lines + 1
-
-    -- Render item lines using renderer.render_line
-    local item_lines = renderer.render_line(item, ctx, i)
-
-    -- Add rendered lines
-    for _, line in ipairs(item_lines) do
-      table.insert(lines, line)
-    end
-
-    -- Record line range for this item
-    local item_end_line = #lines
-    item_to_lines[i] = {
-      first = item_start_line,
-      last = item_end_line,
-    }
-  end
-
-  return lines, item_to_lines
-end
-
---- Apply bottom padding for bottom prompt position
---- Adds empty lines at the top and adjusts all line indices
---- @param lines table Array of line strings (mutated in place)
---- @param item_to_lines table Item to lines mapping (mutated in place)
---- @param ctx table Render context
-local function apply_bottom_padding(lines, item_to_lines, ctx)
-  if ctx.prompt_position ~= 'bottom' then return end
-
-  local total_content_lines = #lines
-  local empty_lines_needed = math.max(0, ctx.win_height - total_content_lines)
-
-  if empty_lines_needed > 0 then
-    for _ = empty_lines_needed, 1, -1 do
-      table.insert(lines, 1, string.rep(' ', ctx.win_width + 5))
-    end
-
-    for i = ctx.display_start, ctx.display_end do
-      if item_to_lines[i] then
-        item_to_lines[i].first = item_to_lines[i].first + empty_lines_needed
-        item_to_lines[i].last = item_to_lines[i].last + empty_lines_needed
-      end
-    end
-  end
-end
-
---- Update buffer content and position cursor
---- @param lines table Array of line strings
---- @param item_to_lines table Item to lines mapping
---- @param ctx table Render context
-local function update_buffer_and_cursor(lines, item_to_lines, ctx)
-  local cursor_line = 0
-  if #ctx.items > 0 and ctx.cursor >= 1 and ctx.cursor <= #ctx.items then
-    local cursor_item = item_to_lines[ctx.cursor]
-    if cursor_item then cursor_line = cursor_item.last end
-  end
-
-  vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', true)
-  vim.api.nvim_buf_set_lines(M.state.list_buf, 0, -1, false, lines)
-  vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
-
-  vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
-
-  if #ctx.items > 0 and cursor_line > 0 and cursor_line <= #lines then
-    vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
-  end
-end
-
---- Apply all highlights using renderer.apply_highlights
---- @param lines table Array of line strings
---- @param item_to_lines table Item to lines mapping
---- @param ctx table Render context
-local function apply_all_highlights(lines, item_to_lines, ctx)
-  ctx.selected_files = M.state.selected_files
-  ctx.query = M.state.query
-
-  local renderer = ctx.renderer
-  if not renderer then renderer = require('fff.file_renderer') end
-
-  for i = ctx.display_start, ctx.display_end do
-    local item = ctx.items[i]
-    local item_lines = item_to_lines[i]
-    if not item_lines then goto continue end
-
-    local line_idx = item_lines.last
-    local line_content = lines[line_idx]
-
-    if not line_content then goto continue end
-
-    renderer.apply_highlights(item, ctx, i, M.state.list_buf, M.state.ns_id, line_idx, line_content)
-    ::continue::
-  end
-end
+-- NOTE: Line generation, bottom padding, buffer writes, cursor positioning,
+-- and highlight application are handled by list_renderer.lua.
+-- picker_ui delegates to list_renderer.render() in render_list() below.
 
 local function finalize_render(item_to_lines, ctx)
   local combo_text_len = nil
@@ -1297,21 +1358,31 @@ local function finalize_render(item_to_lines, ctx)
   -- it's important part of functionality when user scrolls to the middle of the page we hide
   -- the combo overlay which leaves the gap of the internal neovim buffer, so scroll to show last item
   if combo_was_hidden and ctx.prompt_position == 'bottom' then scroll_to_bottom() end
-  scrollbar.render(M.state.layout, ctx.config, M.state.list_win, M.state.pagination, ctx.prompt_position)
+
+  -- Scrollbar is only meaningful for file picker mode where total_matched is exact.
+  -- Grep uses early termination so total_matched is approximate — scrollbar would be misleading.
+  if ctx.mode ~= 'grep' then
+    scrollbar.render(M.state.layout, ctx.config, M.state.list_win, M.state.pagination, ctx.prompt_position)
+  end
 end
 
 function M.render_list()
   if not M.state.active then return end
 
   local ctx = build_render_context()
-  local lines, item_to_lines = generate_item_lines(ctx)
 
-  apply_bottom_padding(lines, item_to_lines, ctx)
-  update_buffer_and_cursor(lines, item_to_lines, ctx)
+  -- Grep empty state: render a welcome view instead of the normal item list
+  if M.state.mode == 'grep' and #ctx.items == 0 then
+    render_grep_empty_state(ctx)
+    return
+  end
 
-  if #ctx.items > 0 then apply_all_highlights(lines, item_to_lines, ctx) end
+  -- Delegate line generation, padding, buffer write, cursor, and highlights
+  -- to the list_renderer module. It returns the item_to_lines mapping needed
+  -- by finalize_render for combo overlays and scrollbar.
+  local item_to_lines = list_renderer.render(ctx, M.state.list_buf, M.state.list_win, M.state.ns_id)
 
-  -- 6. Finalize with combo overlays and scrollbar
+  -- Finalize with combo overlays and scrollbar
   finalize_render(item_to_lines, ctx)
 end
 
@@ -1336,14 +1407,35 @@ function M.update_preview()
   end
 
   -- Check if we need to update the preview (file changed OR location changed)
-  local location_changed = not vim.deep_equal(M.state.last_preview_location, M.state.location)
+  local effective_location = M.state.location
+  -- In grep mode, location comes from the match item, not from query parsing
+  if M.state.mode == 'grep' and item.line_number and item.line_number > 0 then
+    effective_location = { line = item.line_number }
+    if item.col and item.col > 0 then
+      effective_location.col = item.col + 1 -- Convert 0-based byte col to 1-based for highlight_location
+    end
+    -- Pass match_ranges and the query for multi-occurrence highlighting in preview
+    effective_location.grep_query = M.state.query
+  end
+
+  local location_changed = not vim.deep_equal(M.state.last_preview_location, effective_location)
 
   if M.state.last_preview_file == item.path and not location_changed then return end
+
+  -- Same file, different location: just scroll and re-highlight instead of reloading
+  if M.state.last_preview_file == item.path and location_changed then
+    M.state.last_preview_location = effective_location and vim.deepcopy(effective_location) or nil
+    preview.state.location = effective_location
+    if M.state.preview_buf and vim.api.nvim_buf_is_valid(M.state.preview_buf) then
+      preview.apply_location_highlighting(M.state.preview_buf)
+    end
+    return
+  end
 
   preview.clear()
 
   M.state.last_preview_file = item.path
-  M.state.last_preview_location = vim.deepcopy(M.state.location)
+  M.state.last_preview_location = effective_location and vim.deepcopy(effective_location) or nil
 
   local relative_path = item.relative_path or item.path
   local max_title_width = vim.api.nvim_win_get_width(M.state.preview_win)
@@ -1404,7 +1496,7 @@ function M.update_preview()
   if M.state.file_info_buf then preview.update_file_info_buffer(item, M.state.file_info_buf, M.state.cursor) end
 
   preview.set_preview_window(M.state.preview_win)
-  preview.preview(item.path, M.state.preview_buf, M.state.location)
+  preview.preview(item.path, M.state.preview_buf, effective_location, item.is_binary)
 end
 
 --- Clear preview
@@ -1446,6 +1538,8 @@ function M.update_status(progress)
 
   if progress and progress.is_scanning then
     status_info = string.format('Indexing files %d', progress.scanned_files_count)
+  elseif M.state.mode == 'grep' then
+    status_info = 'grep'
   else
     local search_metadata = file_picker.get_search_metadata()
     if #M.state.query < 2 then
@@ -1490,8 +1584,13 @@ function M.move_up()
     if near_bottom and at_last_item then
       local page_size = M.state.pagination.page_size
       if page_size > 0 then
-        local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
-        local has_more = M.state.pagination.page_index < max_page
+        local has_more
+        if M.state.mode == 'grep' then
+          has_more = true
+        else
+          local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
+          has_more = M.state.pagination.page_index < max_page
+        end
         if has_more then
           M.load_next_page()
           return
@@ -1513,7 +1612,11 @@ function M.move_up()
   end
 
   M.render_list()
-  M.update_preview()
+  if M.state.mode == 'grep' then
+    M.update_preview_smart()
+  else
+    M.update_preview()
+  end
   M.update_status()
 
   if M.state.combo_initial_cursor and M.state.combo_visible then
@@ -1556,8 +1659,13 @@ function M.move_down()
     if near_bottom and at_last_item then
       local page_size = M.state.pagination.page_size
       if page_size > 0 then
-        local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
-        local has_more = M.state.pagination.page_index < max_page
+        local has_more
+        if M.state.mode == 'grep' then
+          has_more = true
+        else
+          local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
+          has_more = M.state.pagination.page_index < max_page
+        end
         if has_more then
           M.load_next_page()
           return
@@ -1569,7 +1677,11 @@ function M.move_down()
   end
 
   M.render_list()
-  M.update_preview()
+  if M.state.mode == 'grep' then
+    M.update_preview_smart()
+  else
+    M.update_preview()
+  end
   M.update_status()
 
   if M.state.combo_initial_cursor and M.state.combo_visible then
@@ -1614,6 +1726,8 @@ end
 --- Recall query from history with temporary min_combo_count=0
 function M.recall_query_from_history()
   if not M.state.active then return end
+  -- History cycling is not applicable in grep mode
+  if M.state.mode == 'grep' then return end
 
   -- Initialize offset on first press
   if M.state.history_offset == nil then
@@ -1689,7 +1803,17 @@ local function find_suitable_window()
   return nil
 end
 
---- Toggle selection for the current item
+--- Build a unique key for a grep match occurrence.
+--- Format: "path:line:col" — uniquely identifies one match entry.
+---@param item table Grep match item with path, line_number, col
+---@return string
+local function grep_item_key(item)
+  return string.format('%s:%d:%d', item.path, item.line_number or 0, item.col or 0)
+end
+
+--- Toggle selection for the current item.
+--- In grep mode, selection is per-occurrence (individual match line).
+--- In file mode, selection is per-file path.
 function M.toggle_select()
   if not M.state.active then return end
 
@@ -1699,15 +1823,25 @@ function M.toggle_select()
   local item = items[M.state.cursor]
   if not item or not item.path then return end
 
-  -- Toggle selection using Set pattern:
-  -- Selected: { [path] = true } - key exists in table
-  -- Deselected: key removed from table via nil (NOT set to false)
-  -- This is important: setting to nil removes the key, so pairs() won't iterate over it
-  local was_selected = M.state.selected_files[item.path]
-  if was_selected then
-    M.state.selected_files[item.path] = nil -- Remove from set
+  local was_selected
+
+  if M.state.mode == 'grep' then
+    -- Per-occurrence selection for grep mode
+    local key = grep_item_key(item)
+    was_selected = M.state.selected_items[key] ~= nil
+    if was_selected then
+      M.state.selected_items[key] = nil
+    else
+      M.state.selected_items[key] = item
+    end
   else
-    M.state.selected_files[item.path] = true -- Add to set
+    -- Per-file selection for normal file mode
+    was_selected = M.state.selected_files[item.path]
+    if was_selected then
+      M.state.selected_files[item.path] = nil
+    else
+      M.state.selected_files[item.path] = true
+    end
   end
 
   M.render_list()
@@ -1722,52 +1856,91 @@ function M.toggle_select()
   end
 end
 
---- Send selected files to quickfix list and close picker
+--- Send selected files/matches to quickfix list and close picker.
+--- Normal file mode: entries at line 1, col 1.
+--- Grep mode with selections: selected occurrences with exact line/col.
+--- Grep mode without selections: re-runs search with large limit to collect all matches.
 function M.send_to_quickfix()
   if not M.state.active then return end
 
-  -- Collect selected files from the Set-like structure
-  -- No need to filter for 'false' values because deselected files are removed from the table (set to nil)
-  -- The pairs() iterator only iterates over keys that exist in the table
-  -- So only selected files (value = true) will be collected here
-  local items_to_add = {}
-  for path, _ in pairs(M.state.selected_files) do
-    table.insert(items_to_add, path)
-  end
+  local qf_list = {}
 
-  -- If no selections, use current file under cursor
-  if #items_to_add == 0 then
-    for _, item in ipairs(M.state.filtered_items) do
-      if item and item.path then table.insert(items_to_add, item.path) end
+  if M.state.mode == 'grep' then
+    -- Grep mode: per-occurrence entries with exact locations
+    local has_selections = next(M.state.selected_items) ~= nil
+
+    if has_selections then
+      -- Use explicitly selected items (survives page changes)
+      for _, item in pairs(M.state.selected_items) do
+        table.insert(qf_list, {
+          filename = item.path,
+          lnum = item.line_number or 1,
+          col = (item.col or 0) + 1,
+          text = item.line_content or vim.fn.fnamemodify(item.path, ':.'),
+        })
+      end
+    else
+      -- No selections: run an exhaustive search to get all matches
+      local grep = require('fff.grep')
+      local exhaustive = grep.search(M.state.query, 0, 10000, M.state.grep_config)
+      local all_items = exhaustive and exhaustive.items or {}
+
+      if #all_items == 0 then
+        vim.notify('No matches to send to quickfix', vim.log.levels.WARN)
+        return
+      end
+
+      for _, item in ipairs(all_items) do
+        if item and item.path then
+          table.insert(qf_list, {
+            filename = item.path,
+            lnum = item.line_number or 1,
+            col = (item.col or 0) + 1,
+            text = item.line_content or vim.fn.fnamemodify(item.path, ':.'),
+          })
+        end
+      end
+    end
+  else
+    -- Normal file mode: per-file entries at line 1
+    local paths = {}
+
+    -- Collect from explicit selections, or fall back to all visible items
+    if next(M.state.selected_files) then
+      for path, _ in pairs(M.state.selected_files) do
+        table.insert(paths, path)
+      end
+    else
+      for _, item in ipairs(M.state.filtered_items) do
+        if item and item.path then table.insert(paths, item.path) end
+      end
+    end
+
+    if #paths == 0 then
+      vim.notify('No files to send to quickfix', vim.log.levels.WARN)
+      return
+    end
+
+    for _, path in ipairs(paths) do
+      table.insert(qf_list, {
+        filename = path,
+        lnum = 1,
+        col = 1,
+        text = vim.fn.fnamemodify(path, ':.'),
+      })
     end
   end
 
-  -- Exit if still nothing to add
-  if #items_to_add == 0 then
-    vim.notify('No files to send to quickfix', vim.log.levels.WARN)
-    return
-  end
-
-  -- Close picker first
+  -- Close picker first, then populate quickfix
+  local is_grep = M.state.mode == 'grep'
   M.close()
 
-  -- Build quickfix list entries
-  local qf_list = {}
-  for _, path in ipairs(items_to_add) do
-    table.insert(qf_list, {
-      filename = path,
-      lnum = 1,
-      col = 1,
-      text = vim.fn.fnamemodify(path, ':.'), -- Relative path as text
-    })
-  end
-
-  -- Set quickfix list and open it
   vim.fn.setqflist(qf_list, 'r')
   vim.cmd('copen')
 
-  local count = #items_to_add
-  vim.notify(string.format('Added %d file%s to quickfix list', count, count > 1 and 's' or ''), vim.log.levels.INFO)
+  local count = #qf_list
+  local unit = is_grep and (count == 1 and 'match' or 'matches') or (count == 1 and 'file' or 'files')
+  vim.notify(string.format('Added %d %s to quickfix list', count, unit), vim.log.levels.INFO)
 end
 
 function M.select(action)
@@ -1791,6 +1964,14 @@ function M.select(action)
   local relative_path = vim.fn.fnamemodify(path, ':.')
   local location = M.state.location -- Capture location before closing
   local query = M.state.query -- Capture query before closing for tracking
+
+  -- In grep mode, derive location from the match item itself (line_number/col)
+  if M.state.mode == 'grep' and item.line_number and item.line_number > 0 then
+    location = { line = item.line_number }
+    if item.col and item.col > 0 then
+      location.col = item.col + 1 -- Convert 0-based byte col to 1-based
+    end
+  end
 
   vim.cmd('stopinsert')
   M.close()
@@ -1838,6 +2019,10 @@ function M.close()
 
   combo_renderer.cleanup()
   scrollbar.cleanup()
+
+  -- Clean up treesitter scratch buffers used for grep syntax highlighting
+  local ts_ok, ts_hl = pcall(require, 'fff.treesitter_hl')
+  if ts_ok then ts_hl.cleanup() end
 
   local windows = {
     M.state.input_win,
@@ -1892,6 +2077,9 @@ function M.close()
   M.state.current_file_cache = nil
   M.state.location = nil
   M.state.selected_files = {}
+  M.state.selected_items = {}
+  M.state.mode = nil
+  M.state.grep_config = nil
   M.state.combo_visible = true
   M.state.combo_initial_cursor = nil
   M.reset_history_state()
@@ -2051,11 +2239,16 @@ end
 --- @param opts.layout.preview_position? string|function Preview position: 'left'|'right'|'top'|'bottom' or function(terminal_width, terminal_height): string (default: 'right')
 --- @param opts.layout.preview_size? number|function Preview size as ratio (0.0-1.0) or function(terminal_width, terminal_height): number (default: 0.5)
 --- @param opts.renderer? table Custom renderer implementing {render_line, apply_highlights} interface (default: file_renderer)
+--- @param opts.mode? string Picker mode: nil (default file picker) or 'grep' (live grep)
+--- @param opts.grep_config? table Grep-specific config overrides {max_file_size, smart_case, max_matches_per_file}
 function M.open(opts)
   if M.state.active then return end
 
   M.state.selected_files = {}
+  M.state.selected_items = {}
   M.state.renderer = opts and opts.renderer or nil
+  M.state.mode = opts and opts.mode or nil
+  M.state.grep_config = opts and opts.grep_config or nil
 
   local merged_config, base_path = initialize_picker(opts)
   if not merged_config then return end

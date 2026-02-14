@@ -9,6 +9,7 @@ use fff_query_parser::FFFQuery;
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
 use std::fmt::Debug;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -18,6 +19,25 @@ use std::time::SystemTime;
 use tracing::{Level, debug, error, info, warn};
 
 use crate::{FILE_PICKER, FRECENCY};
+
+/// Detect if a file is binary by checking for NUL bytes in the first 512 bytes.
+/// This is the same heuristic used by git and grep — simple, fast, and sufficient.
+#[inline]
+fn detect_binary(path: &Path, size: u64) -> bool {
+    // Empty files are not binary
+    if size == 0 {
+        return false;
+    }
+
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut reader = std::io::BufReader::with_capacity(1024, file);
+
+    let mut buf = [0u8; 512];
+    let n = reader.read(&mut buf).unwrap_or(0);
+    buf[..n].contains(&0)
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct FuzzySearchOptions<'a> {
@@ -77,6 +97,8 @@ impl FileItem {
             Err(_) => (0, 0),
         };
 
+        let is_binary = detect_binary(&path, size);
+
         Self {
             path,
             relative_path_lower: relative_path.to_lowercase(),
@@ -89,6 +111,7 @@ impl FileItem {
             modification_frecency_score: 0,
             total_frecency_score: 0,
             git_status,
+            is_binary,
         }
     }
 
@@ -409,6 +432,8 @@ impl FilePicker {
                     let modified = modified.as_secs();
                     if file.modified < modified {
                         file.modified = modified;
+                        // Re-detect binary status since content may have changed
+                        file.is_binary = detect_binary(path, file.size);
                     }
                 }
 

@@ -1,4 +1,5 @@
 use crate::FILE_PICKER;
+use crate::MMAP_CACHE;
 use crate::error::Error;
 use crate::file_picker::FilePicker;
 use crate::git::GitStatusCache;
@@ -209,11 +210,13 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
         // Apply file removals
         for path in paths_to_remove {
             picker.remove_file_by_path(path);
+            MMAP_CACHE.invalidate(path);
         }
 
         // Apply file additions/modifications and collect paths for git status update
         let mut files_to_update_git_status = Vec::with_capacity(paths_to_add_or_modify.len());
         for path in paths_to_add_or_modify {
+            MMAP_CACHE.invalidate(path);
             if let Some(file) = picker.on_create_or_modify(path) {
                 files_to_update_git_status.push(file.path.clone());
             }
@@ -251,6 +254,9 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
 
 fn trigger_full_rescan() {
     info!("Triggering full filesystem rescan");
+
+    // Clear mmap cache since file contents may have changed
+    MMAP_CACHE.clear();
 
     let Ok(mut file_picker_guard) = FILE_PICKER.write() else {
         error!("Failed to acquire file picker write lock for full rescan");

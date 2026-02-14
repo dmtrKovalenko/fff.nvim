@@ -184,6 +184,9 @@ local function init()
       git_sign_renamed_selected = 'FFFGitSignRenamedSelected',
       git_sign_untracked_selected = 'FFFGitSignUntrackedSelected',
       git_sign_ignored_selected = 'FFFGitSignIgnoredSelected',
+      -- Grep highlights
+      grep_match = 'IncSearch', -- Highlight for matched text in grep results
+      grep_line_number = 'LineNr', -- Highlight for :line:col location in grep results
     },
     frecency = {
       enabled = true,
@@ -207,6 +210,11 @@ local function init()
       enabled = true,
       log_file = vim.fn.stdpath('log') .. '/fff.log',
       log_level = 'info',
+    },
+    grep = {
+      max_file_size = 10 * 1024 * 1024, -- Skip files larger than 10MB
+      max_matches_per_file = 200, -- Maximum matches per file
+      smart_case = true, -- Case-insensitive unless query has uppercase
     },
   }
 

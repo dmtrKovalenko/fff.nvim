@@ -38,6 +38,11 @@ function M.highlight_location(bufnr, location, namespace)
   local line_count = vim.api.nvim_buf_line_count(bufnr)
   local extmarks = {}
 
+  -- Grep mode: highlight all occurrences of the search pattern across visible lines
+  if location.grep_query and location.grep_query ~= '' then
+    return M.highlight_grep_matches(bufnr, location, namespace)
+  end
+
   if location.line then
     local target_line = math.max(1, math.min(location.line, line_count))
 
@@ -123,6 +128,78 @@ function M.highlight_location(bufnr, location, namespace)
 
         if ok then table.insert(extmarks, { id = mark_id, line = line - 1 }) end
       end
+    end
+  end
+
+  return #extmarks > 0 and extmarks or nil
+end
+
+--- Highlight all occurrences of a grep pattern in the preview buffer.
+--- Highlights every match on all loaded lines, with the target line also
+--- receiving a line highlight (Visual) so the user knows which match they selected.
+--- @param bufnr number Buffer number
+--- @param location table Location with .grep_query, .line, optional .col
+--- @param namespace number Namespace for extmarks
+--- @return table|nil Highlight extmark details for cleanup
+function M.highlight_grep_matches(bufnr, location, namespace)
+  if not vim.api.nvim_buf_is_valid(bufnr) then return nil end
+
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  local extmarks = {}
+  local query = location.grep_query
+
+  -- Extract the actual search text from the grep query (strip file constraints like *.rs /src/)
+  -- The query parser uses space-separated tokens; the first non-constraint token is the pattern.
+  -- Simple heuristic: strip tokens that look like constraints (start with *, /, or !)
+  local search_text = query
+  local parts = vim.split(query, '%s+')
+  local text_parts = {}
+  for _, part in ipairs(parts) do
+    if part ~= '' and not part:match('^[%*!/]') and not part:match('^%.') then table.insert(text_parts, part) end
+  end
+  if #text_parts > 0 then search_text = text_parts[1] end
+
+  if not search_text or search_text == '' then return nil end
+
+  -- Build case-insensitive pattern if the query has no uppercase (smart case)
+  local has_upper = search_text:match('[A-Z]')
+  local escaped = vim.pesc(search_text)
+
+  -- Highlight the target line with a line highlight
+  if location.line then
+    local target_line = math.max(1, math.min(location.line, line_count))
+    local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, target_line - 1, 0, {
+      line_hl_group = 'Visual',
+      priority = 999,
+    })
+    if ok then table.insert(extmarks, { id = mark_id, line = target_line - 1 }) end
+  end
+
+  -- Highlight pattern occurrences in a window around the target line.
+  -- Limit to ±200 lines from target to keep it fast for large files.
+  local scan_start = 1
+  local scan_end = line_count
+  if location.line then
+    scan_start = math.max(1, location.line - 200)
+    scan_end = math.min(line_count, location.line + 200)
+  end
+  local lines = vim.api.nvim_buf_get_lines(bufnr, scan_start - 1, scan_end, false)
+  for idx, line in ipairs(lines) do
+    local i = scan_start + idx - 1
+    local search_line = has_upper and line or line:lower()
+    local search_pat = has_upper and escaped or escaped:lower()
+    local start_pos = 1
+    while true do
+      local s, e = search_line:find(search_pat, start_pos, true)
+      if not s then break end
+      -- s and e are 1-based byte positions; extmarks need 0-based
+      local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, i - 1, s - 1, {
+        end_col = e,
+        hl_group = 'Visual',
+        priority = 1000,
+      })
+      if ok then table.insert(extmarks, { id = mark_id, line = i - 1 }) end
+      start_pos = e + 1
     end
   end
 
