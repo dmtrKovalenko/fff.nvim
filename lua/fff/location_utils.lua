@@ -165,15 +165,10 @@ function M.highlight_grep_matches(bufnr, location, namespace)
   local has_upper = search_text:match('[A-Z]')
   local escaped = vim.pesc(search_text)
 
-  -- Highlight the target line with a line highlight
-  if location.line then
-    local target_line = math.max(1, math.min(location.line, line_count))
-    local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, target_line - 1, 0, {
-      line_hl_group = 'Visual',
-      priority = 999,
-    })
-    if ok then table.insert(extmarks, { id = mark_id, line = target_line - 1 }) end
-  end
+  -- Target line highlighting is handled by the native `cursorline` window option
+  -- (enabled in picker_ui.lua for grep mode). The window cursor is positioned
+  -- on the target line by preview.scroll_to_line(), giving standard Neovim
+  -- cursorline appearance including the line number gutter.
 
   -- Highlight pattern occurrences in a window around the target line.
   -- Limit to ±200 lines from target to keep it fast for large files.
@@ -195,7 +190,7 @@ function M.highlight_grep_matches(bufnr, location, namespace)
       -- s and e are 1-based byte positions; extmarks need 0-based
       local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, i - 1, s - 1, {
         end_col = e,
-        hl_group = 'Visual',
+        hl_group = 'IncSearch',
         priority = 1000,
       })
       if ok then table.insert(extmarks, { id = mark_id, line = i - 1 }) end

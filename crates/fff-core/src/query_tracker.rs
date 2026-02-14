@@ -31,8 +31,10 @@ pub struct QueryTracker {
     env: Env,
     // Database for (project_path, query) -> QueryMatchEntry mappings
     query_file_db: Database<Bytes, SerdeBincode<QueryMatchEntry>>,
-    // Database for project_path -> VecDeque<HistoryEntry> mappings
+    // Database for project_path -> VecDeque<HistoryEntry> mappings (file picker)
     query_history_db: Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
+    // Database for project_path -> VecDeque<HistoryEntry> mappings (grep)
+    grep_query_history_db: Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
 }
 
 impl DbHealthChecker for QueryTracker {
@@ -45,10 +47,15 @@ impl DbHealthChecker for QueryTracker {
 
         let count_queries = self.query_file_db.len(&rtxn).map_err(Error::DbRead)?;
         let count_histories = self.query_history_db.len(&rtxn).map_err(Error::DbRead)?;
+        let count_grep_histories = self
+            .grep_query_history_db
+            .len(&rtxn)
+            .map_err(Error::DbRead)?;
 
         Ok(vec![
             ("query_file_entries", count_queries),
             ("query_history_entries", count_histories),
+            ("grep_query_history_entries", count_grep_histories),
         ])
     }
 }
@@ -77,6 +84,9 @@ impl QueryTracker {
         let query_history_db = env
             .create_database(&mut wtxn, Some("query_history"))
             .map_err(Error::DbCreate)?;
+        let grep_query_history_db = env
+            .create_database(&mut wtxn, Some("grep_query_history"))
+            .map_err(Error::DbCreate)?;
 
         wtxn.commit().map_err(Error::DbCommit)?;
 
@@ -84,6 +94,7 @@ impl QueryTracker {
             env,
             query_file_db,
             query_history_db,
+            grep_query_history_db,
         })
     }
 
@@ -113,6 +124,57 @@ impl QueryTracker {
             .ok_or_else(|| Error::InvalidPath(project_path.to_path_buf()))?;
 
         Ok(*blake3::hash(project_str.as_bytes()).as_bytes())
+    }
+
+    /// Append a query to a history database within an existing write transaction.
+    fn append_to_history(
+        db: &Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
+        wtxn: &mut heed::RwTxn,
+        project_key: &[u8; 32],
+        query: &str,
+        now: u64,
+    ) -> Result<(), Error> {
+        let mut history = db
+            .get(wtxn, project_key)
+            .map_err(Error::DbRead)?
+            .unwrap_or_default();
+
+        history.push_back(HistoryEntry {
+            query: query.to_string(),
+            timestamp: now,
+        });
+        while history.len() > MAX_HISTORY_ENTRIES {
+            history.pop_front();
+        }
+
+        db.put(wtxn, project_key, &history)
+            .map_err(Error::DbWrite)?;
+        Ok(())
+    }
+
+    /// Read a query from a history database at a specific offset.
+    /// offset=0 returns most recent, offset=1 returns 2nd most recent, etc.
+    fn read_history_at_offset(
+        db: &Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
+        env: &Env,
+        project_key: &[u8; 32],
+        offset: usize,
+    ) -> Result<Option<String>, Error> {
+        let rtxn = env.read_txn().map_err(Error::DbStartReadTxn)?;
+
+        let mut history = db
+            .get(&rtxn, project_key)
+            .map_err(Error::DbRead)?
+            .unwrap_or_default();
+
+        // history is FIFO, last element is most recent
+        if history.len() > offset {
+            let index = history.len() - 1 - offset;
+            let record = history.remove(index);
+            Ok(record.map(|r| r.query))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn track_query_completion(
@@ -166,24 +228,7 @@ impl QueryTracker {
 
         // Update query history database
         let project_key = Self::create_project_key(project_path)?;
-        let mut history = self
-            .query_history_db
-            .get(&wtxn, &project_key)
-            .map_err(Error::DbRead)?
-            .unwrap_or_default();
-
-        let history_entry = HistoryEntry {
-            query: query.to_string(),
-            timestamp: now,
-        };
-        history.push_back(history_entry);
-        while history.len() > MAX_HISTORY_ENTRIES {
-            history.pop_front();
-        }
-
-        self.query_history_db
-            .put(&mut wtxn, &project_key, &history)
-            .map_err(Error::DbWrite)?;
+        Self::append_to_history(&self.query_history_db, &mut wtxn, &project_key, query, now)?;
 
         wtxn.commit().map_err(Error::DbCommit)?;
 
@@ -237,32 +282,47 @@ impl QueryTracker {
         }
     }
 
-    /// Get query from history at a specific offset
+    /// Get query from file picker history at a specific offset.
     /// offset=0 returns most recent query, offset=1 returns 2nd most recent, etc.
-    /// Returns None if offset exceeds history length
     pub fn get_historical_query(
         &self,
         project_path: &Path,
         offset: usize,
     ) -> Result<Option<String>, Error> {
         let project_key = Self::create_project_key(project_path)?;
-        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
+        Self::read_history_at_offset(&self.query_history_db, &self.env, &project_key, offset)
+    }
 
-        let mut history = self
-            .query_history_db
-            .get(&rtxn, &project_key)
-            .map_err(Error::DbRead)?
-            .unwrap_or_default();
+    /// Track a grep query in the grep-specific history.
+    /// Only records query history (no file association tracking needed for grep).
+    pub fn track_grep_query(&mut self, query: &str, project_path: &Path) -> Result<(), Error> {
+        let now = self.get_now();
+        let project_key = Self::create_project_key(project_path)?;
+        let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
 
-        // history is FIFO, last element is most recent
-        if history.len() > offset {
-            let index = history.len() - 1 - offset;
-            let record = history.remove(index);
+        Self::append_to_history(
+            &self.grep_query_history_db,
+            &mut wtxn,
+            &project_key,
+            query,
+            now,
+        )?;
 
-            Ok(record.map(|r| r.query))
-        } else {
-            Ok(None)
-        }
+        wtxn.commit().map_err(Error::DbCommit)?;
+
+        tracing::debug!(?query, "Tracked grep query");
+        Ok(())
+    }
+
+    /// Get grep query from history at a specific offset.
+    /// offset=0 returns most recent grep query, offset=1 returns 2nd most recent, etc.
+    pub fn get_historical_grep_query(
+        &self,
+        project_path: &Path,
+        offset: usize,
+    ) -> Result<Option<String>, Error> {
+        let project_key = Self::create_project_key(project_path)?;
+        Self::read_history_at_offset(&self.grep_query_history_db, &self.env, &project_key, offset)
     }
 }
 

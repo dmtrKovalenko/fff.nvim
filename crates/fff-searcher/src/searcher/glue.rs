@@ -2,7 +2,7 @@ use grep_matcher::Matcher;
 
 use crate::{
     lines,
-    searcher::{core::Core, Config, Range, Searcher},
+    searcher::{Config, Range, Searcher, core::Core},
     sink::Sink,
 };
 

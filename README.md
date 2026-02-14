@@ -161,6 +161,8 @@ require('fff').setup({
       -- multi-select keymaps for quickfix
       toggle_select = '<Tab>',
       send_to_quickfix = '<C-q>',
+      -- grep mode: toggle between plain text and regex search
+      toggle_grep_regex = '<C-r>',
     },
     hl = {
       border = 'FloatBorder',
@@ -199,6 +201,13 @@ require('fff').setup({
       git_sign_renamed_selected = 'FFFGitSignRenamedSelected',
       git_sign_untracked_selected = 'FFFGitSignUntrackedSelected',
       git_sign_ignored_selected = 'FFFGitSignIgnoredSelected',
+      -- Grep highlights
+      grep_match = 'IncSearch',               -- Highlight for matched text in grep results
+      grep_line_number = 'LineNr',            -- Highlight for :line:col location
+      grep_regex_active = 'DiagnosticInfo',   -- Highlight for keybind + label when regex is on
+      grep_regex_inactive = 'Comment',        -- Highlight for keybind + label when regex is off
+      -- Cross-mode suggestion highlights
+      suggestion_header = 'WarningMsg',       -- Highlight for the "No results found. Suggested..." banner
     },
     -- Store file open frecency
     frecency = {
@@ -272,6 +281,24 @@ Select multiple files and send them to Neovim's quickfix list (keymaps are confi
 
 - `<Tab>` - Toggle selection for the current file (shows thick border `▊` in signcolumn)
 - `<C-q>` - Send selected files to quickfix list and close picker
+
+#### Live Grep Search Modes
+
+Live grep supports two search modes, toggled with `<C-r>`:
+
+- **Plain text** (default) - The query is matched literally. Special regex characters like `.`, `*`, `(`, `)`, `$` have no special meaning. This is the safest mode for searching code containing regex metacharacters.
+- **Regex** - The query is interpreted as a regular expression. Supports character classes (`[a-z]`), quantifiers (`+`, `*`, `{n}`), alternation (`foo|bar`), anchors (`^`, `$`), word boundaries (`\b`), and more.
+
+The current mode is shown as `[text]` or `[regex]` on the right side of the input field. The `[regex]` indicator is highlighted when active.
+
+#### Cross-Mode Suggestions
+
+When a search returns no results, FFF automatically queries the opposite search mode and displays the results as suggestions:
+
+- **File search with no matches** → shows suggested **content matches** (grep results) for the same query
+- **Grep search with no matches** → shows suggested **file name matches** for the same query
+
+Suggestions are clearly labeled with a "No results found. Suggested ..." banner (highlighted with `hl.suggestion_header`). You can navigate and select suggestion items just like normal results — selecting a grep suggestion will open the file at the matching line.
 
 #### Git Status Highlighting
 

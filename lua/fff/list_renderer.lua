@@ -51,12 +51,34 @@ local M = {}
 
 --- Generate all display lines from items using the renderer.
 --- Each item may produce 1 or more lines (virtual header + content).
+--- When cross-mode suggestions are active, a suggestion banner is prepended
+--- (for top prompt) or appended (for bottom prompt) so it always appears
+--- above the suggestion items visually.
 --- @param ctx ListRenderContext
 --- @return string[] lines Array of line strings
 --- @return table<number, ItemLineMapping> item_to_lines
 local function generate_item_lines(ctx)
   local lines = {}
   local item_to_lines = {}
+
+  -- Cross-mode suggestion header: rendered above items visually.
+  -- For top prompt that means before items; for bottom prompt after items
+  -- (because bottom prompt iterates in reverse).
+  local suggestion_header_lines = {}
+  local has_suggestion_header = ctx.suggestion_source ~= nil and #ctx.items > 0
+  if has_suggestion_header then
+    table.insert(suggestion_header_lines, '')
+    local mode_label = ctx.suggestion_source == 'grep' and 'content matches' or 'file name matches'
+    table.insert(suggestion_header_lines, '  No results found. Suggested ' .. mode_label .. ':')
+    table.insert(suggestion_header_lines, '')
+  end
+
+  -- For top prompt: suggestion header goes before items
+  if has_suggestion_header and ctx.prompt_position ~= 'bottom' then
+    for _, hline in ipairs(suggestion_header_lines) do
+      table.insert(lines, hline)
+    end
+  end
 
   local renderer = ctx.renderer
   if not renderer then renderer = require('fff.file_renderer') end
@@ -82,6 +104,13 @@ local function generate_item_lines(ctx)
       last = item_end_line,
       virtual_count = virtual_count,
     }
+  end
+
+  -- For bottom prompt: suggestion header goes after items (appears above visually)
+  if has_suggestion_header and ctx.prompt_position == 'bottom' then
+    for _, hline in ipairs(suggestion_header_lines) do
+      table.insert(lines, hline)
+    end
   end
 
   return lines, item_to_lines
@@ -195,6 +224,17 @@ function M.render(ctx, list_buf, list_win, ns_id)
   update_buffer_and_cursor(lines, item_to_lines, ctx, list_buf, list_win, ns_id)
 
   if #ctx.items > 0 then apply_all_highlights(lines, item_to_lines, ctx, list_buf, ns_id) end
+
+  -- Highlight the suggestion header lines (if present)
+  if ctx.suggestion_source and #ctx.items > 0 then
+    local suggestion_hl = ctx.config.hl.suggestion_header or 'WarningMsg'
+    for i = 0, #lines - 1 do
+      local line = lines[i + 1]
+      if line and line:match('^%s+No results found') then
+        pcall(vim.api.nvim_buf_add_highlight, list_buf, ns_id, suggestion_hl, i, 0, -1)
+      end
+    end
+  end
 
   return item_to_lines
 end

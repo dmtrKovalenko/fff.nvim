@@ -41,10 +41,7 @@ vim.defer_fn(function()
     return
   end
 
-  vim.notify(
-    string.format('list_renderer test: prompt=%s mode=%s', prompt_pos, mode),
-    vim.log.levels.INFO
-  )
+  vim.notify(string.format('list_renderer test: prompt=%s mode=%s', prompt_pos, mode), vim.log.levels.INFO)
 
   if mode == 'grep' then
     fff.live_grep()

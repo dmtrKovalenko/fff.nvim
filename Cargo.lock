@@ -487,6 +487,7 @@ dependencies = [
  "grep-searcher",
  "heed",
  "ignore",
+ "memchr",
  "memmap2",
  "neo_frizbee",
  "notify",

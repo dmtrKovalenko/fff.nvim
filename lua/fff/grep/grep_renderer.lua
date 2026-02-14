@@ -106,11 +106,25 @@ local function render_match_line(item, ctx)
 
   -- Indent + location + separator + content
   local indent = '  '
-  local prefix_len = #indent + #location + #separator
-  local available = ctx.win_width - prefix_len - 2
+  -- Prefix is always ASCII so byte length == display width
+  local prefix_display_w = #indent + #location + #separator
+  local available = ctx.win_width - prefix_display_w - 2
   local was_truncated = false
-  if #content > available and available > 3 then
-    content = content:sub(1, available - 1) .. '…'
+  local content_display_w = vim.fn.strdisplaywidth(content)
+  if content_display_w > available and available > 3 then
+    -- UTF-8 aware truncation: binary search for the character count that
+    -- fits within the available display width (handles multi-byte and wide chars)
+    local nchars = vim.fn.strchars(content)
+    local lo, hi = 0, nchars
+    while lo < hi do
+      local mid = math.floor((lo + hi + 1) / 2)
+      if vim.fn.strdisplaywidth(vim.fn.strcharpart(content, 0, mid)) <= available - 1 then
+        lo = mid
+      else
+        hi = mid - 1
+      end
+    end
+    content = vim.fn.strcharpart(content, 0, lo) .. '…'
     was_truncated = true
   end
 
@@ -141,10 +155,15 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
   local is_cursor = item_idx == ctx.cursor
   local indent = item._match_indent or 2
 
-  -- 1. Cursor line highlight
+  -- 1. Cursor line highlight — use hl_group + hl_eol instead of line_hl_group
+  -- so that higher-priority inline extmarks (IncSearch match ranges at 200)
+  -- cleanly override both fg and bg on the cursor line.
   if is_cursor then
     vim.api.nvim_buf_set_extmark(buf, ns_id, row, 0, {
-      line_hl_group = config.hl.cursor,
+      end_col = 0,
+      end_row = row + 1,
+      hl_group = config.hl.cursor,
+      hl_eol = true,
       priority = 100,
     })
   end

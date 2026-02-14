@@ -3,7 +3,7 @@
 //! These types use #[repr(C)] for C ABI compatibility and implement
 //! serde traits for JSON serialization.
 
-use std::ffi::{c_char, CString};
+use std::ffi::{CString, c_char};
 use std::ptr;
 
 use fff_core::git::format_git_status;

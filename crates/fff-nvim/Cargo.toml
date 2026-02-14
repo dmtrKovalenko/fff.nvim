@@ -23,6 +23,14 @@ path = "src/bin/search_profiler.rs"
 name = "bench_search_only"
 path = "src/bin/bench_search_only.rs"
 
+[[bin]]
+name = "grep_profiler"
+path = "src/bin/grep_profiler.rs"
+
+[[bin]]
+name = "grep_vs_rg"
+path = "src/bin/grep_vs_rg.rs"
+
 [dependencies]
 # Workspace dependencies
 ahash = { workspace = true }
