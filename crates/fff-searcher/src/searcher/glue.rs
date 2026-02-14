@@ -2,7 +2,7 @@ use grep_matcher::Matcher;
 
 use crate::{
     lines,
-    searcher::{core::Core, Config, Range, Searcher},
+    searcher::{Config, Range, Searcher, core::Core},
     sink::Sink,
 };
 
@@ -69,10 +69,8 @@ impl<'s, M: Matcher, S: Sink> MultiLine<'s, M, S> {
             while !self.slice[self.core.pos()..].is_empty() && keepgoing {
                 keepgoing = self.sink()?;
             }
-            if keepgoing {
-                if let Some(last_match) = self.last_match.take() {
-                    self.sink_matched(&last_match)?;
-                }
+            if keepgoing && let Some(last_match) = self.last_match.take() {
+                self.sink_matched(&last_match)?;
             }
         }
         let byte_count = self.slice.len() as u64;

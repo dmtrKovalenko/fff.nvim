@@ -33,8 +33,8 @@ struct LuaPosition((i32, i32));
 impl IntoLua for LuaPosition {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let table = lua.create_table()?;
-        table.set("line", self.0 .0)?;
-        table.set("col", self.0 .1)?;
+        table.set("line", self.0.0)?;
+        table.set("col", self.0.1)?;
         Ok(LuaValue::Table(table))
     }
 }
@@ -136,6 +136,11 @@ impl IntoLua for GrepResultLua<'_> {
             item.set("size", file.size)?;
             item.set("modified", file.modified)?;
             item.set("total_frecency_score", file.total_frecency_score)?;
+            item.set("access_frecency_score", file.access_frecency_score)?;
+            item.set(
+                "modification_frecency_score",
+                file.modification_frecency_score,
+            )?;
 
             // Match metadata
             item.set("line_number", m.line_number)?;
@@ -153,6 +158,11 @@ impl IntoLua for GrepResultLua<'_> {
             }
             item.set("match_ranges", ranges)?;
 
+            // Fuzzy match score (only set in fuzzy grep mode, nil otherwise)
+            if let Some(score) = m.fuzzy_score {
+                item.set("fuzzy_score", score)?;
+            }
+
             items_table.set(i + 1, item)?;
         }
         table.set("items", items_table)?;
@@ -160,6 +170,13 @@ impl IntoLua for GrepResultLua<'_> {
         table.set("total_matched", self.inner.total_match_count)?;
         table.set("total_files_searched", self.inner.total_files_searched)?;
         table.set("total_files", self.inner.total_files)?;
+        table.set("filtered_file_count", self.inner.filtered_file_count)?;
+        table.set("next_file_offset", self.inner.next_file_offset)?;
+
+        // Pass regex fallback error to Lua (nil if no error)
+        if let Some(ref err) = self.inner.regex_fallback_error {
+            table.set("regex_fallback_error", err.as_str())?;
+        }
 
         Ok(LuaValue::Table(table))
     }

@@ -156,6 +156,12 @@ impl Searcher {
     }
 }
 
+impl Default for Searcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Configuration query methods used by the sink and internal search core.
 impl Searcher {
     /// Returns the line terminator used by this searcher.
@@ -184,15 +190,15 @@ impl Searcher {
         if !self.multi_line() {
             return false;
         }
-        if let Some(line_term) = matcher.line_terminator() {
-            if line_term == self.line_terminator() {
-                return false;
-            }
+        if let Some(line_term) = matcher.line_terminator()
+            && line_term == self.line_terminator()
+        {
+            return false;
         }
-        if let Some(non_matching) = matcher.non_matching_bytes() {
-            if non_matching.contains(self.line_terminator().as_byte()) {
-                return false;
-            }
+        if let Some(non_matching) = matcher.non_matching_bytes()
+            && non_matching.contains(self.line_terminator().as_byte())
+        {
+            return false;
         }
         true
     }

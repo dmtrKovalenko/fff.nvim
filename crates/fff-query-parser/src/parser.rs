@@ -1,8 +1,8 @@
-use crate::ConstraintVec;
 use crate::config::ParserConfig;
 use crate::constraints::{Constraint, GitStatusFilter, TextPartsBuffer};
-use crate::location::{Location, parse_location};
-use zlob::{ZlobFlags, has_wildcards};
+use crate::location::{parse_location, Location};
+use crate::ConstraintVec;
+use zlob::{has_wildcards, ZlobFlags};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
@@ -131,6 +131,12 @@ impl Default for QueryParser<crate::FilePickerConfig> {
 
 #[inline]
 fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constraint<'a>> {
+    // Backslash escape: \token → treat as literal text, skip all constraint parsing.
+    // The leading \ is stripped by the caller when building the search text.
+    if token.starts_with('\\') && token.len() > 1 {
+        return None;
+    }
+
     let first_byte = token.as_bytes().first()?;
 
     match first_byte {
@@ -149,8 +155,8 @@ fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constr
                     return Some(constraint);
                 }
             }
-            // Has wildcards -> use zlob for matching
-            if config.enable_glob() && has_wildcards(token, ZlobFlags::RECOMMENDED) {
+            // Has wildcards -> use config-specific glob detection
+            if config.enable_glob() && config.is_glob_pattern(token) {
                 return Some(Constraint::Glob(token));
             }
             None
@@ -162,8 +168,8 @@ fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constr
             parse_path_segment_trailing(token)
         }
         _ => {
-            // Check for glob patterns using zlob's SIMD-optimized detection
-            if config.enable_glob() && has_wildcards(token, ZlobFlags::RECOMMENDED) {
+            // Check for glob patterns using config-specific detection
+            if config.enable_glob() && config.is_glob_pattern(token) {
                 return Some(Constraint::Glob(token));
             }
 
@@ -232,6 +238,11 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
     token: &'a str,
     config: &C,
 ) -> Option<Constraint<'a>> {
+    // Backslash escape applies here too
+    if token.starts_with('\\') && token.len() > 1 {
+        return None;
+    }
+
     let first_byte = token.as_bytes().first()?;
 
     match first_byte {
@@ -243,8 +254,8 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
                     return Some(constraint);
                 }
             }
-            // Has wildcards -> use zlob for matching
-            if config.enable_glob() && has_wildcards(token, ZlobFlags::RECOMMENDED) {
+            // Has wildcards -> use config-specific glob detection
+            if config.enable_glob() && config.is_glob_pattern(token) {
                 return Some(Constraint::Glob(token));
             }
             None
@@ -255,8 +266,8 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
             parse_path_segment_trailing(token)
         }
         _ => {
-            // Check for glob patterns using zlob's SIMD-optimized detection
-            if config.enable_glob() && has_wildcards(token, ZlobFlags::RECOMMENDED) {
+            // Check for glob patterns using config-specific detection
+            if config.enable_glob() && config.is_glob_pattern(token) {
                 return Some(Constraint::Glob(token));
             }
 
@@ -489,6 +500,172 @@ mod tests {
                 ));
             }
             _ => panic!("Expected Not(GitStatus) constraint"),
+        }
+    }
+
+    #[test]
+    fn test_backslash_escape_extension() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse("\\*.rs foo")
+            .expect("Should parse multi-token query");
+        // \*.rs should NOT be parsed as an Extension constraint
+        assert_eq!(result.constraints.len(), 0);
+        // Both tokens should be text
+        match result.fuzzy_query {
+            FuzzyQuery::Parts(parts) => {
+                assert_eq!(parts.len(), 2);
+                assert_eq!(parts[0], "\\*.rs");
+                assert_eq!(parts[1], "foo");
+            }
+            _ => panic!("Expected Parts, got {:?}", result.fuzzy_query),
+        }
+    }
+
+    #[test]
+    fn test_backslash_escape_path_segment() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse("\\/src/ foo")
+            .expect("Should parse multi-token query");
+        assert_eq!(result.constraints.len(), 0);
+        match result.fuzzy_query {
+            FuzzyQuery::Parts(parts) => {
+                assert_eq!(parts[0], "\\/src/");
+                assert_eq!(parts[1], "foo");
+            }
+            _ => panic!("Expected Parts, got {:?}", result.fuzzy_query),
+        }
+    }
+
+    #[test]
+    fn test_backslash_escape_negation() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse("\\!test foo")
+            .expect("Should parse multi-token query");
+        assert_eq!(result.constraints.len(), 0);
+    }
+
+    #[test]
+    fn test_grep_question_mark_is_text() {
+        use crate::GrepConfig;
+        let parser = QueryParser::new(GrepConfig);
+        // Single token "foo?" should return None (treated as plain text by caller)
+        let result = parser.parse("foo?");
+        assert!(result.is_none(), "foo? should be plain text in grep mode");
+    }
+
+    #[test]
+    fn test_grep_bracket_is_text() {
+        use crate::GrepConfig;
+        let parser = QueryParser::new(GrepConfig);
+        let result = parser.parse("arr[0] something");
+        let result = result.expect("Should parse multi-token query");
+        // arr[0] should NOT be a glob in grep mode
+        assert_eq!(result.constraints.len(), 0);
+    }
+
+    #[test]
+    fn test_grep_path_glob_is_constraint() {
+        use crate::GrepConfig;
+        let parser = QueryParser::new(GrepConfig);
+        let result = parser
+            .parse("pattern src/**/*.rs")
+            .expect("Should parse with path glob");
+        // src/**/*.rs contains / so it should be treated as a glob
+        assert_eq!(result.constraints.len(), 1);
+        assert!(matches!(
+            result.constraints[0],
+            Constraint::Glob("src/**/*.rs")
+        ));
+    }
+
+    #[test]
+    fn test_grep_brace_is_constraint() {
+        use crate::GrepConfig;
+        let parser = QueryParser::new(GrepConfig);
+        let result = parser
+            .parse("pattern {src,lib}")
+            .expect("Should parse with brace expansion");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(matches!(
+            result.constraints[0],
+            Constraint::Glob("{src,lib}")
+        ));
+    }
+
+    #[test]
+    fn test_grep_bare_star_is_text() {
+        use crate::GrepConfig;
+        let parser = QueryParser::new(GrepConfig);
+        // "a*b" contains * but no / or {} — should be text in grep mode
+        let result = parser.parse("a*b something");
+        let result = result.expect("Should parse");
+        assert_eq!(
+            result.constraints.len(),
+            0,
+            "bare * without / should be text"
+        );
+    }
+
+    #[test]
+    fn test_grep_negated_text() {
+        use crate::GrepConfig;
+        let parser = QueryParser::new(GrepConfig);
+        let result = parser
+            .parse("pattern !test")
+            .expect("Should parse negated text in grep mode");
+        assert_eq!(result.constraints.len(), 1);
+        match &result.constraints[0] {
+            Constraint::Not(inner) => {
+                assert!(
+                    matches!(**inner, Constraint::Text("test")),
+                    "Expected Not(Text(\"test\")), got Not({:?})",
+                    inner
+                );
+            }
+            other => panic!("Expected Not constraint, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_grep_negated_path_segment() {
+        use crate::GrepConfig;
+        let parser = QueryParser::new(GrepConfig);
+        let result = parser
+            .parse("pattern !/src/")
+            .expect("Should parse negated path segment in grep mode");
+        assert_eq!(result.constraints.len(), 1);
+        match &result.constraints[0] {
+            Constraint::Not(inner) => {
+                assert!(
+                    matches!(**inner, Constraint::PathSegment("src")),
+                    "Expected Not(PathSegment(\"src\")), got Not({:?})",
+                    inner
+                );
+            }
+            other => panic!("Expected Not constraint, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_grep_negated_extension() {
+        use crate::GrepConfig;
+        let parser = QueryParser::new(GrepConfig);
+        let result = parser
+            .parse("pattern !*.rs")
+            .expect("Should parse negated extension in grep mode");
+        assert_eq!(result.constraints.len(), 1);
+        match &result.constraints[0] {
+            Constraint::Not(inner) => {
+                assert!(
+                    matches!(**inner, Constraint::Extension("rs")),
+                    "Expected Not(Extension(\"rs\")), got Not({:?})",
+                    inner
+                );
+            }
+            other => panic!("Expected Not constraint, got {:?}", other),
         }
     }
 }

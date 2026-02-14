@@ -229,13 +229,24 @@ pub fn fuzzy_search_files(
 #[allow(clippy::type_complexity)]
 pub fn live_grep(
     lua: &Lua,
-    (query, page_index, page_size, max_file_size, max_matches_per_file, smart_case): (
+    (
+        query,
+        file_offset,
+        page_size,
+        max_file_size,
+        max_matches_per_file,
+        smart_case,
+        grep_mode,
+        time_budget_ms,
+    ): (
         String,
         Option<usize>,
         Option<usize>,
         Option<u64>,
         Option<usize>,
         Option<bool>,
+        Option<String>,
+        Option<u64>,
     ),
 ) -> LuaResult<LuaValue> {
     let file_picker_guard = FILE_PICKER
@@ -248,21 +259,23 @@ pub fn live_grep(
 
     let parsed = fff_core::grep::parse_grep_query(&query);
 
+    let mode = match grep_mode.as_deref() {
+        Some("regex") => fff_core::GrepMode::Regex,
+        Some("fuzzy") => fff_core::GrepMode::Fuzzy,
+        _ => fff_core::GrepMode::PlainText, // "plain" or nil or unknown
+    };
+
     let options = fff_core::GrepSearchOptions {
         max_file_size: max_file_size.unwrap_or(10 * 1024 * 1024),
         max_matches_per_file: max_matches_per_file.unwrap_or(200),
         smart_case: smart_case.unwrap_or(true),
-        page_offset: page_index.unwrap_or(0),
+        file_offset: file_offset.unwrap_or(0),
         page_limit: page_size.unwrap_or(50),
+        mode,
+        time_budget_ms: time_budget_ms.unwrap_or(0),
     };
 
-    let result = fff_core::grep::grep_search(
-        picker.get_files(),
-        &query,
-        parsed,
-        &options,
-        &fff_core::MMAP_CACHE,
-    );
+    let result = fff_core::grep::grep_search(picker.get_files(), &query, parsed, &options);
 
     lua_types::GrepResultLua::from(result).into_lua(lua)
 }
@@ -469,6 +482,58 @@ pub fn get_historical_query(_: &Lua, offset: usize) -> LuaResult<Option<String>>
 
     tracker
         .get_historical_query(&project_path, offset)
+        .into_lua_result()
+}
+
+pub fn track_grep_query(_: &Lua, query: String) -> LuaResult<bool> {
+    let project_path = {
+        let file_picker = FILE_PICKER
+            .read()
+            .with_lock_error(Error::AcquireItemLock)
+            .into_lua_result()?;
+        let Some(ref picker) = *file_picker else {
+            return Ok(false);
+        };
+        picker.base_path().to_path_buf()
+    };
+
+    std::thread::spawn(move || {
+        if let Ok(Some(tracker)) = QUERY_TRACKER.write().as_deref_mut()
+            && let Err(e) = tracker.track_grep_query(&query, &project_path)
+        {
+            tracing::error!(
+                query = %query,
+                error = ?e,
+                "Failed to track grep query"
+            );
+        }
+    });
+
+    Ok(true)
+}
+
+pub fn get_historical_grep_query(_: &Lua, offset: usize) -> LuaResult<Option<String>> {
+    let project_path = {
+        let file_picker = FILE_PICKER
+            .read()
+            .with_lock_error(Error::AcquireItemLock)
+            .into_lua_result()?;
+        let Some(ref picker) = *file_picker else {
+            return Ok(None);
+        };
+        picker.base_path().to_path_buf()
+    };
+
+    let query_tracker = QUERY_TRACKER
+        .read()
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
+    let Some(ref tracker) = *query_tracker else {
+        return Ok(None);
+    };
+
+    tracker
+        .get_historical_grep_query(&project_path, offset)
         .into_lua_result()
 }
 
@@ -699,6 +764,11 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "get_historical_query",
         lua.create_function(get_historical_query)?,
+    )?;
+    exports.set("track_grep_query", lua.create_function(track_grep_query)?)?;
+    exports.set(
+        "get_historical_grep_query",
+        lua.create_function(get_historical_grep_query)?,
     )?;
     exports.set("health_check", lua.create_function(health_check)?)?;
     exports.set("shorten_path", lua.create_function(shorten_path)?)?;

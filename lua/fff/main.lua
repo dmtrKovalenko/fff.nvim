@@ -23,7 +23,8 @@ end
 --- @param opts.title? string Window title (default: "Live Grep")
 --- @param opts.prompt? string Input prompt text (default: "grep> ")
 --- @param opts.layout? table Layout overrides
---- @param opts.grep? table Grep-specific overrides {max_file_size, smart_case, max_matches_per_file}
+--- @param opts.grep? table Grep-specific overrides {max_file_size, smart_case, max_matches_per_file, modes}
+--- @param opts.grep.modes? table Available search modes and their cycling order (default: {'plain', 'regex', 'fuzzy'})
 function M.live_grep(opts)
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
   if not picker_ok then

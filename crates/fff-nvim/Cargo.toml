@@ -12,7 +12,7 @@ name = "test_watcher"
 path = "src/bin/test_watcher.rs"
 
 [[bin]]
-	name = "jemalloc_profile"
+name = "jemalloc_profile"
 path = "src/bin/jemalloc_profile.rs"
 
 [[bin]]
@@ -22,6 +22,14 @@ path = "src/bin/search_profiler.rs"
 [[bin]]
 name = "bench_search_only"
 path = "src/bin/bench_search_only.rs"
+
+[[bin]]
+name = "grep_profiler"
+path = "src/bin/grep_profiler.rs"
+
+[[bin]]
+name = "grep_vs_rg"
+path = "src/bin/grep_vs_rg.rs"
 
 [dependencies]
 # Workspace dependencies
@@ -46,7 +54,7 @@ heed = "0.22.0"
 ignore = "0.4.22"
 mimalloc = "0.1.47"
 mlua = { version = "0.11.1", features = ["module", "luajit"] }
-neo_frizbee = { version = "0.7.2" }
+neo_frizbee = { workspace = true }
 notify = "8.1.0"
 notify-debouncer-full = "0.6"
 once_cell = "1.20.2"

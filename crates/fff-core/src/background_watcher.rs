@@ -1,5 +1,4 @@
 use crate::FILE_PICKER;
-use crate::MMAP_CACHE;
 use crate::error::Error;
 use crate::file_picker::FilePicker;
 use crate::git::GitStatusCache;
@@ -23,6 +22,7 @@ pub struct BackgroundWatcher {
 
 const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_PATHS_THRESHOLD: usize = 1024;
+const MAX_SELECTIVE_WATCH_DIRS: usize = 100;
 
 impl BackgroundWatcher {
     pub fn new(base_path: PathBuf, git_workdir: Option<PathBuf>) -> Result<Self, Error> {
@@ -65,8 +65,39 @@ impl BackgroundWatcher {
             config,
         )?;
 
-        debouncer.watch(base_path.as_path(), RecursiveMode::Recursive)?;
-        info!("File watcher initizlieed for path: {}", base_path.display());
+        // Watch only non-ignored directories to avoid flooding the OS event buffer.
+        // On macOS, FSEvents has a fixed-size kernel buffer — watching huge gitignored
+        // directories like `target/` in rust causes buffer overflow, which drops real source file
+        // events. Instead we watch the root non-recursively (for top-level file changes
+        // and new directory detection) and each non-ignored subdirectory recursively.
+        let watch_dirs = collect_non_ignored_dirs(&base_path);
+
+        if watch_dirs.len() > MAX_SELECTIVE_WATCH_DIRS {
+            tracing::warn!(
+                "Too many non-ignored directories ({}/{}) can't efficiently watch them",
+                watch_dirs.len(),
+                MAX_SELECTIVE_WATCH_DIRS
+            );
+            debouncer.watch(base_path.as_path(), RecursiveMode::Recursive)?;
+        } else {
+            debouncer.watch(base_path.as_path(), RecursiveMode::NonRecursive)?;
+
+            for dir in &watch_dirs {
+                match debouncer.watch(dir.as_path(), RecursiveMode::Recursive) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        // Non-fatal: directory may have been removed between discovery and watch
+                        warn!("Failed to watch directory {}: {}", dir.display(), e);
+                    }
+                }
+            }
+        }
+
+        info!(
+            "File watcher initialized for {} directories under {}",
+            watch_dirs.len(),
+            base_path.display()
+        );
 
         Ok(debouncer)
     }
@@ -115,6 +146,18 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
             )
         ) {
             continue;
+        }
+
+        // When macOS FSEvents (or other backends) overflow their event buffer, the kernel
+        // drops individual events and emits a Rescan flag telling us to re-scan the subtree.
+        // Without handling this, modified source files can be silently missed.
+        if debounced_event.event.need_rescan() {
+            warn!(
+                "Received rescan event for paths {:?}, triggering full rescan",
+                debounced_event.event.paths
+            );
+            need_full_rescan = true;
+            break;
         }
 
         tracing::debug!(event = ?debounced_event.event, "Processing FS event");
@@ -210,13 +253,13 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
         // Apply file removals
         for path in paths_to_remove {
             picker.remove_file_by_path(path);
-            MMAP_CACHE.invalidate(path);
+            // No need to invalidate mmap — the FileItem (and its mmap) is dropped
         }
 
         // Apply file additions/modifications and collect paths for git status update
         let mut files_to_update_git_status = Vec::with_capacity(paths_to_add_or_modify.len());
         for path in paths_to_add_or_modify {
-            MMAP_CACHE.invalidate(path);
+            // on_create_or_modify clears the mmap internally when modified time changes
             if let Some(file) = picker.on_create_or_modify(path) {
                 files_to_update_git_status.push(file.path.clone());
             }
@@ -255,8 +298,9 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
 fn trigger_full_rescan() {
     info!("Triggering full filesystem rescan");
 
-    // Clear mmap cache since file contents may have changed
-    MMAP_CACHE.clear();
+    // Note: no need to clear mmaps — they are backed by the kernel page cache
+    // and automatically reflect file changes. Old FileItems (and their mmaps)
+    // are dropped when the picker rebuilds its file list.
 
     let Ok(mut file_picker_guard) = FILE_PICKER.write() else {
         error!("Failed to acquire file picker write lock for full rescan");
@@ -329,4 +373,39 @@ fn is_ignore_definition_path(path: &Path) -> bool {
         path.file_name().and_then(|f| f.to_str()),
         Some(".ignore") | Some(".gitignore")
     )
+}
+
+/// Collects immediate non-ignored subdirectories of `base_path` using the `ignore` crate
+/// to respect .gitignore, .ignore, and global gitignore rules. This is used to set up
+/// selective file watching — only non-ignored directories get a recursive watcher,
+/// preventing gitignored directories like `target/` from flooding the OS event buffer.
+fn collect_non_ignored_dirs(base_path: &Path) -> Vec<PathBuf> {
+    use ignore::WalkBuilder;
+
+    let walker = WalkBuilder::new(base_path)
+        .hidden(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .ignore(true)
+        .follow_links(false)
+        .max_depth(Some(1))
+        .build();
+
+    let mut dirs = Vec::new();
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+
+        // Skip the root directory itself
+        if path == base_path {
+            continue;
+        }
+
+        if path.is_dir() && !is_git_file(path) {
+            dirs.push(path.to_path_buf());
+        }
+    }
+
+    dirs
 }

@@ -66,11 +66,11 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
     }
 
     pub(crate) fn begin(&mut self) -> Result<bool, S::Error> {
-        self.sink.begin(&self.searcher)
+        self.sink.begin(self.searcher)
     }
 
     pub(crate) fn finish(&mut self, byte_count: u64) -> Result<(), S::Error> {
-        self.sink.finish(&self.searcher, &SinkFinish { byte_count })
+        self.sink.finish(self.searcher, &SinkFinish { byte_count })
     }
 
     pub(crate) fn match_by_line(&mut self, buf: &[u8]) -> Result<bool, S::Error> {
@@ -93,10 +93,8 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
                 self.shortest_match(slice)?.is_some()
             };
             self.set_pos(line.end());
-            if matched {
-                if !self.sink_matched(buf, &line)? {
-                    return Ok(false);
-                }
+            if matched && !self.sink_matched(buf, &line)? {
+                return Ok(false);
             }
         }
         Ok(true)
@@ -166,7 +164,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
         let offset = self.absolute_byte_offset + range.start() as u64;
         let linebuf = &buf[*range];
         let keepgoing = self.sink.matched(
-            &self.searcher,
+            self.searcher,
             &SinkMatch {
                 bytes: linebuf,
                 absolute_byte_offset: offset,
@@ -204,10 +202,10 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
                 return true;
             }
         }
-        if let Some(non_matching) = self.matcher.non_matching_bytes() {
-            if non_matching.contains(self.config.line_term.as_byte()) {
-                return true;
-            }
+        if let Some(non_matching) = self.matcher.non_matching_bytes()
+            && non_matching.contains(self.config.line_term.as_byte())
+        {
+            return true;
         }
         false
     }

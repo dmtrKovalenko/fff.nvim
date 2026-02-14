@@ -146,6 +146,7 @@ local function init()
       send_to_quickfix = '<C-q>',
       focus_list = '<leader>l',
       focus_preview = '<leader>p',
+      toggle_grep_regex = '<S-Tab>',
     },
     hl = {
       border = 'FloatBorder',
@@ -187,6 +188,11 @@ local function init()
       -- Grep highlights
       grep_match = 'IncSearch', -- Highlight for matched text in grep results
       grep_line_number = 'LineNr', -- Highlight for :line:col location in grep results
+      grep_regex_active = 'DiagnosticInfo', -- Highlight for keybind + label when regex is on
+      grep_regex_inactive = 'Comment', -- Highlight for keybind + label when regex is off (plain mode)
+      grep_fuzzy_active = 'DiagnosticHint', -- Highlight for keybind + label when fuzzy is on
+      -- Cross-mode suggestion highlights
+      suggestion_header = 'WarningMsg', -- Highlight for the "No results found. Suggested..." banner
     },
     frecency = {
       enabled = true,
@@ -215,6 +221,8 @@ local function init()
       max_file_size = 10 * 1024 * 1024, -- Skip files larger than 10MB
       max_matches_per_file = 200, -- Maximum matches per file
       smart_case = true, -- Case-insensitive unless query has uppercase
+      time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
+      modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
     },
   }
 

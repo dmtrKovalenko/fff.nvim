@@ -1,99 +1,47 @@
 --- Grep Renderer
 --- Custom renderer for live grep results with file grouping.
 --- Consecutive matches from the same file are grouped under a file header line.
---- The header is a real buffer line (like combo boost) — cursor skips it.
+--- The header reuses the same rendering as the file picker list (file_renderer)
+--- for visual consistency — same icon, filename, directory path, git highlights.
 local M = {}
 
--- ── File group header rendering ────────────────────────────────────────
+local file_renderer = require('fff.file_renderer')
 
---- Build the file group header line.
---- Format: "  icon filename  relative/path ─────────"
+--- Build the file group header line using the same layout as file_renderer.
+--- Delegates to file_renderer.render_line (with combo disabled).
 ---@param item table Grep match item (used for file metadata)
 ---@param ctx table Render context
 ---@return string The header line string
----@return number The byte length of the text portion (before dashes)
 local function build_group_header(item, ctx)
-  local icons = require('fff.file_picker.icons')
-  local ext = item.name and item.name:match('%.([^%.]+)$') or nil
-  local icon, _ = icons.get_icon(item.name, ext, false)
-
-  local name = item.name or ''
-  local rel_path = item.relative_path or ''
-
-  -- Show directory portion (relative_path without the filename)
-  local dir_path = ''
-  if #rel_path > #name then
-    dir_path = rel_path:sub(1, #rel_path - #name)
-    -- Remove trailing slash
-    if dir_path:sub(-1) == '/' then dir_path = dir_path:sub(1, -2) end
-  end
-
-  local text_parts = {}
-  table.insert(text_parts, ' ')
-  if icon then
-    table.insert(text_parts, icon)
-    table.insert(text_parts, ' ')
-  end
-  table.insert(text_parts, name)
-  if dir_path ~= '' then
-    table.insert(text_parts, '  ')
-    table.insert(text_parts, dir_path)
-  end
-  table.insert(text_parts, ' ')
-
-  local text = table.concat(text_parts)
-  local text_display_w = vim.fn.strdisplaywidth(text)
-  local remaining = math.max(0, ctx.win_width - text_display_w - 2) -- -2 for sign column
-  local header = text .. string.rep('─', remaining)
-
-  local padding = math.max(0, ctx.win_width - vim.fn.strdisplaywidth(header) + 5)
-  return header .. string.rep(' ', padding), #text
+  -- file_renderer.render_line checks (item_idx == 1 and ctx.has_combo) for combo header.
+  -- We pass item_idx=0 and disable has_combo to suppress combo logic entirely.
+  local saved_has_combo = ctx.has_combo
+  ctx.has_combo = false
+  local lines = file_renderer.render_line(item, ctx, 0)
+  ctx.has_combo = saved_has_combo
+  return lines[1]
 end
 
---- Apply highlights for a file group header line.
+--- Apply highlights for a file group header line using file_renderer.
+--- Delegates to file_renderer.apply_highlights so all highlight groups
+--- (icon, filename, git text color, directory path, git sign) match exactly.
 ---@param item table Grep match item
 ---@param ctx table Render context
 ---@param buf number Buffer handle
 ---@param ns_id number Namespace id
----@param row number 0-based row in buffer
+---@param row number 0-based row in buffer (header line)
 local function apply_group_header_highlights(item, ctx, buf, ns_id, row)
-  local config = ctx.config
-  local icons = require('fff.file_picker.icons')
-  local git_utils = require('fff.git_utils')
-
-  -- Apply border/dash highlight across entire line
-  pcall(vim.api.nvim_buf_add_highlight, buf, ns_id, config.hl.border or 'FloatBorder', row, 0, -1)
-
-  -- Icon highlight
-  local ext = item.name and item.name:match('%.([^%.]+)$') or nil
-  local icon, icon_hl = icons.get_icon(item.name, ext, false)
-  if icon and icon_hl then
-    -- Find icon position: " icon " — icon starts at byte 1
-    local icon_start = 1
-    pcall(vim.api.nvim_buf_add_highlight, buf, ns_id, icon_hl, row, icon_start, icon_start + #icon)
-  end
-
-  -- Filename highlight (bold/bright)
-  local name = item.name or ''
-  local name_start = 1 + (icon and (#icon + 1) or 0)
-  pcall(vim.api.nvim_buf_add_highlight, buf, ns_id, 'Normal', row, name_start, name_start + #name)
-
-  -- Git sign on the header line
-  local sign_char = git_utils.get_border_char(item.git_status)
-  local sign_hl = git_utils.get_border_highlight(item.git_status)
-  if sign_char and sign_char ~= '' then
-    pcall(vim.api.nvim_buf_set_extmark, buf, ns_id, row, 0, {
-      sign_text = sign_char,
-      sign_hl_group = sign_hl,
-      priority = 1000,
-    })
-  end
+  local line_content = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ''
+  -- file_renderer.apply_highlights uses 1-based line_idx and checks (cursor == item_idx).
+  -- Pass item_idx=0 so the header is never treated as the cursor item.
+  local saved_cursor = ctx.cursor
+  ctx.cursor = -1
+  file_renderer.apply_highlights(item, ctx, 0, buf, ns_id, row + 1, line_content)
+  ctx.cursor = saved_cursor
 end
 
--- ── Match line rendering ───────────────────────────────────────────────
-
 --- Render a grep match line (grouped: no filename, just location + content).
---- Format: "  :line:col  matched line content"
+--- Format: " :line:col  matched line content"
 ---@param item table Grep match item
 ---@param ctx table Render context
 ---@return string The match line string
@@ -105,12 +53,26 @@ local function render_match_line(item, ctx)
   local content = vim.trim(raw_content)
 
   -- Indent + location + separator + content
-  local indent = '  '
-  local prefix_len = #indent + #location + #separator
-  local available = ctx.win_width - prefix_len - 2
+  local indent = ' '
+  -- Prefix is always ASCII so byte length == display width
+  local prefix_display_w = #indent + #location + #separator
+  local available = ctx.win_width - prefix_display_w - 2
   local was_truncated = false
-  if #content > available and available > 3 then
-    content = content:sub(1, available - 1) .. '…'
+  local content_display_w = vim.fn.strdisplaywidth(content)
+  if content_display_w > available and available > 3 then
+    -- UTF-8 aware truncation: binary search for the character count that
+    -- fits within the available display width (handles multi-byte and wide chars)
+    local nchars = vim.fn.strchars(content)
+    local lo, hi = 0, nchars
+    while lo < hi do
+      local mid = math.floor((lo + hi + 1) / 2)
+      if vim.fn.strdisplaywidth(vim.fn.strcharpart(content, 0, mid)) <= available - 1 then
+        lo = mid
+      else
+        hi = mid - 1
+      end
+    end
+    content = vim.fn.strcharpart(content, 0, lo) .. '…'
     was_truncated = true
   end
 
@@ -121,7 +83,7 @@ local function render_match_line(item, ctx)
   item._leading_ws = leading_ws
   item._was_truncated = was_truncated
   item._match_indent = #indent
-  item._content_offset = prefix_len -- byte offset where content starts in the line
+  item._content_offset = prefix_display_w -- byte offset where content starts in the line
   item._trimmed_content = content -- trimmed content string for treesitter parsing
 
   return line .. string.rep(' ', padding)
@@ -137,14 +99,18 @@ end
 ---@param line_content string The rendered line text
 local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line_content)
   local config = ctx.config
-  local git_utils = require('fff.git_utils')
   local is_cursor = item_idx == ctx.cursor
-  local indent = item._match_indent or 2
+  local indent = item._match_indent or 1
 
-  -- 1. Cursor line highlight
+  -- 1. Cursor line highlight — use hl_group + hl_eol instead of line_hl_group
+  -- so that higher-priority inline extmarks (IncSearch match ranges at 200)
+  -- cleanly override both fg and bg on the cursor line.
   if is_cursor then
     vim.api.nvim_buf_set_extmark(buf, ns_id, row, 0, {
-      line_hl_group = config.hl.cursor,
+      end_col = 0,
+      end_row = row + 1,
+      hl_group = config.hl.cursor,
+      hl_eol = true,
       priority = 100,
     })
   end
@@ -239,8 +205,6 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
   end
 end
 
--- ── Public interface ───────────────────────────────────────────────────
-
 --- Render a single item's lines (called by list_renderer's generate_item_lines).
 --- Returns 2 lines [header, match] for the first match of a file group,
 --- or 1 line [match] for subsequent matches in the same file.
@@ -282,7 +246,8 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   -- Apply match line highlights
   apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line_content)
 
-  -- If this item has a group header, highlight it too (it's the line above)
+  -- If this item has a group header, highlight it (the line above)
+  -- using file_renderer for identical appearance to the file picker list.
   if item._has_group_header then apply_group_header_highlights(item, ctx, buf, ns_id, row - 1) end
 end
 

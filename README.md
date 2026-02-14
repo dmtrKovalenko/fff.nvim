@@ -161,6 +161,8 @@ require('fff').setup({
       -- multi-select keymaps for quickfix
       toggle_select = '<Tab>',
       send_to_quickfix = '<C-q>',
+      -- grep mode: cycle between plain text, regex, and fuzzy search
+      toggle_grep_regex = '<S-Tab>',
     },
     hl = {
       border = 'FloatBorder',
@@ -199,6 +201,13 @@ require('fff').setup({
       git_sign_renamed_selected = 'FFFGitSignRenamedSelected',
       git_sign_untracked_selected = 'FFFGitSignUntrackedSelected',
       git_sign_ignored_selected = 'FFFGitSignIgnoredSelected',
+      -- Grep highlights
+      grep_match = 'IncSearch',               -- Highlight for matched text in grep results
+      grep_line_number = 'LineNr',            -- Highlight for :line:col location
+      grep_regex_active = 'DiagnosticInfo',   -- Highlight for keybind + label when regex is on
+      grep_regex_inactive = 'Comment',        -- Highlight for keybind + label when regex is off
+      -- Cross-mode suggestion highlights
+      suggestion_header = 'WarningMsg',       -- Highlight for the "No results found. Suggested..." banner
     },
     -- Store file open frecency
     frecency = {
@@ -225,6 +234,14 @@ require('fff').setup({
       enabled = true,
       log_file = vim.fn.stdpath('log') .. '/fff.log',
       log_level = 'info',
+    },
+    -- Live grep search configuration
+    grep = {
+      max_file_size = 10 * 1024 * 1024, -- Skip files larger than 10MB
+      max_matches_per_file = 200, -- Maximum matches per file
+      smart_case = true, -- Case-insensitive unless query has uppercase
+      time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
+      modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
     }
 })
 ```
@@ -272,6 +289,55 @@ Select multiple files and send them to Neovim's quickfix list (keymaps are confi
 
 - `<Tab>` - Toggle selection for the current file (shows thick border `▊` in signcolumn)
 - `<C-q>` - Send selected files to quickfix list and close picker
+
+#### Live Grep Search Modes
+
+Live grep supports three search modes, cycled with `<S-Tab>`:
+
+- **Plain text** (default) - The query is matched literally. Special regex characters like `.`, `*`, `(`, `)`, `$` have no special meaning. This is the safest mode for searching code containing regex metacharacters.
+- **Regex** - The query is interpreted as a regular expression. Supports character classes (`[a-z]`), quantifiers (`+`, `*`, `{n}`), alternation (`foo|bar`), anchors (`^`, `$`), word boundaries (`\b`), and more.
+- **Fuzzy** - The query is fuzzy matched using Smith-Waterman scoring. Accommodates typos and scattered characters (e.g., "mtxlk" matches "mutex_lock"). Results are filtered by a quality threshold to avoid overly fuzzy matches.
+
+The current mode is shown on the right side of the input field (e.g., `plain`, `regex`, `fuzzy`) with color-coded highlighting.
+
+You can customize which modes are available and their cycling order globally in your configuration, or per-call when invoking `live_grep()`.
+
+**Global configuration:**
+```lua
+require('fff').setup({
+  grep = {
+    modes = { 'plain', 'regex' }, -- Only plain and regex, no fuzzy
+  }
+})
+```
+
+**Per-call configuration:**
+```lua
+-- Only fuzzy and plain modes for this specific grep
+require('fff').live_grep({
+  grep = {
+    modes = { 'fuzzy', 'plain' },
+  }
+})
+
+-- Single mode (hides mode indicator completely)
+require('fff').live_grep({
+  grep = {
+    modes = { 'fuzzy' },
+  }
+})
+```
+
+When only one mode is configured, the mode indicator is hidden completely and the cycle keybind does nothing.
+
+#### Cross-Mode Suggestions
+
+When a search returns no results, FFF automatically queries the opposite search mode and displays the results as suggestions:
+
+- **File search with no matches** → shows suggested **content matches** (grep results) for the same query
+- **Grep search with no matches** → shows suggested **file name matches** for the same query
+
+Suggestions are clearly labeled with a "No results found. Suggested ..." banner (highlighted with `hl.suggestion_header`). You can navigate and select suggestion items just like normal results — selecting a grep suggestion will open the file at the matching line.
 
 #### Git Status Highlighting
 

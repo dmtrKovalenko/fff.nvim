@@ -300,6 +300,11 @@ M.state = {
     page_size = 20, -- Items per page (updated dynamically)
     total_matched = 0, -- Total results from last search
     prefetch_margin = 5, -- Trigger refetch when within N items of edge
+    -- Grep file-based pagination: stores the file_offset for each visited page
+    -- so we can go backwards. grep_file_offsets[1] = 0 (page 0 starts at file 0),
+    -- grep_file_offsets[2] = next_file_offset from page 0, etc.
+    grep_file_offsets = {},
+    grep_next_file_offset = 0,
   },
 
   config = nil,
@@ -330,6 +335,17 @@ M.state = {
   mode = nil,
   -- Grep-specific config overrides (max_file_size, smart_case, etc.)
   grep_config = nil,
+  -- Grep search mode: 'plain', 'regex', or 'fuzzy'
+  grep_mode = 'plain',
+  -- Regex fallback error: set when regex compilation fails and search fell back to literal
+  grep_regex_fallback_error = nil,
+
+  -- Cross-mode suggestion state: when primary search yields 0 results,
+  -- we query the opposite mode and show those as suggestions.
+  -- suggestion_items: array of items from the opposite search
+  -- suggestion_source: 'grep' (suggestions from grep) or 'files' (suggestions from file search)
+  suggestion_items = nil,
+  suggestion_source = nil,
 }
 
 function M.create_ui()
@@ -614,8 +630,12 @@ function M.setup_windows()
 
   if M.enabled_preview() then
     vim.api.nvim_win_set_option(M.state.preview_win, 'wrap', false)
-    vim.api.nvim_win_set_option(M.state.preview_win, 'cursorline', false)
-    vim.api.nvim_win_set_option(M.state.preview_win, 'number', false)
+    vim.api.nvim_win_set_option(M.state.preview_win, 'cursorline', M.state.mode == 'grep')
+    vim.api.nvim_win_set_option(
+      M.state.preview_win,
+      'number',
+      M.state.mode == 'grep' or (preview_config and preview_config.line_numbers or false)
+    )
     vim.api.nvim_win_set_option(M.state.preview_win, 'relativenumber', false)
     vim.api.nvim_win_set_option(M.state.preview_win, 'signcolumn', 'no')
     vim.api.nvim_win_set_option(M.state.preview_win, 'foldcolumn', '0')
@@ -709,7 +729,7 @@ local function move_list_cursor(direction)
   if new_cursor ~= M.state.cursor then
     M.state.cursor = new_cursor
     M.render_list()
-    if M.state.mode == 'grep' then
+    if M.state.mode == 'grep' or M.state.suggestion_source == 'grep' then
       M.update_preview_smart()
     else
       M.update_preview()
@@ -757,6 +777,7 @@ function M.setup_keymaps()
   set_keymap({ 'i', 'n' }, keymaps.toggle_debug, M.toggle_debug, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.toggle_select, M.toggle_select, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.send_to_quickfix, M.send_to_quickfix, input_opts)
+  set_keymap({ 'i', 'n' }, keymaps.toggle_grep_regex, M.toggle_grep_regex, input_opts)
 
   -- List buffer
   set_keymap('n', keymaps.close, M.close, list_opts)
@@ -814,13 +835,29 @@ function M.toggle_debug()
     local current_query = M.state.query
     local current_items = M.state.items
     local current_cursor = M.state.cursor
+    -- Preserve mode-specific state across close/open cycle
+    local current_mode = M.state.mode
+    local current_renderer = M.state.renderer
+    local current_grep_mode = M.state.grep_mode
+    local current_grep_config = M.state.grep_config
+    local current_filtered_items = M.state.filtered_items
+    local current_selected_files = M.state.selected_files
+    local current_selected_items = M.state.selected_items
 
     M.close()
-    M.open()
+    M.open({
+      mode = current_mode,
+      renderer = current_renderer,
+      grep_config = current_grep_config,
+    })
 
     M.state.query = current_query
     M.state.items = current_items
     M.state.cursor = current_cursor
+    M.state.grep_mode = current_grep_mode
+    M.state.filtered_items = current_filtered_items
+    M.state.selected_files = current_selected_files
+    M.state.selected_items = current_selected_items
     M.render_list()
     M.update_preview()
     M.update_status()
@@ -834,6 +871,41 @@ function M.toggle_debug()
   else
     M.update_results()
   end
+end
+
+--- Cycle through grep search modes based on configured modes list.
+--- Only works when the picker is in grep mode. Triggers a re-search
+--- with the current query using the new mode.
+function M.toggle_grep_regex()
+  if not M.state.active or M.state.mode ~= 'grep' then return end
+
+  local config = conf.get()
+  -- Use grep_config.modes if provided, otherwise fall back to global config
+  local modes = (M.state.grep_config and M.state.grep_config.modes)
+    or config.grep.modes
+    or { 'plain', 'regex', 'fuzzy' }
+
+  -- If only one mode configured, no cycling needed
+  if #modes <= 1 then return end
+
+  local current_idx = 1
+  for i, m in ipairs(modes) do
+    if m == M.state.grep_mode then
+      current_idx = i
+      break
+    end
+  end
+  M.state.grep_mode = modes[(current_idx % #modes) + 1]
+
+  -- Clear fallback error when switching away from regex
+  if M.state.grep_mode ~= 'regex' then M.state.grep_regex_fallback_error = nil end
+
+  -- Force status refresh by clearing the cached value
+  M.state.last_status_info = nil
+  M.update_status()
+
+  -- Re-run the search with the current query in the new mode
+  if M.state.query ~= '' then M.update_results_sync() end
 end
 
 function M.on_input_change()
@@ -913,16 +985,26 @@ function M.update_results_sync()
 
   local results
   if M.state.mode == 'grep' then
+    M.state.grep_regex_fallback_error = nil
     if M.state.query == '' then
       -- Empty query: show empty state (no search needed)
       results = {}
       M.state.pagination.total_matched = 0
+      M.state.pagination.grep_file_offsets = {}
+      M.state.pagination.grep_next_file_offset = 0
     else
-      -- Grep mode: use live_grep search
+      -- Grep mode: use live_grep search (file_offset=0 for first page)
       local grep = require('fff.grep')
-      local grep_result = grep.search(M.state.query, 0, page_size, M.state.grep_config)
+      local grep_result = grep.search(M.state.query, 0, page_size, M.state.grep_config, M.state.grep_mode)
       results = grep_result.items or {}
       M.state.pagination.total_matched = grep_result.total_matched or 0
+      M.state.pagination.grep_file_offsets = { 0 } -- Page 0 starts at file 0
+      M.state.pagination.grep_next_file_offset = grep_result.next_file_offset or 0
+      M.state.grep_regex_fallback_error = grep_result.regex_fallback_error or nil
+      -- Record offset for page 1 so forward navigation works immediately
+      if grep_result.next_file_offset and grep_result.next_file_offset > 0 then
+        M.state.pagination.grep_file_offsets[2] = grep_result.next_file_offset
+      end
     end
     M.state.location = nil -- Location comes from selected item, not query
   else
@@ -946,10 +1028,47 @@ function M.update_results_sync()
   M.state.items = results
   M.state.filtered_items = results
 
+  -- Cross-mode suggestions: when primary search yields 0 results with a non-empty query,
+  -- query the opposite mode and store results as suggestions.
+  M.state.suggestion_items = nil
+  M.state.suggestion_source = nil
+  if #results == 0 and M.state.query ~= '' then
+    if M.state.mode == 'grep' then
+      -- Grep returned nothing — try file search as suggestion
+      local suggestion_results = file_picker.search_files_paginated(
+        M.state.query,
+        M.state.current_file_cache,
+        M.state.config.max_threads,
+        nil,
+        0,
+        page_size
+      )
+      if suggestion_results and #suggestion_results > 0 then
+        M.state.suggestion_items = suggestion_results
+        M.state.suggestion_source = 'files'
+      end
+    else
+      -- File search returned nothing — try grep as suggestion
+      local grep = require('fff.grep')
+      local grep_result = grep.search(M.state.query, 0, page_size, M.state.grep_config, false)
+      local grep_items = grep_result and grep_result.items or {}
+      if #grep_items > 0 then
+        M.state.suggestion_items = grep_items
+        M.state.suggestion_source = 'grep'
+      end
+    end
+  end
+
+  -- When suggestions are available, use them as the navigable item list
+  -- so the user can browse and select them with normal keybindings.
+  if M.state.suggestion_items and #M.state.suggestion_items > 0 then
+    M.state.filtered_items = M.state.suggestion_items
+  end
+
   -- Results always come in descending order (best first) from Rust
   -- For bottom prompt, we render in reverse so best items appear at bottom
   -- But cursor index should still point to items[1] (best item)
-  M.state.cursor = #results > 0 and 1 or 1
+  M.state.cursor = #M.state.filtered_items > 0 and 1 or 1
 
   M.render_debounced()
 end
@@ -976,13 +1095,26 @@ function M.load_page_at_index(new_page_index, adjust_cursor_fn)
 
   local ok, results
   if M.state.mode == 'grep' then
+    -- File-based pagination: look up the file_offset for this page from our history
+    local file_offset = M.state.pagination.grep_file_offsets[new_page_index + 1] -- 1-based Lua index
+    if file_offset == nil then
+      -- We don't have a recorded offset for this page (shouldn't happen in normal flow)
+      return false
+    end
+
     local grep = require('fff.grep')
-    ok, results = pcall(grep.search, M.state.query, new_page_index * page_size, page_size, M.state.grep_config)
+    ok, results = pcall(grep.search, M.state.query, file_offset, page_size, M.state.grep_config, M.state.grep_mode)
     if ok and results then
-      -- grep.search returns the full result table, extract items and update total
       local grep_result = results
       results = grep_result.items or {}
       M.state.pagination.total_matched = grep_result.total_matched or 0
+      M.state.pagination.grep_next_file_offset = grep_result.next_file_offset or 0
+      M.state.grep_regex_fallback_error = grep_result.regex_fallback_error or nil
+
+      -- Record the offset for the NEXT page so forward navigation works
+      if grep_result.next_file_offset and grep_result.next_file_offset > 0 then
+        M.state.pagination.grep_file_offsets[new_page_index + 2] = grep_result.next_file_offset
+      end
     end
   else
     ok, results = pcall(
@@ -1054,9 +1186,10 @@ function M.load_next_page()
   if page_size == 0 then return false end
 
   if M.state.mode == 'grep' then
-    -- Grep total_match_count is approximate (early termination), so we can't
-    -- reliably compute max_page_index. Instead, try loading the next page and
-    -- let load_page_at_index return false when #results == 0.
+    -- File-based pagination: check if there are more files to search
+    if M.state.pagination.grep_next_file_offset == 0 then
+      return false -- No more files
+    end
     local new_page_index = current_page + 1
     return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = 1 end)
   end
@@ -1223,6 +1356,9 @@ local function render_grep_empty_state(ctx)
 
   vim.api.nvim_buf_clear_namespace(M.state.list_buf, M.state.ns_id, 0, -1)
 
+  -- For bottom prompt, ensure empty state is anchored at the bottom
+  if prompt_position == 'bottom' then scroll_to_bottom() end
+
   -- Apply highlights
   for _, h in ipairs(hl_cmds) do
     pcall(vim.api.nvim_buf_add_highlight, M.state.list_buf, M.state.ns_id, h.hl, h.row, h.col_start, h.col_end)
@@ -1251,6 +1387,18 @@ local function render_grep_empty_state(ctx)
   end
 end
 
+--- Get the appropriate renderer for cross-mode suggestions.
+--- When file search yields no results we suggest grep results (use grep_renderer),
+--- and vice versa (use file_renderer).
+---@return table renderer
+function M.get_suggestion_renderer()
+  if M.state.suggestion_source == 'grep' then
+    return require('fff.grep.grep_renderer')
+  else
+    return require('fff.file_renderer')
+  end
+end
+
 --- Build rendering context with all necessary data
 --- @return table Context object with items, config, dimensions, combo info, etc.
 local function build_render_context()
@@ -1272,10 +1420,10 @@ local function build_render_context()
     M.state.cursor = #items
   end
 
-  -- Combo detection (only in file picker mode, not grep)
+  -- Combo detection (only in file picker mode with real results, not grep or suggestions)
   local combo_boost_score_multiplier = config.history and config.history.combo_boost_multiplier or 100
   local has_combo, combo_header_line, combo_header_text_len, combo_item_index
-  if M.state.mode == 'grep' then
+  if M.state.mode == 'grep' or M.state.suggestion_source then
     has_combo = false
     combo_header_line = nil
     combo_header_text_len = nil
@@ -1324,12 +1472,13 @@ local function build_render_context()
     iter_start = iter_start,
     iter_end = iter_end,
     iter_step = iter_step,
-    renderer = M.state.renderer, -- Custom renderer (if provided)
+    renderer = M.state.suggestion_source and M.get_suggestion_renderer() or M.state.renderer,
     query = M.state.query, -- Current search query (used by grep renderer for empty-state detection)
     selected_files = M.state.selected_files, -- Selected files set (used by file renderer for selection markers)
     selected_items = M.state.selected_items, -- Selected items map (used by grep renderer for per-occurrence markers)
     mode = M.state.mode, -- Current mode (nil or 'grep')
     format_file_display = format_file_display, -- Helper for renderers to format filename + dir path
+    suggestion_source = M.state.suggestion_source, -- Cross-mode suggestion source ('grep' or 'files')
   }
 end
 
@@ -1361,7 +1510,8 @@ local function finalize_render(item_to_lines, ctx)
 
   -- Scrollbar is only meaningful for file picker mode where total_matched is exact.
   -- Grep uses early termination so total_matched is approximate — scrollbar would be misleading.
-  if ctx.mode ~= 'grep' then
+  -- Also skip scrollbar when showing cross-mode suggestions (total_matched reflects the primary search, not suggestions).
+  if ctx.mode ~= 'grep' and not ctx.suggestion_source then
     scrollbar.render(M.state.layout, ctx.config, M.state.list_win, M.state.pagination, ctx.prompt_position)
   end
 end
@@ -1382,8 +1532,84 @@ function M.render_list()
   -- by finalize_render for combo overlays and scrollbar.
   local item_to_lines = list_renderer.render(ctx, M.state.list_buf, M.state.list_win, M.state.ns_id)
 
+  -- For bottom prompt, always ensure content is anchored at the bottom after rendering
+  -- This prevents results from appearing in the middle when there are few items
+  if ctx.prompt_position == 'bottom' then scroll_to_bottom() end
+
   -- Finalize with combo overlays and scrollbar
   finalize_render(item_to_lines, ctx)
+end
+
+--- Build and set the preview window title for a given item and location.
+--- For grep mode, appends :line to the path.
+---@param item table The current item
+---@param location table|nil The effective location
+function M.update_preview_title(item, location)
+  if not M.state.preview_win or not vim.api.nvim_win_is_valid(M.state.preview_win) then return end
+
+  local relative_path = item.relative_path or item.path
+  local max_title_width = vim.api.nvim_win_get_width(M.state.preview_win)
+
+  -- Append :line for grep mode or grep suggestions
+  local suffix = ''
+  local is_grep_item = M.state.mode == 'grep' or M.state.suggestion_source == 'grep'
+  if is_grep_item and location and location.line then suffix = ':' .. tostring(location.line) end
+
+  local display_path = relative_path .. suffix
+  local title
+
+  if #display_path + 2 <= max_title_width then
+    title = string.format(' %s ', display_path)
+  else
+    local available_chars = max_title_width - 2
+
+    local filename = vim.fn.fnamemodify(relative_path, ':t') .. suffix
+    if available_chars <= 3 then
+      title = filename
+    else
+      if #filename + 5 <= available_chars then
+        local normalized_path = vim.fs.normalize(relative_path)
+        local path_parts = vim.split(normalized_path, '[/\\]', { plain = false })
+
+        local segments = {}
+        for _, part in ipairs(path_parts) do
+          if part ~= '' then table.insert(segments, part) end
+        end
+
+        -- Replace last segment with filename+suffix
+        segments[#segments] = vim.fn.fnamemodify(relative_path, ':t') .. suffix
+
+        local segments_to_show = { segments[#segments] }
+        local current_length = #segments_to_show[1] + 4 -- 4 for '../' prefix and spaces
+
+        for i = #segments - 1, 1, -1 do
+          local segment = segments[i]
+          local new_length = current_length + #segment + 1 -- +1 for '/'
+
+          if new_length <= available_chars then
+            table.insert(segments_to_show, 1, segment)
+            current_length = new_length
+          else
+            break
+          end
+        end
+
+        if #segments_to_show == #segments then
+          title = string.format(' %s ', table.concat(segments_to_show, '/'))
+        else
+          title = string.format(' ../%s ', table.concat(segments_to_show, '/'))
+        end
+      else
+        local truncated = filename:sub(1, available_chars - 3) .. '...'
+        title = string.format(' %s ', truncated)
+      end
+    end
+  end
+
+  vim.api.nvim_win_set_config(M.state.preview_win, {
+    title = title,
+    title_pos = 'left',
+  })
 end
 
 function M.update_preview()
@@ -1408,14 +1634,20 @@ function M.update_preview()
 
   -- Check if we need to update the preview (file changed OR location changed)
   local effective_location = M.state.location
-  -- In grep mode, location comes from the match item, not from query parsing
-  if M.state.mode == 'grep' and item.line_number and item.line_number > 0 then
+  -- In grep mode (or when previewing grep suggestions), location comes from the match item
+  local is_grep_item = M.state.mode == 'grep' or M.state.suggestion_source == 'grep'
+  if is_grep_item and item.line_number and item.line_number > 0 then
     effective_location = { line = item.line_number }
     if item.col and item.col > 0 then
       effective_location.col = item.col + 1 -- Convert 0-based byte col to 1-based for highlight_location
     end
-    -- Pass match_ranges and the query for multi-occurrence highlighting in preview
+    -- Pass the query for multi-occurrence highlighting in preview (plain/regex modes).
+    -- For fuzzy mode, also pass the per-match byte offsets so the preview can highlight
+    -- the exact matched characters on the target line without re-searching.
     effective_location.grep_query = M.state.query
+    if M.state.grep_mode == 'fuzzy' and item.match_ranges then
+      effective_location.fuzzy_match_ranges = item.match_ranges
+    end
   end
 
   local location_changed = not vim.deep_equal(M.state.last_preview_location, effective_location)
@@ -1426,6 +1658,10 @@ function M.update_preview()
   if M.state.last_preview_file == item.path and location_changed then
     M.state.last_preview_location = effective_location and vim.deepcopy(effective_location) or nil
     preview.state.location = effective_location
+    -- Update title with new line number for grep/suggestion mode
+    if is_grep_item and effective_location and effective_location.line then
+      M.update_preview_title(item, effective_location)
+    end
     if M.state.preview_buf and vim.api.nvim_buf_is_valid(M.state.preview_buf) then
       preview.apply_location_highlighting(M.state.preview_buf)
     end
@@ -1437,61 +1673,7 @@ function M.update_preview()
   M.state.last_preview_file = item.path
   M.state.last_preview_location = effective_location and vim.deepcopy(effective_location) or nil
 
-  local relative_path = item.relative_path or item.path
-  local max_title_width = vim.api.nvim_win_get_width(M.state.preview_win)
-
-  local title
-  local target_length = max_title_width
-
-  if #relative_path + 2 <= target_length then
-    title = string.format(' %s ', relative_path)
-  else
-    local available_chars = target_length - 2
-
-    local filename = vim.fn.fnamemodify(relative_path, ':t')
-    if available_chars <= 3 then
-      title = filename
-    else
-      if #filename + 5 <= available_chars then
-        local normalized_path = vim.fs.normalize(relative_path)
-        local path_parts = vim.split(normalized_path, '[/\\]', { plain = false })
-
-        local segments = {}
-        for _, part in ipairs(path_parts) do
-          if part ~= '' then table.insert(segments, part) end
-        end
-
-        local segments_to_show = { filename }
-        local current_length = #filename + 4 -- 4 for '../' prefix and spaces
-
-        for i = #segments - 1, 1, -1 do
-          local segment = segments[i]
-          local new_length = current_length + #segment + 1 -- +1 for '/'
-
-          if new_length <= available_chars then
-            table.insert(segments_to_show, 1, segment)
-            current_length = new_length
-          else
-            break
-          end
-        end
-
-        if #segments_to_show == #segments then
-          title = string.format(' %s ', table.concat(segments_to_show, '/'))
-        else
-          title = string.format(' ../%s ', table.concat(segments_to_show, '/'))
-        end
-      else
-        local truncated_filename = filename:sub(1, available_chars - 3) .. '...'
-        title = string.format(' %s ', truncated_filename)
-      end
-    end
-  end
-
-  vim.api.nvim_win_set_config(M.state.preview_win, {
-    title = title,
-    title_pos = 'left',
-  })
+  M.update_preview_title(item, effective_location)
 
   if M.state.file_info_buf then preview.update_file_info_buffer(item, M.state.file_info_buf, M.state.cursor) end
 
@@ -1534,12 +1716,83 @@ end
 --- Update status information on the right side of input using virtual text
 function M.update_status(progress)
   if not M.state.active or not M.state.ns_id then return end
-  local status_info
+  local config = M.state.config
 
+  if M.state.mode == 'grep' then
+    -- Determine available modes to decide if we should show the mode indicator
+    -- Use grep_config.modes if provided, otherwise fall back to global config
+    local modes = (M.state.grep_config and M.state.grep_config.modes)
+      or config.grep.modes
+      or { 'plain', 'regex', 'fuzzy' }
+
+    -- When regex compilation failed and we fell back to literal search, show a warning
+    local fallback_label = nil
+    if M.state.grep_regex_fallback_error then fallback_label = 'invalid regex, using literal' end
+
+    -- If only one mode configured and no fallback error, hide the mode indicator completely
+    if #modes <= 1 and not fallback_label then
+      -- Clear any existing status and don't show anything
+      vim.api.nvim_buf_clear_namespace(M.state.input_buf, M.state.ns_id, 0, -1)
+      M.state.last_status_info = nil
+      return
+    end
+
+    -- Grep mode: show keybind + label, e.g. "<S-Tab> fuzzy"
+    local keybind = config.keymaps.toggle_grep_regex
+    -- Normalize: if it's a table of keys, use the first one for display
+    if type(keybind) == 'table' then keybind = keybind[1] or '<S-Tab>' end
+
+    local mode_labels = {
+      plain = 'plain',
+      regex = 'regex',
+      fuzzy = 'fuzzy',
+    }
+    local mode_label = mode_labels[M.state.grep_mode] or 'plain'
+    local hl
+    if M.state.grep_mode == 'plain' then
+      hl = config.hl.grep_regex_inactive or 'Comment'
+    elseif M.state.grep_mode == 'regex' then
+      hl = config.hl.grep_regex_active or 'DiagnosticInfo'
+    else -- fuzzy
+      hl = config.hl.grep_fuzzy_active or 'DiagnosticHint'
+    end
+
+    local cache_key = keybind .. M.state.grep_mode .. (fallback_label or '')
+    if cache_key == M.state.last_status_info then return end
+    M.state.last_status_info = cache_key
+
+    vim.api.nvim_buf_clear_namespace(M.state.input_buf, M.state.ns_id, 0, -1)
+
+    local win_width = vim.api.nvim_win_get_width(M.state.input_win)
+    local available_width = win_width - 2
+
+    local virt_text
+    if fallback_label then
+      local total_len = #fallback_label
+      local col_position = available_width - total_len
+      virt_text = { { fallback_label, 'DiagnosticWarn' } }
+      vim.api.nvim_buf_set_extmark(M.state.input_buf, M.state.ns_id, 0, 0, {
+        virt_text = virt_text,
+        virt_text_win_col = col_position,
+      })
+    else
+      local total_len = #keybind + 1 + #mode_label
+      local col_position = available_width - total_len
+      vim.api.nvim_buf_set_extmark(M.state.input_buf, M.state.ns_id, 0, 0, {
+        virt_text = {
+          { keybind .. ' ', hl },
+          { mode_label, hl },
+        },
+        virt_text_win_col = col_position,
+      })
+    end
+    return
+  end
+
+  -- File picker mode: show match counts
+  local status_info
   if progress and progress.is_scanning then
     status_info = string.format('Indexing files %d', progress.scanned_files_count)
-  elseif M.state.mode == 'grep' then
-    status_info = 'grep'
   else
     local search_metadata = file_picker.get_search_metadata()
     if #M.state.query < 2 then
@@ -1550,16 +1803,13 @@ function M.update_status(progress)
   end
 
   if status_info == M.state.last_status_info then return end
-
   M.state.last_status_info = status_info
 
   vim.api.nvim_buf_clear_namespace(M.state.input_buf, M.state.ns_id, 0, -1)
 
   local win_width = vim.api.nvim_win_get_width(M.state.input_win)
-  local available_width = win_width - 2 -- Account for borders
-  local status_len = #status_info
-
-  local col_position = available_width - status_len
+  local available_width = win_width - 2
+  local col_position = available_width - #status_info
 
   vim.api.nvim_buf_set_extmark(M.state.input_buf, M.state.ns_id, 0, 0, {
     virt_text = { { status_info, 'LineNr' } },
@@ -1586,7 +1836,7 @@ function M.move_up()
       if page_size > 0 then
         local has_more
         if M.state.mode == 'grep' then
-          has_more = true
+          has_more = M.state.pagination.grep_next_file_offset > 0
         else
           local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
           has_more = M.state.pagination.page_index < max_page
@@ -1612,7 +1862,7 @@ function M.move_up()
   end
 
   M.render_list()
-  if M.state.mode == 'grep' then
+  if M.state.mode == 'grep' or M.state.suggestion_source == 'grep' then
     M.update_preview_smart()
   else
     M.update_preview()
@@ -1661,7 +1911,7 @@ function M.move_down()
       if page_size > 0 then
         local has_more
         if M.state.mode == 'grep' then
-          has_more = true
+          has_more = M.state.pagination.grep_next_file_offset > 0
         else
           local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
           has_more = M.state.pagination.page_index < max_page
@@ -1677,7 +1927,7 @@ function M.move_down()
   end
 
   M.render_list()
-  if M.state.mode == 'grep' then
+  if M.state.mode == 'grep' or M.state.suggestion_source == 'grep' then
     M.update_preview_smart()
   else
     M.update_preview()
@@ -1726,8 +1976,6 @@ end
 --- Recall query from history with temporary min_combo_count=0
 function M.recall_query_from_history()
   if not M.state.active then return end
-  -- History cycling is not applicable in grep mode
-  if M.state.mode == 'grep' then return end
 
   -- Initialize offset on first press
   if M.state.history_offset == nil then
@@ -1737,14 +1985,15 @@ function M.recall_query_from_history()
     M.state.history_offset = M.state.history_offset + 1
   end
 
-  -- Fetch query at current offset from Rust
+  -- Fetch query at current offset from Rust (grep and file picker have separate histories)
   local fuzzy = require('fff.core').ensure_initialized()
-  local ok, query = pcall(fuzzy.get_historical_query, M.state.history_offset)
+  local history_fn = M.state.mode == 'grep' and fuzzy.get_historical_grep_query or fuzzy.get_historical_query
+  local ok, query = pcall(history_fn, M.state.history_offset)
 
   if not ok or not query then
     -- Reached end of history, wrap to beginning
     M.state.history_offset = 0
-    ok, query = pcall(fuzzy.get_historical_query, 0)
+    ok, query = pcall(history_fn, 0)
 
     if not ok or not query then
       -- No history available at all
@@ -1754,7 +2003,7 @@ function M.recall_query_from_history()
     end
   end
 
-  M.state.next_search_force_combo_boost = true
+  if M.state.mode ~= 'grep' then M.state.next_search_force_combo_boost = true end
 
   -- this is going to trigger the on_input_change handler with the normal search and render flow
   vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { M.state.config.prompt .. query })
@@ -1807,9 +2056,7 @@ end
 --- Format: "path:line:col" — uniquely identifies one match entry.
 ---@param item table Grep match item with path, line_number, col
 ---@return string
-local function grep_item_key(item)
-  return string.format('%s:%d:%d', item.path, item.line_number or 0, item.col or 0)
-end
+local function grep_item_key(item) return string.format('%s:%d:%d', item.path, item.line_number or 0, item.col or 0) end
 
 --- Toggle selection for the current item.
 --- In grep mode, selection is per-occurrence (individual match line).
@@ -1882,7 +2129,7 @@ function M.send_to_quickfix()
     else
       -- No selections: run an exhaustive search to get all matches
       local grep = require('fff.grep')
-      local exhaustive = grep.search(M.state.query, 0, 10000, M.state.grep_config)
+      local exhaustive = grep.search(M.state.query, 0, 10000, M.state.grep_config, M.state.grep_mode)
       local all_items = exhaustive and exhaustive.items or {}
 
       if #all_items == 0 then
@@ -1964,9 +2211,12 @@ function M.select(action)
   local relative_path = vim.fn.fnamemodify(path, ':.')
   local location = M.state.location -- Capture location before closing
   local query = M.state.query -- Capture query before closing for tracking
+  local mode = M.state.mode -- Capture mode before closing for tracking
+  local suggestion_source = M.state.suggestion_source -- Capture suggestion context
 
-  -- In grep mode, derive location from the match item itself (line_number/col)
-  if M.state.mode == 'grep' and item.line_number and item.line_number > 0 then
+  -- In grep mode (or when selecting a grep suggestion), derive location from the match item
+  local is_grep_item = mode == 'grep' or suggestion_source == 'grep'
+  if is_grep_item and item.line_number and item.line_number > 0 then
     location = { line = item.line_number }
     if item.col and item.col > 0 then
       location.col = item.col + 1 -- Convert 0-based byte col to 1-based
@@ -2005,7 +2255,11 @@ function M.select(action)
       if config.history and config.history.enabled then
         local fff = require('fff.core').ensure_initialized()
         -- Track in background thread (non-blocking, handled by Rust)
-        pcall(fff.track_query_completion, query, item.path)
+        if mode == 'grep' then
+          pcall(fff.track_grep_query, query)
+        else
+          pcall(fff.track_query_completion, query, item.path)
+        end
       end
     end
   end)
@@ -2080,6 +2334,10 @@ function M.close()
   M.state.selected_items = {}
   M.state.mode = nil
   M.state.grep_config = nil
+  M.state.grep_mode = 'plain'
+  M.state.grep_regex_fallback_error = nil
+  M.state.suggestion_items = nil
+  M.state.suggestion_source = nil
   M.state.combo_visible = true
   M.state.combo_initial_cursor = nil
   M.reset_history_state()
@@ -2252,6 +2510,15 @@ function M.open(opts)
 
   local merged_config, base_path = initialize_picker(opts)
   if not merged_config then return end
+
+  -- Initialize grep_mode to first configured mode when opening in grep mode
+  if M.state.mode == 'grep' then
+    -- Use grep_config.modes if provided, otherwise fall back to global config
+    local modes = (M.state.grep_config and M.state.grep_config.modes)
+      or merged_config.grep.modes
+      or { 'plain', 'regex', 'fuzzy' }
+    M.state.grep_mode = modes[1] or 'plain'
+  end
 
   local current_file_cache = get_current_file_cache(base_path)
   return open_ui_with_state(nil, nil, nil, merged_config, current_file_cache)

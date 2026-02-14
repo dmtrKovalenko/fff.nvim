@@ -99,20 +99,15 @@ impl FileItem {
 
         let is_binary = detect_binary(&path, size);
 
-        Self {
+        Self::new_raw(
             path,
-            relative_path_lower: relative_path.to_lowercase(),
             relative_path,
-            file_name_lower: name.to_lowercase(),
-            file_name: name,
+            name,
             size,
             modified,
-            access_frecency_score: 0,
-            modification_frecency_score: 0,
-            total_frecency_score: 0,
             git_status,
             is_binary,
-        }
+        )
     }
 
     pub fn update_frecency_scores(&mut self, tracker: &FrecencyTracker) -> Result<(), Error> {
@@ -432,8 +427,12 @@ impl FilePicker {
                     let modified = modified.as_secs();
                     if file.modified < modified {
                         file.modified = modified;
-                        // Re-detect binary status since content may have changed
-                        file.is_binary = detect_binary(path, file.size);
+
+                        // TODO figure out if we actually need to remap the memory or invalidate
+                        // mapping here because on linux and macos with the shared map opening it
+                        // should be automatically available everywhere automatically which saves
+                        // some time from doing extra remapping on every search
+                        file.invalidate_mmap();
                     }
                 }
 

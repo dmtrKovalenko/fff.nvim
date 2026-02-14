@@ -15,7 +15,7 @@ use {
 /// Line terminators are considered part of the line they terminate. All lines
 /// yielded by the iterator are guaranteed to be non-empty.
 #[derive(Debug)]
-pub(crate) struct LineStep {
+pub struct LineStep {
     line_term: u8,
     pos: usize,
     end: usize,
@@ -24,7 +24,7 @@ pub(crate) struct LineStep {
 impl LineStep {
     /// Create a new line iterator over the given range of bytes using the
     /// given line terminator.
-    pub(crate) fn new(line_term: u8, start: usize, end: usize) -> LineStep {
+    pub fn new(line_term: u8, start: usize, end: usize) -> LineStep {
         LineStep {
             line_term,
             pos: start,
@@ -34,7 +34,7 @@ impl LineStep {
 
     /// Like next, but returns a `Match` instead of a tuple.
     #[inline(always)]
-    pub(crate) fn next_match(&mut self, bytes: &[u8]) -> Option<Match> {
+    pub fn next_match(&mut self, bytes: &[u8]) -> Option<Match> {
         self.next_impl(bytes).map(|(s, e)| Match::new(s, e))
     }
 
@@ -65,14 +65,14 @@ impl LineStep {
 }
 
 /// Count the number of occurrences of `line_term` in `bytes`.
-pub(crate) fn count(bytes: &[u8], line_term: u8) -> u64 {
+pub fn count(bytes: &[u8], line_term: u8) -> u64 {
     memchr::memchr_iter(line_term, bytes).count() as u64
 }
 
 /// Given a line that possibly ends with a terminator, return that line without
 /// the terminator.
 #[inline(always)]
-pub(crate) fn without_terminator(bytes: &[u8], line_term: LineTerminator) -> &[u8] {
+pub fn without_terminator(bytes: &[u8], line_term: LineTerminator) -> &[u8] {
     let line_term = line_term.as_bytes();
     let start = bytes.len().saturating_sub(line_term.len());
     if bytes.get(start..) == Some(line_term) {
@@ -86,7 +86,7 @@ pub(crate) fn without_terminator(bytes: &[u8], line_term: LineTerminator) -> &[u
 ///
 /// Line terminators are considered part of the line they terminate.
 #[inline(always)]
-pub(crate) fn locate(bytes: &[u8], line_term: u8, range: Match) -> Match {
+pub fn locate(bytes: &[u8], line_term: u8, range: Match) -> Match {
     let line_start = bytes[..range.start()]
         .rfind_byte(line_term)
         .map_or(0, |i| i + 1);

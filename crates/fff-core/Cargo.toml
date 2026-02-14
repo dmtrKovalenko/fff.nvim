@@ -34,6 +34,7 @@ git2 = { workspace = true }
 glidesort = { workspace = true }
 grep-matcher = { workspace = true }
 grep-searcher = { workspace = true }
+memchr = "2"
 heed = { workspace = true }
 ignore = { workspace = true }
 memmap2 = { workspace = true }

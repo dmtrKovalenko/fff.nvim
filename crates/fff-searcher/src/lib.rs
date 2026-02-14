@@ -12,6 +12,6 @@ pub use crate::{
     sink::{Sink, SinkError, SinkFinish, SinkMatch},
 };
 
-mod lines;
+pub mod lines;
 mod searcher;
 mod sink;
