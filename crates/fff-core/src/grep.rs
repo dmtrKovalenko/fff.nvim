@@ -496,11 +496,10 @@ where
         // Check time budget
         if let Some(budget) = time_budget
             && search_start.elapsed() > budget
+            && (!require_partial_fill_for_budget_break
+                || all_matches.len() >= options.page_limit / 2)
         {
-            if !require_partial_fill_for_budget_break || all_matches.len() >= options.page_limit / 2
-            {
-                break;
-            }
+            break;
         }
 
         let Some(mmap) = file.get_mmap() else {
@@ -588,10 +587,7 @@ fn prepare_files_to_search<'a>(
 
     // File-based pagination: skip to the requested file offset
     if options.file_offset < sorted_files.len() {
-        let paginated: Vec<&'a FileItem> = sorted_files[options.file_offset..]
-            .iter()
-            .copied()
-            .collect();
+        let paginated: Vec<&'a FileItem> = sorted_files[options.file_offset..].to_vec();
         (paginated, filtered_file_count)
     } else {
         (Vec::new(), filtered_file_count)
@@ -913,7 +909,7 @@ pub fn grep_search<'a>(
         };
     }
 
-    // fuzzy mode can not use sink pattern to make it more efficient and batch match 
+    // fuzzy mode can not use sink pattern to make it more efficient and batch match
     // all files lines using simd
     if options.mode == GrepMode::Fuzzy {
         return fuzzy_grep_search(

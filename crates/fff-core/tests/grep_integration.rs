@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use fff_core::grep::{grep_search, parse_grep_query, GrepMode, GrepSearchOptions};
+use fff_core::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
 use fff_core::types::FileItem;
 
 /// Create a file inside a temp dir and return its `FileItem`.

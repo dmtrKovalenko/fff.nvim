@@ -1,8 +1,8 @@
+use crate::ConstraintVec;
 use crate::config::ParserConfig;
 use crate::constraints::{Constraint, GitStatusFilter, TextPartsBuffer};
-use crate::location::{parse_location, Location};
-use crate::ConstraintVec;
-use zlob::{has_wildcards, ZlobFlags};
+use crate::location::{Location, parse_location};
+use zlob::{ZlobFlags, has_wildcards};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]

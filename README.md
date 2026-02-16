@@ -69,6 +69,20 @@ FFF.nvim requires:
       "ff", -- try it if you didn't it is a banger keybinding for a picker
       function() require('fff').find_files() end,
       desc = 'FFFind files',
+    },
+    {
+      "fg",
+      function() require('fff').live_grep() end,
+      desc = 'LiFFFe grep',
+    },
+    {
+      "fz",
+      function() require('fff').live_grep({
+	grep = {
+	  modes = { 'fuzzy', 'plain' }
+	}
+      }) end,
+      desc = 'Live fffuzy grep',
     }
   }
 }
@@ -303,6 +317,7 @@ The current mode is shown on the right side of the input field (e.g., `plain`, `
 You can customize which modes are available and their cycling order globally in your configuration, or per-call when invoking `live_grep()`.
 
 **Global configuration:**
+
 ```lua
 require('fff').setup({
   grep = {
@@ -312,6 +327,7 @@ require('fff').setup({
 ```
 
 **Per-call configuration:**
+
 ```lua
 -- Only fuzzy and plain modes for this specific grep
 require('fff').live_grep({
@@ -344,6 +360,7 @@ Suggestions are clearly labeled with a "No results found. Suggested ..." banner 
 FFF integrates with git to show file status through sign column indicators (enabled by default) and optional filename text coloring.
 
 **Sign Column Indicators** (enabled by default) - Border characters shown in the sign column:
+
 ```lua
 hl = {
   git_sign_staged = 'FFFGitSignStaged',
@@ -358,6 +375,7 @@ hl = {
 **Text Highlights** (opt-in) - Apply colors to filenames based on git status:
 
 To enable git status text coloring, set `git.status_text_color = true`:
+
 ```lua
 require('fff').setup({
   git = {
@@ -377,6 +395,7 @@ require('fff').setup({
 The plugin provides sensible default highlight groups that link to common git highlight groups (e.g., GitSignsAdd, GitSignsChange). You can override these with your own custom highlight groups to match your colorscheme.
 
 **Example - Custom Bright Colors for Text:**
+
 ```lua
 vim.api.nvim_set_hl(0, 'CustomGitModified', { fg = '#FFA500' })
 vim.api.nvim_set_hl(0, 'CustomGitUntracked', { fg = '#00FF00' })
