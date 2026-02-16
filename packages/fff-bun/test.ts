@@ -1,9 +1,3 @@
-/**
- * Test script for fff package
- *
- * Run with: bun packages/fff/test.ts
- */
-
 import { FileFinder } from "./src/index";
 import { resolve, dirname } from "path";
 

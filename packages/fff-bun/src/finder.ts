@@ -9,6 +9,7 @@ import {
   ffiInit,
   ffiDestroy,
   ffiSearch,
+  ffiLiveGrep,
   ffiScanFiles,
   ffiIsScanning,
   ffiGetScanProgress,
@@ -30,9 +31,11 @@ import type {
   SearchResult,
   ScanProgress,
   HealthCheck,
+  GrepOptions,
+  GrepResult,
 } from "./types";
 
-import { err, toInternalInitOptions, toInternalSearchOptions } from "./types";
+import { err, toInternalInitOptions, toInternalSearchOptions, toInternalGrepOptions, createGrepCursor } from "./types";
 
 /**
  * FileFinder - Fast file finder with fuzzy search
@@ -151,6 +154,71 @@ export class FileFinder {
 
     // The FFI returns the search result already parsed
     return result as Result<SearchResult>;
+  }
+
+  /**
+   * Search file contents (live grep).
+   *
+   * Searches through the contents of indexed files using the specified mode:
+   * - `"plain"` (default): SIMD-accelerated literal text matching
+   * - `"regex"`: Regular expression matching
+   * - `"fuzzy"`: Smith-Waterman fuzzy matching per line
+   *
+   * Supports pagination for large result sets. The result includes a `nextCursor`
+   * that can be passed back to fetch the next page.
+   *
+   * The query also supports constraint syntax:
+   * - `*.ts pattern` - Only search in TypeScript files
+   * - `src/ pattern` - Only search in the src directory
+   *
+   * @param query - Search query string
+   * @param options - Grep options (mode, pagination, limits)
+   * @returns Grep results with matched lines and file metadata
+   *
+   * @example
+   * ```typescript
+   * // First page
+   * const result = FileFinder.liveGrep("TODO", { mode: "plain", pageLimit: 20 });
+   * if (result.ok) {
+   *   for (const match of result.value.items) {
+   *     console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
+   *   }
+   *   // Fetch next page
+   *   if (result.value.nextCursor) {
+   *     const page2 = FileFinder.liveGrep("TODO", {
+   *       cursor: result.value.nextCursor,
+   *     });
+   *   }
+   * }
+   * ```
+   */
+  static liveGrep(query: string, options?: GrepOptions): Result<GrepResult> {
+    if (!this.initialized) {
+      return err("FileFinder not initialized. Call FileFinder.init() first.");
+    }
+
+    const internalOpts = toInternalGrepOptions(options);
+    const result = ffiLiveGrep(query, JSON.stringify(internalOpts));
+
+    if (!result.ok) {
+      return result;
+    }
+
+    // Transform the raw FFI result: replace nextFileOffset with an opaque cursor
+    const raw = result.value as Record<string, unknown>;
+    const nextFileOffset = raw.nextFileOffset as number;
+
+    const grepResult: GrepResult = {
+      items: raw.items as GrepResult["items"],
+      totalMatched: raw.totalMatched as number,
+      totalFilesSearched: raw.totalFilesSearched as number,
+      totalFiles: raw.totalFiles as number,
+      filteredFileCount: raw.filteredFileCount as number,
+      nextCursor: nextFileOffset > 0 ? createGrepCursor(nextFileOffset) : null,
+      regexFallbackError: raw.regexFallbackError as string | undefined,
+    };
+
+    return { ok: true, value: grepResult };
   }
 
   /**
