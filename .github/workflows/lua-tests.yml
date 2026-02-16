@@ -49,6 +49,23 @@ jobs:
         run: |
           cp target/${{ matrix.target }}/release/fff_nvim.dll target/release/fff_nvim.dll
 
+      - name: Verify Windows DLL has no unexpected dependencies
+        if: matrix.target
+        shell: pwsh
+        run: |
+          # Find dumpbin via vswhere (always available on GitHub Actions Windows runners)
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vsPath" -Recurse -Filter "dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { Write-Error "dumpbin.exe not found"; exit 1 }
+
+          $deps = & $dumpbin.FullName /DEPENDENTS target\release\fff_nvim.dll | Out-String
+          Write-Host $deps
+          # zlob must be statically linked - fail if zlob.dll appears as a dependency
+          if ($deps -match 'zlob\.dll') {
+            Write-Error "fff_nvim.dll has unexpected dynamic dependency on zlob.dll - zlob should be statically linked"
+            exit 1
+          }
+
       - name: Build Rust binary
         if: ${{ !matrix.target }}
         run: cargo build --release -p fff-nvim
