@@ -101,6 +101,7 @@ pub struct FileItemJson {
     pub modification_frecency_score: i64,
     pub total_frecency_score: i64,
     pub git_status: String,
+    pub is_binary: bool,
 }
 
 impl FileItemJson {
@@ -115,6 +116,7 @@ impl FileItemJson {
             modification_frecency_score: item.modification_frecency_score,
             total_frecency_score: item.total_frecency_score,
             git_status: format_git_status(item.git_status).to_string(),
+            is_binary: item.is_binary,
         }
     }
 }

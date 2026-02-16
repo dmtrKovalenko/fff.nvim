@@ -37,19 +37,15 @@ fn main() {
                 let relative_path = relative.to_string_lossy().into_owned();
                 let file_name = entry.file_name().to_string_lossy().into_owned();
 
-                files.push(FileItem {
+                files.push(FileItem::new_raw(
                     path,
-                    relative_path_lower: relative_path.to_lowercase(),
                     relative_path,
-                    file_name_lower: file_name.to_lowercase(),
                     file_name,
-                    size: entry.metadata().ok().map_or(0, |m| m.len()),
-                    modified: 0,
-                    access_frecency_score: 0,
-                    modification_frecency_score: 0,
-                    total_frecency_score: 0,
-                    git_status: None,
-                });
+                    entry.metadata().ok().map_or(0, |m| m.len()),
+                    0,
+                    None,
+                    false,
+                ));
             });
 
         files

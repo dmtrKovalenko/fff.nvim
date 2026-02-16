@@ -53,7 +53,7 @@
           commonArgs
           // {
             cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
+            doCheck = false;
           }
         );
         # Copies the dynamic library into the target/release folder

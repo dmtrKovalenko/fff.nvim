@@ -38,9 +38,14 @@ M.init_query_db = rust_module.init_query_db
 M.destroy_query_db = rust_module.destroy_query_db
 M.track_query_completion = rust_module.track_query_completion
 M.get_historical_query = rust_module.get_historical_query
+M.track_grep_query = rust_module.track_grep_query
+M.get_historical_grep_query = rust_module.get_historical_grep_query
 
 -- Git functions
 M.get_git_root = rust_module.get_git_root
+
+-- Grep functions
+M.live_grep = rust_module.live_grep
 
 -- Utility functions
 M.health_check = rust_module.health_check

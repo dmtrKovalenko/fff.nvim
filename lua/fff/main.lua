@@ -17,6 +17,36 @@ function M.find_files(opts)
   end
 end
 
+--- Live grep: search file contents in the current directory
+--- @param opts? table Optional configuration overrides
+--- @param opts.cwd? string Custom working directory
+--- @param opts.title? string Window title (default: "Live Grep")
+--- @param opts.prompt? string Input prompt text (default: "grep> ")
+--- @param opts.layout? table Layout overrides
+--- @param opts.grep? table Grep-specific overrides {max_file_size, smart_case, max_matches_per_file, modes}
+--- @param opts.grep.modes? table Available search modes and their cycling order (default: {'plain', 'regex', 'fuzzy'})
+function M.live_grep(opts)
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  if not picker_ok then
+    vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
+    return
+  end
+
+  local config = require('fff.conf').get()
+  local grep_renderer = require('fff.grep.grep_renderer')
+
+  local grep_config = vim.tbl_deep_extend('force', config.grep or {}, (opts and opts.grep) or {})
+
+  local picker_opts = vim.tbl_deep_extend('force', opts or {}, {
+    title = (opts and opts.title) or 'Live Grep',
+    mode = 'grep',
+    renderer = grep_renderer,
+    grep_config = grep_config,
+  })
+
+  picker_ui.open(picker_opts)
+end
+
 function M.find_in_git_root()
   local fuzzy = require('fff.core').ensure_initialized()
   local ok, git_root = pcall(fuzzy.get_git_root)

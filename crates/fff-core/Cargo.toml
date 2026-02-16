@@ -26,19 +26,25 @@ tracing = { workspace = true }
 fff-query-parser = { path = "../fff-query-parser" }
 
 # External dependencies
+bindet = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 git2 = { workspace = true }
 glidesort = { workspace = true }
+grep-matcher = { workspace = true }
+grep-searcher = { workspace = true }
+memchr = "2"
 heed = { workspace = true }
 ignore = { workspace = true }
+memmap2 = { workspace = true }
 neo_frizbee = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-full = { workspace = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
 pathdiff = { workspace = true }
+regex = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 smartstring = { version = "1.0.1", features = ["serde"] }
 tracing-appender = "0.2"

@@ -10,6 +10,7 @@ mod error;
 pub mod file_picker;
 pub mod frecency;
 pub mod git;
+pub mod grep;
 pub mod path_utils;
 pub mod query_tracker;
 pub mod score;
@@ -32,6 +33,9 @@ pub use db_healthcheck::{DbHealth, DbHealthChecker};
 pub use error::{Error, Result};
 pub use file_picker::{FuzzySearchOptions, ScanProgress};
 pub use types::{FileItem, PaginationArgs, Score, ScoringContext, SearchResult};
+
+// Re-export grep types
+pub use grep::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions};
 
 // Re-export query parser types (including Location which moved there)
 pub use fff_query_parser::{

@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use std::path::MAIN_SEPARATOR;
 
 // like cow but better
-enum FileItems<'a> {
+pub(crate) enum FileItems<'a> {
     /// All files — borrows the original owned slice, zero allocation.
     All(&'a [FileItem]),
     /// Filtered subset — owns references produced by constraint filtering.
@@ -355,7 +355,7 @@ fn is_special_entry_point_file(filename: &str) -> bool {
 }
 
 /// Score files by frecency when we have a filtered list (prefiltered by constraints)
-fn score_filtered_by_frecency<'a>(
+pub(crate) fn score_filtered_by_frecency<'a>(
     files: &FileItems<'a>,
     context: &ScoringContext,
 ) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
@@ -485,19 +485,16 @@ mod tests {
     use std::path::PathBuf;
 
     fn create_test_file(path: &str, score: i32, modified: u64) -> (FileItem, Score) {
-        let file = FileItem {
-            path: PathBuf::from(path),
-            relative_path: path.to_string(),
-            relative_path_lower: path.to_lowercase(),
-            file_name: path.split('/').last().unwrap_or(path).to_string(),
-            file_name_lower: path.split('/').last().unwrap_or(path).to_lowercase(),
-            size: 0,
+        let file_name = path.split('/').last().unwrap_or(path).to_string();
+        let file = FileItem::new_raw(
+            PathBuf::from(path),
+            path.to_string(),
+            file_name,
+            0,
             modified,
-            access_frecency_score: 0,
-            modification_frecency_score: 0,
-            total_frecency_score: 0,
-            git_status: None,
-        };
+            None,
+            false,
+        );
         let score_obj = Score {
             total: score,
             base_score: score,

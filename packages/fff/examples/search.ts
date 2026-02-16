@@ -118,13 +118,11 @@ async function main() {
   // Show index info
   const health = FileFinder.healthCheck();
   if (health.ok) {
-    console.log(`${DIM}─────────────────────────────────────────${RESET}`);
     console.log(`${DIM}Version:${RESET}    ${health.value.version}`);
     console.log(`${DIM}Base path:${RESET}  ${health.value.filePicker.basePath}`);
     if (health.value.git.repositoryFound) {
       console.log(`${DIM}Git root:${RESET}   ${health.value.git.workdir}`);
     }
-    console.log(`${DIM}─────────────────────────────────────────${RESET}\n`);
   }
 
   // Interactive search loop
@@ -172,7 +170,6 @@ async function main() {
       console.log(
         `${DIM}  Git │ Score │  Size  │  Modified  │ Path${RESET}`
       );
-      console.log(`${DIM}──────┼───────┼────────┼────────────┼${"─".repeat(40)}${RESET}`);
 
       // Results
       for (let i = 0; i < items.length; i++) {
