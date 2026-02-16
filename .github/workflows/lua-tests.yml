@@ -1,0 +1,70 @@
+name: Lua E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "13"
+
+jobs:
+  lua-tests:
+    name: Lua E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
+          cache-key: "v1-lua-e2e"
+          rustflags: ""
+          target: ${{ matrix.target || '' }}
+
+      - name: Build Rust binary (Windows)
+        if: matrix.target
+        run: cargo build --release --target ${{ matrix.target }} -p fff-nvim
+
+      - name: Copy binary to target/release (Windows)
+        if: matrix.target
+        shell: bash
+        run: |
+          cp target/${{ matrix.target }}/release/fff_nvim.dll target/release/fff_nvim.dll
+
+      - name: Build Rust binary
+        if: ${{ !matrix.target }}
+        run: cargo build --release -p fff-nvim
+
+      - name: Install Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: v0.10.4
+
+      - name: Clone plenary.nvim
+        shell: bash
+        run: git clone --depth 1 https://github.com/nvim-lua/plenary.nvim ../plenary.nvim
+
+      - name: Run Lua tests
+        shell: bash
+        run: |
+          nvim --headless -u tests/minimal_init.lua \
+            -c "PlenaryBustedFile tests/fff_core_spec.lua" 2>&1

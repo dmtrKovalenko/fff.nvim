@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "./dist",
+    "lib": ["ESNext"],
+    "types": ["bun"]
+  },
+  "include": ["src/**/*", "scripts/**/*", "*.ts"],
+  "exclude": ["node_modules", "dist", "bin"]
+}

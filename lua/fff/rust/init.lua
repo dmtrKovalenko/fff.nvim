@@ -1,18 +1,31 @@
 local download = require('fff.download')
 
+local is_windows = jit.os:lower() == 'windows'
+
 --- @return string
 local function get_lib_extension()
   if jit.os:lower() == 'mac' or jit.os:lower() == 'osx' then return '.dylib' end
-  if jit.os:lower() == 'windows' then return '.dll' end
+  if is_windows then return '.dll' end
   return '.so'
 end
 
--- search for the lib in the /target/release directory with and without the lib prefix
--- since MSVC doesn't include the prefix
-local info = debug.getinfo(1, 'S')
-local base_path = info and info.source and info.source:match('@?(.*/)') or ''
+--- Resolve a path to an absolute, clean form with native separators.
+--- Resolves `..` components and on Windows converts forward slashes to
+--- backslashes so that Windows APIs (LoadLibraryEx) can find the file.
+--- @param path string
+--- @return string
+local function resolve_path(path)
+  local resolved = vim.fn.fnamemodify(path, ':p')
+  if is_windows then resolved = resolved:gsub('/', '\\') end
+  return resolved
+end
 
--- Fallback: if base_path is nil, try to determine from current file path
+-- Determine base_path from the location of this Lua file
+local info = debug.getinfo(1, 'S')
+-- Match both forward and backslash directory separators for cross-platform support
+local base_path = info and info.source and info.source:match('@?(.*[/\\])') or ''
+
+-- Fallback: if base_path is empty, use vim APIs
 if not base_path or base_path == '' then
   base_path = vim.fn.fnamemodify(vim.fn.resolve(vim.fn.expand('<sfile>:p')), ':h') .. '/'
 end
@@ -33,7 +46,7 @@ end
 -- load the library directly from the first valid path we find
 local function try_load_library()
   for _, path_pattern in ipairs(paths) do
-    local actual_path = path_pattern:gsub('%?', 'fff_nvim')
+    local actual_path = resolve_path(path_pattern:gsub('%?', 'fff_nvim'))
     local stat = vim.uv.fs_stat(actual_path)
     if stat and stat.type == 'file' then
       local loader, err = package.loadlib(actual_path, 'luaopen_fff_nvim')
@@ -46,10 +59,15 @@ end
 
 local backend, load_err = try_load_library()
 if not backend or load_err then
+  local resolved = {}
+  for _, p in ipairs(paths) do
+    table.insert(resolved, resolve_path(p:gsub('%?', 'fff_nvim')))
+  end
+
   local err_msg = string.format(
     'Failed to load fff rust backend.\nError: %s\nSearched paths:\n%s\nMake sure binary exists or make it exists using \n `:lua require("fff.download").download_or_build_binary()`\nor\n`cargo build --release`\n(and rerun neovim after)',
     tostring(load_err),
-    vim.inspect(paths)
+    vim.inspect(resolved)
   )
 
   error(err_msg)

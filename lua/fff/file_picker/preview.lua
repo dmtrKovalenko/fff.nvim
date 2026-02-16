@@ -71,6 +71,32 @@ local function cleanup_file_operation()
   end
 end
 
+--- Process raw chunk data into complete lines, joining any leftover bytes
+--- from the previous chunk and storing any trailing partial line for the next.
+--- @param data string Raw chunk data
+--- @return string[] Complete lines (may be empty if the entire chunk is a partial line)
+local function split_chunk_with_remainder(data)
+  if not data or data == '' then return {} end
+
+  local fo = M.state.file_operation
+  local prefix = fo and fo.remainder or ''
+  local combined = prefix .. data
+
+  local lines = vim.split(combined, '\n', { plain = true })
+
+  if combined:sub(-1) ~= '\n' then
+    -- Data doesn't end on a line boundary: last element is a partial line
+    local partial = table.remove(lines) or ''
+    if fo then fo.remainder = partial end
+  else
+    -- Data ends on a line boundary: remove the trailing empty element
+    if #lines > 0 and lines[#lines] == '' then table.remove(lines) end
+    if fo then fo.remainder = '' end
+  end
+
+  return lines
+end
+
 local function init_dynamic_loading_async(file_path, callback)
   cleanup_file_operation()
 
@@ -79,7 +105,15 @@ local function init_dynamic_loading_async(file_path, callback)
   M.state.has_more_content = true
   M.state.is_loading = false
 
+  local generation = M.state.preview_generation
+
   vim.uv.fs_open(file_path, 'r', 438, function(err, fd)
+    -- Stale callback: preview moved on to a different file
+    if M.state.preview_generation ~= generation then
+      if fd then pcall(vim.uv.fs_close, fd) end
+      return
+    end
+
     if err or not fd then
       callback(false, 'Failed to open file: ' .. (err or 'unknown error'))
       return
@@ -89,6 +123,7 @@ local function init_dynamic_loading_async(file_path, callback)
       fd = fd,
       file_path = file_path,
       position = 0,
+      remainder = '',
     }
 
     callback(true)
@@ -103,9 +138,13 @@ local function load_forward_chunk_async(target_size, callback)
 
   M.state.is_loading = true
   local chunk_size = target_size or (M.config.chunk_size or 16384)
+  local generation = M.state.preview_generation
 
   vim.uv.fs_read(M.state.file_operation.fd, chunk_size, M.state.file_operation.position, function(err, data)
     vim.schedule(function()
+      -- Stale callback: a newer preview has started, discard this result
+      if M.state.preview_generation ~= generation then return end
+
       M.state.is_loading = false
 
       if err then
@@ -115,8 +154,14 @@ local function load_forward_chunk_async(target_size, callback)
 
       if not data or #data == 0 then
         M.state.has_more_content = false
+        -- Flush any remaining partial line as the final piece of data
+        local final_remainder = M.state.file_operation and M.state.file_operation.remainder or ''
         cleanup_file_operation()
-        callback('', nil)
+        if final_remainder ~= '' then
+          callback(final_remainder .. '\n', nil)
+        else
+          callback('', nil)
+        end
         return
       end
 
@@ -135,8 +180,15 @@ local function load_next_chunk_async(chunk_size, callback)
   load_forward_chunk_async(chunk_size, callback)
 end
 
+-- Forward declaration for ensure_content_loaded_async (used in read_file_streaming_async callback)
+local ensure_content_loaded_async
+
 local function read_file_streaming_async(file_path, bufnr, callback)
+  local generation = M.state.preview_generation
+
   init_dynamic_loading_async(file_path, function(success, error_msg)
+    if M.state.preview_generation ~= generation then return end
+
     if not success then
       callback(nil, error_msg)
       return
@@ -159,22 +211,26 @@ local function read_file_streaming_async(file_path, bufnr, callback)
     end
 
     load_next_chunk_async(initial_chunk_size, function(data, err)
+      if M.state.preview_generation ~= generation then return end
+
       if data and data ~= '' then
-        -- there seems to be no other way to append the buffer other than the lines :(
-        local lines = vim.split(data, '\n', { plain = true })
+        local lines = split_chunk_with_remainder(data)
         M.state.loaded_lines = #lines
         M.state.content_height = #lines
 
         -- If we have a location and didn't load enough lines, try to load more
+        local loading_more = false
         if M.state.location then
           local target_line = location_utils.get_target_line(M.state.location)
           if target_line and #lines < target_line and M.state.has_more_content then
-            -- Schedule additional loading after the initial callback
-            vim.schedule(function() ensure_content_loaded_async(target_line) end)
+            loading_more = true
+            vim.schedule(function()
+              if M.state.preview_generation == generation then ensure_content_loaded_async(target_line) end
+            end)
           end
         end
 
-        callback(lines, err)
+        callback(lines, err, loading_more)
       else
         callback(nil, err)
       end
@@ -182,7 +238,7 @@ local function read_file_streaming_async(file_path, bufnr, callback)
   end)
 end
 
-local function ensure_content_loaded_async(target_line)
+ensure_content_loaded_async = function(target_line)
   if not M.state.bufnr or not vim.api.nvim_buf_is_valid(M.state.bufnr) then return end
   if not M.state.has_more_content or M.state.is_loading then return end
 
@@ -191,46 +247,39 @@ local function ensure_content_loaded_async(target_line)
 
   if current_buffer_lines >= buffer_needed then return end
 
-  if current_buffer_lines < buffer_needed then
-    local loading_line = string.format('Loading more content... (%d lines loaded)', M.state.loaded_lines)
-    append_buffer_lines(M.state.bufnr, { '', loading_line })
-  end
+  local generation = M.state.preview_generation
 
-  load_next_chunk_async(M.config.chunk_size, function(data, err)
-    if err then
-      vim.notify('Error loading file content: ' .. err, vim.log.levels.ERROR)
-      -- Remove loading message on error
-      local total_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
-      if total_lines >= 2 then
-        local existing_lines = vim.api.nvim_buf_get_lines(M.state.bufnr, 0, total_lines - 2, false)
-        set_buffer_lines(M.state.bufnr, existing_lines)
-      end
-      return
-    end
+  -- Use a larger chunk to reach the target faster instead of many small 8KB reads
+  local lines_needed = buffer_needed - current_buffer_lines
+  local estimated_bytes = math.max(M.config.chunk_size, lines_needed * 120)
+
+  load_next_chunk_async(estimated_bytes, function(data, err)
+    -- Stale callback: preview moved on to a different file
+    if M.state.preview_generation ~= generation then return end
+    if not M.state.bufnr or not vim.api.nvim_buf_is_valid(M.state.bufnr) then return end
+
+    if err then return end
 
     if data and data ~= '' then
-      local chunk_lines = vim.split(data, '\n', { plain = true })
-      local total_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
-
-      if total_lines >= 2 then
-        local existing_lines = vim.api.nvim_buf_get_lines(M.state.bufnr, 0, total_lines - 2, false)
-        local new_content = vim.list_extend(existing_lines, chunk_lines)
-        set_buffer_lines(M.state.bufnr, new_content)
-      else
-        append_buffer_lines(M.state.bufnr, chunk_lines)
-      end
+      local chunk_lines = split_chunk_with_remainder(data)
+      if #chunk_lines > 0 then append_buffer_lines(M.state.bufnr, chunk_lines) end
 
       M.state.content_height = vim.api.nvim_buf_line_count(M.state.bufnr)
       M.state.loaded_lines = M.state.content_height
-    else
-      -- No more data available - remove the loading message
-      local total_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
-      if total_lines >= 2 then
-        local existing_lines = vim.api.nvim_buf_get_lines(M.state.bufnr, 0, total_lines - 2, false)
-        set_buffer_lines(M.state.bufnr, existing_lines)
-        M.state.content_height = #existing_lines
-        M.state.loaded_lines = M.state.content_height
+
+      -- If we still haven't loaded enough, schedule another chunk
+      if M.state.loaded_lines < buffer_needed and M.state.has_more_content then
+        vim.schedule(function()
+          if M.state.preview_generation == generation then ensure_content_loaded_async(target_line) end
+        end)
+      else
+        -- Enough content loaded — re-apply location highlighting so the
+        -- preview scrolls to the correct line now that it exists in the buffer
+        M.apply_location_highlighting(M.state.bufnr)
       end
+    else
+      -- EOF with no additional data — apply highlighting with whatever we have
+      M.apply_location_highlighting(M.state.bufnr)
     end
   end)
 end
@@ -267,6 +316,7 @@ M.state = {
   file_operation = nil, -- Ongoing file operation: {fd?: any, file_path?: string, position?: number}
   location = nil, -- Current location data for highlighting
   location_namespace = nil, -- Namespace for location highlighting
+  preview_generation = 0, -- Monotonically increasing token to detect stale async callbacks
 }
 
 --- Setup preview configuration
@@ -288,166 +338,6 @@ function M.is_big_file(file_path, bufnr)
   local stat = vim.uv.fs_stat(file_path)
   if stat and stat.size > M.config.max_size then return true end
 
-  return false
-end
-
---- Check if file is binary (async version)
---- @param file_path string Path to the file
---- @param callback function Callback with (is_binary: boolean)
-function M.is_binary_file_async(file_path, callback)
-  local ext = vim.fn.fnamemodify(file_path, ':e')
-  local binary_extensions = {
-    'jpg',
-    'jpeg',
-    'png',
-    'gif',
-    'bmp',
-    'tiff',
-    'tif',
-    'webp',
-    'ico',
-    'pdf',
-    'ps',
-    'eps',
-    'heic',
-    'avif',
-    -- Archives
-    'zip',
-    'rar',
-    '7z',
-    'tar',
-    'gz',
-    'bz2',
-    'xz',
-    -- Executables
-    'exe',
-    'dll',
-    'so',
-    'dylib',
-    'bin',
-    -- Audio/Video
-    'mp3',
-    'mp4',
-    'avi',
-    'mkv',
-    'wav',
-    'flac',
-    'ogg',
-    -- Other binary formats
-    'db',
-    'sqlite',
-    'dat',
-    'bin',
-    'iso',
-  }
-
-  for _, binary_ext in ipairs(binary_extensions) do
-    if ext == binary_ext then
-      callback(true)
-      return
-    end
-  end
-
-  if M.config.binary_file_threshold <= 0 then
-    callback(false)
-    return
-  end
-
-  vim.uv.fs_open(file_path, 'r', 438, function(err, fd)
-    if err or not fd then
-      callback(false)
-      return
-    end
-
-    vim.uv.fs_read(fd, M.config.binary_file_threshold, 0, function(read_err, chunk)
-      vim.uv.fs_close(fd)
-
-      vim.schedule(function()
-        if read_err or not chunk then
-          callback(false)
-          return
-        end
-
-        if chunk:find('\0') then
-          callback(true)
-          return
-        end
-
-        local printable_count = 0
-        local total_count = #chunk
-
-        for i = 1, total_count do
-          local byte = chunk:byte(i)
-          -- Printable ASCII range + common control chars (tab, newline, carriage return)
-          if (byte >= 32 and byte <= 126) or byte == 9 or byte == 10 or byte == 13 then
-            printable_count = printable_count + 1
-          end
-        end
-
-        local printable_ratio = printable_count / total_count
-        callback(printable_ratio < 0.8) -- More aggressive: If less than 80% printable, consider binary
-      end)
-    end)
-  end)
-end
-
---- Check if file is binary (sync version kept for compatibility)
---- @param file_path string Path to the file
---- @return boolean True if file appears to be binary
-function M.is_binary_file(file_path)
-  local ext = vim.fn.fnamemodify(file_path, ':e')
-  local binary_extensions = {
-    'jpg',
-    'jpeg',
-    'png',
-    'gif',
-    'bmp',
-    'tiff',
-    'tif',
-    'webp',
-    'ico',
-    'pdf',
-    'ps',
-    'eps',
-    'heic',
-    'avif',
-    -- Archives
-    'zip',
-    'rar',
-    '7z',
-    'tar',
-    'gz',
-    'bz2',
-    'xz',
-    -- Executables
-    'exe',
-    'dll',
-    'so',
-    'dylib',
-    'bin',
-    -- Audio/Video
-    'mp3',
-    'mp4',
-    'avi',
-    'mkv',
-    'wav',
-    'flac',
-    'ogg',
-    'aac',
-    -- Other binary formats
-    'db',
-    'sqlite',
-    'dat',
-    'bin',
-    'iso',
-  }
-
-  for _, binary_ext in ipairs(binary_extensions) do
-    if ext == binary_ext then return true end
-  end
-
-  -- For sync version, just return false for unknown extensions to avoid blocking
-  -- The main preview logic will handle this with async detection
   return false
 end
 
@@ -536,6 +426,48 @@ function M.create_file_info_content(file, info, file_index)
   return lines
 end
 
+--- Create file info content for grep mode items.
+--- Shows grep-specific metadata: match location, frecency, file info.
+---@param item table Grep match item with file + match metadata
+---@param info table File system information from get_file_info
+---@return table Lines for the file info content
+function M.create_grep_file_info_content(item, info)
+  local lines = {}
+
+  -- Match location info
+  local match_count = item.match_ranges and #item.match_ranges or 0
+  table.insert(
+    lines,
+    string.format('Match: line %d, col %d │ Ranges: %d', item.line_number or 0, (item.col or 0) + 1, match_count)
+  )
+  table.insert(
+    lines,
+    string.format('Byte Offset: %-12d │ Size: %s', item.byte_offset or 0, info.size_formatted or 'N/A')
+  )
+  table.insert(lines, string.format('Type: %-8s │ Git: %s', info.filetype or 'text', item.git_status or 'clean'))
+
+  -- Fuzzy match score (only available in fuzzy grep mode)
+  if item.fuzzy_score then table.insert(lines, string.format('Fuzzy Score: %d', item.fuzzy_score)) end
+
+  -- Frecency info
+  local total = item.total_frecency_score or 0
+  local acc = item.access_frecency_score or 0
+  local mod = item.modification_frecency_score or 0
+  table.insert(lines, string.format('Frecency: total=%d, access=%d, modification=%d', total, acc, mod))
+
+  -- Ordering explanation
+  table.insert(lines, 'Order: files sorted by frecency desc, matches by line asc')
+  table.insert(lines, '')
+
+  -- Time information section
+  table.insert(lines, 'TIMINGS')
+  table.insert(lines, string.rep('─', 50))
+  table.insert(lines, string.format('Modified: %s', info.modified_formatted or 'N/A'))
+  table.insert(lines, string.format('Last Access: %s', info.accessed_formatted or 'N/A'))
+
+  return lines
+end
+
 --- Preview a regular file
 --- @param file_path string Path to the file
 --- @param bufnr number Buffer number for preview
@@ -573,12 +505,14 @@ function M.preview_file(file_path, bufnr)
       vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
       vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
       vim.api.nvim_buf_set_option(bufnr, 'wrap', file_config.wrap_lines or M.config.wrap_lines)
-      vim.api.nvim_buf_set_option(bufnr, 'number', M.config.line_numbers)
 
       M.state.scroll_offset = 0
 
       -- Apply location highlighting if available (delayed to ensure buffer is ready)
-      vim.schedule(function() M.apply_location_highlighting(bufnr) end)
+      local gen = M.state.preview_generation
+      vim.schedule(function()
+        if M.state.preview_generation == gen then M.apply_location_highlighting(bufnr) end
+      end)
 
       return true
     end
@@ -586,10 +520,11 @@ function M.preview_file(file_path, bufnr)
 
   M.state.current_file = file_path
   M.state.bufnr = bufnr
+  local generation = M.state.preview_generation
 
-  read_file_streaming_async(file_path, bufnr, function(content, err)
-    if M.state.current_file ~= file_path then
-      -- User has moved to a different file, ignore this result
+  read_file_streaming_async(file_path, bufnr, function(content, err, loading_more)
+    if M.state.preview_generation ~= generation then
+      -- Preview moved on to a different file, discard
       cleanup_file_operation()
       return
     end
@@ -602,6 +537,9 @@ function M.preview_file(file_path, bufnr)
     end
 
     if M.state.current_file == file_path then
+      -- Guard against buffer being destroyed while async read was in-flight
+      if not vim.api.nvim_buf_is_valid(bufnr) then return end
+
       M.clear_preview_visual_state(bufnr)
       set_buffer_lines(bufnr, content)
 
@@ -611,13 +549,18 @@ function M.preview_file(file_path, bufnr)
       vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
       vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
       vim.api.nvim_buf_set_option(bufnr, 'wrap', file_config.wrap_lines or M.config.wrap_lines)
-      vim.api.nvim_buf_set_option(bufnr, 'number', M.config.line_numbers)
 
       M.state.content_height = #content
       M.state.scroll_offset = 0
 
-      -- Apply location highlighting if available (delayed to ensure buffer is ready)
-      vim.schedule(function() M.apply_location_highlighting(bufnr) end)
+      -- Apply location highlighting if available (delayed to ensure buffer is ready).
+      -- Skip when more content is being loaded asynchronously to reach the target line —
+      -- ensure_content_loaded_async will re-apply highlighting once the target is in the buffer.
+      if not loading_more then
+        vim.schedule(function()
+          if M.state.preview_generation == generation then M.apply_location_highlighting(bufnr) end
+        end)
+      end
     end
   end)
 
@@ -693,15 +636,13 @@ end
 --- @param file_path string Path to the file or directory
 --- @param bufnr number Buffer number for preview
 --- @param location table|nil Optional location data for highlighting
+--- @param is_binary boolean|nil Whether the file is binary (from Rust indexer)
 --- @return boolean if the preview was successful
-function M.preview(file_path, bufnr, location)
-  if not file_path or file_path == '' then
-    -- Don't immediately clear - let the previous content stay visible
-    -- Only clear if we really need to show "No file selected"
-    -- M.clear_buffer(bufnr)
-    -- set_buffer_lines(bufnr, { 'No file selected' })
-    return false
-  end
+function M.preview(file_path, bufnr, location, is_binary)
+  if not file_path or file_path == '' then return false end
+
+  -- Bump generation to invalidate any in-flight async callbacks from previous previews
+  M.state.preview_generation = M.state.preview_generation + 1
 
   if M.state.file_handle then
     M.state.file_handle:close()
@@ -726,7 +667,7 @@ function M.preview(file_path, bufnr, location)
     local win_height = vim.api.nvim_win_get_height(M.state.winid) - 2
 
     return image.display_image(file_path, bufnr, win_width, win_height)
-  elseif M.is_binary_file(file_path) then
+  elseif is_binary then
     return M.preview_binary_file(file_path, bufnr)
   else
     return M.preview_file(file_path, bufnr)
@@ -778,8 +719,9 @@ end
 function M.set_preview_window(winid) M.state.winid = winid end
 
 --- Update file info buffer
---- @param file table File information from search results
+--- @param file table File information from search results (or grep match item)
 --- @param bufnr number Buffer number for file info
+--- @param file_index number|nil Index of the file in search results (for score lookup, file mode only)
 --- @return boolean Success status
 function M.update_file_info_buffer(file, bufnr, file_index)
   if not file then
@@ -793,7 +735,13 @@ function M.update_file_info_buffer(file, bufnr, file_index)
     return false
   end
 
-  local file_info_lines = M.create_file_info_content(file, info, file_index)
+  -- Detect grep mode items by the presence of line_number (grep-specific field)
+  local file_info_lines
+  if file.line_number ~= nil then
+    file_info_lines = M.create_grep_file_info_content(file, info)
+  else
+    file_info_lines = M.create_file_info_content(file, info, file_index)
+  end
   set_buffer_lines(bufnr, file_info_lines)
 
   vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
@@ -848,6 +796,9 @@ function M.clear_buffer(bufnr)
 end
 
 function M.clear()
+  -- Bump generation to invalidate any in-flight async callbacks
+  M.state.preview_generation = M.state.preview_generation + 1
+
   cleanup_file_operation()
 
   M.state.loaded_lines = 0
@@ -883,7 +834,16 @@ function M.apply_location_highlighting(bufnr)
 
   if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
     local target_line = location_utils.get_target_line(M.state.location)
-    if target_line then M.scroll_to_line(target_line) end
+    if target_line then
+      local buffer_lines = vim.api.nvim_buf_line_count(bufnr)
+      if target_line > buffer_lines and M.state.has_more_content then
+        -- Target line is beyond loaded content — load more first.
+        -- ensure_content_loaded_async will re-apply highlighting when done.
+        ensure_content_loaded_async(target_line)
+        return
+      end
+      M.scroll_to_line(target_line)
+    end
   end
 end
 

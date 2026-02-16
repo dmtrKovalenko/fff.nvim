@@ -1,0 +1,20 @@
+[package]
+name = "fff-c"
+version = "0.1.0"
+edition = "2024"
+description = "C FFI bindings for fff-core - use from any language with C FFI support"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mimalloc.workspace = true
+once_cell.workspace = true
+tracing.workspace = true
+git2.workspace = true
+
+fff-core = { path = "../fff-core" }
+fff-query-parser = { path = "../fff-query-parser" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
