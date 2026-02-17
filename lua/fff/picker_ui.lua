@@ -40,7 +40,9 @@ local function get_border_chars()
   return BORDER_PRESETS.single, T_JUNCTION_PRESETS.single
 end
 
-local function get_prompt_position()
+--- Resolve the raw user-configured prompt_position (ignoring any vertical-layout forcing).
+--- Used by compute_layout_and_borders() before the forcing decision is made.
+local function get_raw_prompt_position()
   local config = M.state.config
 
   if config and config.layout and config.layout.prompt_position then
@@ -58,6 +60,14 @@ local function get_prompt_position()
   end
 
   return 'bottom'
+end
+
+--- Get the effective prompt position. Returns the forced value (stored in state)
+--- when the picker is active, so rendering, cursor movement, scrollbar, and pagination
+--- all stay consistent with the actual window layout.
+local function get_prompt_position()
+  if M.state.prompt_position then return M.state.prompt_position end
+  return get_raw_prompt_position()
 end
 
 local function get_preview_position()
@@ -422,7 +432,7 @@ local function compute_layout_and_borders()
   local col = math.floor(terminal_width * col_ratio)
   local row = math.floor(terminal_height * row_ratio)
 
-  local prompt_position = get_prompt_position()
+  local prompt_position = get_raw_prompt_position()
   local preview_position = get_preview_position()
 
   -- Force prompt to opposite side of preview for vertical layouts
@@ -1562,7 +1572,7 @@ local function build_render_context()
   local items = M.state.filtered_items
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
   local win_width = vim.api.nvim_win_get_width(M.state.list_win)
-  local prompt_position = M.state.prompt_position or get_prompt_position()
+  local prompt_position = get_prompt_position()
 
   -- Get actual text offset (signcolumn + foldcolumn + line numbers)
   local win_info = vim.fn.getwininfo(M.state.list_win)[1]
