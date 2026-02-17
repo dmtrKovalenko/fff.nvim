@@ -208,7 +208,7 @@ fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
     let start = Instant::now();
     let result = grep_search(files, query, parsed, &options);
     let elapsed = start.elapsed();
-    (result.total_match_count, elapsed)
+    (result.matches.len(), elapsed)
 }
 
 /// fff paginated: first 50 results only (real UI scenario).
@@ -226,8 +226,6 @@ fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
     let start = Instant::now();
     let result = grep_search(files, query, parsed, &options);
     let elapsed = start.elapsed();
-    // Use matches.len() — the actual truncated page the UI would display,
-    // not total_match_count which includes overshoot from parallel batches.
     (result.matches.len(), elapsed)
 }
 

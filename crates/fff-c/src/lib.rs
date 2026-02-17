@@ -321,7 +321,7 @@ pub unsafe extern "C" fn fff_live_grep(
 
     let options = fff_core::GrepSearchOptions {
         max_file_size: opts.max_file_size.unwrap_or(10 * 1024 * 1024),
-        max_matches_per_file: opts.max_matches_per_file.unwrap_or(200),
+        max_matches_per_file: opts.max_matches_per_file.unwrap_or(0),
         smart_case: opts.smart_case.unwrap_or(true),
         file_offset: opts.file_offset.unwrap_or(0),
         page_limit: opts.page_limit.unwrap_or(50),
@@ -359,7 +359,7 @@ pub unsafe extern "C" fn fff_scan_files(fff_handle: *mut c_void) -> *mut FffResu
         None => return FffResult::err("File picker not initialized"),
     };
 
-    match picker.trigger_rescan() {
+    match picker.trigger_rescan(&inst.frecency) {
         Ok(_) => FffResult::ok_empty(),
         Err(e) => FffResult::err(&format!("Failed to trigger rescan: {}", e)),
     }
@@ -430,21 +430,28 @@ pub unsafe extern "C" fn fff_wait_for_scan(
         Err(e) => return e,
     };
 
-    let guard = match inst.picker.read() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
+    // Clone the scanning flag so we can drop the picker lock before polling.
+    // Otherwise the read lock blocks the scan thread from writing results.
+    let scan_signal = {
+        let guard = match inst.picker.read() {
+            Ok(g) => g,
+            Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
+        };
 
-    let picker = match guard.as_ref() {
-        Some(p) => p,
-        None => return FffResult::err("File picker not initialized"),
+        let picker = match guard.as_ref() {
+            Some(p) => p,
+            None => return FffResult::err("File picker not initialized"),
+        };
+
+        picker.scan_signal()
+        // guard is dropped here, releasing the read lock
     };
 
     let timeout = Duration::from_millis(timeout_ms);
     let start = std::time::Instant::now();
     let mut sleep_duration = Duration::from_millis(1);
 
-    while picker.is_scan_active() {
+    while scan_signal.load(std::sync::atomic::Ordering::Relaxed) {
         if start.elapsed() >= timeout {
             return FffResult::ok_data("false");
         }
@@ -587,7 +594,7 @@ pub unsafe extern "C" fn fff_refresh_git_status(fff_handle: *mut c_void) -> *mut
         Err(e) => return e,
     };
 
-    match FilePicker::refresh_git_status_shared(&inst.picker) {
+    match FilePicker::refresh_git_status(&inst.picker, &inst.frecency) {
         Ok(count) => FffResult::ok_data(&count.to_string()),
         Err(e) => FffResult::err(&format!("Failed to refresh git status: {}", e)),
     }

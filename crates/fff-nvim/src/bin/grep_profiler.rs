@@ -139,11 +139,7 @@ impl<'a> GrepBench<'a> {
         let start = Instant::now();
         let result = grep_search(self.files, query, parsed, &self.options);
         let elapsed = start.elapsed();
-        (
-            elapsed,
-            result.total_match_count,
-            result.total_files_searched,
-        )
+        (elapsed, result.matches.len(), result.total_files_searched)
     }
 
     /// Benchmark a query with multiple iterations

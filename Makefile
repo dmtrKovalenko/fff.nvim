@@ -12,7 +12,7 @@ test-setup:
 	fi
 
 test-rust:
-	cargo test --verbose --workspace --exclude fff-nvim
+	cargo test --workspace
 
 test-lua: test-setup build
 	nvim --headless -u tests/minimal_init.lua \

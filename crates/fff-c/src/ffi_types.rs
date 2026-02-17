@@ -341,7 +341,7 @@ impl GrepResultJson {
                     GrepMatchJson::from_grep_match(m, file)
                 })
                 .collect(),
-            total_matched: result.total_match_count,
+            total_matched: result.matches.len(),
             total_files_searched: result.total_files_searched,
             total_files: result.total_files,
             filtered_file_count: result.filtered_file_count,

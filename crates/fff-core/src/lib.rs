@@ -4,14 +4,10 @@
 //!
 //! # State management
 //!
-//! The library supports two usage modes:
-//!
-//! 1. **Global state** (for fff-nvim): Uses process-wide statics (`FILE_PICKER`, `FRECENCY`,
-//!    `QUERY_TRACKER`). Only one instance can exist at a time.
-//!
-//! 2. **Instance state** (for fff-c / FFI consumers): Callers create their own
-//!    `SharedPicker` / `SharedFrecency` and pass them into `FilePicker::with_shared_state`.
-//!    Multiple independent instances can coexist.
+//! All state is instance-based. Callers create their own `SharedPicker` /
+//! `SharedFrecency` / `SharedQueryTracker` and pass them into
+//! `FilePicker::new_with_shared_state`. Multiple independent instances can
+//! coexist in the same process.
 
 mod background_watcher;
 pub mod constraints;
@@ -29,34 +25,18 @@ pub mod types;
 
 use file_picker::FilePicker;
 use frecency::FrecencyTracker;
-use once_cell::sync::Lazy;
 use query_tracker::QueryTracker;
 use std::sync::{Arc, RwLock};
 
-/// Thread-safe shared handle to a `FilePicker`.
-///
-/// Used by `spawn_scan_and_watcher` and `BackgroundWatcher` to write scan results
-/// and file-system events back into the picker without relying on global statics.
 pub type SharedPicker = Arc<RwLock<Option<FilePicker>>>;
-
-/// Thread-safe shared handle to a `FrecencyTracker`.
 pub type SharedFrecency = Arc<RwLock<Option<FrecencyTracker>>>;
+pub type SharedQueryTracker = Arc<RwLock<Option<QueryTracker>>>;
 
-// Global state - same pattern as fff-nvim
-pub static FRECENCY: Lazy<RwLock<Option<FrecencyTracker>>> = Lazy::new(|| RwLock::new(None));
-pub static FILE_PICKER: Lazy<RwLock<Option<FilePicker>>> = Lazy::new(|| RwLock::new(None));
-pub static QUERY_TRACKER: Lazy<RwLock<Option<QueryTracker>>> = Lazy::new(|| RwLock::new(None));
-
-// Re-export main types for convenience
 pub use db_healthcheck::{DbHealth, DbHealthChecker};
 pub use error::{Error, Result};
-pub use file_picker::{FuzzySearchOptions, ScanProgress};
-pub use types::{FileItem, PaginationArgs, Score, ScoringContext, SearchResult};
-
-// Re-export grep types
-pub use grep::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions};
-
-// Re-export query parser types (including Location which moved there)
 pub use fff_query_parser::{
     Constraint, FFFQuery, FuzzyQuery, Location, QueryParser, location::parse_location,
 };
+pub use file_picker::{FuzzySearchOptions, ScanProgress};
+pub use grep::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions};
+pub use types::{FileItem, PaginationArgs, Score, ScoringContext, SearchResult};

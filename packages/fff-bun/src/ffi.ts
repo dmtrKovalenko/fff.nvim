@@ -307,9 +307,11 @@ export function ffiWaitForScan(
     handle,
     BigInt(timeoutMs)
   );
-  const result = parseResult<string>(resultPtr);
+  const result = parseResult<boolean | string>(resultPtr);
   if (!result.ok) return result;
-  return { ok: true, value: result.value === "true" };
+  // JSON.parse("true") returns boolean true, but we also handle
+  // the string case defensively.
+  return { ok: true, value: result.value === true || result.value === "true" };
 }
 
 /**
@@ -339,9 +341,9 @@ export function ffiTrackAccess(
     handle,
     ptr(encodeString(filePath))
   );
-  const result = parseResult<string>(resultPtr);
+  const result = parseResult<boolean | string>(resultPtr);
   if (!result.ok) return result;
-  return { ok: true, value: result.value === "true" };
+  return { ok: true, value: result.value === true || result.value === "true" };
 }
 
 /**
@@ -350,9 +352,10 @@ export function ffiTrackAccess(
 export function ffiRefreshGitStatus(handle: NativeHandle): Result<number> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_refresh_git_status(handle);
-  const result = parseResult<string>(resultPtr);
+  const result = parseResult<number | string>(resultPtr);
   if (!result.ok) return result;
-  return { ok: true, value: parseInt(result.value, 10) };
+  // JSON.parse("3") returns 3 (number), parseInt handles both
+  return { ok: true, value: typeof result.value === "number" ? result.value : parseInt(result.value, 10) };
 }
 
 /**
@@ -369,9 +372,9 @@ export function ffiTrackQuery(
     ptr(encodeString(query)),
     ptr(encodeString(filePath))
   );
-  const result = parseResult<string>(resultPtr);
+  const result = parseResult<boolean | string>(resultPtr);
   if (!result.ok) return result;
-  return { ok: true, value: result.value === "true" };
+  return { ok: true, value: result.value === true || result.value === "true" };
 }
 
 /**
@@ -386,10 +389,10 @@ export function ffiGetHistoricalQuery(
     handle,
     BigInt(offset)
   );
-  const result = parseResult<string>(resultPtr);
+  const result = parseResult<string | null>(resultPtr);
   if (!result.ok) return result;
-  if (result.value === "null") return { ok: true, value: null };
-  return result;
+  if (result.value === null || result.value === "null") return { ok: true, value: null };
+  return result as Result<string>;
 }
 
 /**

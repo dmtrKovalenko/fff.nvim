@@ -1,4 +1,3 @@
-use crate::FILE_PICKER;
 use crate::error::Error;
 use crate::file_picker::FilePicker;
 use crate::git::GitStatusCache;
@@ -13,7 +12,7 @@ use notify_debouncer_full::{
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{Level, error, info, warn};
+use tracing::{Level, debug, error, info, warn};
 
 type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, RecommendedCache>;
 
@@ -29,8 +28,8 @@ impl BackgroundWatcher {
     pub fn new(
         base_path: PathBuf,
         git_workdir: Option<PathBuf>,
-        shared_picker: Option<SharedPicker>,
-        shared_frecency: Option<SharedFrecency>,
+        shared_picker: SharedPicker,
+        shared_frecency: SharedFrecency,
     ) -> Result<Self, Error> {
         info!(
             "Initializing background watcher for path: {}",
@@ -49,14 +48,15 @@ impl BackgroundWatcher {
     fn create_debouncer(
         base_path: PathBuf,
         git_workdir: Option<PathBuf>,
-        shared_picker: Option<SharedPicker>,
-        shared_frecency: Option<SharedFrecency>,
+        shared_picker: SharedPicker,
+        shared_frecency: SharedFrecency,
     ) -> Result<Debouncer, Error> {
         // do not follow symlinks as then notifiers spawns a bunch of events for symlinked
         // files that could be git ignored, we have to property differentiate those and if
         // the file was edited through a
         let config = Config::default().with_follow_symlinks(false);
 
+        let git_workdir_for_handler = git_workdir.clone();
         let mut debouncer = new_debouncer_opt(
             DEBOUNCE_TIMEOUT,
             Some(DEBOUNCE_TIMEOUT / 2), // tick rate for the event span
@@ -65,9 +65,9 @@ impl BackgroundWatcher {
                     Ok(events) => {
                         handle_debounced_events(
                             events,
-                            &git_workdir,
-                            shared_picker.as_ref(),
-                            shared_frecency.as_ref(),
+                            &git_workdir_for_handler,
+                            &shared_picker,
+                            &shared_frecency,
                         );
                     }
                     Err(errors) => {
@@ -105,6 +105,11 @@ impl BackgroundWatcher {
                     }
                 }
             }
+
+            // In selective mode the .git directory is excluded from the non-ignored
+            // dirs, but we still need to observe changes that affect git status
+            // (staging, unstaging, committing, branch switches, merges, etc.).
+            watch_git_status_paths(&mut debouncer, git_workdir.as_ref());
         }
 
         info!(
@@ -142,8 +147,8 @@ impl Drop for BackgroundWatcher {
 fn handle_debounced_events(
     events: Vec<DebouncedEvent>,
     git_workdir: &Option<PathBuf>,
-    shared_picker: Option<&SharedPicker>,
-    shared_frecency: Option<&SharedFrecency>,
+    shared_picker: &SharedPicker,
+    shared_frecency: &SharedFrecency,
 ) {
     // this will be called very often, we have to minimiy the lock time for file picker
     let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
@@ -194,14 +199,30 @@ fn handle_debounced_events(
                 need_full_git_rescan = true;
             }
 
-            if !should_include_file(path, &repo) {
+            if is_git_file(path) {
                 continue;
             }
 
-            if !path.exists() {
+            // Use a combination of event kind and filesystem state to decide
+            // whether a path is an addition/modification or a removal.
+            //
+            // We cannot rely on `path.exists()` alone because:
+            //   - A freshly created file might not be visible yet (race).
+            //   - macOS FSEvents uses Modify(Name(Any)) for both rename-in
+            //     and rename-out, so we must stat the path to disambiguate.
+            //
+            // We cannot rely on event kind alone because:
+            //   - Remove events are not always emitted (macOS often sends
+            //     Modify(Name(Any)) instead of Remove).
+            let is_removal = matches!(debounced_event.event.kind, EventKind::Remove(_));
+
+            if is_removal || !path.exists() {
                 paths_to_remove.push(path.as_path());
             } else {
-                paths_to_add_or_modify.push(path.as_path());
+                // For additions/modifications, still filter gitignored files.
+                if should_include_file(path, &repo) {
+                    paths_to_add_or_modify.push(path.as_path());
+                }
             }
         }
 
@@ -223,7 +244,7 @@ fn handle_debounced_events(
 
     if need_full_rescan {
         info!(?affected_paths_count, "Triggering full rescan");
-        trigger_full_rescan(shared_picker);
+        trigger_full_rescan(shared_picker, shared_frecency);
         return;
     }
 
@@ -239,85 +260,94 @@ fn handle_debounced_events(
         paths_to_add_or_modify.len()
     );
 
+    // Apply file index updates (add/remove) unconditionally — these must
+    // happen even when there is no git repository.
+    let files_to_update_git_status =
+        if !paths_to_remove.is_empty() || !paths_to_add_or_modify.is_empty() {
+            debug!(
+                "Applying file index changes: {} to remove, {} to add/modify",
+                paths_to_remove.len(),
+                paths_to_add_or_modify.len(),
+            );
+
+            let apply_changes = |picker: &mut FilePicker| -> Vec<PathBuf> {
+                for path in &paths_to_remove {
+                    let removed = picker.remove_file_by_path(path);
+                    debug!("remove_file_by_path({:?}) -> {}", path, removed);
+                }
+
+                let mut files_to_update = Vec::with_capacity(paths_to_add_or_modify.len());
+                for path in &paths_to_add_or_modify {
+                    let result = picker.on_create_or_modify(path);
+                    match result {
+                        Some(file) => {
+                            debug!(
+                                "on_create_or_modify({:?}) -> Some({})",
+                                path,
+                                file.path.display()
+                            );
+                            files_to_update.push(file.path.clone());
+                        }
+                        None => {
+                            error!("on_create_or_modify({:?}) -> None (file not added!)", path);
+                        }
+                    }
+                }
+                info!(
+                    "apply_changes complete: {} files to update git status",
+                    files_to_update.len()
+                );
+                files_to_update
+            };
+
+            let Ok(mut guard) = shared_picker.write() else {
+                error!("Failed to acquire file picker write lock");
+                return;
+            };
+            let Some(ref mut picker) = *guard else {
+                error!("File picker not initialized");
+                return;
+            };
+            apply_changes(picker)
+        } else {
+            debug!("No file index changes to apply");
+            Vec::new()
+        };
+
+    // Git status updates require a repository.
     let Some(repo) = repo.as_ref() else {
-        info!("No git repo, skipping git status updates");
+        debug!("No git repo available, skipping git status updates");
         return;
     };
 
     if need_full_git_rescan {
         info!("Triggering full git rescan");
 
-        let result = if let Some(sp) = shared_picker {
-            FilePicker::refresh_git_status_shared(sp)
-        } else {
-            FilePicker::refresh_git_status_global()
-        };
+        let result = FilePicker::refresh_git_status(shared_picker, shared_frecency);
         if let Err(e) = result {
             error!("Failed to refresh git status: {:?}", e);
         }
-
         return;
     }
 
-    if paths_to_remove.is_empty() && paths_to_add_or_modify.is_empty() {
-        return;
-    }
+    if !files_to_update_git_status.is_empty() {
+        info!(
+            "Fetching git status for {} files",
+            files_to_update_git_status.len()
+        );
 
-    let apply_changes = |picker: &mut FilePicker| -> Vec<PathBuf> {
-        for path in &paths_to_remove {
-            picker.remove_file_by_path(path);
-        }
-
-        let mut files_to_update = Vec::with_capacity(paths_to_add_or_modify.len());
-        for path in &paths_to_add_or_modify {
-            if let Some(file) = picker.on_create_or_modify(path) {
-                files_to_update.push(file.path.clone());
+        let status = match GitStatusCache::git_status_for_paths(repo, &files_to_update_git_status) {
+            Ok(status) => status,
+            Err(e) => {
+                tracing::error!(?e, "Failed to query git status");
+                return;
             }
-        }
-        files_to_update
-    };
-
-    let files_to_update_git_status = if let Some(sp) = shared_picker {
-        let Ok(mut guard) = sp.write() else {
-            error!("Failed to acquire file picker write lock");
-            return;
         };
-        let Some(ref mut picker) = *guard else {
-            error!("File picker not initialized");
-            return;
-        };
-        apply_changes(picker)
-    } else {
-        let Ok(mut file_picker_guard) = FILE_PICKER.write() else {
-            error!("Failed to acquire file picker write lock");
-            return;
-        };
-        let Some(ref mut picker) = *file_picker_guard else {
-            error!("File picker not initialized");
-            return;
-        };
-        apply_changes(picker)
-    };
 
-    info!(
-        "Fetching git status for {} files",
-        files_to_update_git_status.len()
-    );
-
-    let status = match GitStatusCache::git_status_for_paths(repo, &files_to_update_git_status) {
-        Ok(status) => status,
-        Err(e) => {
-            tracing::error!(?e, "Failed to query git statue");
-            return;
-        }
-    };
-
-    // only lock the picker for the shortest possible time
-    if let Some(sp) = shared_picker {
-        if let Ok(mut guard) = sp.write()
+        if let Ok(mut guard) = shared_picker.write()
             && let Some(ref mut picker) = *guard
         {
-            if let Err(e) = picker.update_git_statuses_with_frecency(status, shared_frecency) {
+            if let Err(e) = picker.update_git_statuses(status, shared_frecency) {
                 error!("Failed to update git statuses: {:?}", e);
             } else {
                 info!("Successfully updated git statuses in picker");
@@ -325,64 +355,43 @@ fn handle_debounced_events(
         } else {
             error!("Failed to acquire picker lock for git status update");
         }
-    } else if let Ok(mut file_picker_guard) = FILE_PICKER.write()
-        && let Some(ref mut picker) = *file_picker_guard
-    {
-        if let Err(e) = picker.update_git_statuses(status) {
-            error!("Failed to update git statuses: {:?}", e);
-        } else {
-            info!("Successfully updated git statuses in picker");
-        }
-    } else {
-        error!("Failed to acquire picker lock for git status update");
     }
 }
 
-fn trigger_full_rescan(shared_picker: Option<&SharedPicker>) {
+fn trigger_full_rescan(shared_picker: &SharedPicker, shared_frecency: &SharedFrecency) {
     info!("Triggering full filesystem rescan");
 
     // Note: no need to clear mmaps — they are backed by the kernel page cache
     // and automatically reflect file changes. Old FileItems (and their mmaps)
     // are dropped when the picker rebuilds its file list.
 
-    if let Some(sp) = shared_picker {
-        let Ok(mut guard) = sp.write() else {
-            error!("Failed to acquire file picker write lock for full rescan");
-            return;
-        };
-        let Some(ref mut picker) = *guard else {
-            error!("File picker not initialized, cannot trigger rescan");
-            return;
-        };
-        if let Err(e) = picker.trigger_rescan() {
-            error!("Failed to trigger full rescan: {:?}", e);
-        } else {
-            info!("Full filesystem rescan completed successfully");
-        }
+    let Ok(mut guard) = shared_picker.write() else {
+        error!("Failed to acquire file picker write lock for full rescan");
+        return;
+    };
+    let Some(ref mut picker) = *guard else {
+        error!("File picker not initialized, cannot trigger rescan");
+        return;
+    };
+    if let Err(e) = picker.trigger_rescan(shared_frecency) {
+        error!("Failed to trigger full rescan: {:?}", e);
     } else {
-        let Ok(mut file_picker_guard) = FILE_PICKER.write() else {
-            error!("Failed to acquire file picker write lock for full rescan");
-            return;
-        };
-        let Some(ref mut picker) = *file_picker_guard else {
-            error!("File picker not initialized, cannot trigger rescan");
-            return;
-        };
-        if let Err(e) = picker.trigger_rescan() {
-            error!("Failed to trigger full rescan: {:?}", e);
-        } else {
-            info!("Full filesystem rescan completed successfully");
-        }
+        info!("Full filesystem rescan completed successfully");
     }
 }
 
 fn should_include_file(path: &Path, repo: &Option<Repository>) -> bool {
-    if !path.is_file() || is_git_file(path) {
+    // Directories are not indexed — only regular files (and symlinks to files).
+    if path.is_dir() {
         return false;
     }
 
-    repo.as_ref()
-        .is_some_and(|repo| repo.is_path_ignored(path) == Ok(false))
+    // If there is a git repo, respect its ignore rules.
+    // If there is no repo (or the check fails), include the file.
+    match repo.as_ref() {
+        Some(repo) => repo.is_path_ignored(path) != Ok(true),
+        None => true,
+    }
 }
 
 #[inline]
@@ -430,6 +439,40 @@ fn is_ignore_definition_path(path: &Path) -> bool {
         path.file_name().and_then(|f| f.to_str()),
         Some(".ignore") | Some(".gitignore")
     )
+}
+
+fn watch_git_status_paths(debouncer: &mut Debouncer, git_workdir: Option<&PathBuf>) {
+    let Some(workdir) = git_workdir else {
+        return;
+    };
+
+    let git_dir = workdir.join(".git");
+    if !git_dir.is_dir() {
+        return;
+    }
+
+    // Watch .git/ non-recursively to catch top-level files:
+    // index, index.lock, HEAD, packed-refs, MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD
+    if let Err(e) = debouncer.watch(&git_dir, RecursiveMode::NonRecursive) {
+        warn!("Failed to watch .git directory: {}", e);
+        return;
+    }
+
+    // Watch refs/ recursively to catch branch/tag changes
+    let refs_dir = git_dir.join("refs");
+    if refs_dir.is_dir()
+        && let Err(e) = debouncer.watch(&refs_dir, RecursiveMode::Recursive)
+    {
+        warn!("Failed to watch .git/refs: {}", e);
+    }
+
+    // Watch info/ non-recursively for exclude and sparse-checkout
+    let info_dir = git_dir.join("info");
+    if info_dir.is_dir()
+        && let Err(e) = debouncer.watch(&info_dir, RecursiveMode::NonRecursive)
+    {
+        warn!("Failed to watch .git/info: {}", e);
+    }
 }
 
 /// Collects immediate non-ignored subdirectories of `base_path` using the `ignore` crate

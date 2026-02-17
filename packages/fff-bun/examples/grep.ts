@@ -36,7 +36,7 @@ function formatGitStatus(status: string): string {
       return `${RED}D${RESET}`;
     case "renamed":
       return `${BLUE}R${RESET}`;
-    case "clear":
+    case "clean":
     case "current":
       return `${DIM} ${RESET}`;
     default:

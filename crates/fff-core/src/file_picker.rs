@@ -6,7 +6,6 @@ use crate::query_tracker::QueryMatchEntry;
 use crate::score::match_and_score_files;
 use crate::types::{FileItem, PaginationArgs, ScoringContext, SearchResult};
 use crate::{SharedFrecency, SharedPicker};
-use ahash::AHashMap;
 use fff_query_parser::FFFQuery;
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
@@ -19,8 +18,6 @@ use std::sync::{
 };
 use std::time::SystemTime;
 use tracing::{Level, debug, error, info, warn};
-
-use crate::{FILE_PICKER, FRECENCY};
 
 /// Detect if a file is binary by checking for NUL bytes in the first 512 bytes.
 /// This is the same heuristic used by git and grep — simple, fast, and sufficient.
@@ -54,8 +51,8 @@ pub struct FuzzySearchOptions<'a> {
 
 #[derive(Debug, Clone)]
 struct FileSync {
-    pub files: Vec<FileItem>,
-    pub path_to_index: AHashMap<PathBuf, usize>,
+    /// Files sorted by path for binary search
+    files: Vec<FileItem>,
     pub git_workdir: Option<PathBuf>,
 }
 
@@ -63,14 +60,72 @@ impl FileSync {
     fn new() -> Self {
         Self {
             files: Vec::new(),
-            path_to_index: AHashMap::new(),
             git_workdir: None,
         }
     }
 
-    /// Fast O(1) lookup using HashMap (15-18x faster than binary search)
+    /// Get all files (read-only). Files are sorted by path.
+    #[inline]
+    fn files(&self) -> &[FileItem] {
+        &self.files
+    }
+
+    fn get_file(&self, index: usize) -> Option<&FileItem> {
+        self.files.get(index)
+    }
+
+    /// Get mutable file at index
+    #[inline]
+    fn get_file_mut(&mut self, index: usize) -> Option<&mut FileItem> {
+        self.files.get_mut(index)
+    }
+
+    /// Find file index by path using binary search - O(log n)
+    #[inline]
     fn find_file_index(&self, path: &Path) -> Result<usize, usize> {
-        self.path_to_index.get(path).copied().ok_or(0) // Return Err(0) to match binary_search signature
+        self.files.binary_search_by(|f| f.path.as_path().cmp(path))
+    }
+
+    /// Get file count
+    #[inline]
+    #[allow(dead_code)]
+    fn len(&self) -> usize {
+        self.files.len()
+    }
+
+    /// Insert a file at position. Simple - no HashMap to maintain!
+    fn insert_file(&mut self, position: usize, file: FileItem) {
+        self.files.insert(position, file);
+    }
+
+    /// Remove file at index. Simple - no HashMap to maintain!
+    fn remove_file(&mut self, index: usize) {
+        if index < self.files.len() {
+            self.files.remove(index);
+        }
+    }
+
+    /// Remove files matching predicate.
+    /// Returns number of files removed.
+    fn retain_files<F>(&mut self, predicate: F) -> usize
+    where
+        F: FnMut(&FileItem) -> bool,
+    {
+        let initial_len = self.files.len();
+        self.files.retain(predicate);
+        initial_len - self.files.len()
+    }
+
+    /// Insert a file in sorted order (by path).
+    /// Returns true if inserted, false if file already exists.
+    fn insert_file_sorted(&mut self, file: FileItem) -> bool {
+        match self.find_file_index(&file.path) {
+            Ok(_) => false, // File already exists
+            Err(position) => {
+                self.insert_file(position, file);
+                true
+            }
+        }
     }
 }
 
@@ -122,16 +177,6 @@ impl FileItem {
 
         Ok(())
     }
-
-    /// Locks the tracker and updates frecensy score for one file. If need multiple files updates
-    /// use `update_frecency_scores` instead.
-    pub fn update_frecency_scores_global(&mut self) -> Result<(), Error> {
-        let Some(ref frecency) = *FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)? else {
-            return Ok(());
-        };
-
-        self.update_frecency_scores(frecency)
-    }
 }
 
 pub struct FilePicker {
@@ -170,58 +215,18 @@ impl FilePicker {
         self.sync_data.git_workdir.as_deref()
     }
 
-    /// Get files in frecency order (already sorted, zero overhead).
-    /// Files are always stored sorted by frecency in the sync_data.files Vec.
+    /// Get all indexed files sorted by path.
+    /// Note: Files are stored sorted by PATH for efficient insert/remove.
+    /// For frecency-sorted results, use search() which sorts matched results.
     pub fn get_files(&self) -> &[FileItem] {
-        &self.sync_data.files
-    }
-
-    pub fn new(base_path: String) -> Result<Self, Error> {
-        Self::new_with_options(base_path, false)
-    }
-
-    pub fn new_with_options(base_path: String, warmup_mmap_cache: bool) -> Result<Self, Error> {
-        info!(
-            "Initializing FilePicker with base_path: {}, warmup: {}",
-            base_path, warmup_mmap_cache
-        );
-        let path = PathBuf::from(&base_path);
-        if !path.exists() {
-            error!("Base path does not exist: {}", base_path);
-            return Err(Error::InvalidPath(path));
-        }
-
-        let scan_signal = Arc::new(AtomicBool::new(false));
-        let synced_files_count = Arc::new(AtomicUsize::new(0));
-
-        let picker = Self {
-            base_path: path.clone(),
-            sync_data: FileSync::new(),
-            is_scanning: Arc::clone(&scan_signal),
-            scanned_files_count: Arc::clone(&synced_files_count),
-            background_watcher: None,
-            warmup_mmap_cache,
-        };
-
-        // Background thread writes back into the global FILE_PICKER / FRECENCY.
-        spawn_scan_and_watcher(
-            path.clone(),
-            Arc::clone(&scan_signal),
-            Arc::clone(&synced_files_count),
-            warmup_mmap_cache,
-            None,
-            None,
-        );
-
-        Ok(picker)
+        self.sync_data.files()
     }
 
     /// Create a new FilePicker and place it into the provided shared handle.
     ///
-    /// Unlike [`new_with_options`], this does **not** touch the global
-    /// `FILE_PICKER` / `FRECENCY` statics. The background scan thread
-    /// and file-system watcher write into the provided `SharedPicker` and
-    /// read frecency data from the provided `SharedFrecency`.
+    /// The background scan thread and file-system watcher write into the
+    /// provided `SharedPicker` and read frecency data from the provided
+    /// `SharedFrecency`.
     ///
     /// Multiple independent instances can coexist in the same process.
     pub fn new_with_shared_state(
@@ -240,7 +245,10 @@ impl FilePicker {
             return Err(Error::InvalidPath(path));
         }
 
-        let scan_signal = Arc::new(AtomicBool::new(false));
+        // Initialize scan_signal to `true` so that any `wait_for_scan` call
+        // that races with the background thread sees "scanning in progress"
+        // rather than a stale `false` (the thread hasn't started yet).
+        let scan_signal = Arc::new(AtomicBool::new(true));
         let synced_files_count = Arc::new(AtomicUsize::new(0));
 
         let picker = FilePicker {
@@ -264,8 +272,8 @@ impl FilePicker {
             Arc::clone(&scan_signal),
             Arc::clone(&synced_files_count),
             warmup_mmap_cache,
-            Some(shared_picker),
-            Some(shared_frecency),
+            shared_picker,
+            shared_frecency,
         );
 
         Ok(())
@@ -362,107 +370,42 @@ impl FilePicker {
         }
     }
 
-    pub fn update_git_statuses(&mut self, status_cache: GitStatusCache) -> Result<(), Error> {
-        self.update_git_statuses_with_frecency(status_cache, None)
-    }
-
-    /// Update git statuses for files, optionally using a specific frecency tracker
-    /// instead of the global `FRECENCY` static.
-    pub fn update_git_statuses_with_frecency(
+    /// Update git statuses for files, using the provided shared frecency tracker.
+    pub fn update_git_statuses(
         &mut self,
         status_cache: GitStatusCache,
-        shared_frecency: Option<&SharedFrecency>,
+        shared_frecency: &SharedFrecency,
     ) -> Result<(), Error> {
         debug!(
             statuses_count = status_cache.statuses_len(),
             "Updating git status",
         );
 
-        // Read frecency from the shared handle if provided, otherwise from the global.
-        if let Some(sf) = shared_frecency {
-            let frecency = sf.read().map_err(|_| Error::AcquireFrecencyLock)?;
-            status_cache
-                .into_iter()
-                .try_for_each(|(path, status)| -> Result<(), Error> {
-                    if let Some(file) = self.get_mut_file_by_path(&path) {
-                        file.git_status = Some(status);
-                        if let Some(ref f) = *frecency {
-                            file.update_frecency_scores(f)?;
-                        }
-                    } else {
-                        error!(?path, "Couldn't update the git status for path");
+        let frecency = shared_frecency
+            .read()
+            .map_err(|_| Error::AcquireFrecencyLock)?;
+        status_cache
+            .into_iter()
+            .try_for_each(|(path, status)| -> Result<(), Error> {
+                if let Some(file) = self.get_mut_file_by_path(&path) {
+                    file.git_status = Some(status);
+                    if let Some(ref f) = *frecency {
+                        file.update_frecency_scores(f)?;
                     }
-                    Ok(())
-                })?;
-        } else {
-            let frecency = FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)?;
-            status_cache
-                .into_iter()
-                .try_for_each(|(path, status)| -> Result<(), Error> {
-                    if let Some(file) = self.get_mut_file_by_path(&path) {
-                        file.git_status = Some(status);
-                        if let Some(frecency) = frecency.as_ref() {
-                            file.update_frecency_scores(frecency)?;
-                        }
-                    } else {
-                        error!(?path, "Couldn't update the git status for path");
-                    }
-                    Ok(())
-                })?;
-        }
+                } else {
+                    error!(?path, "Couldn't update the git status for path");
+                }
+                Ok(())
+            })?;
 
         Ok(())
     }
 
-    /// Fetches all the git statuses first and updates the global FILE_PICKER
-    /// with the new statuses with the smallest possible lock time.
-    pub fn refresh_git_status_global() -> Result<usize, Error> {
-        let git_status = {
-            let Some(ref picker) = *FILE_PICKER.read().map_err(|_| Error::AcquireItemLock)? else {
-                return Err(Error::FilePickerMissing)?;
-            };
-
-            debug!(
-                "Refreshing git statuses for picker: {:?}",
-                picker.git_root()
-            );
-
-            // we keep here readonly lock but allowing querying the index while it scan lasts
-            GitStatusCache::read_git_status(
-                picker.git_root(),
-                StatusOptions::new()
-                    .include_untracked(true)
-                    .recurse_untracked_dirs(true)
-                    // when manually refreshing git status we want to include all unmodified file
-                    // to make sure that their status is correctly updated when user
-                    // commited/stashed/removed changes
-                    .include_unmodified(true)
-                    .exclude_submodules(true),
-            )
-        };
-
-        let mut file_picker = FILE_PICKER.write().map_err(|_| Error::AcquireItemLock)?;
-        let picker = file_picker
-            .as_mut()
-            .ok_or_else(|| Error::FilePickerMissing)?;
-
-        let statuses_count = if let Some(git_status) = git_status {
-            let count = git_status.statuses_len();
-            picker.update_git_statuses(git_status)?;
-
-            count
-        } else {
-            0
-        };
-
-        Ok(statuses_count)
-    }
-
-    /// Instance-based variant of [`refresh_git_status_global`].
-    ///
-    /// Refreshes git statuses using the provided shared picker handle instead
-    /// of the global `FILE_PICKER` static.
-    pub fn refresh_git_status_shared(shared_picker: &SharedPicker) -> Result<usize, Error> {
+    /// Refreshes git statuses using the provided shared picker and frecency handles.
+    pub fn refresh_git_status(
+        shared_picker: &SharedPicker,
+        shared_frecency: &SharedFrecency,
+    ) -> Result<usize, Error> {
         let git_status = {
             let guard = shared_picker.read().map_err(|_| Error::AcquireItemLock)?;
             let Some(ref picker) = *guard else {
@@ -489,7 +432,7 @@ impl FilePicker {
 
         let statuses_count = if let Some(git_status) = git_status {
             let count = git_status.statuses_len();
-            picker.update_git_statuses(git_status)?;
+            picker.update_git_statuses(git_status, shared_frecency)?;
             count
         } else {
             0
@@ -504,7 +447,7 @@ impl FilePicker {
         frecency_tracker: &FrecencyTracker,
     ) -> Result<(), Error> {
         if let Ok(index) = self.sync_data.find_file_index(file_path.as_ref())
-            && let Some(file) = self.sync_data.files.get_mut(index)
+            && let Some(file) = self.sync_data.get_file_mut(index)
         {
             file.update_frecency_scores(frecency_tracker)?;
         }
@@ -516,35 +459,38 @@ impl FilePicker {
         self.sync_data
             .find_file_index(path.as_ref())
             .ok()
-            .and_then(|index| self.sync_data.files.get(index))
+            .and_then(|index| self.sync_data.files().get(index))
     }
 
     pub fn get_mut_file_by_path(&mut self, path: impl AsRef<Path>) -> Option<&mut FileItem> {
         self.sync_data
             .find_file_index(path.as_ref())
             .ok()
-            .and_then(|index| self.sync_data.files.get_mut(index))
+            .and_then(|index| self.sync_data.get_file_mut(index))
     }
 
     /// Add a file to the picker's files in sorted order (used by background watcher)
     pub fn add_file_sorted(&mut self, file: FileItem) -> Option<&FileItem> {
-        match self
-            .sync_data
-            .files
-            .binary_search_by(|f| f.relative_path.cmp(&file.relative_path))
-        {
-            Ok(position) => {
-                warn!(
-                    "Trying to insert a file that already exists: {}",
-                    file.relative_path
-                );
+        let path = file.path.clone();
 
-                self.sync_data.files.get(position)
-            }
-            Err(position) => {
-                self.sync_data.files.insert(position, file);
-                self.sync_data.files.get(position)
-            }
+        if self.sync_data.insert_file_sorted(file) {
+            // File was inserted, look it up
+            self.sync_data
+                .find_file_index(&path)
+                .ok()
+                .and_then(|idx| self.sync_data.get_file_mut(idx))
+                .map(|file_mut| &*file_mut) // Convert &mut to &
+        } else {
+            // File already exists
+            warn!(
+                "Trying to insert a file that already exists: {}",
+                path.display()
+            );
+            self.sync_data
+                .find_file_index(&path)
+                .ok()
+                .and_then(|idx| self.sync_data.get_file_mut(idx))
+                .map(|file_mut| &*file_mut) // Convert &mut to &
         }
     }
 
@@ -553,8 +499,12 @@ impl FilePicker {
         let path = path.as_ref();
         match self.sync_data.find_file_index(path) {
             Ok(pos) => {
-                // safe to read because we are in lock and binary search returned valid position
-                let file = &mut self.sync_data.files[pos];
+                debug!(
+                    "on_create_or_modify: file EXISTS at index {}, updating metadata",
+                    pos
+                );
+                // File exists - update its metadata (doesn't change indices, safe)
+                let file = self.sync_data.get_file_mut(pos)?;
 
                 let modified = match std::fs::metadata(path) {
                     Ok(metadata) => metadata
@@ -580,21 +530,40 @@ impl FilePicker {
                     }
                 }
 
-                Some(file)
+                Some(&*file) // Convert &mut to &
             }
             Err(pos) => {
-                let file_item = FileItem::new(path.to_path_buf(), &self.base_path, None);
-                self.sync_data.files.insert(pos, file_item);
+                debug!(
+                    "on_create_or_modify: file NEW, inserting at index {} (total files: {})",
+                    pos,
+                    self.sync_data.files().len()
+                );
 
-                self.sync_data.files.get(pos)
+                let file_item = FileItem::new(path.to_path_buf(), &self.base_path, None);
+                let path_buf = file_item.path.clone();
+
+                self.sync_data.insert_file(pos, file_item);
+                let result = self.sync_data.get_file(pos);
+
+                if result.is_none() {
+                    error!(
+                        "on_create_or_modify: FAILED to find file after insert! path={:?}",
+                        path_buf
+                    );
+                } else {
+                    debug!("on_create_or_modify: successfully inserted and found file");
+                }
+
+                result
             }
         }
     }
 
     pub fn remove_file_by_path(&mut self, path: impl AsRef<Path>) -> bool {
-        match self.sync_data.find_file_index(path.as_ref()) {
+        let path = path.as_ref();
+        match self.sync_data.find_file_index(path) {
             Ok(index) => {
-                self.sync_data.files.remove(index);
+                self.sync_data.remove_file(index);
                 true
             }
             Err(_) => false,
@@ -604,13 +573,9 @@ impl FilePicker {
     // TODO make this O(n)
     pub fn remove_all_files_in_dir(&mut self, dir: impl AsRef<Path>) -> usize {
         let dir_path = dir.as_ref();
-        let initial_len = self.sync_data.files.len();
-
+        // Use the safe retain_files method which maintains both indices
         self.sync_data
-            .files
-            .retain(|file| !file.path.starts_with(dir_path));
-
-        initial_len - self.sync_data.files.len()
+            .retain_files(|file| !file.path.starts_with(dir_path))
     }
 
     pub fn stop_background_monitor(&mut self) {
@@ -619,7 +584,7 @@ impl FilePicker {
         }
     }
 
-    pub fn trigger_rescan(&mut self) -> Result<(), Error> {
+    pub fn trigger_rescan(&mut self, shared_frecency: &SharedFrecency) -> Result<(), Error> {
         if self.is_scanning.load(Ordering::Relaxed) {
             debug!("Scan already in progress, skipping trigger_rescan");
             return Ok(());
@@ -628,7 +593,8 @@ impl FilePicker {
         self.is_scanning.store(true, Ordering::Relaxed);
         self.scanned_files_count.store(0, Ordering::Relaxed);
 
-        let scan_result = scan_filesystem(&self.base_path, &self.scanned_files_count, None);
+        let scan_result =
+            scan_filesystem(&self.base_path, &self.scanned_files_count, shared_frecency);
         match scan_result {
             Ok(sync) => {
                 info!(
@@ -640,7 +606,7 @@ impl FilePicker {
 
                 if self.warmup_mmap_cache {
                     // Warmup in background to avoid blocking
-                    let files = self.sync_data.files.clone();
+                    let files = self.sync_data.files().to_vec(); // Clone all files
                     std::thread::spawn(move || {
                         warmup_mmaps(&files);
                     });
@@ -656,6 +622,12 @@ impl FilePicker {
     pub fn is_scan_active(&self) -> bool {
         self.is_scanning.load(Ordering::Relaxed)
     }
+
+    /// Return a clone of the scanning flag so callers can poll it without
+    /// holding a lock on the picker.
+    pub fn scan_signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.is_scanning)
+    }
 }
 
 #[allow(unused)]
@@ -670,15 +642,16 @@ fn spawn_scan_and_watcher(
     scan_signal: Arc<AtomicBool>,
     synced_files_count: Arc<AtomicUsize>,
     warmup_mmap_cache: bool,
-    shared_picker: Option<SharedPicker>,
-    shared_frecency: Option<SharedFrecency>,
+    shared_picker: SharedPicker,
+    shared_frecency: SharedFrecency,
 ) {
     std::thread::spawn(move || {
-        scan_signal.store(true, Ordering::Relaxed);
+        // scan_signal is already `true` (set by the caller before spawning)
+        // so waiters see "scanning" even before this thread is scheduled.
         info!("Starting initial file scan");
 
         let mut git_workdir = None;
-        match scan_filesystem(&base_path, &synced_files_count, shared_frecency.as_ref()) {
+        match scan_filesystem(&base_path, &synced_files_count, &shared_frecency) {
             Ok(sync) => {
                 info!(
                     "Initial filesystem scan completed: found {} files",
@@ -687,21 +660,12 @@ fn spawn_scan_and_watcher(
 
                 git_workdir = sync.git_workdir.clone();
 
-                // Write results into the provided shared handle, or fall back to
-                // the global FILE_PICKER when running in global mode.
-                let write_result = if let Some(ref sp) = shared_picker {
-                    sp.write().ok().map(|mut guard| {
-                        if let Some(ref mut picker) = *guard {
-                            picker.sync_data = sync;
-                        }
-                    })
-                } else {
-                    crate::FILE_PICKER.write().ok().map(|mut guard| {
-                        if let Some(ref mut picker) = *guard {
-                            picker.sync_data = sync;
-                        }
-                    })
-                };
+                // Write results into the provided shared handle.
+                let write_result = shared_picker.write().ok().map(|mut guard| {
+                    if let Some(ref mut picker) = *guard {
+                        picker.sync_data = sync;
+                    }
+                });
 
                 if write_result.is_none() {
                     error!("Failed to write scan results into picker");
@@ -710,25 +674,15 @@ fn spawn_scan_and_watcher(
                 // OPTIMIZATION: Warmup mmap cache in background to avoid blocking first grep.
                 // The aggressive parallel warmup was causing cache thrashing and delaying
                 // initial searches. Now it runs async and doesn't block.
-                if warmup_mmap_cache {
-                    let picker_clone = if let Some(ref sp) = shared_picker {
-                        sp.read()
-                            .ok()
-                            .and_then(|g| g.as_ref().map(|p| p.sync_data.files.clone()))
-                    } else {
-                        crate::FILE_PICKER
-                            .read()
-                            .ok()
-                            .and_then(|g| g.as_ref().map(|p| p.sync_data.files.clone()))
-                    };
-
-                    if let Some(files) = picker_clone {
-                        warmup_mmaps(&files);
-                    }
-                }
-
-                if write_result.is_none() {
-                    error!("Failed to write scan results into picker");
+                //
+                // We warmup under a read lock on the picker's actual files so that
+                // the OnceLock<Mmap> instances are populated in-place — no clone needed.
+                // Read locks allow concurrent readers so this doesn't block searches.
+                if warmup_mmap_cache
+                    && let Ok(guard) = shared_picker.read()
+                    && let Some(ref picker) = *guard
+                {
+                    warmup_mmaps(picker.sync_data.files());
                 }
             }
             Err(e) => {
@@ -746,19 +700,11 @@ fn spawn_scan_and_watcher(
             Ok(watcher) => {
                 info!("Background file watcher initialized successfully");
 
-                let write_result = if let Some(ref sp) = shared_picker {
-                    sp.write().ok().map(|mut guard| {
-                        if let Some(ref mut picker) = *guard {
-                            picker.background_watcher = Some(watcher);
-                        }
-                    })
-                } else {
-                    crate::FILE_PICKER.write().ok().map(|mut guard| {
-                        if let Some(ref mut picker) = *guard {
-                            picker.background_watcher = Some(watcher);
-                        }
-                    })
-                };
+                let write_result = shared_picker.write().ok().map(|mut guard| {
+                    if let Some(ref mut picker) = *guard {
+                        picker.background_watcher = Some(watcher);
+                    }
+                });
 
                 if write_result.is_none() {
                     error!("Failed to store background watcher in picker");
@@ -778,8 +724,8 @@ fn spawn_scan_and_watcher(
 ///
 /// Each file is mmap'd and a single byte is read to trigger the page fault.
 /// This runs in parallel using rayon.
+#[tracing::instrument(skip(files), name = "warmup_mmaps", level = Level::DEBUG)]
 fn warmup_mmaps(files: &[FileItem]) {
-    let warmup_start = std::time::Instant::now();
     let warmed = std::sync::atomic::AtomicUsize::new(0);
 
     files.par_iter().for_each(|file| {
@@ -796,19 +742,12 @@ fn warmup_mmaps(files: &[FileItem]) {
             warmed.fetch_add(1, Ordering::Relaxed);
         }
     });
-
-    let warmed_count = warmed.load(Ordering::Relaxed);
-    info!(
-        "Mmap warmup completed: {warmed_count}/{} files in {:?}",
-        files.len(),
-        warmup_start.elapsed()
-    );
 }
 
 fn scan_filesystem(
     base_path: &Path,
     synced_files_count: &Arc<AtomicUsize>,
-    shared_frecency: Option<&SharedFrecency>,
+    shared_frecency: &SharedFrecency,
 ) -> Result<FileSync, Error> {
     use ignore::{WalkBuilder, WalkState};
     use std::thread;
@@ -895,11 +834,9 @@ fn scan_filesystem(
             Error::ThreadPanic
         })?;
 
-        let frecency = if let Some(sf) = shared_frecency {
-            sf.read().map_err(|_| Error::AcquireFrecencyLock)?
-        } else {
-            FRECENCY.read().map_err(|_| Error::AcquireFrecencyLock)?
-        };
+        let frecency = shared_frecency
+            .read()
+            .map_err(|_| Error::AcquireFrecencyLock)?;
         files
             .par_iter_mut()
             .try_for_each(|file| -> Result<(), Error> {
@@ -921,33 +858,8 @@ fn scan_filesystem(
             files.len()
         );
 
-        // Sort files by frecency (descending) for optimal grep performance
-        info!("SCAN: Sorting files by frecency");
-        let sort_start = std::time::Instant::now();
-
-        files.par_sort_unstable_by(|a, b| {
-            b.total_frecency_score
-                .cmp(&a.total_frecency_score)
-                .then(b.modified.cmp(&a.modified))
-        });
-
-        // Build path_to_index HashMap for O(1) lookups
-        let path_to_index: AHashMap<PathBuf, usize> = files
-            .iter()
-            .enumerate()
-            .map(|(idx, file)| (file.path.clone(), idx))
-            .collect();
-
-        info!(
-            "SCAN: Sort and index build completed in {:?}",
-            sort_start.elapsed()
-        );
-
-        Ok(FileSync {
-            files,
-            path_to_index,
-            git_workdir,
-        })
+        files.par_sort_unstable_by(|a, b| a.path.as_os_str().cmp(b.path.as_os_str()));
+        Ok(FileSync { files, git_workdir })
     })
 }
 

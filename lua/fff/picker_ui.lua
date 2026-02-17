@@ -2129,7 +2129,8 @@ function M.send_to_quickfix()
     else
       -- No selections: run an exhaustive search to get all matches
       local grep = require('fff.grep')
-      local exhaustive = grep.search(M.state.query, 0, 10000, M.state.grep_config, M.state.grep_mode)
+      local exhaustive_config = vim.tbl_extend('force', M.state.grep_config or {}, { max_matches_per_file = 0 })
+      local exhaustive = grep.search(M.state.query, 0, 10000, exhaustive_config, M.state.grep_mode)
       local all_items = exhaustive and exhaustive.items or {}
 
       if #all_items == 0 then

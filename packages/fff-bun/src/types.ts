@@ -291,9 +291,7 @@ export function createGrepCursor(offset: number): GrepCursor {
  * Options for live grep (content search)
  *
  * Files are searched sequentially in frecency order (most recently/frequently
- * accessed first). The engine collects matching lines across files until
- * `pageLimit` total matches are reached, then stops and returns a
- * `nextCursor` for fetching the next page.
+ * accessed first). The engine returns a `nextCursor` for fetching the next page.
  */
 export interface GrepOptions {
   /** Maximum file size to search in bytes. Files larger than this are skipped. (default: 10MB) */
@@ -307,26 +305,11 @@ export interface GrepOptions {
    * Omit (or pass `null`) for the first page.
    */
   cursor?: GrepCursor | null;
-  /**
-   * Maximum total number of matching lines to return across all files.
-   * The engine walks files in frecency order, accumulating matches until this
-   * limit is reached, then truncates and stops.
-   *
-   * Pagination is file-based, not match-based: if a single file produces more
-   * matches than the remaining capacity, the excess matches from that file are
-   * dropped and the next page resumes from the *next* file. This means some
-   * matches at the boundary may be skipped, but it guarantees no duplicates
-   * across pages and requires no server-side cursor state.
-   *
-   * Use `nextCursor` from the result to fetch the next page. (default: 50)
-   */
-  pageLimit?: number;
   /** Search mode (default: "plain") */
   mode?: GrepMode;
   /**
    * Maximum wall-clock time in milliseconds to spend searching before returning
-   * partial results. The engine will still return at least `pageLimit / 2` matches
-   * (if available) before honoring the budget. 0 = unlimited. (default: 0)
+   * partial results. 0 = unlimited. (default: 0)
    */
   timeBudgetMs?: number;
 }
@@ -373,9 +356,9 @@ export interface GrepMatch {
  * Result from a grep search
  */
 export interface GrepResult {
-  /** Matched items with file and line information. At most `pageLimit` entries. */
+  /** Matched items with file and line information. At most `max_matches_per_file`. */
   items: GrepMatch[];
-  /** Total number of matches collected (equal to items.length unless truncated by pageLimit) */
+  /** Total number of matches collected (always equal to items.length). */
   totalMatched: number;
   /** Number of files actually opened and searched in this call */
   totalFilesSearched: number;
@@ -401,7 +384,6 @@ export interface GrepOptionsInternal {
   max_matches_per_file?: number;
   smart_case?: boolean;
   file_offset?: number;
-  page_limit?: number;
   mode?: string;
   time_budget_ms?: number;
 }
@@ -416,7 +398,6 @@ export function toInternalGrepOptions(opts?: GrepOptions): GrepOptionsInternal {
     max_matches_per_file: opts?.maxMatchesPerFile,
     smart_case: opts?.smartCase,
     file_offset: opts?.cursor?._offset ?? 0,
-    page_limit: opts?.pageLimit,
     mode: opts?.mode,
     time_budget_ms: opts?.timeBudgetMs,
   };

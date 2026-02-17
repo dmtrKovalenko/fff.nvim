@@ -207,7 +207,7 @@ export class FileFinder {
    * @example
    * ```typescript
    * // First page
-   * const result = finder.liveGrep("TODO", { mode: "plain", pageLimit: 20 });
+        * const result = finder.liveGrep("TODO", { mode: "plain" });
    * if (result.ok) {
    *   for (const match of result.value.items) {
    *     console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
