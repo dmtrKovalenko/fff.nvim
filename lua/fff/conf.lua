@@ -111,7 +111,7 @@ local function init()
       height = 0.8,
       width = 0.8,
       prompt_position = 'bottom', -- or 'top'
-      preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
+      preview_position = 'auto', -- or 'left', 'right', 'top', 'bottom'
       preview_size = 0.5,
       show_scrollbar = true, -- Show scrollbar for pagination
       path_shorten_strategy = 'middle_number', -- or 'middle', 'end'

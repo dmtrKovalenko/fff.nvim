@@ -62,19 +62,29 @@ end
 
 local function get_preview_position()
   local config = M.state.config
+  local terminal_width = vim.o.columns
+  local terminal_height = vim.o.lines
 
   if config and config.layout and config.layout.preview_position then
-    local terminal_width = vim.o.columns
-    local terminal_height = vim.o.lines
-
-    return utils.resolve_config_value(
+    local raw = utils.resolve_config_value(
       config.layout.preview_position,
       terminal_width,
       terminal_height,
-      function(value) return utils.is_one_of(value, { 'left', 'right', 'top', 'bottom' }) end,
-      'right',
+      function(value) return utils.is_one_of(value, { 'auto', 'left', 'right', 'top', 'bottom' }) end,
+      'auto',
       'layout.preview_position'
     )
+
+    if raw == 'auto' then
+      local width_ratio = utils.resolve_config_value(
+        config.layout.width, terminal_width, terminal_height,
+        utils.is_valid_ratio, 0.8, 'layout.width'
+      )
+      local picker_width = math.floor(terminal_width * width_ratio)
+      return picker_width < 120 and 'bottom' or 'right'
+    end
+
+    return raw
   end
 
   return 'right'
@@ -418,6 +428,16 @@ function M.create_ui()
   local prompt_position = get_prompt_position()
   local preview_position = get_preview_position()
 
+  -- Force prompt to opposite side of preview for vertical layouts
+  -- so the results panel is always sandwiched between input and preview
+  if M.enabled_preview() then
+    if preview_position == 'bottom' then
+      prompt_position = 'top'
+    elseif preview_position == 'top' then
+      prompt_position = 'bottom'
+    end
+  end
+
   local preview_size_ratio = utils.resolve_config_value(
     config.layout.preview_size,
     terminal_width,
@@ -469,28 +489,30 @@ function M.create_ui()
     height = layout.list_height,
     col = layout.list_col,
     row = layout.list_row,
-    -- To make the input feel connected with the picker, we customize the
-    -- respective corner border characters based on prompt_position
-    -- When prompt at bottom: list has top border + sides, no bottom (connects to input below)
-    -- When prompt at top: list has sides + bottom with T-junctions at top (connects to input above)
-    border = prompt_position == 'bottom'
+    -- Customize borders so the list connects seamlessly to adjacent panels
+    -- Vertical preview: list is sandwiched between input and preview, T-junctions top, empty bottom
+    -- Otherwise: connect to input based on prompt_position
+    border = (M.enabled_preview() and (preview_position == 'top' or preview_position == 'bottom'))
+        and { t_junctions[1], border_chars[2], t_junctions[2], border_chars[4], '', '', '', border_chars[8] }
+      or (prompt_position == 'bottom'
         and { border_chars[1], border_chars[2], border_chars[3], border_chars[4], '', '', '', border_chars[8] }
-      or {
-        t_junctions[1],
-        border_chars[2],
-        t_junctions[2],
-        border_chars[4],
-        border_chars[5],
-        border_chars[6],
-        border_chars[7],
-        border_chars[8],
-      },
+        or {
+          t_junctions[1],
+          border_chars[2],
+          t_junctions[2],
+          border_chars[4],
+          border_chars[5],
+          border_chars[6],
+          border_chars[7],
+          border_chars[8],
+        }),
     style = 'minimal',
   }
 
   local title = ' ' .. (M.state.config.title or 'FFFiles') .. ' '
-  -- Only add title if prompt is at bottom - when prompt is top, title should be on input
-  if prompt_position == 'bottom' then
+  -- Title goes on the topmost window in the stack:
+  -- prompt at bottom + no top preview = list is topmost
+  if prompt_position == 'bottom' and preview_position ~= 'top' then
     list_window_config.title = title
     list_window_config.title_pos = 'left'
   end
@@ -516,6 +538,19 @@ function M.create_ui()
 
   -- Create preview window
   if M.enabled_preview() and layout.preview then
+    -- Customize preview borders for vertical layouts to connect seamlessly
+    local preview_border = border_chars
+    local preview_title = ' Preview '
+    if preview_position == 'bottom' then
+      -- T-junctions on top (connects to list above), full bottom
+      preview_border = { t_junctions[1], border_chars[2], t_junctions[2], border_chars[4], border_chars[5], border_chars[6], border_chars[7], border_chars[8] }
+    elseif preview_position == 'top' then
+      -- Full top, empty bottom (connects to list below)
+      preview_border = { border_chars[1], border_chars[2], border_chars[3], border_chars[4], '', '', '', border_chars[8] }
+      -- Preview is the topmost window, so it gets the picker title
+      preview_title = title
+    end
+
     M.state.preview_win = vim.api.nvim_open_win(M.state.preview_buf, false, {
       relative = 'editor',
       width = layout.preview.width,
@@ -523,8 +558,8 @@ function M.create_ui()
       col = layout.preview.col,
       row = layout.preview.row,
       style = 'minimal',
-      border = border_chars,
-      title = ' Preview ',
+      border = preview_border,
+      title = preview_title,
       title_pos = 'left',
     })
   end
