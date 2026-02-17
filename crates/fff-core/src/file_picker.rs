@@ -136,6 +136,7 @@ pub struct FilePicker {
     is_scanning: Arc<AtomicBool>,
     scanned_files_count: Arc<AtomicUsize>,
     background_watcher: Option<BackgroundWatcher>,
+    warmup_mmap_cache: bool,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -157,6 +158,10 @@ impl FilePicker {
         &self.base_path
     }
 
+    pub fn warmup_mmap_cache(&self) -> bool {
+        self.warmup_mmap_cache
+    }
+
     pub fn git_root(&self) -> Option<&Path> {
         self.sync_data.git_workdir.as_deref()
     }
@@ -166,7 +171,20 @@ impl FilePicker {
     }
 
     pub fn new(base_path: String) -> Result<Self, Error> {
-        info!("Initializing FilePicker with base_path: {}", base_path);
+        Self::with_options(base_path, false)
+    }
+
+    /// Create a new FilePicker with explicit options.
+    ///
+    /// When `warmup_mmap_cache` is `true`, all non-binary files will be mmap'd
+    /// and their pages paged in immediately after the initial scan completes.
+    /// This makes the first grep search as fast as subsequent ones at the cost
+    /// of a longer startup time and higher initial memory pressure.
+    pub fn with_options(base_path: String, warmup_mmap_cache: bool) -> Result<Self, Error> {
+        info!(
+            "Initializing FilePicker with base_path: {}, warmup: {}",
+            base_path, warmup_mmap_cache
+        );
         let path = PathBuf::from(&base_path);
         if !path.exists() {
             error!("Base path does not exist: {}", base_path);
@@ -182,12 +200,14 @@ impl FilePicker {
             is_scanning: Arc::clone(&scan_signal),
             scanned_files_count: Arc::clone(&synced_files_count),
             background_watcher: None,
+            warmup_mmap_cache,
         };
 
         spawn_scan_and_watcher(
             path.clone(),
             Arc::clone(&scan_signal),
             Arc::clone(&synced_files_count),
+            warmup_mmap_cache,
         );
 
         Ok(picker)
@@ -492,7 +512,11 @@ impl FilePicker {
                     sync.files.len()
                 );
 
-                self.sync_data = sync
+                self.sync_data = sync;
+
+                if self.warmup_mmap_cache {
+                    warmup_mmaps(&self.sync_data.files);
+                }
             }
             Err(error) => error!(?error, "Failed to scan file system"),
         }
@@ -517,6 +541,7 @@ fn spawn_scan_and_watcher(
     base_path: PathBuf,
     scan_signal: Arc<AtomicBool>,
     synced_files_count: Arc<AtomicUsize>,
+    warmup_mmap_cache: bool,
 ) {
     std::thread::spawn(move || {
         scan_signal.store(true, Ordering::Relaxed);
@@ -535,6 +560,10 @@ fn spawn_scan_and_watcher(
                     && let Some(ref mut picker) = *file_picker_guard
                 {
                     picker.sync_data = sync;
+
+                    if warmup_mmap_cache {
+                        warmup_mmaps(&picker.sync_data.files);
+                    }
                 }
             }
             Err(e) => {
@@ -560,6 +589,38 @@ fn spawn_scan_and_watcher(
 
         // the debouncer keeps running in its own thread
     });
+}
+
+/// Pre-populate mmap caches for all eligible files so the first grep search
+/// doesn't pay the mmap creation + page fault cost.
+///
+/// Each file is mmap'd and a single byte is read to trigger the page fault.
+/// This runs in parallel using rayon.
+fn warmup_mmaps(files: &[FileItem]) {
+    let warmup_start = std::time::Instant::now();
+    let warmed = std::sync::atomic::AtomicUsize::new(0);
+
+    files.par_iter().for_each(|file| {
+        if file.is_binary || file.size == 0 {
+            return;
+        }
+
+        if let Some(mmap) = file.get_mmap() {
+            // Read the first byte to trigger the initial page fault, which
+            // causes the kernel to start readahead for subsequent pages.
+            // This is cheaper than madvise and portable across all platforms.
+            let _ = std::hint::black_box(mmap.first());
+
+            warmed.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+
+    let warmed_count = warmed.load(Ordering::Relaxed);
+    info!(
+        "Mmap warmup completed: {warmed_count}/{} files in {:?}",
+        files.len(),
+        warmup_start.elapsed()
+    );
 }
 
 fn scan_filesystem(

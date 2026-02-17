@@ -2575,9 +2575,9 @@ dependencies = [
 
 [[package]]
 name = "zlob"
-version = "1.2.8"
+version = "1.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d3608be1d193aac6f33fd38cd47c2bca4938ab41006195e8dcd291d87a5428f"
+checksum = "674f4e74544c0a00887c0dff7862fe13742de8c5dbcf6db9eac0643362554d44"
 dependencies = [
  "bindgen",
  "bitflags 2.9.1",

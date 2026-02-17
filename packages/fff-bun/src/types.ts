@@ -31,6 +31,13 @@ export interface InitOptions {
   historyDbPath?: string;
   /** Use unsafe no-lock mode for databases (optional, defaults to false) */
   useUnsafeNoLock?: boolean;
+  /**
+   * Pre-populate mmap caches for all files after the initial scan completes.
+   * When enabled, the first grep search will be as fast as subsequent ones
+   * at the cost of a longer scan time and higher initial memory usage.
+   * (default: false)
+   */
+  warmupMmapCache?: boolean;
 }
 
 /**
@@ -210,6 +217,7 @@ export interface InitOptionsInternal {
   frecency_db_path?: string;
   history_db_path?: string;
   use_unsafe_no_lock: boolean;
+  warmup_mmap_cache: boolean;
 }
 
 /**
@@ -235,6 +243,7 @@ export function toInternalInitOptions(opts: InitOptions): InitOptionsInternal {
     frecency_db_path: opts.frecencyDbPath,
     history_db_path: opts.historyDbPath,
     use_unsafe_no_lock: opts.useUnsafeNoLock ?? false,
+    warmup_mmap_cache: opts.warmupMmapCache ?? false,
   };
 }
 
@@ -252,5 +261,170 @@ export function toInternalSearchOptions(
     min_combo_count: opts?.minComboCount,
     page_index: opts?.pageIndex,
     page_size: opts?.pageSize,
+  };
+}
+
+// ============================================================================
+// Grep (live content search) types
+// ============================================================================
+
+/**
+ * Grep search mode
+ */
+export type GrepMode = "plain" | "regex" | "fuzzy";
+
+/**
+ * Opaque pagination cursor for grep results.
+ * Pass this to `GrepOptions.cursor` to fetch the next page.
+ * Do not construct or modify this — use the `nextCursor` from a previous `GrepResult`.
+ */
+export interface GrepCursor {
+  /** @internal */
+  readonly __brand: "GrepCursor";
+  /** @internal */
+  readonly _offset: number;
+}
+
+/**
+ * @internal Create a GrepCursor from a raw file offset.
+ */
+export function createGrepCursor(offset: number): GrepCursor {
+  return { __brand: "GrepCursor" as const, _offset: offset };
+}
+
+/**
+ * Options for live grep (content search)
+ *
+ * Files are searched sequentially in frecency order (most recently/frequently
+ * accessed first). The engine collects matching lines across files until
+ * `pageLimit` total matches are reached, then stops and returns a
+ * `nextCursor` for fetching the next page.
+ */
+export interface GrepOptions {
+  /** Maximum file size to search in bytes. Files larger than this are skipped. (default: 10MB) */
+  maxFileSize?: number;
+  /** Maximum matching lines to collect from a single file (default: 200) */
+  maxMatchesPerFile?: number;
+  /** Smart case: case-insensitive when the query is all lowercase, case-sensitive otherwise (default: true) */
+  smartCase?: boolean;
+  /**
+   * Pagination cursor from a previous `GrepResult.nextCursor`.
+   * Omit (or pass `null`) for the first page.
+   */
+  cursor?: GrepCursor | null;
+  /**
+   * Maximum total number of matching lines to return across all files.
+   * The engine walks files in frecency order, accumulating matches until this
+   * limit is reached, then truncates and stops.
+   *
+   * Pagination is file-based, not match-based: if a single file produces more
+   * matches than the remaining capacity, the excess matches from that file are
+   * dropped and the next page resumes from the *next* file. This means some
+   * matches at the boundary may be skipped, but it guarantees no duplicates
+   * across pages and requires no server-side cursor state.
+   *
+   * Use `nextCursor` from the result to fetch the next page. (default: 50)
+   */
+  pageLimit?: number;
+  /** Search mode (default: "plain") */
+  mode?: GrepMode;
+  /**
+   * Maximum wall-clock time in milliseconds to spend searching before returning
+   * partial results. The engine will still return at least `pageLimit / 2` matches
+   * (if available) before honoring the budget. 0 = unlimited. (default: 0)
+   */
+  timeBudgetMs?: number;
+}
+
+/**
+ * A single grep match with file and line information
+ */
+export interface GrepMatch {
+  /** Absolute path to the file */
+  path: string;
+  /** Path relative to the indexed directory */
+  relativePath: string;
+  /** File name only */
+  fileName: string;
+  /** Git status */
+  gitStatus: string;
+  /** File size in bytes */
+  size: number;
+  /** Last modified timestamp (Unix seconds) */
+  modified: number;
+  /** Whether the file is binary */
+  isBinary: boolean;
+  /** Combined frecency score */
+  totalFrecencyScore: number;
+  /** Access-based frecency score */
+  accessFrecencyScore: number;
+  /** Modification-based frecency score */
+  modificationFrecencyScore: number;
+  /** 1-based line number of the match */
+  lineNumber: number;
+  /** 0-based byte column of first match start */
+  col: number;
+  /** Absolute byte offset of the matched line from file start */
+  byteOffset: number;
+  /** The matched line text (may be truncated) */
+  lineContent: string;
+  /** Byte offset pairs [start, end] within lineContent for highlighting */
+  matchRanges: [number, number][];
+  /** Fuzzy match score (only in fuzzy mode) */
+  fuzzyScore?: number;
+}
+
+/**
+ * Result from a grep search
+ */
+export interface GrepResult {
+  /** Matched items with file and line information. At most `pageLimit` entries. */
+  items: GrepMatch[];
+  /** Total number of matches collected (equal to items.length unless truncated by pageLimit) */
+  totalMatched: number;
+  /** Number of files actually opened and searched in this call */
+  totalFilesSearched: number;
+  /** Total number of indexed files (before any filtering) */
+  totalFiles: number;
+  /** Number of files eligible for search after filtering out binary files, oversized files, and constraint mismatches */
+  filteredFileCount: number;
+  /**
+   * Cursor for the next page, or `null` if all eligible files have been searched.
+   * Pass this as `GrepOptions.cursor` to continue from where this call left off.
+   */
+  nextCursor: GrepCursor | null;
+  /** When regex mode fails to compile the pattern, the engine falls back to literal matching and this field contains the compilation error */
+  regexFallbackError?: string;
+}
+
+/**
+ * Internal: Grep options format sent to Rust FFI
+ * @internal
+ */
+export interface GrepOptionsInternal {
+  max_file_size?: number;
+  max_matches_per_file?: number;
+  smart_case?: boolean;
+  file_offset?: number;
+  page_limit?: number;
+  mode?: string;
+  time_budget_ms?: number;
+}
+
+/**
+ * Convert public GrepOptions to internal format
+ * @internal
+ */
+export function toInternalGrepOptions(
+  opts?: GrepOptions
+): GrepOptionsInternal {
+  return {
+    max_file_size: opts?.maxFileSize,
+    max_matches_per_file: opts?.maxMatchesPerFile,
+    smart_case: opts?.smartCase,
+    file_offset: opts?.cursor?._offset ?? 0,
+    page_limit: opts?.pageLimit,
+    mode: opts?.mode,
+    time_budget_ms: opts?.timeBudgetMs,
   };
 }

@@ -16,7 +16,22 @@ High-performance fuzzy file finder for Bun, powered by Rust. Perfect for LLM age
 bun add @ff-labs/bun
 ```
 
-The native binary will be downloaded automatically during installation.
+The correct native binary for your platform is installed automatically via platform-specific packages (e.g. `@ff-labs/fff-bun-darwin-arm64`, `@ff-labs/fff-bun-linux-x64-gnu`). No GitHub downloads are needed.
+
+### Supported Platforms
+
+| Platform | Architecture | Package |
+|----------|-------------|---------|
+| macOS | ARM64 (Apple Silicon) | `@ff-labs/fff-bun-darwin-arm64` |
+| macOS | x64 (Intel) | `@ff-labs/fff-bun-darwin-x64` |
+| Linux | x64 (glibc) | `@ff-labs/fff-bun-linux-x64-gnu` |
+| Linux | ARM64 (glibc) | `@ff-labs/fff-bun-linux-arm64-gnu` |
+| Linux | x64 (musl) | `@ff-labs/fff-bun-linux-x64-musl` |
+| Linux | ARM64 (musl) | `@ff-labs/fff-bun-linux-arm64-musl` |
+| Windows | x64 | `@ff-labs/fff-bun-win32-x64` |
+| Windows | ARM64 | `@ff-labs/fff-bun-win32-arm64` |
+
+If the platform package isn't available, the postinstall script will attempt to download from GitHub releases as a fallback.
 
 ## Quick Start
 
@@ -98,6 +113,48 @@ Track file access for frecency scoring.
 FileFinder.trackAccess("/path/to/file.ts");
 ```
 
+### `FileFinder.liveGrep(query, options?)`
+
+Search file contents with SIMD-accelerated matching.
+
+```typescript
+interface GrepOptions {
+  maxFileSize?: number;        // Max file size in bytes (default: 10MB)
+  maxMatchesPerFile?: number;  // Max matches per file (default: 200)
+  smartCase?: boolean;         // Case-insensitive if all lowercase (default: true)
+  fileOffset?: number;         // Pagination offset (default: 0)
+  pageLimit?: number;          // Max matches to return (default: 50)
+  mode?: "plain" | "regex" | "fuzzy"; // Search mode (default: "plain")
+  timeBudgetMs?: number;       // Time limit in ms, 0 = unlimited (default: 0)
+}
+
+// Plain text search
+const result = FileFinder.liveGrep("TODO", { pageLimit: 20 });
+if (result.ok) {
+  for (const match of result.value.items) {
+    console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
+  }
+}
+
+// Regex search
+const regexResult = FileFinder.liveGrep("fn\\s+\\w+", { mode: "regex" });
+
+// Fuzzy search
+const fuzzyResult = FileFinder.liveGrep("imprt recat", { mode: "fuzzy" });
+
+// Pagination
+const page1 = FileFinder.liveGrep("error");
+if (page1.ok && page1.value.nextCursor) {
+  const page2 = FileFinder.liveGrep("error", {
+    cursor: page1.value.nextCursor,
+  });
+}
+
+// With file constraints
+const tsOnly = FileFinder.liveGrep("*.ts useState");
+const srcOnly = FileFinder.liveGrep("src/ handleClick");
+```
+
 ### `FileFinder.trackQuery(query, selectedFile)`
 
 Track query completion for smart suggestions.
@@ -121,6 +178,7 @@ if (health.ok) {
 
 ### Other Methods
 
+- `FileFinder.liveGrep(query, options?)` - Search file contents
 - `FileFinder.scanFiles()` - Trigger rescan
 - `FileFinder.isScanning()` - Check scan status
 - `FileFinder.getScanProgress()` - Get scan progress
@@ -168,6 +226,33 @@ interface FileItem {
 }
 ```
 
+## Grep Result Types
+
+```typescript
+interface GrepResult {
+  items: GrepMatch[];
+  totalMatched: number;
+  totalFilesSearched: number;
+  totalFiles: number;
+  filteredFileCount: number;
+  nextCursor: GrepCursor | null; // Pass to options.cursor for next page
+  regexFallbackError?: string;   // Set if regex was invalid
+}
+
+interface GrepMatch {
+  path: string;
+  relativePath: string;
+  fileName: string;
+  gitStatus: string;
+  lineNumber: number;    // 1-based
+  col: number;           // 0-based byte column
+  byteOffset: number;    // Absolute byte offset in file
+  lineContent: string;   // The matched line text
+  matchRanges: [number, number][]; // Byte offsets for highlighting
+  fuzzyScore?: number;   // Only in fuzzy mode
+}
+```
+
 ## Building from Source
 
 If prebuilt binaries aren't available for your platform:
@@ -186,10 +271,10 @@ cargo build --release -p fff-c
 ## CLI Tools
 
 ```bash
-# Download binary manually
-bunx fff download [version]
+# Download binary manually (fallback if npm package unavailable)
+bunx fff download [tag]
 
-# Show platform info
+# Show platform info and binary location
 bunx fff info
 ```
 

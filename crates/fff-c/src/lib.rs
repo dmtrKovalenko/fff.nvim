@@ -18,7 +18,7 @@ use fff_core::frecency::FrecencyTracker;
 use fff_core::query_tracker::QueryTracker;
 use fff_core::{DbHealthChecker, FuzzySearchOptions, PaginationArgs, QueryParser};
 use fff_core::{FILE_PICKER, FRECENCY, QUERY_TRACKER};
-use ffi_types::{FffResult, InitOptions, ScanProgress, SearchOptions};
+use ffi_types::{FffResult, GrepSearchOptionsJson, InitOptions, ScanProgress, SearchOptions};
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -107,7 +107,7 @@ pub unsafe extern "C" fn fff_init(opts_json: *const c_char) -> *mut FffResult {
         }
     }
 
-    match FilePicker::new(opts.base_path) {
+    match FilePicker::with_options(opts.base_path, opts.warmup_mmap_cache) {
         Ok(picker) => {
             *file_picker = Some(picker);
             FffResult::ok_empty()
@@ -223,6 +223,74 @@ pub unsafe extern "C" fn fff_search(
     }
 }
 
+/// Perform content search (grep) across indexed files
+///
+/// Searches file contents using the specified mode:
+/// - "plain" (default): SIMD-accelerated literal text matching
+/// - "regex": Regular expression matching
+/// - "fuzzy": Smith-Waterman fuzzy matching per line
+///
+/// Results include file metadata and match locations with byte offsets
+/// for highlighting. Supports file-based pagination via `file_offset`
+/// and `next_file_offset` in the result.
+///
+/// # Safety
+/// `query` and `opts_json` must be valid null-terminated UTF-8 strings
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_live_grep(
+    query: *const c_char,
+    opts_json: *const c_char,
+) -> *mut FffResult {
+    let query_str = match unsafe { cstr_to_str(query) } {
+        Some(s) => s,
+        None => return FffResult::err("Query is null or invalid UTF-8"),
+    };
+
+    let opts: GrepSearchOptionsJson = if opts_json.is_null() {
+        GrepSearchOptionsJson::default()
+    } else {
+        unsafe { cstr_to_str(opts_json) }
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default()
+    };
+
+    let file_picker_guard = match FILE_PICKER.read() {
+        Ok(f) => f,
+        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
+    };
+
+    let picker = match file_picker_guard.as_ref() {
+        Some(p) => p,
+        None => return FffResult::err("File picker not initialized. Call fff_init first."),
+    };
+
+    let mode = match opts.mode.as_deref() {
+        Some("regex") => fff_core::GrepMode::Regex,
+        Some("fuzzy") => fff_core::GrepMode::Fuzzy,
+        _ => fff_core::GrepMode::PlainText,
+    };
+
+    let parsed = fff_core::grep::parse_grep_query(query_str);
+
+    let options = fff_core::GrepSearchOptions {
+        max_file_size: opts.max_file_size.unwrap_or(10 * 1024 * 1024),
+        max_matches_per_file: opts.max_matches_per_file.unwrap_or(200),
+        smart_case: opts.smart_case.unwrap_or(true),
+        file_offset: opts.file_offset.unwrap_or(0),
+        page_limit: opts.page_limit.unwrap_or(50),
+        mode,
+        time_budget_ms: opts.time_budget_ms.unwrap_or(0),
+    };
+
+    let result = fff_core::grep::grep_search(picker.get_files(), query_str, parsed, &options);
+
+    let json_result = ffi_types::GrepResultJson::from_grep_result(&result);
+    match serde_json::to_string(&json_result) {
+        Ok(json) => FffResult::ok_data(&json),
+        Err(e) => FffResult::err(&format!("Failed to serialize grep results: {}", e)),
+    }
+}
+
 // ============================================================================
 // File Index Functions
 // ============================================================================
@@ -335,13 +403,17 @@ pub unsafe extern "C" fn fff_restart_index(new_path: *const c_char) -> *mut FffR
         Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
     };
 
-    // Stop existing picker
-    if let Some(mut picker) = file_picker.take() {
+    // Stop existing picker, preserving warmup setting
+    let warmup = if let Some(mut picker) = file_picker.take() {
+        let warmup = picker.warmup_mmap_cache();
         picker.stop_background_monitor();
-    }
+        warmup
+    } else {
+        false
+    };
 
     // Create new picker
-    match FilePicker::new(canonical_path.to_string_lossy().to_string()) {
+    match FilePicker::with_options(canonical_path.to_string_lossy().to_string(), warmup) {
         Ok(picker) => {
             *file_picker = Some(picker);
             FffResult::ok_empty()

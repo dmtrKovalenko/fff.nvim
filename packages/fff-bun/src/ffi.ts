@@ -28,6 +28,12 @@ const ffiDefinition = {
     returns: FFIType.ptr,
   },
 
+  // Live grep (content search)
+  fff_live_grep: {
+    args: [FFIType.cstring, FFIType.cstring],
+    returns: FFIType.ptr,
+  },
+
   // File index
   fff_scan_files: {
     args: [],
@@ -331,6 +337,18 @@ export function ffiHealthCheck(testPath: string): Result<unknown> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_health_check(
     ptr(encodeString(testPath))
+  );
+  return parseResult<unknown>(resultPtr);
+}
+
+/**
+ * Live grep - search file contents
+ */
+export function ffiLiveGrep(query: string, optsJson: string): Result<unknown> {
+  const library = loadLibrary();
+  const resultPtr = library.symbols.fff_live_grep(
+    ptr(encodeString(query)),
+    ptr(encodeString(optsJson))
   );
   return parseResult<unknown>(resultPtr);
 }

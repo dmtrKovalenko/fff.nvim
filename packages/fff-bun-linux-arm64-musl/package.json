@@ -1,0 +1,19 @@
+{
+  "name": "@ff-labs/fff-bun-linux-arm64-musl",
+  "version": "0.0.0",
+  "description": "fff native binary for Linux ARM64 (musl)",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "main": "libfff_c.so",
+  "files": ["libfff_c.so"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
+    "directory": "packages/fff-bun-linux-arm64-musl"
+  },
+  "libc": ["musl"]
+}
