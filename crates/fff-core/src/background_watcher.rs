@@ -3,6 +3,7 @@ use crate::error::Error;
 use crate::file_picker::FilePicker;
 use crate::git::GitStatusCache;
 use crate::sort_buffer::sort_with_buffer;
+use crate::{SharedFrecency, SharedPicker};
 use git2::Repository;
 use notify::event::{AccessKind, AccessMode};
 use notify::{Config, EventKind, RecursiveMode};
@@ -25,13 +26,19 @@ const MAX_PATHS_THRESHOLD: usize = 1024;
 const MAX_SELECTIVE_WATCH_DIRS: usize = 100;
 
 impl BackgroundWatcher {
-    pub fn new(base_path: PathBuf, git_workdir: Option<PathBuf>) -> Result<Self, Error> {
+    pub fn new(
+        base_path: PathBuf,
+        git_workdir: Option<PathBuf>,
+        shared_picker: Option<SharedPicker>,
+        shared_frecency: Option<SharedFrecency>,
+    ) -> Result<Self, Error> {
         info!(
             "Initializing background watcher for path: {}",
             base_path.display()
         );
 
-        let debouncer = Self::create_debouncer(base_path, git_workdir)?;
+        let debouncer =
+            Self::create_debouncer(base_path, git_workdir, shared_picker, shared_frecency)?;
         info!("Background file watcher initialized successfully");
 
         Ok(Self {
@@ -42,6 +49,8 @@ impl BackgroundWatcher {
     fn create_debouncer(
         base_path: PathBuf,
         git_workdir: Option<PathBuf>,
+        shared_picker: Option<SharedPicker>,
+        shared_frecency: Option<SharedFrecency>,
     ) -> Result<Debouncer, Error> {
         // do not follow symlinks as then notifiers spawns a bunch of events for symlinked
         // files that could be git ignored, we have to property differentiate those and if
@@ -54,7 +63,12 @@ impl BackgroundWatcher {
             {
                 move |result: DebounceEventResult| match result {
                     Ok(events) => {
-                        handle_debounced_events(events, &git_workdir);
+                        handle_debounced_events(
+                            events,
+                            &git_workdir,
+                            shared_picker.as_ref(),
+                            shared_frecency.as_ref(),
+                        );
                     }
                     Err(errors) => {
                         error!("File watcher errors: {:?}", errors);
@@ -124,8 +138,13 @@ impl Drop for BackgroundWatcher {
     }
 }
 
-#[tracing::instrument(name = "fs_events", skip(events), level = Level::DEBUG)]
-fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<PathBuf>) {
+#[tracing::instrument(name = "fs_events", skip(events, shared_picker, shared_frecency), level = Level::DEBUG)]
+fn handle_debounced_events(
+    events: Vec<DebouncedEvent>,
+    git_workdir: &Option<PathBuf>,
+    shared_picker: Option<&SharedPicker>,
+    shared_frecency: Option<&SharedFrecency>,
+) {
     // this will be called very often, we have to minimiy the lock time for file picker
     let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
     let mut need_full_rescan = false;
@@ -204,7 +223,7 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
 
     if need_full_rescan {
         info!(?affected_paths_count, "Triggering full rescan");
-        trigger_full_rescan();
+        trigger_full_rescan(shared_picker);
         return;
     }
 
@@ -228,7 +247,12 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
     if need_full_git_rescan {
         info!("Triggering full git rescan");
 
-        if let Err(e) = FilePicker::refresh_git_status_global() {
+        let result = if let Some(sp) = shared_picker {
+            FilePicker::refresh_git_status_shared(sp)
+        } else {
+            FilePicker::refresh_git_status_global()
+        };
+        if let Err(e) = result {
             error!("Failed to refresh git status: {:?}", e);
         }
 
@@ -239,33 +263,40 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
         return;
     }
 
-    let files_to_update_git_status = {
+    let apply_changes = |picker: &mut FilePicker| -> Vec<PathBuf> {
+        for path in &paths_to_remove {
+            picker.remove_file_by_path(path);
+        }
+
+        let mut files_to_update = Vec::with_capacity(paths_to_add_or_modify.len());
+        for path in &paths_to_add_or_modify {
+            if let Some(file) = picker.on_create_or_modify(path) {
+                files_to_update.push(file.path.clone());
+            }
+        }
+        files_to_update
+    };
+
+    let files_to_update_git_status = if let Some(sp) = shared_picker {
+        let Ok(mut guard) = sp.write() else {
+            error!("Failed to acquire file picker write lock");
+            return;
+        };
+        let Some(ref mut picker) = *guard else {
+            error!("File picker not initialized");
+            return;
+        };
+        apply_changes(picker)
+    } else {
         let Ok(mut file_picker_guard) = FILE_PICKER.write() else {
             error!("Failed to acquire file picker write lock");
             return;
         };
-
         let Some(ref mut picker) = *file_picker_guard else {
             error!("File picker not initialized");
             return;
         };
-
-        // Apply file removals
-        for path in paths_to_remove {
-            picker.remove_file_by_path(path);
-            // No need to invalidate mmap — the FileItem (and its mmap) is dropped
-        }
-
-        // Apply file additions/modifications and collect paths for git status update
-        let mut files_to_update_git_status = Vec::with_capacity(paths_to_add_or_modify.len());
-        for path in paths_to_add_or_modify {
-            // on_create_or_modify clears the mmap internally when modified time changes
-            if let Some(file) = picker.on_create_or_modify(path) {
-                files_to_update_git_status.push(file.path.clone());
-            }
-        }
-
-        files_to_update_git_status
+        apply_changes(picker)
     };
 
     info!(
@@ -281,8 +312,20 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
         }
     };
 
-    // only lock the picker for theshortest possitble time
-    if let Ok(mut file_picker_guard) = FILE_PICKER.write()
+    // only lock the picker for the shortest possible time
+    if let Some(sp) = shared_picker {
+        if let Ok(mut guard) = sp.write()
+            && let Some(ref mut picker) = *guard
+        {
+            if let Err(e) = picker.update_git_statuses_with_frecency(status, shared_frecency) {
+                error!("Failed to update git statuses: {:?}", e);
+            } else {
+                info!("Successfully updated git statuses in picker");
+            }
+        } else {
+            error!("Failed to acquire picker lock for git status update");
+        }
+    } else if let Ok(mut file_picker_guard) = FILE_PICKER.write()
         && let Some(ref mut picker) = *file_picker_guard
     {
         if let Err(e) = picker.update_git_statuses(status) {
@@ -295,27 +338,41 @@ fn handle_debounced_events(events: Vec<DebouncedEvent>, git_workdir: &Option<Pat
     }
 }
 
-fn trigger_full_rescan() {
+fn trigger_full_rescan(shared_picker: Option<&SharedPicker>) {
     info!("Triggering full filesystem rescan");
 
     // Note: no need to clear mmaps — they are backed by the kernel page cache
     // and automatically reflect file changes. Old FileItems (and their mmaps)
     // are dropped when the picker rebuilds its file list.
 
-    let Ok(mut file_picker_guard) = FILE_PICKER.write() else {
-        error!("Failed to acquire file picker write lock for full rescan");
-        return;
-    };
-
-    let Some(ref mut picker) = *file_picker_guard else {
-        error!("File picker not initialized, cannot trigger rescan");
-        return;
-    };
-
-    if let Err(e) = picker.trigger_rescan() {
-        error!("Failed to trigger full rescan: {:?}", e);
+    if let Some(sp) = shared_picker {
+        let Ok(mut guard) = sp.write() else {
+            error!("Failed to acquire file picker write lock for full rescan");
+            return;
+        };
+        let Some(ref mut picker) = *guard else {
+            error!("File picker not initialized, cannot trigger rescan");
+            return;
+        };
+        if let Err(e) = picker.trigger_rescan() {
+            error!("Failed to trigger full rescan: {:?}", e);
+        } else {
+            info!("Full filesystem rescan completed successfully");
+        }
     } else {
-        info!("Full filesystem rescan completed successfully");
+        let Ok(mut file_picker_guard) = FILE_PICKER.write() else {
+            error!("Failed to acquire file picker write lock for full rescan");
+            return;
+        };
+        let Some(ref mut picker) = *file_picker_guard else {
+            error!("File picker not initialized, cannot trigger rescan");
+            return;
+        };
+        if let Err(e) = picker.trigger_rescan() {
+            error!("Failed to trigger full rescan: {:?}", e);
+        } else {
+            info!("Full filesystem rescan completed successfully");
+        }
     }
 }
 

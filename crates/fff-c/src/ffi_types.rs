@@ -3,7 +3,7 @@
 //! These types use #[repr(C)] for C ABI compatibility and implement
 //! serde traits for JSON serialization.
 
-use std::ffi::{CString, c_char};
+use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
 use fff_core::git::format_git_status;
@@ -20,6 +20,8 @@ pub struct FffResult {
     pub data: *mut c_char,
     /// Error message on failure (null-terminated string, caller must free)
     pub error: *mut c_char,
+    /// Opaque handle pointer (used by fff_create to return the instance)
+    pub handle: *mut c_void,
 }
 
 impl FffResult {
@@ -29,6 +31,7 @@ impl FffResult {
             success: true,
             data: ptr::null_mut(),
             error: ptr::null_mut(),
+            handle: ptr::null_mut(),
         }))
     }
 
@@ -38,6 +41,17 @@ impl FffResult {
             success: true,
             data: CString::new(data).unwrap_or_default().into_raw(),
             error: ptr::null_mut(),
+            handle: ptr::null_mut(),
+        }))
+    }
+
+    /// Create a successful result carrying an opaque instance handle.
+    pub fn ok_handle(handle: *mut c_void) -> *mut Self {
+        Box::into_raw(Box::new(FffResult {
+            success: true,
+            data: ptr::null_mut(),
+            error: ptr::null_mut(),
+            handle,
         }))
     }
 
@@ -47,6 +61,7 @@ impl FffResult {
             success: false,
             data: ptr::null_mut(),
             error: CString::new(error).unwrap_or_default().into_raw(),
+            handle: ptr::null_mut(),
         }))
     }
 }

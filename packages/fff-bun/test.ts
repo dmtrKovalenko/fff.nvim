@@ -15,9 +15,9 @@ async function main() {
     process.exit(1);
   }
 
-  // Health check (before init)
-  console.log("Health check (before init):");
-  const healthBefore = FileFinder.healthCheck();
+  // Health check (before creating instance)
+  console.log("Health check (no instance):");
+  const healthBefore = FileFinder.healthCheckStatic();
   if (healthBefore.ok) {
     console.log(`  Version: ${healthBefore.value.version}`);
     console.log(`  Git available: ${healthBefore.value.git.available}`);
@@ -29,25 +29,27 @@ async function main() {
 
   // Initialize with the root project directory to test on more files
   const testDir = resolve(dirname(import.meta.path), "../..");
-  console.log(`Initializing with base path: ${testDir}`);
+  console.log(`Creating instance with base path: ${testDir}`);
 
-  const initResult = FileFinder.init({
+  const createResult = FileFinder.create({
     basePath: testDir,
   });
 
-  if (!initResult.ok) {
-    console.error(`Init failed: ${initResult.error}`);
+  if (!createResult.ok) {
+    console.error(`Create failed: ${createResult.error}`);
     process.exit(1);
   }
-  console.log("Initialization successful!\n");
+
+  const finder = createResult.value;
+  console.log("Instance created successfully!\n");
 
   // Wait for scan with polling to show progress
   console.log("Waiting for initial scan...");
   const startTime = Date.now();
   let lastCount = 0;
   
-  while (FileFinder.isScanning()) {
-    const progress = FileFinder.getScanProgress();
+  while (finder.isScanning()) {
+    const progress = finder.getScanProgress();
     if (progress.ok && progress.value.scannedFilesCount !== lastCount) {
       lastCount = progress.value.scannedFilesCount;
       console.log(`  Scanning: ${lastCount} files...`);
@@ -61,7 +63,7 @@ async function main() {
   }
 
   // Get final scan progress
-  const progress = FileFinder.getScanProgress();
+  const progress = finder.getScanProgress();
   if (progress.ok) {
     console.log(`Scan complete: ${progress.value.scannedFilesCount} files indexed`);
     console.log(`Scan time: ${Date.now() - startTime}ms`);
@@ -70,7 +72,7 @@ async function main() {
 
   // Search test
   console.log("Searching for 'lib.rs'...");
-  const searchResult = FileFinder.search("lib.rs", { pageSize: 5 });
+  const searchResult = finder.search("lib.rs", { pageSize: 5 });
 
   if (searchResult.ok) {
     console.log(`Found ${searchResult.value.totalMatched} matches (showing first 5):\n`);
@@ -88,7 +90,7 @@ async function main() {
 
   // Search with different query
   console.log("Searching for 'package.json'...");
-  const searchResult2 = FileFinder.search("package.json", { pageSize: 3 });
+  const searchResult2 = finder.search("package.json", { pageSize: 3 });
 
   if (searchResult2.ok) {
     console.log(`Found ${searchResult2.value.totalMatched} matches:\n`);
@@ -101,8 +103,8 @@ async function main() {
   console.log();
 
   // Health check (after init)
-  console.log("Health check (after init):");
-  const healthAfter = FileFinder.healthCheck();
+  console.log("Health check (with instance):");
+  const healthAfter = finder.healthCheck();
   if (healthAfter.ok) {
     console.log(`  File picker initialized: ${healthAfter.value.filePicker.initialized}`);
     console.log(`  Base path: ${healthAfter.value.filePicker.basePath}`);
@@ -113,14 +115,34 @@ async function main() {
   }
   console.log();
 
+  // Test multiple instances
+  console.log("Testing multiple instances...");
+  const finder2Result = FileFinder.create({ basePath: testDir });
+  if (finder2Result.ok) {
+    const finder2 = finder2Result.value;
+    console.log("  Second instance created successfully");
+    
+    finder2.waitForScan(5000);
+    const search2 = finder2.search("Cargo.toml");
+    if (search2.ok) {
+      console.log(`  Second instance found ${search2.value.totalMatched} matches for 'Cargo.toml'`);
+    }
+    
+    finder2.destroy();
+    console.log("  Second instance destroyed");
+    
+    // First instance should still work
+    const search3 = finder.search("Cargo.toml");
+    if (search3.ok) {
+      console.log(`  First instance still works: ${search3.value.totalMatched} matches`);
+    }
+  }
+  console.log();
+
   // Cleanup
   console.log("Cleaning up...");
-  const destroyResult = FileFinder.destroy();
-  if (destroyResult.ok) {
-    console.log("Cleanup successful!");
-  } else {
-    console.error(`Cleanup failed: ${destroyResult.error}`);
-  }
+  finder.destroy();
+  console.log(`Cleanup successful! (isDestroyed: ${finder.isDestroyed})`);
 
   console.log("\n=== Test Complete ===");
 }

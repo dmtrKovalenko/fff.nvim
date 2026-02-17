@@ -52,11 +52,8 @@ describe("Binary Detection", () => {
 });
 
 describe("FileFinder - Health Check", () => {
-  test("healthCheck works before initialization", () => {
-    // Make sure we start fresh
-    FileFinder.destroy();
-
-    const result = FileFinder.healthCheck();
+  test("healthCheckStatic works without an instance", () => {
+    const result = FileFinder.healthCheckStatic();
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -68,31 +65,32 @@ describe("FileFinder - Health Check", () => {
 });
 
 describe("FileFinder - Full Lifecycle", () => {
-  // Single beforeAll/afterAll for the entire test suite to avoid repeated init/destroy
+  let finder: FileFinder;
+
   beforeAll(() => {
-    FileFinder.destroy(); // Clean any previous state
+    const result = FileFinder.create({ basePath: testDir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      finder = result.value;
+    }
   });
 
   afterAll(() => {
-    FileFinder.destroy();
+    finder?.destroy();
   });
 
-  test("init succeeds with valid path", () => {
-    const result = FileFinder.init({
-      basePath: testDir,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(FileFinder.isInitialized()).toBe(true);
+  test("create succeeds with valid path", () => {
+    expect(finder).toBeDefined();
+    expect(finder.isDestroyed).toBe(false);
   });
 
   test("isScanning returns a boolean", () => {
-    const scanning = FileFinder.isScanning();
+    const scanning = finder.isScanning();
     expect(typeof scanning).toBe("boolean");
   });
 
   test("getScanProgress returns valid data", () => {
-    const result = FileFinder.getScanProgress();
+    const result = finder.getScanProgress();
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -103,12 +101,12 @@ describe("FileFinder - Full Lifecycle", () => {
 
   test("waitForScan completes", () => {
     // Small timeout - scan should be fast or already done
-    const result = FileFinder.waitForScan(500);
+    const result = finder.waitForScan(500);
     expect(result.ok).toBe(true);
   });
 
   test("search with empty query returns all files", () => {
-    const result = FileFinder.search("");
+    const result = finder.search("");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -118,7 +116,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search returns a valid result structure", () => {
-    const result = FileFinder.search("Cargo.toml");
+    const result = finder.search("Cargo.toml");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -130,7 +128,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search returns empty for non-matching query", () => {
-    const result = FileFinder.search("xyznonexistentfilenamexyz123456");
+    const result = finder.search("xyznonexistentfilenamexyz123456");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -140,7 +138,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search respects pageSize option", () => {
-    const result = FileFinder.search("ts", { pageSize: 3 });
+    const result = finder.search("ts", { pageSize: 3 });
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -148,8 +146,50 @@ describe("FileFinder - Full Lifecycle", () => {
     }
   });
 
+  test("liveGrep plain text returns matching lines", () => {
+    const result = finder.liveGrep("fff-core", { mode: "plain", pageLimit: 10 });
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      expect(result.value.totalMatched).toBeGreaterThan(0);
+      expect(result.value.items.length).toBeGreaterThan(0);
+      expect(result.value.items.length).toBeLessThanOrEqual(10);
+
+      const first = result.value.items[0];
+      expect(typeof first.relativePath).toBe("string");
+      expect(typeof first.lineNumber).toBe("number");
+      expect(first.lineNumber).toBeGreaterThan(0);
+      expect(typeof first.lineContent).toBe("string");
+      expect(first.lineContent.toLowerCase()).toContain("fff-core");
+      expect(Array.isArray(first.matchRanges)).toBe(true);
+      expect(first.matchRanges.length).toBeGreaterThan(0);
+
+      expect(typeof result.value.totalFilesSearched).toBe("number");
+      expect(typeof result.value.totalFiles).toBe("number");
+      expect(typeof result.value.filteredFileCount).toBe("number");
+    }
+  });
+
+  test("liveGrep fuzzy mode returns results with scores", () => {
+    // Intentional typo: "depdnency" instead of "dependency" to exercise fuzzy matching
+    const result = finder.liveGrep("depdnency", { mode: "fuzzy", pageLimit: 10 });
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      expect(result.value.totalMatched).toBeGreaterThan(0);
+      expect(result.value.items.length).toBeGreaterThan(0);
+
+      const first = result.value.items[0];
+      expect(typeof first.relativePath).toBe("string");
+      expect(typeof first.lineNumber).toBe("number");
+      expect(typeof first.lineContent).toBe("string");
+      // Fuzzy mode should produce a fuzzyScore on each match
+      expect(typeof first.fuzzyScore).toBe("number");
+    }
+  });
+
   test("healthCheck shows initialized state", () => {
-    const result = FileFinder.healthCheck();
+    const result = finder.healthCheck();
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -160,7 +200,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("healthCheck detects git repository", () => {
-    const result = FileFinder.healthCheck(testDir);
+    const result = finder.healthCheck(testDir);
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -169,36 +209,71 @@ describe("FileFinder - Full Lifecycle", () => {
     }
   });
 
-  test("destroy and re-init works", () => {
-    FileFinder.destroy();
-    expect(FileFinder.isInitialized()).toBe(false);
+  test("destroy and re-create works", () => {
+    finder.destroy();
+    expect(finder.isDestroyed).toBe(true);
 
-    const result = FileFinder.init({
-      basePath: testDir,
-    });
+    const result = FileFinder.create({ basePath: testDir });
     expect(result.ok).toBe(true);
-    expect(FileFinder.isInitialized()).toBe(true);
+    if (result.ok) {
+      finder = result.value;
+    }
+    expect(finder.isDestroyed).toBe(false);
+  });
+
+  test("multiple instances can coexist", () => {
+    const result2 = FileFinder.create({ basePath: testDir });
+    expect(result2.ok).toBe(true);
+
+    if (result2.ok) {
+      const finder2 = result2.value;
+
+      // Both should work independently
+      const search1 = finder.search("Cargo");
+      const search2 = finder2.search("Cargo");
+
+      expect(search1.ok).toBe(true);
+      expect(search2.ok).toBe(true);
+
+      // Destroying one should not affect the other
+      finder2.destroy();
+
+      const search3 = finder.search("Cargo");
+      expect(search3.ok).toBe(true);
+    }
   });
 });
 
 describe("FileFinder - Error Handling", () => {
-  test("search fails when not initialized", () => {
-    FileFinder.destroy();
+  test("search fails on destroyed instance", () => {
+    const createResult = FileFinder.create({ basePath: testDir });
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
 
-    const result = FileFinder.search("test");
+    const f = createResult.value;
+    f.destroy();
+
+    const result = f.search("test");
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain("not initialized");
+      expect(result.error).toContain("destroyed");
     }
   });
 
-  test("getScanProgress fails when not initialized", () => {
-    const result = FileFinder.getScanProgress();
+  test("getScanProgress fails on destroyed instance", () => {
+    const createResult = FileFinder.create({ basePath: testDir });
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const f = createResult.value;
+    f.destroy();
+
+    const result = f.getScanProgress();
     expect(result.ok).toBe(false);
   });
 
-  test("init fails with invalid path", () => {
-    const result = FileFinder.init({
+  test("create fails with invalid path", () => {
+    const result = FileFinder.create({
       basePath: "/nonexistent/path/that/does/not/exist",
     });
 

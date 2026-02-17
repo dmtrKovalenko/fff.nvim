@@ -1,9 +1,7 @@
 /**
  * Result type for all operations - follows the Result pattern
  */
-export type Result<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: string };
+export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /**
  * Helper to create a successful result
@@ -252,7 +250,7 @@ export function toInternalInitOptions(opts: InitOptions): InitOptionsInternal {
  * @internal
  */
 export function toInternalSearchOptions(
-  opts?: SearchOptions
+  opts?: SearchOptions,
 ): SearchOptionsInternal {
   return {
     max_threads: opts?.maxThreads,
@@ -264,9 +262,6 @@ export function toInternalSearchOptions(
   };
 }
 
-// ============================================================================
-// Grep (live content search) types
-// ============================================================================
 
 /**
  * Grep search mode
@@ -415,9 +410,7 @@ export interface GrepOptionsInternal {
  * Convert public GrepOptions to internal format
  * @internal
  */
-export function toInternalGrepOptions(
-  opts?: GrepOptions
-): GrepOptionsInternal {
+export function toInternalGrepOptions(opts?: GrepOptions): GrepOptionsInternal {
   return {
     max_file_size: opts?.maxFileSize,
     max_matches_per_file: opts?.maxMatchesPerFile,

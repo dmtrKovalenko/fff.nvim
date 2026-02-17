@@ -10,7 +10,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 mimalloc.workspace = true
-once_cell.workspace = true
 tracing.workspace = true
 git2.workspace = true
 

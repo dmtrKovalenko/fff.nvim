@@ -557,7 +557,7 @@ fn prepare_files_to_search<'a>(
     constraints: &[fff_query_parser::Constraint<'_>],
     options: &GrepSearchOptions,
 ) -> (Vec<&'a FileItem>, usize) {
-    let filtered: Vec<&FileItem> = if constraints.is_empty() {
+    let prefiltered_count: Vec<&FileItem> = if constraints.is_empty() {
         files
             .iter()
             .filter(|f| !f.is_binary && f.size > 0 && f.size <= options.max_file_size)
@@ -575,22 +575,12 @@ fn prepare_files_to_search<'a>(
         }
     };
 
-    // Sort by frecency descending for optimal pagination (best files first)
-    let mut sorted_files = filtered;
-    sort_with_buffer(&mut sorted_files, |a, b| {
-        b.total_frecency_score
-            .cmp(&a.total_frecency_score)
-            .then(b.modified.cmp(&a.modified))
-    });
-
-    let filtered_file_count = sorted_files.len();
-
-    // File-based pagination: skip to the requested file offset
-    if options.file_offset < sorted_files.len() {
-        let paginated: Vec<&'a FileItem> = sorted_files[options.file_offset..].to_vec();
-        (paginated, filtered_file_count)
+    let prefiltered_file_count = prefiltered_count.len();
+    if options.file_offset < prefiltered_count.len() {
+        let paginated: Vec<&'a FileItem> = prefiltered_count[options.file_offset..].to_vec();
+        (paginated, prefiltered_file_count)
     } else {
-        (Vec::new(), filtered_file_count)
+        (Vec::new(), prefiltered_file_count)
     }
 }
 

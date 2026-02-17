@@ -463,7 +463,6 @@ dependencies = [
  "fff-query-parser",
  "git2",
  "mimalloc",
- "once_cell",
  "serde",
  "serde_json",
  "tracing",

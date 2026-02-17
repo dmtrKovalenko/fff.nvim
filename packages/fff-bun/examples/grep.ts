@@ -111,22 +111,24 @@ async function main() {
   }
 
   console.log(`${DIM}Initializing index for: ${directory}${RESET}`);
-  const initResult = FileFinder.init({
+  const createResult = FileFinder.create({
     basePath: directory,
     warmupMmapCache: true,
   });
 
-  if (!initResult.ok) {
-    console.error(`${RED}Init failed: ${initResult.error}${RESET}`);
+  if (!createResult.ok) {
+    console.error(`${RED}Init failed: ${createResult.error}${RESET}`);
     process.exit(1);
   }
+
+  const finder = createResult.value;
 
   // Wait for scan
   process.stdout.write(`${DIM}Scanning files...${RESET}`);
   const startTime = Date.now();
 
-  while (FileFinder.isScanning()) {
-    const progress = FileFinder.getScanProgress();
+  while (finder.isScanning()) {
+    const progress = finder.getScanProgress();
     if (progress.ok) {
       process.stdout.write(
         `\r${DIM}Scanning files... ${progress.value.scannedFilesCount}${RESET}   `
@@ -136,7 +138,7 @@ async function main() {
   }
 
   const scanTime = Date.now() - startTime;
-  const finalProgress = FileFinder.getScanProgress();
+  const finalProgress = finder.getScanProgress();
   const totalFiles = finalProgress.ok
     ? finalProgress.value.scannedFilesCount
     : 0;
@@ -166,7 +168,7 @@ async function main() {
     rl.question(`${CYAN}grep[${modeLabel}]>${RESET} `, (query) => {
       if (query.toLowerCase() === "q" || query.toLowerCase() === "quit") {
         console.log(`\n${DIM}Goodbye!${RESET}`);
-        FileFinder.destroy();
+        finder.destroy();
         rl.close();
         process.exit(0);
       }
@@ -196,7 +198,7 @@ async function main() {
       }
 
       const searchStart = Date.now();
-      const result = FileFinder.liveGrep(query, {
+      const result = finder.liveGrep(query, {
         mode: currentMode,
         pageLimit: 30,
         timeBudgetMs: 5000,
