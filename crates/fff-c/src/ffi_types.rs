@@ -7,7 +7,7 @@ use std::ffi::{CString, c_char};
 use std::ptr;
 
 use fff_core::git::format_git_status;
-use fff_core::{FileItem, Location, Score, SearchResult};
+use fff_core::{FileItem, GrepMatch, GrepResult, Location, Score, SearchResult};
 use serde::{Deserialize, Serialize};
 
 /// Result type returned by all FFI functions
@@ -63,6 +63,10 @@ pub struct InitOptions {
     /// Use unsafe no-lock mode for databases (optional, defaults to false)
     #[serde(default)]
     pub use_unsafe_no_lock: bool,
+    /// Pre-populate mmap caches for all files after initial scan so the first
+    /// grep search is as fast as subsequent ones (optional, defaults to false)
+    #[serde(default)]
+    pub warmup_mmap_cache: bool,
 }
 
 /// Search options (JSON-deserializable)
@@ -218,6 +222,116 @@ impl SearchResultJson {
             total_matched: result.total_matched,
             total_files: result.total_files,
             location: result.location.as_ref().map(LocationJson::from_location),
+        }
+    }
+}
+
+// ============================================================================
+// Grep (live search) types
+// ============================================================================
+
+/// Grep search options (JSON-deserializable)
+#[derive(Debug, Default, Deserialize)]
+pub struct GrepSearchOptionsJson {
+    /// Maximum file size to search (bytes, default: 10MB)
+    pub max_file_size: Option<u64>,
+    /// Maximum matches per file (default: 200)
+    pub max_matches_per_file: Option<usize>,
+    /// Smart case: case-insensitive if query is lowercase (default: true)
+    pub smart_case: Option<bool>,
+    /// File-based pagination offset (default: 0)
+    pub file_offset: Option<usize>,
+    /// Maximum matches to return (default: 50)
+    pub page_limit: Option<usize>,
+    /// Search mode: "plain", "regex", or "fuzzy" (default: "plain")
+    pub mode: Option<String>,
+    /// Time budget in milliseconds, 0 = unlimited (default: 0)
+    pub time_budget_ms: Option<u64>,
+}
+
+/// A single grep match for JSON serialization
+#[derive(Debug, Serialize)]
+pub struct GrepMatchJson {
+    /// File metadata
+    pub path: String,
+    pub relative_path: String,
+    pub file_name: String,
+    pub git_status: String,
+    pub size: u64,
+    pub modified: u64,
+    pub is_binary: bool,
+    pub total_frecency_score: i64,
+    pub access_frecency_score: i64,
+    pub modification_frecency_score: i64,
+    /// Match metadata
+    pub line_number: u64,
+    pub col: usize,
+    pub byte_offset: u64,
+    pub line_content: String,
+    /// Byte offset pairs (start, end) within line_content for highlighting
+    pub match_ranges: Vec<[u32; 2]>,
+    /// Fuzzy match score (only in fuzzy mode)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fuzzy_score: Option<u16>,
+}
+
+impl GrepMatchJson {
+    pub fn from_grep_match(m: &GrepMatch, file: &FileItem) -> Self {
+        GrepMatchJson {
+            path: file.path.to_string_lossy().to_string(),
+            relative_path: file.relative_path.clone(),
+            file_name: file.file_name.clone(),
+            git_status: format_git_status(file.git_status).to_string(),
+            size: file.size,
+            modified: file.modified,
+            is_binary: file.is_binary,
+            total_frecency_score: file.total_frecency_score,
+            access_frecency_score: file.access_frecency_score,
+            modification_frecency_score: file.modification_frecency_score,
+            line_number: m.line_number,
+            col: m.col,
+            byte_offset: m.byte_offset,
+            line_content: m.line_content.clone(),
+            match_ranges: m
+                .match_byte_offsets
+                .iter()
+                .map(|&(start, end)| [start, end])
+                .collect(),
+            fuzzy_score: m.fuzzy_score,
+        }
+    }
+}
+
+/// Grep result for JSON serialization
+#[derive(Debug, Serialize)]
+pub struct GrepResultJson {
+    pub items: Vec<GrepMatchJson>,
+    pub total_matched: usize,
+    pub total_files_searched: usize,
+    pub total_files: usize,
+    pub filtered_file_count: usize,
+    pub next_file_offset: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regex_fallback_error: Option<String>,
+}
+
+impl GrepResultJson {
+    pub fn from_grep_result(result: &GrepResult) -> Self {
+        GrepResultJson {
+            items: result
+                .matches
+                .iter()
+                .map(|m| {
+                    let file = result.files[m.file_index];
+                    GrepMatchJson::from_grep_match(m, file)
+                })
+                .collect(),
+            total_matched: result.total_match_count,
+            total_files_searched: result.total_files_searched,
+            total_files: result.total_files,
+            filtered_file_count: result.filtered_file_count,
+            next_file_offset: result.next_file_offset,
+            regex_fallback_error: result.regex_fallback_error.clone(),
         }
     }
 }

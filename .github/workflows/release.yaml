@@ -2,7 +2,7 @@ name: Prebuild
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/binaries]
   pull_request:
 
 jobs:
@@ -110,39 +110,55 @@ jobs:
             target: x86_64-unknown-linux-gnu
             zigbuild_target: x86_64-unknown-linux-gnu.2.17
             artifact_name: target/x86_64-unknown-linux-gnu/release/libfff_c.so
+            npm_package: fff-bun-linux-x64-gnu
+            lib_filename: libfff_c.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             zigbuild_target: aarch64-unknown-linux-gnu.2.17
             artifact_name: target/aarch64-unknown-linux-gnu/release/libfff_c.so
+            npm_package: fff-bun-linux-arm64-gnu
+            lib_filename: libfff_c.so
             ext: so
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact_name: target/x86_64-unknown-linux-musl/release/libfff_c.so
+            npm_package: fff-bun-linux-x64-musl
+            lib_filename: libfff_c.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             artifact_name: target/aarch64-unknown-linux-musl/release/libfff_c.so
+            npm_package: fff-bun-linux-arm64-musl
+            lib_filename: libfff_c.so
             ext: so
 
           ## macOS builds
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: target/x86_64-apple-darwin/release/libfff_c.dylib
+            npm_package: fff-bun-darwin-x64
+            lib_filename: libfff_c.dylib
             ext: dylib
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: target/aarch64-apple-darwin/release/libfff_c.dylib
+            npm_package: fff-bun-darwin-arm64
+            lib_filename: libfff_c.dylib
             ext: dylib
 
           ## Windows builds
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: target/x86_64-pc-windows-msvc/release/fff_c.dll
+            npm_package: fff-bun-win32-x64
+            lib_filename: fff_c.dll
             ext: dll
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             artifact_name: target/aarch64-pc-windows-msvc/release/fff_c.dll
+            npm_package: fff-bun-win32-arm64
+            lib_filename: fff_c.dll
             ext: dll
 
     steps:
@@ -181,11 +197,23 @@ jobs:
           cargo build --release --target ${{ matrix.target }} -p fff-c
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
-      - name: Upload artifacts
+      - name: Prepare npm package
+        shell: bash
+        run: |
+          # Copy the built binary into the platform npm package directory
+          cp "c-lib-${{ matrix.target }}.${{ matrix.ext }}" "packages/${{ matrix.npm_package }}/${{ matrix.lib_filename }}"
+
+      - name: Upload C library artifact
         uses: actions/upload-artifact@v4
         with:
           name: c-lib-${{ matrix.target }}
           path: c-lib-${{ matrix.target }}.*
+
+      - name: Upload npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.npm_package }}
+          path: packages/${{ matrix.npm_package }}/
 
   release:
     name: Release
@@ -231,6 +259,11 @@ jobs:
             rmdir "$dir" 2>/dev/null || true
           done
 
+      - name: Remove npm package artifacts from release binaries
+        working-directory: ./binaries
+        run: |
+          rm -rf npm-*
+
       - name: Generate checksums
         working-directory: ./binaries
         run: |
@@ -266,6 +299,97 @@ jobs:
 
             ## C FFI Library (for Bun/Node/Python)
             - `c-lib-{target}.so` / `.dylib` / `.dll` - C FFI library
+
+  npm-publish:
+    name: Publish npm packages
+    needs: [build-c]
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/binaries'))
+      || (github.event_name == 'pull_request' && (github.head_ref == 'main' || github.head_ref == 'feat/binaries'))
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Determine version
+        id: version
+        run: |
+          # Read the base version from fff-core Cargo.toml (single source of truth)
+          base_version=$(grep '^version' crates/fff-core/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          short_sha=$(git rev-parse --short HEAD)
+          
+          # Always publish as nightly prerelease: X.Y.Z-nightly.<short-sha>
+          echo "version=${base_version}-nightly.${short_sha}" >> $GITHUB_OUTPUT
+          
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "tag=nightly" >> $GITHUB_OUTPUT
+          else
+            echo "tag=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download npm package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: ./npm-packages
+
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          
+          for pkg_dir in ./npm-packages/npm-*/; do
+            if [ -d "$pkg_dir" ]; then
+              pkg_name=$(node -p "require('${pkg_dir}package.json').name")
+              echo "Publishing ${pkg_name}@${VERSION} with tag ${TAG}..."
+              
+              # Update version in package.json
+              node -e "
+                const fs = require('fs');
+                const pkg = JSON.parse(fs.readFileSync('${pkg_dir}package.json', 'utf8'));
+                pkg.version = '${VERSION}';
+                fs.writeFileSync('${pkg_dir}package.json', JSON.stringify(pkg, null, 2) + '\n');
+              "
+              
+              cd "$pkg_dir"
+              npm publish --tag "$TAG" --access public || echo "Failed to publish ${pkg_name} (may already exist)"
+              cd -
+            fi
+          done
+
+      - name: Publish main package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          
+          echo "Publishing @ff-labs/fff-bun@${VERSION} with tag ${TAG}..."
+          
+          # Update version and optionalDependencies versions in the main package
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('./packages/fff-bun/package.json', 'utf8'));
+            pkg.version = '${VERSION}';
+            if (pkg.optionalDependencies) {
+              for (const dep of Object.keys(pkg.optionalDependencies)) {
+                pkg.optionalDependencies[dep] = '${VERSION}';
+              }
+            }
+            fs.writeFileSync('./packages/fff-bun/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          
+          cd packages/fff-bun
+          npm publish --tag "$TAG" --access public || echo "Failed to publish @ff-labs/fff-bun (may already exist)"
 
   comment-on-pr:
     name: Comment on PR

@@ -1,0 +1,18 @@
+{
+  "name": "@ff-labs/fff-bun-win32-arm64",
+  "version": "0.0.0",
+  "description": "fff native binary for Windows ARM64",
+  "os": ["win32"],
+  "cpu": ["arm64"],
+  "main": "fff_c.dll",
+  "files": ["fff_c.dll"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
+    "directory": "packages/fff-bun-win32-arm64"
+  }
+}

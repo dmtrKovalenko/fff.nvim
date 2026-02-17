@@ -1,0 +1,18 @@
+{
+  "name": "@ff-labs/fff-bun-darwin-arm64",
+  "version": "0.0.0",
+  "description": "fff native binary for macOS ARM64 (Apple Silicon)",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "main": "libfff_c.dylib",
+  "files": ["libfff_c.dylib"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
+    "directory": "packages/fff-bun-darwin-arm64"
+  }
+}

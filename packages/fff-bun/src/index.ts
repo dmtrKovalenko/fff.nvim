@@ -51,6 +51,11 @@ export type {
   ScanProgress,
   HealthCheck,
   DbHealth,
+  GrepMode,
+  GrepOptions,
+  GrepMatch,
+  GrepResult,
+  GrepCursor,
 } from "./types";
 
 // Result helpers
@@ -66,4 +71,4 @@ export {
 } from "./download";
 
 // Platform utilities
-export { getTriple, getLibExtension, getLibFilename } from "./platform";
+export { getTriple, getLibExtension, getLibFilename, getNpmPackageName } from "./platform";

@@ -1,8 +1,7 @@
 {
-  "name": "@ff-labs/bun",
+  "name": "@ff-labs/fff-bun",
   "version": "0.1.37",
   "private": false,
-  "nativeBinaryHash": "1537fc7",
   "description": "High-performance fuzzy file finder for Bun - perfect for LLM agent tools",
   "type": "module",
   "main": "src/index.ts",
@@ -15,7 +14,8 @@
   },
   "bin": {
     "fff": "./scripts/cli.ts",
-    "fff-demo": "./examples/search.ts"
+    "fff-demo": "./examples/search.ts",
+    "fff-grep": "./examples/grep.ts"
   },
   "files": [
     "src",
@@ -66,6 +66,16 @@
     "url": "https://github.com/dmtrKovalenko/fff.nvim/issues"
   },
   "homepage": "https://github.com/dmtrKovalenko/fff.nvim#readme",
+  "optionalDependencies": {
+    "@ff-labs/fff-bun-darwin-arm64": "0.0.0",
+    "@ff-labs/fff-bun-darwin-x64": "0.0.0",
+    "@ff-labs/fff-bun-linux-x64-gnu": "0.0.0",
+    "@ff-labs/fff-bun-linux-arm64-gnu": "0.0.0",
+    "@ff-labs/fff-bun-linux-x64-musl": "0.0.0",
+    "@ff-labs/fff-bun-linux-arm64-musl": "0.0.0",
+    "@ff-labs/fff-bun-win32-x64": "0.0.0",
+    "@ff-labs/fff-bun-win32-arm64": "0.0.0"
+  },
   "devDependencies": {
     "@types/bun": "^1.3.8",
     "typescript": "^5.0.0"
