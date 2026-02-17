@@ -58,7 +58,16 @@ function M.render(layout, config, list_win, pagination, prompt_position)
   end
 
   if not scrollbar_state.buf or not vim.api.nvim_buf_is_valid(scrollbar_state.buf) then return end
-  pcall(vim.api.nvim_win_set_config, scrollbar_state.win, { hide = false })
+
+  -- Reposition scrollbar to match current layout (handles both initial show and resize)
+  pcall(vim.api.nvim_win_set_config, scrollbar_state.win, {
+    relative = 'editor',
+    width = 1,
+    height = layout.list_height,
+    col = layout.list_col + layout.list_width + 1,
+    row = layout.list_row + 1,
+    hide = false,
+  })
 
   local win_height = vim.api.nvim_win_get_height(list_win)
 
