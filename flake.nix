@@ -35,9 +35,13 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
+        cargoToml = builtins.fromTOML (builtins.readFile ./crates/fff-nvim/Cargo.toml);
+
         # Common arguments can be set here to avoid repeating them later
         # Note: changes here will rebuild all dependency crates
         commonArgs = {
+          pname = cargoToml.package.name;
+          version = cargoToml.package.version;
           src = craneLib.cleanCargoSource ./.;
           strictDeps = true;
 
