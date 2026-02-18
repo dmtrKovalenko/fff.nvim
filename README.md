@@ -342,6 +342,9 @@ require('fff').live_grep({
     modes = { 'fuzzy' },
   }
 })
+
+-- Pre-fill the search with an initial query
+require('fff').live_grep({ query = 'search term' })
 ```
 
 When only one mode is configured, the mode indicator is hidden completely and the cycle keybind does nothing.

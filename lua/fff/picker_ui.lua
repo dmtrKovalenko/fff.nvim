@@ -2521,7 +2521,8 @@ function M.open(opts)
   end
 
   local current_file_cache = get_current_file_cache(base_path)
-  return open_ui_with_state(nil, nil, nil, merged_config, current_file_cache)
+  local query = opts and opts.query or nil
+  return open_ui_with_state(query, nil, nil, merged_config, current_file_cache)
 end
 
 function M.monitor_scan_progress(iteration)
