@@ -219,7 +219,7 @@ local function init()
     },
     grep = {
       max_file_size = 10 * 1024 * 1024, -- Skip files larger than 10MB
-      max_matches_per_file = 200, -- Maximum matches per file
+      max_matches_per_file = 100, -- Maximum matches per file
       smart_case = true, -- Case-insensitive unless query has uppercase
       time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
       modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order

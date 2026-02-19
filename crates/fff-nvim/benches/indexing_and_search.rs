@@ -1,8 +1,9 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use fff_nvim::FILE_PICKER;
-use fff_nvim::file_picker::{FilePicker, FuzzySearchOptions};
-use fff_nvim::types::PaginationArgs;
+use fff_core::file_picker::FilePicker;
+use fff_core::types::{FileItem, PaginationArgs};
+use fff_core::{FuzzySearchOptions, SharedFrecency, SharedPicker};
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 /// Initialize tracing to output to console
@@ -19,20 +20,26 @@ fn init_tracing() {
     //     .try_init();
 }
 
-/// Initialize FilePicker and insert into global state
-fn init_file_picker_internal(path: &str) -> Result<(), String> {
-    let picker = FilePicker::new(path.to_string())
-        .map_err(|e| format!("Failed to create FilePicker: {:?}", e))?;
-
-    let mut picker_guard = FILE_PICKER
-        .write()
-        .map_err(|_| "Failed to acquire write lock")?;
-    *picker_guard = Some(picker);
-    Ok(())
+/// Initialize FilePicker using shared state
+fn init_file_picker_internal(
+    path: &str,
+    shared_picker: &SharedPicker,
+    shared_frecency: &SharedFrecency,
+) -> Result<(), String> {
+    FilePicker::new_with_shared_state(
+        path.to_string(),
+        false,
+        Arc::clone(shared_picker),
+        Arc::clone(shared_frecency),
+    )
+    .map_err(|e| format!("Failed to create FilePicker: {:?}", e))
 }
 
 /// Helper function to wait for scanning to complete and get file count
-fn wait_for_scan_completion(timeout_secs: u64) -> Result<usize, String> {
+fn wait_for_scan_completion(
+    shared_picker: &SharedPicker,
+    timeout_secs: u64,
+) -> Result<usize, String> {
     let start = std::time::Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
     let mut last_log = std::time::Instant::now();
@@ -42,7 +49,7 @@ fn wait_for_scan_completion(timeout_secs: u64) -> Result<usize, String> {
         iteration += 1;
 
         {
-            let picker_guard = FILE_PICKER
+            let picker_guard = shared_picker
                 .read()
                 .map_err(|_| "Failed to acquire read lock")?;
             if let Some(ref picker) = *picker_guard {
@@ -91,9 +98,9 @@ fn wait_for_scan_completion(timeout_secs: u64) -> Result<usize, String> {
     }
 }
 
-/// Get files from the global FILE_PICKER
-fn get_files_snapshot() -> Result<Vec<fff_nvim::types::FileItem>, String> {
-    let picker_guard = FILE_PICKER
+/// Get files from the shared picker
+fn get_files_snapshot(shared_picker: &SharedPicker) -> Result<Vec<FileItem>, String> {
+    let picker_guard = shared_picker
         .read()
         .map_err(|_| "Failed to acquire read lock")?;
     if let Some(ref picker) = *picker_guard {
@@ -103,9 +110,9 @@ fn get_files_snapshot() -> Result<Vec<fff_nvim::types::FileItem>, String> {
     }
 }
 
-/// Clean up global state
-fn cleanup_global_state() {
-    if let Ok(mut picker_guard) = FILE_PICKER.write() {
+/// Clean up shared state
+fn cleanup_shared_state(shared_picker: &SharedPicker) {
+    if let Ok(mut picker_guard) = shared_picker.write() {
         if let Some(mut picker) = picker_guard.take() {
             picker.stop_background_monitor();
         }
@@ -113,7 +120,7 @@ fn cleanup_global_state() {
 }
 
 /// Initialize FilePicker once and return files snapshot
-fn setup_once() -> Result<Vec<fff_nvim::types::FileItem>, String> {
+fn setup_once() -> Result<(Vec<FileItem>, SharedPicker, SharedFrecency), String> {
     init_tracing();
 
     let big_repo_path = PathBuf::from("./big-repo");
@@ -125,32 +132,24 @@ fn setup_once() -> Result<Vec<fff_nvim::types::FileItem>, String> {
         .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
     eprintln!("  Path: {:?}", canonical_path);
 
-    {
-        let picker_guard = FILE_PICKER
-            .read()
-            .map_err(|_| "Failed to acquire read lock")?;
-        if let Some(ref picker) = *picker_guard {
-            let files = picker.get_files();
-            if !files.is_empty() {
-                eprintln!("  ℹ Reusing existing index with {} files", files.len());
-                return Ok(files.to_vec());
-            }
-        }
-    }
+    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
+    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
 
-    cleanup_global_state();
-    std::thread::sleep(Duration::from_millis(500));
-
-    init_file_picker_internal(&canonical_path.to_string_lossy())?;
+    init_file_picker_internal(
+        &canonical_path.to_string_lossy(),
+        &shared_picker,
+        &shared_frecency,
+    )?;
 
     eprintln!("  Waiting for background scan to complete...");
-    let file_count = wait_for_scan_completion(120)?;
+    let file_count = wait_for_scan_completion(&shared_picker, 120)?;
     eprintln!(
         "  ✓ Indexed {} files (will be reused for all benchmarks)\n",
         file_count
     );
 
-    get_files_snapshot()
+    let files = get_files_snapshot(&shared_picker)?;
+    Ok((files, shared_picker, shared_frecency))
 }
 
 /// Benchmark for indexing the big-repo directory
@@ -179,21 +178,23 @@ fn bench_indexing(c: &mut Criterion) {
 
     group.bench_function("index_big_repo", |b| {
         b.iter(|| {
-            cleanup_global_state();
-            std::thread::sleep(Duration::from_millis(500));
+            let sp: SharedPicker = Arc::new(RwLock::new(None));
+            let sf: SharedFrecency = Arc::new(RwLock::new(None));
 
             let start = std::time::Instant::now();
-            init_file_picker_internal(black_box(&canonical_path.to_string_lossy()))
+            init_file_picker_internal(black_box(&canonical_path.to_string_lossy()), &sp, &sf)
                 .expect("Failed to init FilePicker");
 
-            match wait_for_scan_completion(120) {
+            match wait_for_scan_completion(&sp, 120) {
                 Ok(file_count) => {
                     let elapsed = start.elapsed();
                     eprintln!("  ✓ Indexed {} files in {:?}", file_count, elapsed);
+                    cleanup_shared_state(&sp);
                     file_count
                 }
                 Err(e) => {
                     eprintln!("  ✗ Error: {}", e);
+                    cleanup_shared_state(&sp);
                     0
                 }
             }
@@ -205,8 +206,8 @@ fn bench_indexing(c: &mut Criterion) {
 
 /// Benchmark for searching with various query patterns
 fn bench_search_queries(c: &mut Criterion) {
-    let files = match setup_once() {
-        Ok(files) => files,
+    let (files, _sp, _sf) = match setup_once() {
+        Ok(result) => result,
         Err(e) => {
             eprint!("Failed to setup picker {e:?}");
             return;
@@ -230,6 +231,7 @@ fn bench_search_queries(c: &mut Criterion) {
                 let results = FilePicker::fuzzy_search(
                     black_box(&files),
                     black_box(query),
+                    None,
                     FuzzySearchOptions {
                         max_threads: 4,
                         current_file: None,
@@ -254,8 +256,8 @@ fn bench_search_queries(c: &mut Criterion) {
 
 /// Benchmark search with different thread counts
 fn bench_search_thread_scaling(c: &mut Criterion) {
-    let files = match setup_once() {
-        Ok(files) => files,
+    let (files, _sp, _sf) = match setup_once() {
+        Ok(result) => result,
         Err(e) => {
             eprintln!("⚠ Skipping thread scaling benchmarks: {}", e);
             return;
@@ -277,6 +279,7 @@ fn bench_search_thread_scaling(c: &mut Criterion) {
                     let results = FilePicker::fuzzy_search(
                         black_box(&files),
                         black_box(query),
+                        None,
                         FuzzySearchOptions {
                             max_threads: threads,
                             current_file: None,
@@ -302,8 +305,8 @@ fn bench_search_thread_scaling(c: &mut Criterion) {
 
 /// Benchmark search with different result limits
 fn bench_search_result_limits(c: &mut Criterion) {
-    let files = match setup_once() {
-        Ok(files) => files,
+    let (files, _sp, _sf) = match setup_once() {
+        Ok(result) => result,
         Err(e) => {
             eprintln!("⚠ Skipping result limit benchmarks: {}", e);
             return;
@@ -322,6 +325,7 @@ fn bench_search_result_limits(c: &mut Criterion) {
                 let results = FilePicker::fuzzy_search(
                     black_box(&files),
                     black_box(query),
+                    None,
                     FuzzySearchOptions {
                         max_threads: 4,
                         current_file: None,
@@ -379,6 +383,7 @@ fn bench_search_scalability(c: &mut Criterion) {
                 let results = FilePicker::fuzzy_search(
                     black_box(subset),
                     black_box(query),
+                    None,
                     FuzzySearchOptions {
                         max_threads: 4,
                         current_file: None,
@@ -403,8 +408,8 @@ fn bench_search_scalability(c: &mut Criterion) {
 
 /// Benchmark search performance with different ordering modes
 fn bench_search_ordering(c: &mut Criterion) {
-    let files = match setup_once() {
-        Ok(files) => files,
+    let (files, _sp, _sf) = match setup_once() {
+        Ok(result) => result,
         Err(e) => {
             eprintln!("⚠ Skipping ordering benchmarks: {}", e);
             return;
@@ -422,6 +427,7 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box(query),
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
@@ -446,6 +452,7 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box(query),
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
@@ -470,6 +477,7 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box("mod"),
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
@@ -493,6 +501,7 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box("mod"),
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
@@ -517,6 +526,7 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box("controller"),
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
@@ -540,6 +550,7 @@ fn bench_search_ordering(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box("controller"),
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
@@ -563,8 +574,8 @@ fn bench_search_ordering(c: &mut Criterion) {
 
 /// Benchmark pagination: first page vs deep page
 fn bench_pagination_performance(c: &mut Criterion) {
-    let files = match setup_once() {
-        Ok(files) => files,
+    let (files, _sp, _sf) = match setup_once() {
+        Ok(result) => result,
         Err(e) => {
             eprintln!("⚠ Skipping pagination benchmarks: {}", e);
             return;
@@ -583,6 +594,7 @@ fn bench_pagination_performance(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box(query),
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
@@ -607,6 +619,7 @@ fn bench_pagination_performance(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box(query),
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
@@ -631,6 +644,7 @@ fn bench_pagination_performance(c: &mut Criterion) {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
                 black_box(query),
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,

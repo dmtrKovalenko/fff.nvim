@@ -1,4 +1,4 @@
-name: Lua E2E Tests
+name: e2e Tests
 
 on:
   push:
@@ -12,7 +12,7 @@ env:
 
 jobs:
   lua-tests:
-    name: Lua E2E (${{ matrix.os }})
+    name: e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -24,6 +24,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -82,6 +83,8 @@ jobs:
 
       - name: Run Lua tests
         shell: bash
-        run: |
-          nvim --headless -u tests/minimal_init.lua \
-            -c "PlenaryBustedFile tests/fff_core_spec.lua" 2>&1
+        run: make test-lua
+
+      - name: Run bun tests
+        shell: bash
+        run: make test-bun

@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use fff_nvim::query_tracker::QueryTracker;
+use fff_core::query_tracker::QueryTracker;
 use rand::distributions::Alphanumeric;
 use rand::prelude::*;
 use std::path::PathBuf;
