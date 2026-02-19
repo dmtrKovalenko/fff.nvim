@@ -12,7 +12,10 @@ use fff_query_parser::{FFFQuery, GrepConfig, QueryParser};
 use grep_matcher::{Match, Matcher, NoCaptures, NoError};
 use grep_searcher::lines::{self, LineStep};
 use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
-use tracing::{debug, warn};
+use rayon::prelude::*;
+use smallvec::SmallVec;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tracing::Level;
 
 /// Controls how the grep pattern is interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -48,7 +51,8 @@ pub struct GrepMatch {
     /// The matched line text, truncated to `MAX_LINE_DISPLAY_LEN`.
     pub line_content: String,
     /// Byte offsets `(start, end)` within `line_content` for each match.
-    pub match_byte_offsets: Vec<(u32, u32)>,
+    /// Stack-allocated for the common case of ≤4 spans per line.
+    pub match_byte_offsets: SmallVec<[(u32, u32); 4]>,
     /// Fuzzy match score from neo_frizbee (only set in Fuzzy grep mode).
     pub fuzzy_score: Option<u16>,
 }
@@ -59,8 +63,6 @@ pub struct GrepResult<'a> {
     pub matches: Vec<GrepMatch>,
     /// Deduplicated file references for the returned matches.
     pub files: Vec<&'a FileItem>,
-    /// Total matches collected (may be more than `matches.len()` due to page_limit).
-    pub total_match_count: usize,
     /// Number of files actually searched in this call.
     pub total_files_searched: usize,
     /// Total number of indexed files (before filtering).
@@ -107,12 +109,12 @@ pub struct GrepSearchOptions {
 /// For multiline patterns we must NOT report a line terminator — the regex
 /// can match across line boundaries, so the searcher needs the `MultiLine`
 /// strategy.
-struct FffMatcher {
-    regex: regex::bytes::Regex,
+struct RegexMatcher<'r> {
+    regex: &'r regex::bytes::Regex,
     is_multiline: bool,
 }
 
-impl Matcher for FffMatcher {
+impl Matcher for RegexMatcher<'_> {
     type Captures = NoCaptures;
     type Error = NoError;
 
@@ -226,47 +228,19 @@ fn ascii_case_insensitive_find(haystack: &[u8], needle_lower: &[u8]) -> Option<u
 /// JS or huge single-line files from blowing up memory.
 const MAX_LINE_DISPLAY_LEN: usize = 512;
 
-/// Unified sink that collects `GrepMatch` entries from a single file search
-/// for PlainText and Regex modes.
-///
-/// Uses mode-specific highlight extraction:
-/// - PlainText: SIMD-accelerated `memchr::memmem::Finder` for literal matching
-/// - Regex: Compiled regex for variable-length match extraction
-///
-/// Fuzzy mode bypasses GrepSink entirely — it uses SIMD `match_list` directly.
-struct GrepSink<'r> {
+struct SinkState {
     file_index: usize,
     matches: Vec<GrepMatch>,
     max_matches: usize,
-    /// SIMD-accelerated literal finder for match position highlighting.
-    /// Used in PlainText mode; also used as fallback in Regex mode for
-    /// simple patterns.
-    finder: &'r memchr::memmem::Finder<'r>,
-    /// Length of the search pattern in bytes (for computing match end offsets).
-    /// Only accurate in PlainText mode; in Regex mode the regex_highlights
-    /// field provides exact match spans.
-    pattern_len: u32,
-    /// When true, perform ASCII case-insensitive matching for highlights.
-    case_insensitive: bool,
-    /// When set (Regex mode), use this regex to find exact highlight positions
-    /// within matched lines instead of the literal finder.
-    regex_highlights: Option<&'r regex::bytes::Regex>,
 }
 
-impl Sink for GrepSink<'_> {
-    type Error = std::io::Error;
-
-    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
-        // Check per-file limit
-        if self.matches.len() >= self.max_matches {
-            return Ok(false);
-        }
-
-        let line_bytes = mat.bytes();
+impl SinkState {
+    #[inline]
+    fn prepare_line<'a>(line_bytes: &'a [u8], mat: &SinkMatch<'_>) -> (&'a [u8], u32, u64, u64) {
         let line_number = mat.line_number().unwrap_or(0);
         let byte_offset = mat.absolute_byte_offset();
 
-        // Trim trailing newline/CR directly on bytes to avoid UTF-8 conversion
+        // Trim trailing newline/CR directly on bytes to avoid UTF-8 conversion.
         let trimmed_len = {
             let mut len = line_bytes.len();
             while len > 0 && matches!(line_bytes[len - 1], b'\n' | b'\r') {
@@ -276,7 +250,7 @@ impl Sink for GrepSink<'_> {
         };
         let trimmed_bytes = &line_bytes[..trimmed_len];
 
-        // Truncate for display (floor to a char boundary)
+        // Truncate for display (floor to a char boundary).
         let display_bytes = if trimmed_bytes.len() > MAX_LINE_DISPLAY_LEN {
             let mut end = MAX_LINE_DISPLAY_LEN;
             while end > 0 && !is_utf8_char_boundary(trimmed_bytes[end]) {
@@ -286,38 +260,70 @@ impl Sink for GrepSink<'_> {
         } else {
             trimmed_bytes
         };
-        let display_len = display_bytes.len() as u32;
 
-        // Find all match positions within the display line.
-        // Mode-specific highlight extraction:
-        // - Regex: use compiled regex for variable-length spans
-        // - PlainText: use faster memchr::memmem literal finder
-        let mut match_byte_offsets = Vec::new();
+        let display_len = display_bytes.len() as u32;
+        (display_bytes, display_len, line_number, byte_offset)
+    }
+
+    #[inline]
+    fn push_match(
+        &mut self,
+        line_number: u64,
+        col: usize,
+        byte_offset: u64,
+        line_content: String,
+        match_byte_offsets: SmallVec<[(u32, u32); 4]>,
+    ) {
+        self.matches.push(GrepMatch {
+            file_index: self.file_index,
+            line_number,
+            col,
+            byte_offset,
+            line_content,
+            match_byte_offsets,
+            fuzzy_score: None,
+        });
+    }
+}
+
+/// Sink for `PlainText` mode.
+///
+/// Highlights are extracted with SIMD-accelerated `memchr::memmem::Finder`.
+/// Case-insensitive matching lowercases the line into a stack buffer before
+/// searching, keeping positions 1:1 for ASCII.
+/// No regex engine is involved at any point.
+struct PlainTextSink<'r> {
+    state: SinkState,
+    finder: &'r memchr::memmem::Finder<'r>,
+    pattern_len: u32,
+    case_insensitive: bool,
+}
+
+impl Sink for PlainTextSink<'_> {
+    type Error = std::io::Error;
+
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+        if self.state.max_matches != 0 && self.state.matches.len() >= self.state.max_matches {
+            return Ok(false);
+        }
+
+        let line_bytes = mat.bytes();
+        let (display_bytes, display_len, line_number, byte_offset) =
+            SinkState::prepare_line(line_bytes, mat);
+
+        let line_content = String::from_utf8_lossy(display_bytes).into_owned();
+        let mut match_byte_offsets: SmallVec<[(u32, u32); 4]> = SmallVec::new();
         let mut col = 0usize;
         let mut first = true;
 
-        let line_content = String::from_utf8_lossy(display_bytes).into_owned();
-
-        if let Some(re) = self.regex_highlights {
-            // Regex mode: find all non-overlapping matches using the regex engine
-            for m in re.find_iter(display_bytes) {
-                let abs_start = m.start() as u32;
-                let abs_end = (m.end() as u32).min(display_len);
-                if first {
-                    col = abs_start as usize;
-                    first = false;
-                }
-                match_byte_offsets.push((abs_start, abs_end));
-            }
-        } else if self.case_insensitive {
-            // PlainText case-insensitive: lowercase the display bytes on the stack,
-            // find positions in the lowered copy, map back (positions are 1:1 for ASCII).
+        if self.case_insensitive {
+            // Lowercase the display bytes into a stack buffer; positions are 1:1
+            // for ASCII so no mapping is needed.
             let mut lowered = [0u8; MAX_LINE_DISPLAY_LEN];
             let len = display_bytes.len().min(MAX_LINE_DISPLAY_LEN);
             for (dst, &src) in lowered[..len].iter_mut().zip(display_bytes) {
                 *dst = src.to_ascii_lowercase();
             }
-
             let mut start_pos = 0usize;
             while let Some(pos) = self.finder.find(&lowered[start_pos..len]) {
                 let abs_start = (start_pos + pos) as u32;
@@ -327,10 +333,9 @@ impl Sink for GrepSink<'_> {
                     first = false;
                 }
                 match_byte_offsets.push((abs_start, abs_end));
-                start_pos += pos + 1; // advance past match start to find overlapping matches
+                start_pos += pos + 1;
             }
         } else {
-            // PlainText case-sensitive: use memchr::memmem directly
             let mut start_pos = 0usize;
             while let Some(pos) = self.finder.find(&display_bytes[start_pos..]) {
                 let abs_start = (start_pos + pos) as u32;
@@ -344,24 +349,72 @@ impl Sink for GrepSink<'_> {
             }
         }
 
-        self.matches.push(GrepMatch {
-            file_index: self.file_index,
+        self.state.push_match(
             line_number,
             col,
             byte_offset,
             line_content,
             match_byte_offsets,
-            fuzzy_score: None, // GrepSink is only used for PlainText/Regex modes
-        });
-
+        );
         Ok(true)
     }
 
-    fn finish(
+    fn finish(&mut self, _: &Searcher, _: &grep_searcher::SinkFinish) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+/// Sink for `Regex` mode.
+///
+/// Uses the compiled regex to extract precise variable-length highlight spans
+/// from each matched line. No `memmem` finder is involved.
+struct RegexSink<'r> {
+    state: SinkState,
+    re: &'r regex::bytes::Regex,
+}
+
+impl Sink for RegexSink<'_> {
+    type Error = std::io::Error;
+
+    fn matched(
         &mut self,
         _searcher: &Searcher,
-        _: &grep_searcher::SinkFinish,
-    ) -> Result<(), Self::Error> {
+        sink_match: &SinkMatch<'_>,
+    ) -> Result<bool, Self::Error> {
+        if self.state.max_matches != 0 && self.state.matches.len() >= self.state.max_matches {
+            return Ok(false);
+        }
+
+        let line_bytes = sink_match.bytes();
+        let (display_bytes, display_len, line_number, byte_offset) =
+            SinkState::prepare_line(line_bytes, sink_match);
+
+        let line_content = String::from_utf8_lossy(display_bytes).into_owned();
+        let mut match_byte_offsets: SmallVec<[(u32, u32); 4]> = SmallVec::new();
+        let mut col = 0usize;
+        let mut first = true;
+
+        for m in self.re.find_iter(display_bytes) {
+            let abs_start = m.start() as u32;
+            let abs_end = (m.end() as u32).min(display_len);
+            if first {
+                col = abs_start as usize;
+                first = false;
+            }
+            match_byte_offsets.push((abs_start, abs_end));
+        }
+
+        self.state.push_match(
+            line_number,
+            col,
+            byte_offset,
+            line_content,
+            match_byte_offsets,
+        );
+        Ok(true)
+    }
+
+    fn finish(&mut self, _: &Searcher, _: &grep_searcher::SinkFinish) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -384,33 +437,17 @@ fn is_utf8_char_boundary(b: u8) -> bool {
 /// - The input is passed directly to the regex engine without escaping
 /// - Smart case still applies
 /// - Returns `None` for invalid regex patterns — the caller falls back to literal mode
-fn build_regex(
-    pattern: &str,
-    smart_case: bool,
-    mode: GrepMode,
-) -> Result<regex::bytes::Regex, String> {
+fn build_regex(pattern: &str, smart_case: bool) -> Result<regex::bytes::Regex, String> {
     if pattern.is_empty() {
         return Err("empty pattern".to_string());
     }
 
-    // Check for multiline: user typed literal \n
-    let (effective_pattern, _is_multiline) = if pattern.contains("\\n") {
-        (pattern.replace("\\n", "\n"), true)
+    let regex_pattern = if pattern.contains("\\n") {
+        pattern.replace("\\n", "\n")
     } else {
-        (pattern.to_string(), false)
+        pattern.to_string()
     };
 
-    // Build the regex pattern based on mode
-    let regex_pattern = match mode {
-        GrepMode::PlainText => regex::escape(&effective_pattern),
-        GrepMode::Regex => effective_pattern,
-        GrepMode::Fuzzy => {
-            // Fuzzy mode doesn't use regex at all, so this function should never be called
-            return Err("build_regex called for Fuzzy mode".to_string());
-        }
-    };
-
-    // Smart case: case-insensitive unless query contains uppercase
     let case_insensitive = if smart_case {
         !pattern.chars().any(|c| c.is_uppercase())
     } else {
@@ -427,15 +464,15 @@ fn build_regex(
 /// Convert character-position indices from neo_frizbee into byte-offset
 /// pairs (start, end) suitable for `match_byte_offsets`.
 ///
-/// neo_frizbee returns character positions (0-based index into the char
+/// frizbee returns character positions (0-based index into the char
 /// iterator). We need byte ranges because the UI renderer and Lua layer
 /// use byte offsets for extmark highlights.
 ///
 /// Each matched character becomes its own (byte_start, byte_end) pair.
 /// Adjacent characters are merged into a single contiguous range.
-fn char_indices_to_byte_offsets(line: &str, char_indices: &[usize]) -> Vec<(u32, u32)> {
+fn char_indices_to_byte_offsets(line: &str, char_indices: &[usize]) -> SmallVec<[(u32, u32); 4]> {
     if char_indices.is_empty() {
-        return Vec::new();
+        return SmallVec::new();
     }
 
     // Build a map: char_index -> (byte_start, byte_end) for all chars.
@@ -446,7 +483,7 @@ fn char_indices_to_byte_offsets(line: &str, char_indices: &[usize]) -> Vec<(u32,
         .collect();
 
     // Convert char indices to byte ranges, merging adjacent ranges
-    let mut result: Vec<(u32, u32)> = Vec::with_capacity(char_indices.len());
+    let mut result: SmallVec<[(u32, u32); 4]> = SmallVec::with_capacity(char_indices.len());
 
     for &ci in char_indices {
         if ci >= char_byte_ranges.len() {
@@ -466,19 +503,17 @@ fn char_indices_to_byte_offsets(line: &str, char_indices: &[usize]) -> Vec<(u32,
     result
 }
 
+#[tracing::instrument(skip_all, level = Level::DEBUG)]
 fn run_file_search<'a, F>(
     files_to_search: &[&'a FileItem],
     options: &GrepSearchOptions,
     total_files: usize,
     filtered_file_count: usize,
     regex_fallback_error: Option<String>,
-    // When true, only break on time budget if we already have enough
-    // results to fill half a page (fuzzy mode collects from many files).
-    require_partial_fill_for_budget_break: bool,
-    mut search_file: F,
+    search_file: F,
 ) -> GrepResult<'a>
 where
-    F: FnMut(&[u8], usize) -> Vec<GrepMatch>,
+    F: Fn(&[u8], usize) -> Vec<GrepMatch> + Sync,
 {
     let time_budget = if options.time_budget_ms > 0 {
         Some(std::time::Duration::from_millis(options.time_budget_ms))
@@ -487,59 +522,90 @@ where
     };
 
     let search_start = std::time::Instant::now();
-    let mut total_match_count = 0usize;
-    let mut files_searched_in_call = 0usize;
+    let page_limit = options.page_limit;
+
+    let budget_exceeded = AtomicBool::new(false);
+
+    // Parallel phase: search all files concurrently using rayon.
+    // Every file is visited (no early-exit gaps), so per_file_results is a
+    // contiguous, order-preserving subset — pagination offsets stay correct.
+    // The time budget acts as the work bound; there is no separate file cap.
+    let per_file_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)> = files_to_search
+        .par_iter()
+        .enumerate()
+        .filter_map(|(idx, file)| {
+            // Time budget check (relaxed — checked once per file, not per line).
+            if let Some(budget) = time_budget
+                && search_start.elapsed() > budget
+            {
+                budget_exceeded.store(true, Ordering::Relaxed);
+                return None;
+            }
+
+            let mmap = file.get_mmap()?;
+            let file_matches = search_file(&mmap[..], options.max_matches_per_file);
+
+            if file_matches.is_empty() {
+                return None;
+            }
+
+            Some((idx, *file, file_matches))
+        })
+        .collect();
+
+    // Flatten per-file results into the final vecs in sorted order.
+    // Each match stores a `file_index` pointing into `result_files` so that
+    // consumers (FFI JSON, Lua) can look up file metadata without duplicating
+    // it across every match from the same file.
     let mut result_files: Vec<&'a FileItem> = Vec::new();
     let mut all_matches: Vec<GrepMatch> = Vec::new();
+    // files_consumed tracks how far into files_to_search we have advanced,
+    // counting every file whose results were emitted (with or without matches).
+    // We use the batch_idx of the last consumed file + 1, which is correct
+    // because per_file_results only contains files that had matches, and
+    // files between them that had no matches were still searched and can be
+    // safely skipped on the next page.
+    let mut files_consumed: usize = 0;
 
-    for (file_idx, file) in files_to_search.iter().enumerate() {
-        // Check time budget
-        if let Some(budget) = time_budget
-            && search_start.elapsed() > budget
-            && (!require_partial_fill_for_budget_break
-                || all_matches.len() >= options.page_limit / 2)
-        {
-            break;
+    for (batch_idx, file, file_matches) in per_file_results {
+        // batch_idx is the 0-based position in files_to_search.
+        // Advance files_consumed to include this file and all no-match files before it.
+        files_consumed = batch_idx + 1;
+
+        let file_result_idx = result_files.len();
+        result_files.push(file);
+
+        for mut m in file_matches {
+            m.file_index = file_result_idx;
+            all_matches.push(m);
         }
 
-        let Some(mmap) = file.get_mmap() else {
-            files_searched_in_call = file_idx + 1;
-            continue;
-        };
-
-        let file_matches = search_file(&mmap[..], options.max_matches_per_file);
-
-        files_searched_in_call = file_idx + 1;
-
-        if !file_matches.is_empty() {
-            let deduped_file_idx = result_files.len();
-            result_files.push(file);
-
-            for mut m in file_matches {
-                m.file_index = deduped_file_idx;
-                all_matches.push(m);
-            }
-
-            total_match_count = all_matches.len();
-
-            if total_match_count >= options.page_limit {
-                all_matches.truncate(options.page_limit);
-                break;
-            }
+        // page_limit is a soft cap: we always finish the current file before
+        // stopping, so no matches are dropped. A page may return up to
+        // page_limit + max_matches_per_file - 1 matches in the worst case.
+        if all_matches.len() >= page_limit {
+            break;
         }
     }
 
-    let next_file_offset = if files_searched_in_call < files_to_search.len() {
-        options.file_offset + files_searched_in_call
+    // If no file had any match, we searched the entire slice.
+    if result_files.is_empty() {
+        files_consumed = files_to_search.len();
+    }
+
+    let has_more = budget_exceeded.load(Ordering::Relaxed)
+        || (all_matches.len() >= page_limit && files_consumed < files_to_search.len());
+
+    let next_file_offset = if has_more {
+        options.file_offset + files_consumed
     } else {
-        0 // No more files — signal end of results
+        0
     };
 
     GrepResult {
         matches: all_matches,
         files: result_files,
-        total_match_count,
-        total_files_searched: files_searched_in_call,
+        total_files_searched: files_consumed,
         total_files,
         filtered_file_count,
         next_file_offset,
@@ -550,14 +616,14 @@ where
 /// Filter files by constraints and size/binary checks, sort by frecency,
 /// and apply file-based pagination.
 ///
-/// Returns `(paginated_files, filtered_file_count)`. The paginated list
+/// Returns `(paginated_files, filtered_file_count)`. The paginated slice
 /// is empty if the offset is past the end of available files.
 fn prepare_files_to_search<'a>(
     files: &'a [FileItem],
     constraints: &[fff_query_parser::Constraint<'_>],
     options: &GrepSearchOptions,
 ) -> (Vec<&'a FileItem>, usize) {
-    let filtered: Vec<&FileItem> = if constraints.is_empty() {
+    let prefiltered: Vec<&FileItem> = if constraints.is_empty() {
         files
             .iter()
             .filter(|f| !f.is_binary && f.size > 0 && f.size <= options.max_file_size)
@@ -575,22 +641,21 @@ fn prepare_files_to_search<'a>(
         }
     };
 
-    // Sort by frecency descending for optimal pagination (best files first)
-    let mut sorted_files = filtered;
+    let total_count = prefiltered.len();
+
+    // Sort by frecency (files are stored by path, not frecency)
+    let mut sorted_files = prefiltered;
     sort_with_buffer(&mut sorted_files, |a, b| {
         b.total_frecency_score
             .cmp(&a.total_frecency_score)
             .then(b.modified.cmp(&a.modified))
     });
 
-    let filtered_file_count = sorted_files.len();
-
-    // File-based pagination: skip to the requested file offset
-    if options.file_offset < sorted_files.len() {
-        let paginated: Vec<&'a FileItem> = sorted_files[options.file_offset..].to_vec();
-        (paginated, filtered_file_count)
+    if options.file_offset < total_count {
+        let sorted_files = sorted_files.split_off(options.file_offset);
+        (sorted_files, total_count)
     } else {
-        (Vec::new(), filtered_file_count)
+        (Vec::new(), total_count)
     }
 }
 
@@ -633,6 +698,7 @@ fn fuzzy_grep_search<'a>(
     options: &GrepSearchOptions,
     total_files: usize,
     filtered_file_count: usize,
+    case_insensitive: bool,
 ) -> GrepResult<'a> {
     // max_typos controls how many *needle* characters can be unmatched.
     // A transposition (e.g. "shcema" → "schema") costs ~1 typo with
@@ -653,6 +719,10 @@ fn fuzzy_grep_search<'a>(
             // instead of 1). Scattered matches are filtered by max_typos
             // and the match span check below instead.
             exact_match_bonus: 100,
+            // gap_open_penalty: 4,
+            // gap_extend_penalty: 2,
+            prefix_bonus: 0,
+            capitalization_bonus: if case_insensitive { 0 } else { 4 },
             ..neo_frizbee::Scoring::default()
         },
     };
@@ -673,22 +743,7 @@ fn fuzzy_grep_search<'a>(
     let max_match_span = grep_text.len() * 2;
     let needle_len = grep_text.len();
 
-    // Maximum allowed gaps (discontinuities) in the match indices.
-    // A gap occurs where indices[i] != indices[i-1] + 1 — meaning the
-    // matched chars jump over unmatched haystack chars.
-    //
-    // Good matches have few gaps:
-    //   "struct SortedArrayMap" for "struct SortedMap": 1 gap ("Array" skip)
-    //   "schema" for "shcema": 1 gap (transposition)
-    //
-    // Garbage matches have many gaps:
-    //   "struct SourcingProjectMetadataParts" for "struct SortedMap": 6 gaps
-    //
     // We scale by needle_len: longer needles tolerate more gaps.
-    //   1-3  chars → 1 gap
-    //   4-7  chars → 2 gaps
-    //   8-11 chars → 3 gaps
-    //   12+  chars → 4 gaps, etc.
     let max_gaps = (needle_len / 4).max(1);
 
     run_file_search(
@@ -697,9 +752,7 @@ fn fuzzy_grep_search<'a>(
         total_files,
         filtered_file_count,
         None,
-        true, // fuzzy: only break on budget if we have partial results
         |file_bytes: &[u8], max_matches_per_file: usize| {
-            // --- Phase 1: Line splitting ---
             // Reuse grep-searcher's LineStep for SIMD-accelerated line iteration.
             // This is the same code path used by PlainText/Regex modes and is
             // verified to handle platform line endings (LF, CRLF) correctly.
@@ -755,11 +808,11 @@ fn fuzzy_grep_search<'a>(
                 let idx = m.index as usize;
                 let raw_line = file_lines[idx];
 
-                // Truncate for display ONLY for lines that passed scoring.
                 let display_line = if raw_line.len() > MAX_LINE_DISPLAY_LEN {
-                    // Floor to a char boundary
                     let mut end = MAX_LINE_DISPLAY_LEN;
                     let bytes = raw_line.as_bytes();
+                    // important for non ascii languages that might have character boundary at
+                    // offset exactly at MAX_LINE_DISPLAY_LEN
                     while end > 0 && !is_utf8_char_boundary(bytes[end]) {
                         end -= 1;
                     }
@@ -768,12 +821,10 @@ fn fuzzy_grep_search<'a>(
                     raw_line
                 };
 
-                // Get character highlight positions via reference smith-waterman.
-                // Called only on lines that passed SIMD score + min_score.
-                let Some(mi) = neo_frizbee::match_indices(grep_text, display_line, &frizbee_config)
+                let Some(match_indices) =
+                    neo_frizbee::match_indices(grep_text, display_line, &frizbee_config)
                 else {
-                    // match_indices returned None (filtered by max_typos) — skip
-                    continue;
+                    continue; // something is off treat as nomatch
                 };
 
                 // Minimum matched chars: at least (needle_len - 1) characters
@@ -781,11 +832,11 @@ fn fuzzy_grep_search<'a>(
                 // char (a single typo/transposition) but rejects matches that
                 // only hit a partial substring (e.g. "HashMap" for "shcema").
                 let min_matched = needle_len.saturating_sub(1).max(1);
-                if mi.indices.len() < min_matched {
+                if match_indices.indices.len() < min_matched {
                     continue;
                 }
 
-                let indices = &mi.indices;
+                let indices = &match_indices.indices;
 
                 if let (Some(&first), Some(&last)) = (indices.first(), indices.last()) {
                     // Span check: reject widely scattered matches.
@@ -822,7 +873,8 @@ fn fuzzy_grep_search<'a>(
                 }
 
                 let (ln, bo) = line_meta[idx];
-                let match_byte_offsets = char_indices_to_byte_offsets(display_line, &mi.indices);
+                let match_byte_offsets =
+                    char_indices_to_byte_offsets(display_line, &match_indices.indices);
                 let col = match_byte_offsets
                     .first()
                     .map(|r| r.0 as usize)
@@ -835,10 +887,10 @@ fn fuzzy_grep_search<'a>(
                     byte_offset: bo,
                     line_content: display_line.to_string(),
                     match_byte_offsets,
-                    fuzzy_score: Some(mi.score),
+                    fuzzy_score: Some(match_indices.score),
                 });
 
-                if file_matches.len() >= max_matches_per_file {
+                if max_matches_per_file != 0 && file_matches.len() >= max_matches_per_file {
                     break;
                 }
             }
@@ -854,8 +906,8 @@ fn fuzzy_grep_search<'a>(
 /// frecency for the "welcome state" UI.
 pub fn grep_search<'a>(
     files: &'a [FileItem],
-    query: &str,
-    parsed: Option<FFFQuery<'_>>,
+    raw_query: &str,
+    query: Option<FFFQuery<'_>>,
     options: &GrepSearchOptions,
 ) -> GrepResult<'a> {
     let total_files = files.len();
@@ -866,34 +918,47 @@ pub fn grep_search<'a>(
     // spaces to form the grep pattern:
     //   "name = *.rs someth" -> grep "name = someth" with constraint Extension("rs")
     let constraints: &[fff_query_parser::Constraint<'_>];
-    let extracted_grep_text: String;
 
-    let grep_text: &str = match &parsed {
+    let grep_text = match &query {
         Some(p) => {
             constraints = &p.constraints[..];
-            if constraints.is_empty() {
-                // No constraints at all — the entire query is the grep pattern.
-                // Still need to strip backslash escapes from tokens.
-                extracted_grep_text = strip_backslash_escapes(query.trim());
-                &extracted_grep_text
-            } else {
-                // Has constraints — rebuild grep text from the original query
-                // by collecting all non-constraint tokens.
-                extracted_grep_text = extract_text_from_query(query);
-                &extracted_grep_text
-            }
+            p.grep_text()
         }
         None => {
             constraints = &[];
-            // Single token or simple query — strip backslash escapes
-            extracted_grep_text = strip_backslash_escapes(query.trim());
-            &extracted_grep_text
+            // Single-token query (parser returned None). If the token is a
+            // backslash-escaped constraint (e.g. `\*.rs`, `\/src/`, `\!test`),
+            // strip the leading `\` so the literal text is searched. Other
+            // backslash sequences (e.g. `\bfoo\b` in regex mode) are left alone.
+            let t = raw_query.trim();
+            if t.starts_with('\\') && t.len() > 1 {
+                // Re-parse the unescaped suffix: if it would be a constraint,
+                // the user intended an escape; strip the backslash.
+                let suffix = &t[1..];
+                let parser = QueryParser::new(GrepConfig);
+                if parser
+                    .parse(suffix)
+                    .is_some_and(|q| !q.constraints.is_empty())
+                {
+                    suffix.to_string()
+                } else {
+                    t.to_string()
+                }
+            } else {
+                t.to_string()
+            }
         }
     };
 
-    // Empty query: return git-modified files sorted by frecency
     if grep_text.is_empty() {
-        return build_empty_query_result(files, constraints, total_files);
+        return GrepResult {
+            total_files,
+            filtered_file_count: total_files,
+            next_file_offset: 0,
+            matches: Vec::new(),
+            files: Vec::new(),
+            ..Default::default()
+        };
     }
 
     // Filter, sort, and paginate files (shared across all modes)
@@ -909,73 +974,44 @@ pub fn grep_search<'a>(
         };
     }
 
-    // fuzzy mode can not use sink pattern to make it more efficient and batch match
-    // all files lines using simd
-    if options.mode == GrepMode::Fuzzy {
-        return fuzzy_grep_search(
-            grep_text,
-            &files_to_search,
-            options,
-            total_files,
-            filtered_file_count,
-        );
-    }
-
-    // Build regex from the grep text (PlainText/Regex modes only).
-    // On regex compilation failure in Regex mode, fall back to literal (escaped) matching
-    // so the user still gets results. The error is recorded for the UI to display.
-    let mut regex_fallback_error: Option<String> = None;
-    let regex = match build_regex(grep_text, options.smart_case, options.mode) {
-        Ok(r) => r,
-        Err(err) if options.mode == GrepMode::Regex => {
-            // Regex compilation failed — fall back to PlainText (escaped) mode
-            warn!(
-                "Regex compilation failed for {:?}, falling back to literal search: {}",
-                grep_text, err
-            );
-            regex_fallback_error = Some(err);
-            match build_regex(grep_text, options.smart_case, GrepMode::PlainText) {
-                Ok(r) => r,
-                Err(_) => {
-                    return GrepResult {
-                        total_files,
-                        ..Default::default()
-                    };
-                }
-            }
-        }
-        Err(_) => {
-            return GrepResult {
-                total_files,
-                ..Default::default()
-            };
-        }
-    };
-
-    // Determine if multiline mode is needed
-    let is_multiline = grep_text.contains("\\n");
-
-    // Build a memchr literal finder for SIMD-accelerated highlight matching
-    // in the sink. For case-insensitive (smart_case with no uppercase),
-    // we search a lowered copy of each display line.
     let case_insensitive = if options.smart_case {
         !grep_text.chars().any(|c| c.is_uppercase())
     } else {
         false
     };
 
-    // For multiline patterns, replace escaped \n with actual newline
+    let mut regex_fallback_error: Option<String> = None;
+    let regex = match options.mode {
+        GrepMode::PlainText => None,
+        GrepMode::Fuzzy => {
+            return fuzzy_grep_search(
+                &grep_text,
+                &files_to_search,
+                options,
+                total_files,
+                filtered_file_count,
+                case_insensitive,
+            );
+        }
+        GrepMode::Regex => build_regex(&grep_text, options.smart_case)
+            .inspect_err(|err| {
+                tracing::warn!("Regex compilation failed for {}. Error {}", grep_text, err);
+
+                regex_fallback_error = Some(err.to_string());
+            })
+            .ok(),
+    };
+
+    let is_multiline = grep_text.contains("\\n");
+
     let effective_pattern = if is_multiline {
         grep_text.replace("\\n", "\n")
     } else {
         grep_text.to_string()
     };
 
-    // In regex mode, the sink highlight finder uses the original literal text
-    // for highlighting (we cannot use the regex pattern as a literal needle).
-    // For simple regex patterns this works well; for complex patterns with
-    // alternation or quantifiers, highlights may be incomplete — this is
-    // acceptable since exact highlight positions are cosmetic.
+    // Build the finder pattern once — used by PlainTextSink (and as a
+    // literal-needle fallback anchor when regex compilation fell back to plain).
     let finder_pattern: Vec<u8> = if case_insensitive {
         effective_pattern.as_bytes().to_ascii_lowercase()
     } else {
@@ -984,290 +1020,62 @@ pub fn grep_search<'a>(
     let finder = memchr::memmem::Finder::new(&finder_pattern);
     let pattern_len = finder_pattern.len() as u32;
 
-    // In regex mode, we also keep the compiled regex for precise per-line
-    // highlight extraction in the sink (variable-length matches).
-    let sink_regex = if options.mode == GrepMode::Regex {
-        Some(regex.clone())
-    } else {
-        None
-    };
-
-    let mode = options.mode;
-
-    // Create matchers ONCE outside the parallel loop to avoid per-file allocation.
-    // PlainText: avoids cloning the needle Vec for every file.
-    // Regex: avoids cloning the compiled regex DFA for every file.
+    // `PlainTextMatcher` is used by the grep-searcher engine for line detection.
+    // `PlainTextSink` / `RegexSink` handle highlight extraction independently.
     let plain_matcher = PlainTextMatcher {
-        needle: if case_insensitive {
-            effective_pattern.as_bytes().to_ascii_lowercase()
-        } else {
-            effective_pattern.as_bytes().to_vec()
-        },
+        needle: finder_pattern.clone(),
         case_insensitive,
     };
-    let regex_matcher = FffMatcher {
-        regex,
-        is_multiline,
-    };
 
-    let mut searcher = SearcherBuilder::new()
-        .line_number(true)
-        .multi_line(is_multiline)
-        .build();
+    let searcher = {
+        let mut b = SearcherBuilder::new();
+        b.line_number(true).multi_line(is_multiline);
+        b
+    }
+    .build();
 
-    debug!(
-        grep_text,
-        filtered_files = files_to_search.len(),
-        file_offset = options.file_offset,
-        page_limit = options.page_limit,
-        is_multiline,
-        time_budget_ms = options.time_budget_ms,
-        "Starting grep search"
-    );
-
-    // Sequential search in frecency order.
-    // Files are pre-sorted by frecency so the most relevant results come first.
-    // Sequential iteration gives us trivial, correct pagination: we stop at
-    // file K and resume from K on the next page. No atomics, no race conditions,
-    // no duplicate results across pages.
-    //
-    // The time_budget prevents pathological queries from blocking the UI.
-    // For common patterns the page_limit (typically 50) fills from the first
-    // handful of high-frecency files, so sequential is fast in practice.
+    // Dispatch to the appropriate sink type at the boundary — zero runtime
+    // branching inside the per-line hot path.
     run_file_search(
         &files_to_search,
         options,
         total_files,
         filtered_file_count,
         regex_fallback_error,
-        false, // PlainText/Regex: break immediately on time budget
         |file_bytes: &[u8], max_matches: usize| {
-            let mut sink = GrepSink {
+            let state = SinkState {
                 file_index: 0, // set by run_file_search
                 matches: Vec::new(),
                 max_matches,
-                finder: &finder,
-                pattern_len,
-                case_insensitive,
-                regex_highlights: sink_regex.as_ref(),
             };
 
-            match mode {
-                GrepMode::PlainText => {
-                    if let Err(e) = searcher.search_slice(&plain_matcher, file_bytes, &mut sink) {
-                        tracing::error!(error = %e, "Grep (plain text) search failed");
-                    }
-                }
-                GrepMode::Regex => {
+            match regex {
+                Some(ref re) => {
+                    let regex_matcher = RegexMatcher {
+                        regex: re,
+                        is_multiline,
+                    };
+                    let mut sink = RegexSink { state, re };
                     if let Err(e) = searcher.search_slice(&regex_matcher, file_bytes, &mut sink) {
                         tracing::error!(error = %e, "Grep (regex) search failed");
                     }
+                    sink.state.matches
                 }
-                GrepMode::Fuzzy => unreachable!(),
+                None => {
+                    let mut sink = PlainTextSink {
+                        state,
+                        finder: &finder,
+                        pattern_len,
+                        case_insensitive,
+                    };
+                    if let Err(e) = searcher.search_slice(&plain_matcher, file_bytes, &mut sink) {
+                        tracing::error!(error = %e, "Grep (plain text) search failed");
+                    }
+                    sink.state.matches
+                }
             }
-
-            sink.matches
         },
     )
-}
-
-/// Build the empty query result: git-modified/untracked files sorted by frecency.
-/// This provides a useful "welcome state" showing files the user is actively working on.
-fn build_empty_query_result<'a>(
-    files: &'a [FileItem],
-    constraints: &[fff_query_parser::Constraint<'_>],
-    total_files: usize,
-) -> GrepResult<'a> {
-    use crate::git::is_modified_status;
-
-    // Filter to git-modified/untracked files
-    let mut changed_files: Vec<&FileItem> = if constraints.is_empty() {
-        files
-            .iter()
-            .filter(|f| {
-                f.git_status
-                    .is_some_and(|s| is_modified_status(s) || s.contains(git2::Status::WT_NEW))
-            })
-            .collect()
-    } else {
-        match apply_constraints(files, constraints) {
-            Some(constrained) => constrained
-                .into_iter()
-                .filter(|f| {
-                    f.git_status
-                        .is_some_and(|s| is_modified_status(s) || s.contains(git2::Status::WT_NEW))
-                })
-                .collect(),
-            None => files
-                .iter()
-                .filter(|f| {
-                    f.git_status
-                        .is_some_and(|s| is_modified_status(s) || s.contains(git2::Status::WT_NEW))
-                })
-                .collect(),
-        }
-    };
-
-    // Sort by frecency
-    sort_with_buffer(&mut changed_files, |a, b| {
-        b.total_frecency_score
-            .cmp(&a.total_frecency_score)
-            .then(b.modified.cmp(&a.modified))
-    });
-
-    // Limit to a reasonable number
-    changed_files.truncate(50);
-
-    let total_matched = changed_files.len();
-
-    // For empty query, each file is a "match" with line_number = 0 (sentinel)
-    let matches: Vec<GrepMatch> = changed_files
-        .iter()
-        .enumerate()
-        .map(|(i, _)| GrepMatch {
-            file_index: i,
-            line_number: 0,
-            col: 0,
-            byte_offset: 0,
-            line_content: String::new(),
-            match_byte_offsets: Vec::new(),
-            fuzzy_score: None,
-        })
-        .collect();
-
-    GrepResult {
-        matches,
-        files: changed_files,
-        total_match_count: total_matched,
-        total_files_searched: 0,
-        total_files,
-        filtered_file_count: 0,
-        next_file_offset: 0,
-        regex_fallback_error: None,
-    }
-}
-
-/// Extract the first consecutive run of non-constraint text tokens from a query.
-///
-/// Strip leading backslash from escaped tokens in a grep query string.
-///
-/// A token is considered "escaped" only when:
-/// 1. It starts with `\`
-/// 2. The remainder (after `\`) would be recognised as a constraint token
-///
-/// This ensures regex syntax like `\bfoo\b` and `\$100` is left untouched,
-/// while `\*.rs` (escape of extension filter) and `\/src/` (escape of path
-/// segment) are properly unescaped.
-///
-/// Returns the original string unchanged if no tokens need stripping
-/// (fast path — no allocation).
-fn strip_backslash_escapes(text: &str) -> String {
-    // Fast path: no backslash anywhere → return as-is
-    if !text.contains('\\') {
-        return text.to_string();
-    }
-
-    let mut parts: Vec<&str> = Vec::new();
-    let mut needs_strip = false;
-
-    for token in text.split_whitespace() {
-        if token.starts_with('\\') && token.len() > 1 && is_constraint_token(&token[1..]) {
-            parts.push(&token[1..]);
-            needs_strip = true;
-        } else {
-            parts.push(token);
-        }
-    }
-
-    if needs_strip {
-        parts.join(" ")
-    } else {
-        text.to_string()
-    }
-}
-
-/// Extracts all non-constraint text tokens from a query, skipping constraint
-/// tokens and joining the remaining text with spaces.
-///
-/// Given `"name = *.rs someth"`, this returns `"name = someth"`:
-/// - `"name"` → text → collect
-/// - `"="` → text → collect
-/// - `"*.rs"` → constraint → skip
-/// - `"someth"` → text → collect
-///
-/// Backslash-escaped tokens (e.g. `\*.rs`) are treated as text with the
-/// leading `\` stripped.
-fn extract_text_from_query(query: &str) -> String {
-    let trimmed = query.trim();
-    let mut parts: Vec<&str> = Vec::new();
-
-    for token in trimmed.split_whitespace() {
-        // Backslash-escaped constraint tokens are always text, never constraints
-        let is_escaped =
-            token.starts_with('\\') && token.len() > 1 && is_constraint_token(&token[1..]);
-        let is_constraint = !is_escaped && is_constraint_token(token);
-
-        if is_constraint {
-            continue;
-        }
-
-        if is_escaped {
-            // Strip the leading backslash — the user wants the literal text
-            parts.push(&token[1..]);
-        } else {
-            parts.push(token);
-        }
-    }
-
-    parts.join(" ")
-}
-
-/// Quick check if a token looks like a grep constraint.
-/// This mirrors the constraint patterns recognized by GrepConfig in the query parser.
-#[inline]
-fn is_constraint_token(token: &str) -> bool {
-    if token.is_empty() {
-        return false;
-    }
-
-    // Backslash-escaped tokens are never constraints
-    if token.starts_with('\\') && token.len() > 1 {
-        return false;
-    }
-
-    let bytes = token.as_bytes();
-    match bytes[0] {
-        // *.rs, *.toml — extension/glob constraints
-        b'*' if token.len() > 2 && bytes[1] == b'.' => true,
-        // /src/, /lib — path segment constraints
-        b'/' if token.len() > 1 => true,
-        // !test, !*.rs, !/src/ — negation constraints (any !word is a constraint)
-        b'!' if token.len() > 1 => true,
-        _ => {
-            // Trailing slash: www/ — path segment
-            if token.len() > 1 && bytes[bytes.len() - 1] == b'/' {
-                return true;
-            }
-            // key:value — type:rust, status:modified, etc.
-            if let Some(colon_pos) = token.find(':') {
-                let key = &token[..colon_pos];
-                if matches!(key, "type" | "status" | "st" | "g" | "git") {
-                    return true;
-                }
-            }
-            // Grep-specific glob: only path-oriented globs (contains / or {})
-            // This mirrors GrepConfig::is_glob_pattern
-            if zlob::has_wildcards(token, zlob::ZlobFlags::RECOMMENDED) {
-                if bytes.contains(&b'/') {
-                    return true;
-                }
-                if bytes.contains(&b'{') && bytes.contains(&b'}') {
-                    return true;
-                }
-            }
-            false
-        }
-    }
 }
 
 /// Parse a grep query using the GrepConfig parser.
@@ -1278,125 +1086,6 @@ pub fn parse_grep_query(query: &str) -> Option<FFFQuery<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_text_from_query_simple() {
-        assert_eq!(extract_text_from_query("name"), "name");
-    }
-
-    #[test]
-    fn test_extract_text_from_query_with_spaces() {
-        assert_eq!(extract_text_from_query("name ="), "name =");
-    }
-
-    #[test]
-    fn test_extract_text_from_query_with_constraint_after() {
-        assert_eq!(extract_text_from_query("name = *.rs"), "name =");
-    }
-
-    #[test]
-    fn test_extract_text_from_query_with_constraint_between_text() {
-        assert_eq!(
-            extract_text_from_query("name = *.rs someth"),
-            "name = someth"
-        );
-    }
-
-    #[test]
-    fn test_extract_text_from_query_leading_constraint() {
-        assert_eq!(extract_text_from_query("*.rs name ="), "name =");
-    }
-
-    #[test]
-    fn test_extract_text_from_query_only_constraints() {
-        assert_eq!(extract_text_from_query("*.rs /src/"), "");
-    }
-
-    #[test]
-    fn test_extract_text_from_query_empty() {
-        assert_eq!(extract_text_from_query(""), "");
-    }
-
-    #[test]
-    fn test_extract_text_from_query_path_constraint() {
-        assert_eq!(extract_text_from_query("name /src/ value"), "name value");
-    }
-
-    #[test]
-    fn test_extract_text_from_query_negation() {
-        assert_eq!(extract_text_from_query("name !*.rs value"), "name value");
-    }
-
-    #[test]
-    fn test_is_constraint_token() {
-        assert!(is_constraint_token("*.rs"));
-        assert!(is_constraint_token("/src/"));
-        assert!(is_constraint_token("/lib"));
-        assert!(is_constraint_token("www/"));
-        assert!(is_constraint_token("!*.rs"));
-        assert!(is_constraint_token("!/src/"));
-        assert!(is_constraint_token("!test")); // negated text is also a constraint
-        assert!(is_constraint_token("type:rust"));
-        assert!(is_constraint_token("status:modified"));
-
-        assert!(!is_constraint_token("name"));
-        assert!(!is_constraint_token("="));
-        assert!(!is_constraint_token("fn"));
-        assert!(!is_constraint_token("hello:world")); // unknown key
-    }
-
-    #[test]
-    fn test_is_constraint_token_backslash_escape() {
-        // Backslash-escaped tokens are never constraints
-        assert!(!is_constraint_token("\\*.rs"));
-        assert!(!is_constraint_token("\\/src/"));
-        assert!(!is_constraint_token("\\!*.rs"));
-        assert!(!is_constraint_token("\\type:rust"));
-    }
-
-    #[test]
-    fn test_is_constraint_token_grep_globs() {
-        // Path-oriented globs ARE constraints
-        assert!(is_constraint_token("src/**/*.rs"));
-        assert!(is_constraint_token("*/tests/*"));
-        // Brace expansion IS a constraint
-        assert!(is_constraint_token("{src,lib}"));
-        // Bare wildcards without / or {} are NOT constraints
-        assert!(!is_constraint_token("foo?"));
-        assert!(!is_constraint_token("arr[0]"));
-        assert!(!is_constraint_token("a*b"));
-    }
-
-    #[test]
-    fn test_extract_text_from_query_backslash_escape() {
-        // Escaped extension should be text with \ stripped
-        assert_eq!(extract_text_from_query("\\*.rs foo"), "*.rs foo");
-        // Escaped path segment should be text with \ stripped
-        assert_eq!(extract_text_from_query("\\/src/ foo"), "/src/ foo");
-        // Escaped negation should be text with \ stripped
-        assert_eq!(extract_text_from_query("\\!test foo"), "!test foo");
-    }
-
-    #[test]
-    fn test_extract_text_from_query_question_mark() {
-        // ? should be treated as text, not a glob
-        assert_eq!(extract_text_from_query("foo?"), "foo?");
-        assert_eq!(extract_text_from_query("foo? bar"), "foo? bar");
-    }
-
-    #[test]
-    fn test_extract_text_from_query_bracket() {
-        // [] should be treated as text, not a glob
-        assert_eq!(extract_text_from_query("arr[0]"), "arr[0]");
-        assert_eq!(extract_text_from_query("arr[0] more"), "arr[0] more");
-    }
-
-    #[test]
-    fn test_extract_text_from_query_path_glob_is_constraint() {
-        // Path glob should be skipped as a constraint
-        assert_eq!(extract_text_from_query("pattern src/**/*.rs"), "pattern");
-    }
 
     #[test]
     fn test_fuzzy_typo_scoring() {

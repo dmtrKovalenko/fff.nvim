@@ -241,6 +241,13 @@ end
 ensure_content_loaded_async = function(target_line)
   if not M.state.bufnr or not vim.api.nvim_buf_is_valid(M.state.bufnr) then return end
   if not M.state.has_more_content or M.state.is_loading then return end
+  -- Guard against missing file handle: without it load_next_chunk_async returns
+  -- synchronously with empty data, which triggers apply_location_highlighting
+  -- -> ensure_content_loaded_async again, causing infinite recursion (stack overflow).
+  if not M.state.file_operation then
+    M.state.has_more_content = false
+    return
+  end
 
   local current_buffer_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
   local buffer_needed = target_line + 50
@@ -278,7 +285,10 @@ ensure_content_loaded_async = function(target_line)
         M.apply_location_highlighting(M.state.bufnr)
       end
     else
-      -- EOF with no additional data — apply highlighting with whatever we have
+      -- EOF with no additional data — mark loading as finished to prevent
+      -- apply_location_highlighting -> ensure_content_loaded_async recursion,
+      -- then apply highlighting with whatever content we have.
+      M.state.has_more_content = false
       M.apply_location_highlighting(M.state.bufnr)
     end
   end)

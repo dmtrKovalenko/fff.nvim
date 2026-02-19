@@ -3,6 +3,13 @@ import { FileFinder } from "./index";
 import { findBinary, getDevBinaryPath } from "./download";
 import { getTriple, getLibExtension, getLibFilename } from "./platform";
 
+// Cross-platform path normalization helpers
+const normalizePath = (path: string | null | undefined): string | null => {
+  if (!path) return null;
+  // Convert backslashes to forward slashes for consistent comparison
+  return path.replace(/\\/g, "/");
+};
+
 const testDir = process.cwd();
 
 describe("Platform Detection", () => {
@@ -42,7 +49,9 @@ describe("Binary Detection", () => {
   test("getDevBinaryPath finds local build", () => {
     const devPath = getDevBinaryPath();
     expect(devPath).not.toBeNull();
-    expect(devPath).toContain("target/release");
+    // Normalize path for cross-platform comparison (Windows uses backslashes)
+    const normalizedPath = normalizePath(devPath);
+    expect(normalizedPath).toContain("target/release");
   });
 
   test("findBinary returns a path", () => {
@@ -52,11 +61,8 @@ describe("Binary Detection", () => {
 });
 
 describe("FileFinder - Health Check", () => {
-  test("healthCheck works before initialization", () => {
-    // Make sure we start fresh
-    FileFinder.destroy();
-
-    const result = FileFinder.healthCheck();
+  test("healthCheckStatic works without an instance", () => {
+    const result = FileFinder.healthCheckStatic();
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -68,31 +74,32 @@ describe("FileFinder - Health Check", () => {
 });
 
 describe("FileFinder - Full Lifecycle", () => {
-  // Single beforeAll/afterAll for the entire test suite to avoid repeated init/destroy
+  let finder: FileFinder;
+
   beforeAll(() => {
-    FileFinder.destroy(); // Clean any previous state
+    const result = FileFinder.create({ basePath: testDir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      finder = result.value;
+    }
   });
 
   afterAll(() => {
-    FileFinder.destroy();
+    finder?.destroy();
   });
 
-  test("init succeeds with valid path", () => {
-    const result = FileFinder.init({
-      basePath: testDir,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(FileFinder.isInitialized()).toBe(true);
+  test("create succeeds with valid path", () => {
+    expect(finder).toBeDefined();
+    expect(finder.isDestroyed).toBe(false);
   });
 
   test("isScanning returns a boolean", () => {
-    const scanning = FileFinder.isScanning();
+    const scanning = finder.isScanning();
     expect(typeof scanning).toBe("boolean");
   });
 
   test("getScanProgress returns valid data", () => {
-    const result = FileFinder.getScanProgress();
+    const result = finder.getScanProgress();
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -103,22 +110,37 @@ describe("FileFinder - Full Lifecycle", () => {
 
   test("waitForScan completes", () => {
     // Small timeout - scan should be fast or already done
-    const result = FileFinder.waitForScan(500);
+    const result = finder.waitForScan(500);
     expect(result.ok).toBe(true);
   });
 
   test("search with empty query returns all files", () => {
-    const result = FileFinder.search("");
+    // First check scan progress to see if files were indexed
+    const progress = finder.getScanProgress();
+    if (progress.ok) {
+    }
+
+    const result = finder.search("");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
+      if (result.value.items.length > 0) {
+        // Log first few paths to see format on Windows
+        // Items are strings (file paths), not objects
+        const samplePaths = result.value.items
+          .slice(0, 3)
+          .map((item) =>
+            normalizePath(typeof item === "string" ? item : item.relativePath),
+          );
+      }
       // Empty query should return files (frecency-sorted)
       expect(result.value.totalFiles).toBeGreaterThan(0);
+    } else {
     }
   });
 
   test("search returns a valid result structure", () => {
-    const result = FileFinder.search("Cargo.toml");
+    const result = finder.search("Cargo.toml");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -130,7 +152,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search returns empty for non-matching query", () => {
-    const result = FileFinder.search("xyznonexistentfilenamexyz123456");
+    const result = finder.search("xyznonexistentfilenamexyz123456");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -140,7 +162,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search respects pageSize option", () => {
-    const result = FileFinder.search("ts", { pageSize: 3 });
+    const result = finder.search("ts", { pageSize: 3 });
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -148,19 +170,83 @@ describe("FileFinder - Full Lifecycle", () => {
     }
   });
 
+  test("liveGrep plain text returns matching lines", () => {
+    const result = finder.liveGrep("fff-core", {
+      mode: "plain",
+    });
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      if (result.value.items.length > 0) {
+        // Log sample match to verify content on Windows
+        const first = result.value.items[0];
+        const normalizedPath = normalizePath(first.relativePath);
+      }
+
+      expect(result.value.totalMatched).toBeGreaterThan(0);
+      expect(result.value.items.length).toBeGreaterThan(0);
+
+      const first = result.value.items[0];
+      expect(typeof first.relativePath).toBe("string");
+      // Normalize path for cross-platform validation
+      const normalizedFirstPath = normalizePath(first.relativePath);
+      expect(normalizedFirstPath).toBeTruthy();
+      expect(typeof first.lineNumber).toBe("number");
+      expect(first.lineNumber).toBeGreaterThan(0);
+      expect(typeof first.lineContent).toBe("string");
+      expect(first.lineContent.toLowerCase()).toContain("fff-core");
+      expect(Array.isArray(first.matchRanges)).toBe(true);
+      expect(first.matchRanges.length).toBeGreaterThan(0);
+
+      expect(typeof result.value.totalFilesSearched).toBe("number");
+      expect(typeof result.value.totalFiles).toBe("number");
+      expect(typeof result.value.filteredFileCount).toBe("number");
+    } else {
+    }
+  });
+
+  test("liveGrep fuzzy mode returns results with scores", () => {
+    // Intentional typo: "depdnency" instead of "dependency" to exercise fuzzy matching
+    const result = finder.liveGrep("depdnency", {
+      mode: "fuzzy",
+    });
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      expect(result.value.totalMatched).toBeGreaterThan(0);
+      expect(result.value.items.length).toBeGreaterThan(0);
+
+      const first = result.value.items[0];
+      expect(typeof first.relativePath).toBe("string");
+      // Normalize path for cross-platform validation
+      const normalizedFirstPath = normalizePath(first.relativePath);
+      expect(normalizedFirstPath).toBeTruthy();
+      expect(typeof first.lineNumber).toBe("number");
+      expect(typeof first.lineContent).toBe("string");
+      // Fuzzy mode should produce a fuzzyScore on each match
+      expect(typeof first.fuzzyScore).toBe("number");
+    }
+  });
+
   test("healthCheck shows initialized state", () => {
-    const result = FileFinder.healthCheck();
+    const result = finder.healthCheck();
     expect(result.ok).toBe(true);
 
     if (result.ok) {
       expect(result.value.filePicker.initialized).toBe(true);
       expect(result.value.filePicker.basePath).toBeDefined();
+      // Normalize basePath for cross-platform comparison
+      const normalizedBasePath = normalizePath(
+        result.value.filePicker.basePath || "",
+      );
+      const normalizedTestDir = normalizePath(testDir);
+      expect(normalizedBasePath).toBe(normalizedTestDir);
       expect(typeof result.value.filePicker.indexedFiles).toBe("number");
     }
   });
 
   test("healthCheck detects git repository", () => {
-    const result = FileFinder.healthCheck(testDir);
+    const result = finder.healthCheck(testDir);
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -169,37 +255,78 @@ describe("FileFinder - Full Lifecycle", () => {
     }
   });
 
-  test("destroy and re-init works", () => {
-    FileFinder.destroy();
-    expect(FileFinder.isInitialized()).toBe(false);
+  test("destroy and re-create works", () => {
+    finder.destroy();
+    expect(finder.isDestroyed).toBe(true);
 
-    const result = FileFinder.init({
-      basePath: testDir,
-    });
+    const result = FileFinder.create({ basePath: testDir });
     expect(result.ok).toBe(true);
-    expect(FileFinder.isInitialized()).toBe(true);
+    if (result.ok) {
+      finder = result.value;
+    }
+    expect(finder.isDestroyed).toBe(false);
+  });
+
+  test("multiple instances can coexist", () => {
+    const result2 = FileFinder.create({ basePath: testDir });
+    expect(result2.ok).toBe(true);
+
+    if (result2.ok) {
+      const finder2 = result2.value;
+
+      // Both should work independently
+      const search1 = finder.search("Cargo");
+      const search2 = finder2.search("Cargo");
+
+      expect(search1.ok).toBe(true);
+      expect(search2.ok).toBe(true);
+
+      // Destroying one should not affect the other
+      finder2.destroy();
+
+      const search3 = finder.search("Cargo");
+      expect(search3.ok).toBe(true);
+    }
   });
 });
 
 describe("FileFinder - Error Handling", () => {
-  test("search fails when not initialized", () => {
-    FileFinder.destroy();
+  test("search fails on destroyed instance", () => {
+    const createResult = FileFinder.create({ basePath: testDir });
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
 
-    const result = FileFinder.search("test");
+    const f = createResult.value;
+    f.destroy();
+
+    const result = f.search("test");
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain("not initialized");
+      expect(result.error).toContain("destroyed");
     }
   });
 
-  test("getScanProgress fails when not initialized", () => {
-    const result = FileFinder.getScanProgress();
+  test("getScanProgress fails on destroyed instance", () => {
+    const createResult = FileFinder.create({ basePath: testDir });
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+
+    const f = createResult.value;
+    f.destroy();
+
+    const result = f.getScanProgress();
     expect(result.ok).toBe(false);
   });
 
-  test("init fails with invalid path", () => {
-    const result = FileFinder.init({
-      basePath: "/nonexistent/path/that/does/not/exist",
+  test("create fails with invalid path", () => {
+    // Use a cross-platform invalid path
+    const invalidPath =
+      process.platform === "win32"
+        ? "C:\\nonexistent\\path\\that\\does\\not\\exist"
+        : "/nonexistent/path/that/does/not/exist";
+
+    const result = FileFinder.create({
+      basePath: invalidPath,
     });
 
     expect(result.ok).toBe(false);

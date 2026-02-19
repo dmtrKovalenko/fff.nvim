@@ -12,7 +12,12 @@ import { existsSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { getTriple, getLibExtension, getLibFilename, getNpmPackageName } from "./platform";
+import {
+  getTriple,
+  getLibExtension,
+  getLibFilename,
+  getNpmPackageName,
+} from "./platform";
 
 const GITHUB_REPO = "dmtrKovalenko/fff.nvim";
 
@@ -107,13 +112,30 @@ export function getDevBinaryPath(): string | null {
   return null;
 }
 
-/**
- * Find the binary, checking all known locations in priority order:
- * 1. Platform-specific npm package (primary distribution method)
- * 2. Local bin/ directory (legacy postinstall download)
- * 3. Local dev build (cargo build output)
- */
+function isDevWorkspace(): boolean {
+  const packageDir = getPackageDir();
+  const workspaceRoot = join(packageDir, "..", "..");
+  return existsSync(join(workspaceRoot, "Cargo.toml"));
+}
+
 export function findBinary(): string | null {
+  if (isDevWorkspace()) {
+    // 1. Local bin/ directory (populated by `make prepare-bun`)
+    const installedPath = getBinaryPath();
+    if (existsSync(installedPath)) return installedPath;
+
+    // 2. Local dev build (target/release or target/debug)
+    const devPath = getDevBinaryPath();
+    if (devPath) return devPath;
+
+    // 3. Fallback to npm package
+    const npmPath = resolveFromNpmPackage();
+    if (npmPath) return npmPath;
+
+    return null;
+  }
+
+  // Production: npm package first
   // 1. Try platform-specific npm package first
   const npmPath = resolveFromNpmPackage();
   if (npmPath) return npmPath;
@@ -182,10 +204,10 @@ export async function downloadBinary(tag?: string): Promise<string> {
  */
 async function fetchLatestReleaseTag(): Promise<string> {
   const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
-  
+
   const response = await fetch(url, {
     headers: {
-      "Accept": "application/vnd.github.v3+json",
+      Accept: "application/vnd.github.v3+json",
       "User-Agent": "fff-bun-client",
     },
   });
@@ -194,7 +216,7 @@ async function fetchLatestReleaseTag(): Promise<string> {
     const allReleasesUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases`;
     const allResponse = await fetch(allReleasesUrl, {
       headers: {
-        "Accept": "application/vnd.github.v3+json",
+        Accept: "application/vnd.github.v3+json",
         "User-Agent": "fff-bun-client",
       },
     });
@@ -203,7 +225,7 @@ async function fetchLatestReleaseTag(): Promise<string> {
       throw new Error(`Failed to fetch releases: ${allResponse.status}`);
     }
 
-    const releases = await allResponse.json() as Array<{ tag_name: string }>;
+    const releases = (await allResponse.json()) as Array<{ tag_name: string }>;
     if (releases.length === 0) {
       throw new Error("No releases found");
     }
@@ -211,7 +233,7 @@ async function fetchLatestReleaseTag(): Promise<string> {
     return releases[0].tag_name;
   }
 
-  const release = await response.json() as { tag_name: string };
+  const release = (await response.json()) as { tag_name: string };
   return release.tag_name;
 }
 

@@ -1,6 +1,7 @@
 use fff_core::file_picker::FilePicker;
-use fff_core::{FILE_PICKER, FuzzySearchOptions, PaginationArgs, QueryParser};
+use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::env;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -60,6 +61,7 @@ fn format_bytes(bytes: usize) -> String {
 }
 
 fn test_search_memory_pattern(
+    shared_picker: &SharedPicker,
     name: &str,
     iterations: usize,
     query_pattern: impl Fn(usize) -> String,
@@ -82,8 +84,8 @@ fn test_search_memory_pattern(
         let query = query_pattern(i);
 
         let (result_count, _total_matched) = {
-            let file_picker_guard = FILE_PICKER.read().unwrap();
-            if let Some(ref picker) = *file_picker_guard {
+            let guard = shared_picker.read().unwrap();
+            if let Some(ref picker) = *guard {
                 let parser = QueryParser::default();
                 let parsed = parser.parse(&query);
                 let search_result = FilePicker::fuzzy_search(
@@ -177,20 +179,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Test directory: {}", base_path);
     println!();
 
+    // Create shared state
+    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
+    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
+
     // Initialize FilePicker
-    {
-        let mut file_picker_guard = FILE_PICKER.write().unwrap();
-        if file_picker_guard.is_none() {
-            println!("Initializing FilePicker...");
-            *file_picker_guard = Some(FilePicker::new(base_path.clone())?);
-        }
-    }
+    println!("Initializing FilePicker...");
+    FilePicker::new_with_shared_state(
+        base_path.clone(),
+        false,
+        Arc::clone(&shared_picker),
+        Arc::clone(&shared_frecency),
+    )?;
 
     // Wait for initial scan
     println!("Waiting for file scan...");
     loop {
-        if let Ok(file_picker_guard) = FILE_PICKER.read()
-            && let Some(ref picker) = *file_picker_guard
+        if let Ok(guard) = shared_picker.read()
+            && let Some(ref picker) = *guard
             && !picker.is_scan_active()
             && !picker.get_files().is_empty()
         {
@@ -200,8 +206,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let file_count = {
-        let file_picker_guard = FILE_PICKER.read()?;
-        file_picker_guard.as_ref().unwrap().get_files().len()
+        let guard = shared_picker.read().unwrap();
+        guard.as_ref().unwrap().get_files().len()
     };
 
     println!("📊 Found {} files", file_count);
@@ -216,10 +222,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test different memory patterns
 
     // 1. Repeated same query - should have minimal growth if caching works
-    test_search_memory_pattern("Same Query Repeated (1000x)", 1000, |_| "test".to_string())?;
+    test_search_memory_pattern(&shared_picker, "Same Query Repeated (1000x)", 1000, |_| {
+        "test".to_string()
+    })?;
 
     // 2. Cycling through different queries
-    test_search_memory_pattern("Cycling Queries (1000x)", 1000, |i| {
+    test_search_memory_pattern(&shared_picker, "Cycling Queries (1000x)", 1000, |i| {
         let queries = [
             "test", "main", "lib", "src", "mod", "file", "picker", "fuzzy", "search",
         ];
@@ -227,24 +235,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     // 3. Unique queries each time - worst case for any caching
-    test_search_memory_pattern("Unique Queries (500x)", 500, |i| {
+    test_search_memory_pattern(&shared_picker, "Unique Queries (500x)", 500, |i| {
         format!("unique_query_{}", i)
     })?;
 
     // 4. Queries that return many results
     test_search_memory_pattern(
+        &shared_picker,
         "High Result Count (500x)",
         500,
         |_| "a".to_string(), // Single character likely to match many files
     )?;
 
     // 5. Queries with no results
-    test_search_memory_pattern("No Results (500x)", 500, |_| {
+    test_search_memory_pattern(&shared_picker, "No Results (500x)", 500, |_| {
         "zzzz_no_match_expected".to_string()
     })?;
 
     // 6. Long intensive test
-    test_search_memory_pattern("Long Intensive Test (2000x)", 2000, |i| {
+    test_search_memory_pattern(&shared_picker, "Long Intensive Test (2000x)", 2000, |i| {
         let patterns = [
             "rs", "lua", "toml", "mod", "lib", "main", "test", "src", "file",
         ];

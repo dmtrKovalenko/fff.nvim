@@ -120,12 +120,7 @@ impl Searcher {
 
     /// Execute a search over the given slice and write the results to the
     /// given sink.
-    pub fn search_slice<M, S>(
-        &mut self,
-        matcher: M,
-        slice: &[u8],
-        write_to: S,
-    ) -> Result<(), S::Error>
+    pub fn search_slice<M, S>(&self, matcher: M, slice: &[u8], write_to: S) -> Result<(), S::Error>
     where
         M: Matcher,
         S: Sink,

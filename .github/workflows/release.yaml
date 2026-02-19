@@ -2,7 +2,7 @@ name: Prebuild
 
 on:
   push:
-    branches: [main, feat/binaries]
+    branches: [main, feat/interchangable-ffi]
   pull_request:
 
 jobs:
@@ -305,8 +305,8 @@ jobs:
     needs: [build-c]
     runs-on: ubuntu-latest
     if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/binaries'))
-      || (github.event_name == 'pull_request' && (github.head_ref == 'main' || github.head_ref == 'feat/binaries'))
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/interchangable-ffi'))
+      || (github.event_name == 'pull_request' && (github.head_ref == 'main' || github.head_ref == 'feat/interchangable-ffi'))
     permissions:
       contents: read
     steps:

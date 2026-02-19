@@ -4,32 +4,13 @@
 
 use fff_core::file_picker::FilePicker;
 use fff_core::git::format_git_status;
-use fff_core::{FILE_PICKER, FRECENCY, FuzzySearchOptions, PaginationArgs, QueryParser};
+use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::env;
 use std::io::{self, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
-
-fn cleanup_global_state() {
-    // Clean up file picker
-    {
-        let mut file_picker = FILE_PICKER.write().unwrap();
-        if let Some(mut picker) = file_picker.take() {
-            picker.stop_background_monitor();
-            drop(picker);
-            println!("🧹 FilePicker cleaned up");
-        }
-    }
-
-    // Clean up frecency tracker
-    {
-        let mut frecency = FRECENCY.write().unwrap();
-        *frecency = None;
-        println!("🧹 Frecency tracker cleaned up");
-    }
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -43,28 +24,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
 
+    // Create shared state
+    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
+    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
+
+    // Clone for signal handler
+    let picker_for_cleanup = Arc::clone(&shared_picker);
     ctrlc::set_handler(move || {
         println!("\n🛑 Received interrupt signal, shutting down...");
-        cleanup_global_state();
+        if let Ok(mut guard) = picker_for_cleanup.write() {
+            if let Some(mut picker) = guard.take() {
+                picker.stop_background_monitor();
+                println!("🧹 FilePicker cleaned up");
+            }
+        }
         r.store(false, Ordering::SeqCst);
         std::process::exit(0);
     })?;
 
     let mut git_stats = std::collections::HashMap::new();
-    // Initialize the global file picker using lib.rs function
-    {
-        let mut file_picker = FILE_PICKER.write().unwrap();
-        if file_picker.is_some() {
-            eprintln!("❌ FilePicker already initialized");
-            std::process::exit(1);
-        }
-        *file_picker = Some(FilePicker::new(base_path.clone())?);
-    }
 
-    // Get initial file count from global state
+    // Initialize the file picker using shared state
+    FilePicker::new_with_shared_state(
+        base_path.clone(),
+        false,
+        Arc::clone(&shared_picker),
+        Arc::clone(&shared_frecency),
+    )?;
+
+    // Get initial file count from shared state
     let initial_count = {
-        let file_picker = FILE_PICKER.read().unwrap();
-        let files = file_picker.as_ref().unwrap().get_files();
+        let guard = shared_picker.read().unwrap();
+        let files = guard.as_ref().unwrap().get_files();
         println!("Initial file count: {}", files.len());
 
         if !files.is_empty() {
@@ -96,8 +87,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         iteration += 1;
 
         let current_count = {
-            let file_picker = FILE_PICKER.read().unwrap();
-            file_picker.as_ref().unwrap().get_files().len()
+            let guard = shared_picker.read().unwrap();
+            guard.as_ref().unwrap().get_files().len()
         };
 
         if current_count != last_count {
@@ -111,13 +102,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
 
                 // Show some recently added files
-                let file_picker = FILE_PICKER.read().unwrap();
-                let files = file_picker.as_ref().unwrap().get_files();
+                let guard = shared_picker.read().unwrap();
+                let files = guard.as_ref().unwrap().get_files();
                 let newest_files = files.iter().rev().take(added.min(3));
                 for file in newest_files {
                     println!("   ➕ {}", file.relative_path);
                 }
-                drop(file_picker);
             } else {
                 let removed = last_count - current_count;
                 println!(
@@ -136,8 +126,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 timestamp, current_count
             );
 
-            let file_picker = FILE_PICKER.read().unwrap();
-            let current_files = file_picker.as_ref().unwrap().get_files();
+            let guard = shared_picker.read().unwrap();
+            let current_files = guard.as_ref().unwrap().get_files();
 
             git_stats.clear();
             for file in current_files {
@@ -156,8 +146,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if iteration % 40 == 0 {
             let timestamp = chrono::Local::now().format("%H:%M:%S");
-            let file_picker = FILE_PICKER.read().unwrap();
-            let files = file_picker.as_ref().unwrap().get_files();
+            let guard = shared_picker.read().unwrap();
+            let files = guard.as_ref().unwrap().get_files();
             let parser = QueryParser::default();
             let parsed = parser.parse("rs");
             let search_results = FilePicker::fuzzy_search(
@@ -197,13 +187,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     score.total
                 );
             }
-            drop(file_picker);
         }
 
         io::stdout().flush().unwrap();
     }
 
     // Clean up before exit
-    cleanup_global_state();
+    if let Ok(mut guard) = shared_picker.write() {
+        if let Some(mut picker) = guard.take() {
+            picker.stop_background_monitor();
+        }
+    }
     Ok(())
 }
