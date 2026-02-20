@@ -78,12 +78,17 @@ FFF.nvim requires:
     {
       "fz",
       function() require('fff').live_grep({
-	grep = {
-	  modes = { 'fuzzy', 'plain' }
-	}
+        grep = {
+          modes = { 'fuzzy', 'plain' }
+        }
       }) end,
       desc = 'Live fffuzy grep',
-    }
+    },
+    {
+      "fc",
+      function() require('fff').live_grep({ query = vim.fn.expand("<cword>") }) end,
+      desc = 'Search current word',
+    },
   }
 }
 ```
