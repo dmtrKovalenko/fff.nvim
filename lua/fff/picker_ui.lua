@@ -67,7 +67,7 @@ local function get_preview_position()
     local terminal_width = vim.o.columns
     local terminal_height = vim.o.lines
 
-    return utils.resolve_config_value(
+    local position = utils.resolve_config_value(
       config.layout.preview_position,
       terminal_width,
       terminal_height,
@@ -75,6 +75,15 @@ local function get_preview_position()
       'right',
       'layout.preview_position'
     )
+
+    local flex = config.layout.flex
+    if flex then
+      local size = flex.size or 130
+      local wrap = flex.wrap or 'top'
+      if terminal_width < size then return wrap end
+    end
+
+    return position
   end
 
   return 'right'

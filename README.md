@@ -141,6 +141,10 @@ require('fff').setup({
       prompt_position = 'bottom', -- or 'top'
       preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
       preview_size = 0.5,
+      flex = { -- set to nil to disable flex layout
+        size = 130, -- column threshold: if screen width >= size, use preview_position; otherwise use wrap
+        wrap = 'top', -- position to use when screen is narrower than size
+      },
       show_scrollbar = true, -- Show scrollbar for pagination
       -- How to shorten long directory paths in the file list:
       -- 'middle_number' (default): uses dots for 1-3 hidden (a/./b, a/../b, a/.../b)
