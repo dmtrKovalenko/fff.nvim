@@ -6,15 +6,13 @@ use crate::{SharedFrecency, SharedPicker};
 use git2::Repository;
 use notify::event::{AccessKind, AccessMode};
 use notify::{Config, EventKind, RecursiveMode};
-use notify_debouncer_full::{
-    DebounceEventResult, DebouncedEvent, RecommendedCache, new_debouncer_opt,
-};
+use notify_debouncer_full::{DebounceEventResult, DebouncedEvent, NoCache, new_debouncer_opt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{Level, debug, error, info, warn};
 
-type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, RecommendedCache>;
+type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, NoCache>;
 
 pub struct BackgroundWatcher {
     debouncer: Arc<Mutex<Option<Debouncer>>>,
@@ -75,7 +73,11 @@ impl BackgroundWatcher {
                     }
                 }
             },
-            RecommendedCache::new(),
+            // There is an issue with recommended cache implementation on macos
+            // it keeps track of all the files added to the watcher which is not a problem
+            // for us because any rename to the file will anyway require the removing from the
+            // ordedred index and adding it back with the new name
+            NoCache::new(),
             config,
         )?;
 
