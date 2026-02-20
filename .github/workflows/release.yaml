@@ -84,6 +84,10 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-nvim
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
+      - name: Ad-hoc sign macOS binary
+        if: contains(matrix.os, 'macos')
+        run: codesign --force --sign - "${{ matrix.target }}.${{ matrix.ext }}"
+
       - name: Build for Windows
         if: contains(matrix.os, 'windows')
         shell: bash
@@ -189,6 +193,10 @@ jobs:
         run: |
           MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-c
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
+
+      - name: Ad-hoc sign macOS binary
+        if: contains(matrix.os, 'macos')
+        run: codesign --force --sign - "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for Windows
         if: contains(matrix.os, 'windows')
