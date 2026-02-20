@@ -134,7 +134,10 @@ require('fff').setup({
       height = 0.8,
       width = 0.8,
       prompt_position = 'bottom', -- or 'top'
-      preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
+      preview_position = 'right', -- or 'left', 'right', 'top', 'bottom', 'flex'
+      -- 'flex' places the preview on the right when the window is >= flex_columns
+      -- wide, and on top when narrower. Useful for adapting to split layouts.
+      flex_columns = 130,         -- column threshold used by 'flex' preview_position
       preview_size = 0.5,
       show_scrollbar = true, -- Show scrollbar for pagination
       -- How to shorten long directory paths in the file list:

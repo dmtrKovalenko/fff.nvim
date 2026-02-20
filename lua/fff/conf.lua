@@ -111,8 +111,9 @@ local function init()
       height = 0.8,
       width = 0.8,
       prompt_position = 'bottom', -- or 'top'
-      preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
+      preview_position = 'right', -- or 'left', 'right', 'top', 'bottom', 'flex'
       preview_size = 0.5,
+      flex_columns = 130, -- used when preview_position = 'flex': right if width >= this, else top
       show_scrollbar = true, -- Show scrollbar for pagination
       path_shorten_strategy = 'middle_number', -- or 'middle', 'end'
     },
