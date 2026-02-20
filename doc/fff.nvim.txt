@@ -1,4 +1,4 @@
-*fff.nvim.txt*        For Neovim >= 0.10.0       Last change: 2026 February 19
+*fff.nvim.txt*        For Neovim >= 0.10.0       Last change: 2026 February 20
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -365,6 +365,9 @@ your configuration, or per-call when invoking `live_grep()`.
         modes = { 'fuzzy' },
       }
     })
+    
+    -- Pre-fill the search with an initial query
+    require('fff').live_grep({ query = 'search term' })
 <
 
 When only one mode is configured, the mode indicator is hidden completely and
