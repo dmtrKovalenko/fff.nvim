@@ -77,11 +77,11 @@ FFF.nvim requires:
     },
     {
       "fz",
-	  function() require('fff').live_grep({
-		grep = {
-			modes = { 'fuzzy', 'plain' }
-	    }
-	  }) end,
+      function() require('fff').live_grep({
+        grep = {
+          modes = { 'fuzzy', 'plain' }
+        }
+      }) end,
       desc = 'Live fffuzy grep',
     },
     {
