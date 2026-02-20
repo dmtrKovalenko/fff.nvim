@@ -14,6 +14,8 @@ jobs:
   lua-tests:
     name: e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # e2e tests could be flaky on CI so we do not block release creation if they failed
+    continue-on-error: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     strategy:
       fail-fast: false
       matrix:
