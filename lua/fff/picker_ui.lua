@@ -60,6 +60,8 @@ local function get_prompt_position()
   return 'bottom'
 end
 
+local DEFAULT_FLIP_COLUMNS = 130
+
 local function get_preview_position()
   local config = M.state.config
 
@@ -67,14 +69,22 @@ local function get_preview_position()
     local terminal_width = vim.o.columns
     local terminal_height = vim.o.lines
 
-    return utils.resolve_config_value(
+    local position = utils.resolve_config_value(
       config.layout.preview_position,
       terminal_width,
       terminal_height,
-      function(value) return utils.is_one_of(value, { 'left', 'right', 'top', 'bottom' }) end,
+      function(value) 
+        return utils.is_one_of(value, { 'left', 'right', 'top', 'bottom', 'flex' }) 
+      end,
       'right',
       'layout.preview_position'
     )
+
+    if position == 'flex' then
+      return terminal_width >= config.layout.flex_columns and 'right' or 'top'
+    end
+
+    return position
   end
 
   return 'right'
