@@ -119,7 +119,9 @@ local function verify_sha256(file_path, expected_hash, callback)
       -- SHA256 hash <file_path>:
       -- <hash>
       -- CertUtil: -hashfile command completed successfully.
-      actual_hash = (result.stdout or ''):match("hash.-:\r?\n([%x ]+)\r?\nCertUtil: %-hashfile command completed successfully%.")
+      actual_hash = (result.stdout or ''):match(
+        'hash.-:\r?\n([%x ]+)\r?\nCertUtil: %-hashfile command completed successfully%.'
+      )
     else
       actual_hash = (result.stdout or ''):match('^%s*([0-9a-fA-F]+)')
     end
