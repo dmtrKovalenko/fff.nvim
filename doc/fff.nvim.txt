@@ -1,4 +1,4 @@
-*fff.nvim.txt*        For Neovim >= 0.10.0       Last change: 2026 February 20
+*fff.nvim.txt*        For Neovim >= 0.10.0       Last change: 2026 February 23
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -100,12 +100,17 @@ LAZY.NVIM
         {
           "fz",
           function() require('fff').live_grep({
-        grep = {
-          modes = { 'fuzzy', 'plain' }
-        }
+            grep = {
+              modes = { 'fuzzy', 'plain' }
+            }
           }) end,
           desc = 'Live fffuzy grep',
-        }
+        },
+        {
+          "fc",
+          function() require('fff').live_grep({ query = vim.fn.expand("<cword>") }) end,
+          desc = 'Search current word',
+        },
       }
     }
 <
