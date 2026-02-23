@@ -1,9 +1,12 @@
 use fff_core::file_picker::FilePicker;
-use fff_core::{FILE_PICKER, FileItem, FuzzySearchOptions, PaginationArgs, QueryParser};
+use fff_core::{
+    FileItem, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker,
+};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 /// Wait for background scan to complete
-fn wait_for_scan(timeout_secs: u64) -> Result<usize, String> {
+fn wait_for_scan(shared_picker: &SharedPicker, timeout_secs: u64) -> Result<usize, String> {
     let start = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
     let mut iteration = 0;
@@ -11,7 +14,7 @@ fn wait_for_scan(timeout_secs: u64) -> Result<usize, String> {
     loop {
         iteration += 1;
 
-        let picker_guard = FILE_PICKER
+        let picker_guard = shared_picker
             .read()
             .map_err(|_| "Failed to acquire read lock")?;
         if let Some(ref picker) = *picker_guard {
@@ -45,21 +48,9 @@ fn wait_for_scan(timeout_secs: u64) -> Result<usize, String> {
     }
 }
 
-/// Initialize FilePicker and insert into global state
-fn init_file_picker(path: &str) -> Result<(), String> {
-    let picker = FilePicker::new(path.to_string())
-        .map_err(|e| format!("Failed to create FilePicker: {:?}", e))?;
-
-    let mut picker_guard = FILE_PICKER
-        .write()
-        .map_err(|_| "Failed to acquire write lock")?;
-    *picker_guard = Some(picker);
-    Ok(())
-}
-
-/// Get files snapshot from global state
-fn get_files() -> Result<Vec<FileItem>, String> {
-    let picker_guard = FILE_PICKER
+/// Get files snapshot from shared state
+fn get_files(shared_picker: &SharedPicker) -> Result<Vec<FileItem>, String> {
+    let picker_guard = shared_picker
         .read()
         .map_err(|_| "Failed to acquire read lock")?;
     if let Some(ref picker) = *picker_guard {
@@ -82,17 +73,27 @@ fn main() {
     let canonical_path =
         fff_core::path_utils::canonicalize(&big_repo_path).expect("Failed to canonicalize path");
 
+    // Create shared state
+    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
+    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
+
     eprintln!("Initializing FilePicker for: {:?}", canonical_path);
-    init_file_picker(&canonical_path.to_string_lossy()).expect("Failed to init FilePicker");
+    FilePicker::new_with_shared_state(
+        canonical_path.to_string_lossy().to_string(),
+        false,
+        Arc::clone(&shared_picker),
+        Arc::clone(&shared_frecency),
+    )
+    .expect("Failed to init FilePicker");
 
     // Give background thread time to start
     std::thread::sleep(Duration::from_millis(200));
 
     eprintln!("Waiting for scan to complete...");
-    let file_count = wait_for_scan(120).expect("Failed to wait for scan");
+    let file_count = wait_for_scan(&shared_picker, 120).expect("Failed to wait for scan");
     eprintln!("✓ Indexed {} files\n", file_count);
 
-    let files = get_files().expect("Failed to get files");
+    let files = get_files(&shared_picker).expect("Failed to get files");
 
     // Test queries representing different search patterns
     let test_queries = vec![

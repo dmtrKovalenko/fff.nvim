@@ -95,12 +95,17 @@ FFF.nvim requires:
     {
       "fz",
       function() require('fff').live_grep({
-	grep = {
-	  modes = { 'fuzzy', 'plain' }
-	}
+        grep = {
+          modes = { 'fuzzy', 'plain' }
+        }
       }) end,
       desc = 'Live fffuzy grep',
-    }
+    },
+    {
+      "fc",
+      function() require('fff').live_grep({ query = vim.fn.expand("<cword>") }) end,
+      desc = 'Search current word',
+    },
   }
 }
 ```
@@ -208,13 +213,16 @@ require('fff').setup({
       preview_scroll_up = '<C-u>',
       preview_scroll_down = '<C-d>',
       toggle_debug = '<F2>',
+      -- grep mode: cycle between plain text, regex, and fuzzy search
+      toggle_grep_regex = '<S-Tab>',
       -- goes to the previous query in history
       cycle_previous_query = '<C-Up>',
       -- multi-select keymaps for quickfix
       toggle_select = '<Tab>',
       send_to_quickfix = '<C-q>',
-      -- grep mode: cycle between plain text, regex, and fuzzy search
-      toggle_grep_regex = '<S-Tab>',
+      -- this are specific for the normal mode (you can exit it using any other keybind like jj)
+      focus_list = '<leader>l',
+      focus_preview = '<leader>p',
     },
     hl = {
       border = 'FloatBorder',
@@ -290,7 +298,7 @@ require('fff').setup({
     -- Live grep search configuration
     grep = {
       max_file_size = 10 * 1024 * 1024, -- Skip files larger than 10MB
-      max_matches_per_file = 200, -- Maximum matches per file
+      max_matches_per_file = 100, -- Maximum matches per file (set 0 to unlimited)
       smart_case = true, -- Case-insensitive unless query has uppercase
       time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
       modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
@@ -490,6 +498,9 @@ require('fff').live_grep({
     modes = { 'fuzzy' },
   }
 })
+
+-- Pre-fill the search with an initial query
+require('fff').live_grep({ query = 'search term' })
 ```
 
 When only one mode is configured, the mode indicator is hidden completely and the cycle keybind does nothing.

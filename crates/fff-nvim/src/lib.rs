@@ -3,12 +3,16 @@ use error::{IntoCoreError, IntoLuaResult};
 use fff_core::file_picker::FilePicker;
 use fff_core::frecency::FrecencyTracker;
 use fff_core::query_tracker::QueryTracker;
-use fff_core::{DbHealthChecker, Error, FuzzySearchOptions, PaginationArgs, QueryParser};
-use fff_core::{FILE_PICKER, FRECENCY, QUERY_TRACKER};
+use fff_core::{
+    DbHealthChecker, Error, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency,
+    SharedPicker, SharedQueryTracker,
+};
 use mimalloc::MiMalloc;
 use mlua::prelude::*;
+use once_cell::sync::Lazy;
 use path_shortening::PathShortenStrategy;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 mod error;
@@ -18,6 +22,12 @@ mod path_shortening;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+
+// the global state for neovim lives here for efficiency
+// lua ffi is pretty bad with the overhead of converting raw pointer into tables
+pub static FILE_PICKER: Lazy<SharedPicker> = Lazy::new(|| Arc::new(RwLock::new(None)));
+pub static FRECENCY: Lazy<SharedFrecency> = Lazy::new(|| Arc::new(RwLock::new(None)));
+pub static QUERY_TRACKER: Lazy<SharedQueryTracker> = Lazy::new(|| Arc::new(RwLock::new(None)));
 
 pub fn init_db(
     _: &Lua,
@@ -68,31 +78,45 @@ pub fn destroy_query_db(_: &Lua, _: ()) -> LuaResult<bool> {
 }
 
 pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
-    let mut file_picker = FILE_PICKER
-        .write()
-        .with_lock_error(Error::AcquireItemLock)
-        .into_lua_result()?;
-    if file_picker.is_some() {
-        return Ok(false);
+    {
+        let guard = FILE_PICKER
+            .read()
+            .with_lock_error(Error::AcquireItemLock)
+            .into_lua_result()?;
+        if guard.is_some() {
+            return Ok(false);
+        }
     }
 
-    let picker = FilePicker::new(base_path).into_lua_result()?;
-    *file_picker = Some(picker);
+    FilePicker::new_with_shared_state(
+        base_path,
+        false,
+        Arc::clone(&FILE_PICKER),
+        Arc::clone(&FRECENCY),
+    )
+    .into_lua_result()?;
+
     Ok(true)
 }
 
 fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
-    let mut file_picker = FILE_PICKER
-        .write()
-        .with_lock_error(Error::AcquireItemLock)?;
-
-    // drop should clean it anyway but just to be extra sure
-    if let Some(mut picker) = file_picker.take() {
-        picker.stop_background_monitor();
+    // Stop existing picker
+    {
+        let mut guard = FILE_PICKER
+            .write()
+            .with_lock_error(Error::AcquireItemLock)?;
+        if let Some(mut picker) = guard.take() {
+            picker.stop_background_monitor();
+        }
     }
 
-    let new_picker = FilePicker::new(path.to_string_lossy().to_string())?;
-    *file_picker = Some(new_picker);
+    // Create new picker backed by the same shared state
+    FilePicker::new_with_shared_state(
+        path.to_string_lossy().to_string(),
+        false,
+        Arc::clone(&FILE_PICKER),
+        Arc::clone(&FRECENCY),
+    )?;
 
     Ok(())
 }
@@ -136,7 +160,7 @@ pub fn scan_files(_: &Lua, _: ()) -> LuaResult<()> {
         .ok_or(Error::FilePickerMissing)
         .into_lua_result()?;
 
-    picker.trigger_rescan().into_lua_result()?;
+    picker.trigger_rescan(&FRECENCY).into_lua_result()?;
     ::tracing::info!("scan_files trigger_rescan completed");
     Ok(())
 }
@@ -362,7 +386,7 @@ pub fn get_git_root(_: &Lua, _: ()) -> LuaResult<Option<String>> {
 }
 
 pub fn refresh_git_status(_: &Lua, _: ()) -> LuaResult<usize> {
-    FilePicker::refresh_git_status_global().into_lua_result()
+    FilePicker::refresh_git_status(&FILE_PICKER, &FRECENCY).into_lua_result()
 }
 
 pub fn update_single_file_frecency(_: &Lua, file_path: String) -> LuaResult<bool> {
@@ -444,8 +468,9 @@ pub fn track_query_completion(_: &Lua, (query, file_path): (String, String)) -> 
     };
 
     // Spawn background thread to do the actual tracking (expensive DB write)
+    let query_tracker = Arc::clone(&QUERY_TRACKER);
     std::thread::spawn(move || {
-        if let Ok(Some(tracker)) = QUERY_TRACKER.write().as_deref_mut()
+        if let Ok(Some(tracker)) = query_tracker.write().as_deref_mut()
             && let Err(e) = tracker.track_query_completion(&query, &project_path, &file_path)
         {
             tracing::error!(
@@ -497,8 +522,9 @@ pub fn track_grep_query(_: &Lua, query: String) -> LuaResult<bool> {
         picker.base_path().to_path_buf()
     };
 
+    let query_tracker = Arc::clone(&QUERY_TRACKER);
     std::thread::spawn(move || {
-        if let Ok(Some(tracker)) = QUERY_TRACKER.write().as_deref_mut()
+        if let Ok(Some(tracker)) = query_tracker.write().as_deref_mut()
             && let Err(e) = tracker.track_grep_query(&query, &project_path)
         {
             tracing::error!(

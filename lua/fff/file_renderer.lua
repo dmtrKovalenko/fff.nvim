@@ -72,7 +72,7 @@ function M.render_line(item, ctx, item_idx)
       if mod >= 6 then
         indicator = '🔥'
       elseif access >= 4 then
-        indicator = '⭐'
+        indicator = '⭐️'
       elseif total >= 3 then
         indicator = '✨'
       elseif total >= 1 then
@@ -149,7 +149,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
 
   -- 4. Frecency indicator
   if ctx.debug_enabled then
-    local start_pos, end_pos = line_content:find('[⭐🔥✨•]%d+')
+    local start_pos, end_pos = line_content:find('[⭐️🔥✨•]%d+')
     if start_pos then
       vim.api.nvim_buf_add_highlight(buf, ns_id, ctx.config.hl.frecency, line_idx - 1, start_pos - 1, end_pos)
     end

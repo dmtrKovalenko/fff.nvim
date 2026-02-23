@@ -35,7 +35,7 @@ function formatGitStatus(status: string): string {
       return `${RED}D${RESET}`;
     case "renamed":
       return `${BLUE}R${RESET}`;
-    case "clear":
+    case "clean":
     case "current":
       return `${DIM} ${RESET}`;
     default:
@@ -84,24 +84,26 @@ async function main() {
     process.exit(1);
   }
 
-  // Initialize
+  // Create instance
   console.log(`${DIM}Initializing index for: ${targetDir}${RESET}`);
-  const initResult = FileFinder.init({
+  const createResult = FileFinder.create({
     basePath: targetDir,
   });
 
-  if (!initResult.ok) {
-    console.error(`${RED}Init failed: ${initResult.error}${RESET}`);
+  if (!createResult.ok) {
+    console.error(`${RED}Init failed: ${createResult.error}${RESET}`);
     process.exit(1);
   }
+
+  const finder = createResult.value;
 
   // Wait for scan with progress
   process.stdout.write(`${DIM}Scanning files...${RESET}`);
   const startTime = Date.now();
   let lastCount = 0;
 
-  while (FileFinder.isScanning()) {
-    const progress = FileFinder.getScanProgress();
+  while (finder.isScanning()) {
+    const progress = finder.getScanProgress();
     if (progress.ok && progress.value.scannedFilesCount !== lastCount) {
       lastCount = progress.value.scannedFilesCount;
       process.stdout.write(`\r${DIM}Scanning files... ${lastCount}${RESET}   `);
@@ -110,13 +112,13 @@ async function main() {
   }
 
   const scanTime = Date.now() - startTime;
-  const finalProgress = FileFinder.getScanProgress();
+  const finalProgress = finder.getScanProgress();
   const totalFiles = finalProgress.ok ? finalProgress.value.scannedFilesCount : 0;
 
   console.log(`\r${GREEN}✓${RESET} Indexed ${BOLD}${totalFiles}${RESET} files in ${scanTime}ms\n`);
 
   // Show index info
-  const health = FileFinder.healthCheck();
+  const health = finder.healthCheck();
   if (health.ok) {
     console.log(`${DIM}Version:${RESET}    ${health.value.version}`);
     console.log(`${DIM}Base path:${RESET}  ${health.value.filePicker.basePath}`);
@@ -137,13 +139,13 @@ async function main() {
     rl.question(`${CYAN}search>${RESET} `, (query) => {
       if (query.toLowerCase() === "q" || query.toLowerCase() === "quit") {
         console.log(`\n${DIM}Goodbye!${RESET}`);
-        FileFinder.destroy();
+        finder.destroy();
         rl.close();
         process.exit(0);
       }
 
       const searchStart = Date.now();
-      const result = FileFinder.search(query, { pageSize: 15 });
+      const result = finder.search(query, { pageSize: 15 });
       const searchTime = Date.now() - searchStart;
 
       if (!result.ok) {

@@ -188,7 +188,6 @@ fn plain_text_across_multiple_files() {
 
     let result = grep_search(&files, "use std", None, &plain_opts());
 
-    assert_eq!(result.total_match_count, 3);
     assert_eq!(result.matches.len(), 3);
     // Should match in files a.txt and b.txt
     assert_eq!(result.files.len(), 2);
@@ -279,17 +278,28 @@ fn plain_text_page_limit() {
 
     let result = grep_search(&files, "target", None, &opts);
 
+    // page_limit is a soft minimum: we always finish the current file, so we
+    // get at least page_limit matches (no data loss) and at most
+    // max_matches_per_file (200) from a single file.
     assert!(
-        result.matches.len() <= 10,
-        "should respect page_limit: got {}",
+        result.matches.len() >= opts.page_limit,
+        "should return at least page_limit matches: got {}",
         result.matches.len()
     );
+    assert!(
+        result.matches.len() <= opts.max_matches_per_file,
+        "should never exceed max_matches_per_file: got {}",
+        result.matches.len()
+    );
+    // Single file with 100 lines all matching — all should be returned.
+    assert_eq!(result.matches.len(), 100, "all 100 lines must be returned");
 }
 
 #[test]
 fn plain_text_file_offset_pagination() {
     let tmp = TempDir::new().unwrap();
-    // Create many files so file-based pagination works
+    // Create many files (1 match per file) so file-based pagination exercises
+    // offset tracking across files with and without matches.
     let mut files = Vec::new();
     for i in 0..20 {
         files.push(create_file(
@@ -302,14 +312,51 @@ fn plain_text_file_offset_pagination() {
     let mut opts = plain_opts();
     opts.page_limit = 5;
 
-    let result1 = grep_search(&files, "unique_token", None, &opts);
-    assert!(result1.matches.len() > 0);
+    // Collect ALL matches across all pages and verify no duplicates and full coverage.
+    let mut all_line_texts: Vec<String> = Vec::new();
+    let mut pages = 0;
+    let max_pages = 20; // safety limit
 
-    if result1.next_file_offset > 0 {
-        opts.file_offset = result1.next_file_offset;
-        let result2 = grep_search(&files, "unique_token", None, &opts);
-        assert!(result2.matches.len() > 0, "second page should have results");
+    loop {
+        let result = grep_search(&files, "unique_token", None, &opts);
+
+        for m in &result.matches {
+            let text = m.line_content.trim().to_string();
+            assert!(
+                !all_line_texts.contains(&text),
+                "duplicate match across pages: '{}'",
+                text
+            );
+            all_line_texts.push(text);
+        }
+
+        pages += 1;
+        assert!(pages <= max_pages, "pagination did not terminate");
+
+        if result.next_file_offset == 0 {
+            break;
+        }
+
+        // Offset must strictly advance
+        assert!(
+            result.next_file_offset > opts.file_offset,
+            "next_file_offset ({}) did not advance past current ({})",
+            result.next_file_offset,
+            opts.file_offset
+        );
+        opts.file_offset = result.next_file_offset;
     }
+
+    assert_eq!(
+        all_line_texts.len(),
+        20,
+        "pagination should find all 20 matches across all pages, got {}",
+        all_line_texts.len()
+    );
+    assert!(
+        pages > 1,
+        "should require multiple pages with page_limit=5 and 20 files"
+    );
 }
 
 #[test]
@@ -1064,13 +1111,28 @@ fn fuzzy_respects_page_limit() {
 
     let mut opts = fuzzy_opts();
     opts.page_limit = 10;
+    opts.max_matches_per_file = 50;
 
     let result = grep_search(&files, "target", None, &opts);
 
+    // page_limit is a soft minimum: we always finish the current file, so we
+    // get at least page_limit matches (no data loss) and at most
+    // max_matches_per_file (200) from a single file.
     assert!(
-        result.matches.len() <= 10,
-        "should respect page_limit: got {}",
+        result.matches.len() >= opts.page_limit,
+        "should return at least page_limit matches: got {}",
         result.matches.len()
+    );
+    assert!(
+        result.matches.len() <= opts.max_matches_per_file,
+        "should never exceed max_matches_per_file: got {}",
+        result.matches.len()
+    );
+
+    assert_eq!(
+        result.matches.len(),
+        opts.max_matches_per_file,
+        "all limit of lines must be returned"
     );
 }
 

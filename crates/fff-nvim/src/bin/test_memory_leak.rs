@@ -1,7 +1,8 @@
 use fff_core::file_picker::FilePicker;
-use fff_core::{FILE_PICKER, FuzzySearchOptions, PaginationArgs, QueryParser};
+use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::env;
 use std::io::{self, Write};
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -77,24 +78,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Test directory: {}", base_path);
     println!();
 
-    // Initialize the file picker directly
+    // Create shared state
+    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
+    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
+
+    // Initialize the file picker
     println!("📁 Initializing FilePicker...");
-    {
-        let mut file_picker_guard = FILE_PICKER.write().unwrap();
-        if file_picker_guard.is_none() {
-            println!("Creating new FilePicker for path: {}", base_path);
-            match FilePicker::new(base_path.clone()) {
-                Ok(picker) => {
-                    println!("FilePicker created successfully");
-                    *file_picker_guard = Some(picker);
-                }
-                Err(e) => {
-                    eprintln!("Failed to create FilePicker: {:?}", e);
-                    std::process::exit(1);
-                }
-            }
-        }
-    }
+    FilePicker::new_with_shared_state(
+        base_path.clone(),
+        false,
+        Arc::clone(&shared_picker),
+        Arc::clone(&shared_frecency),
+    )?;
 
     // Wait for initial scan to complete
     println!("⏳ Waiting for initial file scan to complete...");
@@ -102,8 +97,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scan_completed = false;
 
     loop {
-        if let Ok(file_picker_guard) = FILE_PICKER.read()
-            && let Some(ref picker) = *file_picker_guard
+        if let Ok(guard) = shared_picker.read()
+            && let Some(ref picker) = *guard
         {
             if !picker.is_scan_active() {
                 println!("Scan inactive, checking file count...");
@@ -128,10 +123,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // If async scan didn't work, trigger a manual scan
     if !scan_completed {
         println!("Triggering manual rescan...");
-        if let Ok(mut file_picker_guard) = FILE_PICKER.write()
-            && let Some(ref mut picker) = *file_picker_guard
+        if let Ok(mut guard) = shared_picker.write()
+            && let Some(ref mut picker) = *guard
         {
-            match picker.trigger_rescan() {
+            match picker.trigger_rescan(&shared_frecency) {
                 Ok(_) => println!("Manual rescan completed"),
                 Err(e) => println!("Manual rescan failed: {:?}", e),
             }
@@ -139,8 +134,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let initial_file_count = {
-        let file_picker_guard = FILE_PICKER.read()?;
-        if let Some(ref picker) = *file_picker_guard {
+        let guard = shared_picker.read().unwrap();
+        if let Some(ref picker) = *guard {
             let files = picker.get_files();
             println!("Found {} files in picker", files.len());
             if !files.is_empty() {
@@ -151,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             files.len()
         } else {
-            println!("No picker found in FILE_PICKER static!");
+            println!("No picker found!");
             0
         }
     };
@@ -199,8 +194,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let search_start = Instant::now();
         let parser = QueryParser::default();
         let (result_count, search_duration) = {
-            let file_picker_guard = FILE_PICKER.read().unwrap();
-            if let Some(ref picker) = *file_picker_guard {
+            let guard = shared_picker.read().unwrap();
+            if let Some(ref picker) = *guard {
                 let parsed = parser.parse(query);
                 let search_result = FilePicker::fuzzy_search(
                     picker.get_files(),

@@ -120,7 +120,7 @@ Search file contents with SIMD-accelerated matching.
 ```typescript
 interface GrepOptions {
   maxFileSize?: number;        // Max file size in bytes (default: 10MB)
-  maxMatchesPerFile?: number;  // Max matches per file (default: 200)
+  maxMatchesPerFile?: number;  // Max matches per file (default: 200, set 0 to unlimited) 
   smartCase?: boolean;         // Case-insensitive if all lowercase (default: true)
   fileOffset?: number;         // Pagination offset (default: 0)
   pageLimit?: number;          // Max matches to return (default: 50)

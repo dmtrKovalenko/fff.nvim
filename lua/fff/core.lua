@@ -46,6 +46,7 @@ local function setup_global_autocmds(config)
   vim.api.nvim_create_autocmd('DirChanged', {
     group = group,
     callback = function()
+      if vim.v.event.scope == 'window' then return end
       local new_cwd = vim.v.event.cwd
       if state.initialized and new_cwd and new_cwd ~= config.base_path then
         vim.schedule(function()

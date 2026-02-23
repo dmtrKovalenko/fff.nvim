@@ -2,11 +2,14 @@
  * FileFinder - High-level API for the fff file finder
  *
  * This class provides a type-safe, ergonomic API for file finding operations.
+ * Each instance owns an independent native file picker that can be created
+ * and destroyed independently. Multiple instances can coexist.
+ *
  * All methods return Result types for explicit error handling.
  */
 
 import {
-  ffiInit,
+  ffiCreate,
   ffiDestroy,
   ffiSearch,
   ffiLiveGrep,
@@ -22,6 +25,7 @@ import {
   ffiHealthCheck,
   ensureLoaded,
   isAvailable,
+  type NativeHandle,
 } from "./ffi";
 
 import type {
@@ -35,27 +39,36 @@ import type {
   GrepResult,
 } from "./types";
 
-import { err, toInternalInitOptions, toInternalSearchOptions, toInternalGrepOptions, createGrepCursor } from "./types";
+import {
+  err,
+  toInternalInitOptions,
+  toInternalSearchOptions,
+  toInternalGrepOptions,
+  createGrepCursor,
+} from "./types";
 
 /**
  * FileFinder - Fast file finder with fuzzy search
+ *
+ * Each instance is backed by an independent native file picker. Create as many
+ * as you need and destroy them when done.
  *
  * @example
  * ```typescript
  * import { FileFinder } from "fff";
  *
- * // Initialize
- * const result = FileFinder.init({ basePath: "/path/to/project" });
- * if (!result.ok) {
- *   console.error(result.error);
+ * // Create an instance
+ * const finder = FileFinder.create({ basePath: "/path/to/project" });
+ * if (!finder.ok) {
+ *   console.error(finder.error);
  *   process.exit(1);
  * }
  *
  * // Wait for initial scan
- * FileFinder.waitForScan(5000);
+ * finder.value.waitForScan(5000);
  *
  * // Search for files
- * const search = FileFinder.search("main.ts");
+ * const search = finder.value.search("main.ts");
  * if (search.ok) {
  *   for (const item of search.value.items) {
  *     console.log(item.relativePath);
@@ -63,57 +76,75 @@ import { err, toInternalInitOptions, toInternalSearchOptions, toInternalGrepOpti
  * }
  *
  * // Cleanup
- * FileFinder.destroy();
+ * finder.value.destroy();
  * ```
  */
 export class FileFinder {
-  private static initialized = false;
+  private handle: NativeHandle | null;
+
+  private constructor(handle: NativeHandle) {
+    this.handle = handle;
+  }
 
   /**
-   * Initialize the file finder with the given options.
+   * Create a new file finder instance.
    *
    * @param options - Initialization options
-   * @returns Result indicating success or failure
+   * @returns Result containing the new FileFinder instance or an error
    *
    * @example
    * ```typescript
    * // Basic initialization
-   * FileFinder.init({ basePath: "/path/to/project" });
+   * const finder = FileFinder.create({ basePath: "/path/to/project" });
    *
    * // With custom database paths
-   * FileFinder.init({
+   * const finder = FileFinder.create({
    *   basePath: "/path/to/project",
    *   frecencyDbPath: "/custom/frecency.mdb",
    *   historyDbPath: "/custom/history.mdb",
    * });
-   *
-   * // Minimal mode (no databases - just omit db paths)
-   * FileFinder.init({ basePath: "/path/to/project" });
    * ```
    */
-  static init(options: InitOptions): Result<void> {
+  static create(options: InitOptions): Result<FileFinder> {
     const internalOpts = toInternalInitOptions(options);
-    const result = ffiInit(JSON.stringify(internalOpts));
+    const result = ffiCreate(JSON.stringify(internalOpts));
 
-    if (result.ok) {
-      this.initialized = true;
+    if (!result.ok) {
+      return result;
     }
 
-    return result;
+    return { ok: true, value: new FileFinder(result.value) };
   }
 
   /**
    * Destroy and clean up all resources.
    *
    * Call this when you're done using the file finder to free memory
-   * and stop background file watching.
+   * and stop background file watching. After calling this, the instance
+   * must not be used again.
    */
-  static destroy(): Result<void> {
-    const result = ffiDestroy();
-    if (result.ok) {
-      this.initialized = false;
+  destroy(): void {
+    if (this.handle !== null) {
+      ffiDestroy(this.handle);
+      this.handle = null;
     }
-    return result;
+  }
+
+  /**
+   * Check if this instance has been destroyed.
+   */
+  get isDestroyed(): boolean {
+    return this.handle === null;
+  }
+
+  /**
+   * Guard that returns an error if the instance has been destroyed.
+   */
+  private ensureAlive(): Result<NativeHandle> {
+    if (this.handle === null) {
+      return err("FileFinder instance has been destroyed.");
+    }
+    return { ok: true, value: this.handle };
   }
 
   /**
@@ -131,7 +162,7 @@ export class FileFinder {
    *
    * @example
    * ```typescript
-   * const result = FileFinder.search("main.ts", { pageSize: 10 });
+   * const result = finder.search("main.ts", { pageSize: 10 });
    * if (result.ok) {
    *   console.log(`Found ${result.value.totalMatched} files`);
    *   for (const item of result.value.items) {
@@ -140,19 +171,17 @@ export class FileFinder {
    * }
    * ```
    */
-  static search(query: string, options?: SearchOptions): Result<SearchResult> {
-    if (!this.initialized) {
-      return err("FileFinder not initialized. Call FileFinder.init() first.");
-    }
+  search(query: string, options?: SearchOptions): Result<SearchResult> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
 
     const internalOpts = toInternalSearchOptions(options);
-    const result = ffiSearch(query, JSON.stringify(internalOpts));
+    const result = ffiSearch(guard.value, query, JSON.stringify(internalOpts));
 
     if (!result.ok) {
       return result;
     }
 
-    // The FFI returns the search result already parsed
     return result as Result<SearchResult>;
   }
 
@@ -178,27 +207,30 @@ export class FileFinder {
    * @example
    * ```typescript
    * // First page
-   * const result = FileFinder.liveGrep("TODO", { mode: "plain", pageLimit: 20 });
+        * const result = finder.liveGrep("TODO", { mode: "plain" });
    * if (result.ok) {
    *   for (const match of result.value.items) {
    *     console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
    *   }
    *   // Fetch next page
    *   if (result.value.nextCursor) {
-   *     const page2 = FileFinder.liveGrep("TODO", {
+   *     const page2 = finder.liveGrep("TODO", {
    *       cursor: result.value.nextCursor,
    *     });
    *   }
    * }
    * ```
    */
-  static liveGrep(query: string, options?: GrepOptions): Result<GrepResult> {
-    if (!this.initialized) {
-      return err("FileFinder not initialized. Call FileFinder.init() first.");
-    }
+  liveGrep(query: string, options?: GrepOptions): Result<GrepResult> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
 
     const internalOpts = toInternalGrepOptions(options);
-    const result = ffiLiveGrep(query, JSON.stringify(internalOpts));
+    const result = ffiLiveGrep(
+      guard.value,
+      query,
+      JSON.stringify(internalOpts)
+    );
 
     if (!result.ok) {
       return result;
@@ -227,29 +259,27 @@ export class FileFinder {
    * This is useful after major file system changes that the
    * background watcher might have missed.
    */
-  static scanFiles(): Result<void> {
-    if (!this.initialized) {
-      return err("FileFinder not initialized. Call FileFinder.init() first.");
-    }
-    return ffiScanFiles();
+  scanFiles(): Result<void> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+    return ffiScanFiles(guard.value);
   }
 
   /**
    * Check if a scan is currently in progress.
    */
-  static isScanning(): boolean {
-    if (!this.initialized) return false;
-    return ffiIsScanning();
+  isScanning(): boolean {
+    if (this.handle === null) return false;
+    return ffiIsScanning(this.handle);
   }
 
   /**
    * Get the current scan progress.
    */
-  static getScanProgress(): Result<ScanProgress> {
-    if (!this.initialized) {
-      return err("FileFinder not initialized. Call FileFinder.init() first.");
-    }
-    return ffiGetScanProgress() as Result<ScanProgress>;
+  getScanProgress(): Result<ScanProgress> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+    return ffiGetScanProgress(guard.value) as Result<ScanProgress>;
   }
 
   /**
@@ -260,18 +290,19 @@ export class FileFinder {
    *
    * @example
    * ```typescript
-   * FileFinder.init({ basePath: "/path/to/project" });
-   * const completed = FileFinder.waitForScan(10000);
-   * if (!completed.ok || !completed.value) {
-   *   console.warn("Scan did not complete in time");
+   * const finder = FileFinder.create({ basePath: "/path/to/project" });
+   * if (finder.ok) {
+   *   const completed = finder.value.waitForScan(10000);
+   *   if (!completed.ok || !completed.value) {
+   *     console.warn("Scan did not complete in time");
+   *   }
    * }
    * ```
    */
-  static waitForScan(timeoutMs: number = 5000): Result<boolean> {
-    if (!this.initialized) {
-      return err("FileFinder not initialized. Call FileFinder.init() first.");
-    }
-    return ffiWaitForScan(timeoutMs);
+  waitForScan(timeoutMs: number = 5000): Result<boolean> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+    return ffiWaitForScan(guard.value, timeoutMs);
   }
 
   /**
@@ -281,11 +312,10 @@ export class FileFinder {
    *
    * @param newPath - New directory path to index
    */
-  static reindex(newPath: string): Result<void> {
-    if (!this.initialized) {
-      return err("FileFinder not initialized. Call FileFinder.init() first.");
-    }
-    return ffiRestartIndex(newPath);
+  reindex(newPath: string): Result<void> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+    return ffiRestartIndex(guard.value, newPath);
   }
 
   /**
@@ -295,11 +325,10 @@ export class FileFinder {
    *
    * @param filePath - Absolute path to the accessed file
    */
-  static trackAccess(filePath: string): Result<boolean> {
-    if (!this.initialized) {
-      return { ok: true, value: false };
-    }
-    return ffiTrackAccess(filePath);
+  trackAccess(filePath: string): Result<boolean> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+    return ffiTrackAccess(guard.value, filePath);
   }
 
   /**
@@ -307,11 +336,10 @@ export class FileFinder {
    *
    * @returns Number of files with updated git status
    */
-  static refreshGitStatus(): Result<number> {
-    if (!this.initialized) {
-      return err("FileFinder not initialized. Call FileFinder.init() first.");
-    }
-    return ffiRefreshGitStatus();
+  refreshGitStatus(): Result<number> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+    return ffiRefreshGitStatus(guard.value);
   }
 
   /**
@@ -323,11 +351,10 @@ export class FileFinder {
    * @param query - The search query that was used
    * @param selectedFilePath - The file path that was selected
    */
-  static trackQuery(query: string, selectedFilePath: string): Result<boolean> {
-    if (!this.initialized) {
-      return { ok: true, value: false };
-    }
-    return ffiTrackQuery(query, selectedFilePath);
+  trackQuery(query: string, selectedFilePath: string): Result<boolean> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+    return ffiTrackQuery(guard.value, query, selectedFilePath);
   }
 
   /**
@@ -336,11 +363,10 @@ export class FileFinder {
    * @param offset - Offset from most recent (0 = most recent)
    * @returns The historical query string, or null if not found
    */
-  static getHistoricalQuery(offset: number): Result<string | null> {
-    if (!this.initialized) {
-      return { ok: true, value: null };
-    }
-    return ffiGetHistoricalQuery(offset);
+  getHistoricalQuery(offset: number): Result<string | null> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+    return ffiGetHistoricalQuery(guard.value, offset);
   }
 
   /**
@@ -350,8 +376,11 @@ export class FileFinder {
    *
    * @param testPath - Optional path to test git repository detection
    */
-  static healthCheck(testPath?: string): Result<HealthCheck> {
-    return ffiHealthCheck(testPath || "") as Result<HealthCheck>;
+  healthCheck(testPath?: string): Result<HealthCheck> {
+    return ffiHealthCheck(
+      this.handle,
+      testPath || ""
+    ) as Result<HealthCheck>;
   }
 
   /**
@@ -372,9 +401,13 @@ export class FileFinder {
   }
 
   /**
-   * Check if the file finder is initialized.
+   * Get a health check without requiring an instance.
+   *
+   * Returns limited info (version + git only, no picker/frecency/query data).
+   *
+   * @param testPath - Optional path to test git repository detection
    */
-  static isInitialized(): boolean {
-    return this.initialized;
+  static healthCheckStatic(testPath?: string): Result<HealthCheck> {
+    return ffiHealthCheck(null, testPath || "") as Result<HealthCheck>;
   }
 }

@@ -66,7 +66,6 @@ impl<C: ParserConfig> QueryParser<C> {
             return None;
         }
 
-        // Stack-allocated buffer for text parts (up to 16 parts)
         let mut text_parts = TextPartsBuffer::new();
         let tokens = query.split_whitespace();
 
@@ -120,6 +119,40 @@ impl<C: ParserConfig> QueryParser<C> {
             fuzzy_query,
             location,
         })
+    }
+}
+
+impl<'a> FFFQuery<'a> {
+    /// Returns the grep search text by joining all non-constraint text tokens.
+    ///
+    /// Backslash-escaped tokens (e.g. `\*.rs`) are included as literal text
+    /// with the leading `\` stripped, since the backslash is only an escape
+    /// signal to the parser and should not appear in the final pattern.
+    ///
+    /// `FuzzyQuery::Empty` → empty string  
+    /// `FuzzyQuery::Text("foo")` → `"foo"`  
+    /// `FuzzyQuery::Parts(["a", "\\*.rs", "b"])` → `"a *.rs b"`
+    pub fn grep_text(&self) -> String {
+        match &self.fuzzy_query {
+            FuzzyQuery::Empty => String::new(),
+            FuzzyQuery::Text(t) => strip_leading_backslash(t).to_string(),
+            FuzzyQuery::Parts(parts) => parts
+                .iter()
+                .map(|t| strip_leading_backslash(t))
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+}
+
+/// Strip the leading `\` from a backslash-escaped token, returning the rest.
+/// For all other tokens returns the input unchanged.
+#[inline]
+fn strip_leading_backslash(token: &str) -> &str {
+    if token.starts_with('\\') && token.len() > 1 {
+        &token[1..]
+    } else {
+        token
     }
 }
 
@@ -351,7 +384,7 @@ fn parse_git_status(value: &str) -> Option<Constraint<'_>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FilePickerConfig;
+    use crate::{FilePickerConfig, GrepConfig};
 
     #[test]
     fn test_parse_extension() {
@@ -548,8 +581,99 @@ mod tests {
     }
 
     #[test]
+    fn test_grep_text_plain_text() {
+        // Multi-token plain text — no constraints
+        let q = QueryParser::new(GrepConfig)
+            .parse("name =")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "name =");
+    }
+
+    #[test]
+    fn test_grep_text_strips_constraint() {
+        let q = QueryParser::new(GrepConfig)
+            .parse("name = *.rs someth")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "name = someth");
+    }
+
+    #[test]
+    fn test_grep_text_leading_constraint() {
+        let q = QueryParser::new(GrepConfig)
+            .parse("*.rs name =")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "name =");
+    }
+
+    #[test]
+    fn test_grep_text_only_constraints() {
+        let q = QueryParser::new(GrepConfig)
+            .parse("*.rs /src/")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "");
+    }
+
+    #[test]
+    fn test_grep_text_path_constraint() {
+        let q = QueryParser::new(GrepConfig)
+            .parse("name /src/ value")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "name value");
+    }
+
+    #[test]
+    fn test_grep_text_negation_constraint() {
+        let q = QueryParser::new(GrepConfig)
+            .parse("name !*.rs value")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "name value");
+    }
+
+    #[test]
+    fn test_grep_text_backslash_escape_stripped() {
+        // \*.rs should be text with the leading \ removed
+        let q = QueryParser::new(GrepConfig)
+            .parse("\\*.rs foo")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "*.rs foo");
+
+        let q = QueryParser::new(GrepConfig)
+            .parse("\\/src/ foo")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "/src/ foo");
+
+        let q = QueryParser::new(GrepConfig)
+            .parse("\\!test foo")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "!test foo");
+    }
+
+    #[test]
+    fn test_grep_text_question_mark_is_text() {
+        let q = QueryParser::new(GrepConfig)
+            .parse("foo? bar")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "foo? bar");
+    }
+
+    #[test]
+    fn test_grep_text_bracket_is_text() {
+        let q = QueryParser::new(GrepConfig)
+            .parse("arr[0] more")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "arr[0] more");
+    }
+
+    #[test]
+    fn test_grep_text_path_glob_is_constraint() {
+        let q = QueryParser::new(GrepConfig)
+            .parse("pattern src/**/*.rs")
+            .expect("should parse");
+        assert_eq!(q.grep_text(), "pattern");
+    }
+
+    #[test]
     fn test_grep_question_mark_is_text() {
-        use crate::GrepConfig;
         let parser = QueryParser::new(GrepConfig);
         // Single token "foo?" should return None (treated as plain text by caller)
         let result = parser.parse("foo?");
@@ -558,7 +682,6 @@ mod tests {
 
     #[test]
     fn test_grep_bracket_is_text() {
-        use crate::GrepConfig;
         let parser = QueryParser::new(GrepConfig);
         let result = parser.parse("arr[0] something");
         let result = result.expect("Should parse multi-token query");
@@ -568,7 +691,6 @@ mod tests {
 
     #[test]
     fn test_grep_path_glob_is_constraint() {
-        use crate::GrepConfig;
         let parser = QueryParser::new(GrepConfig);
         let result = parser
             .parse("pattern src/**/*.rs")
@@ -583,7 +705,6 @@ mod tests {
 
     #[test]
     fn test_grep_brace_is_constraint() {
-        use crate::GrepConfig;
         let parser = QueryParser::new(GrepConfig);
         let result = parser
             .parse("pattern {src,lib}")
@@ -597,7 +718,6 @@ mod tests {
 
     #[test]
     fn test_grep_bare_star_is_text() {
-        use crate::GrepConfig;
         let parser = QueryParser::new(GrepConfig);
         // "a*b" contains * but no / or {} — should be text in grep mode
         let result = parser.parse("a*b something");
@@ -611,7 +731,6 @@ mod tests {
 
     #[test]
     fn test_grep_negated_text() {
-        use crate::GrepConfig;
         let parser = QueryParser::new(GrepConfig);
         let result = parser
             .parse("pattern !test")
@@ -631,7 +750,6 @@ mod tests {
 
     #[test]
     fn test_grep_negated_path_segment() {
-        use crate::GrepConfig;
         let parser = QueryParser::new(GrepConfig);
         let result = parser
             .parse("pattern !/src/")
@@ -651,7 +769,6 @@ mod tests {
 
     #[test]
     fn test_grep_negated_extension() {
-        use crate::GrepConfig;
         let parser = QueryParser::new(GrepConfig);
         let result = parser
             .parse("pattern !*.rs")

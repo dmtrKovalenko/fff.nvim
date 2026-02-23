@@ -167,7 +167,7 @@ impl IntoLua for GrepResultLua<'_> {
         }
         table.set("items", items_table)?;
 
-        table.set("total_matched", self.inner.total_match_count)?;
+        table.set("total_matched", self.inner.matches.len())?;
         table.set("total_files_searched", self.inner.total_files_searched)?;
         table.set("total_files", self.inner.total_files)?;
         table.set("filtered_file_count", self.inner.filtered_file_count)?;

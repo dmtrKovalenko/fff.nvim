@@ -127,7 +127,7 @@ pub fn is_modified_status(status: Status) -> bool {
 
 pub fn format_git_status(status: Option<Status>) -> &'static str {
     match status {
-        None => "clear",
+        None => "clean",
         Some(status) => {
             if status.contains(Status::WT_NEW) {
                 "untracked"
