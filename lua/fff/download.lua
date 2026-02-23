@@ -113,7 +113,16 @@ local function verify_sha256(file_path, expected_hash, callback)
       return
     end
 
-    local actual_hash = (result.stdout or ''):match('^%s*([0-9a-fA-F]+)')
+    local actual_hash
+    if sysname:match('windows') then
+      -- Output format of certutil on windows:
+      -- SHA256 hash <file_path>:
+      -- <hash>
+      -- CertUtil: -hashfile command completed successfully.
+      actual_hash = (result.stdout or ''):match("hash.-:\r?\n([%x ]+)\r?\nCertUtil: %-hashfile command completed successfully%.")
+    else
+      actual_hash = (result.stdout or ''):match('^%s*([0-9a-fA-F]+)')
+    end
     if not actual_hash then
       callback(false, 'Could not parse sha256 output: ' .. tostring(result.stdout))
       return
