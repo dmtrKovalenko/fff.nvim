@@ -6,6 +6,7 @@
 local M = {}
 
 local file_renderer = require('fff.file_renderer')
+local tresitter_highlight = require('fff.treesitter_hl')
 
 --- Build the file group header line using the same layout as file_renderer.
 --- Delegates to file_renderer.render_line (with combo disabled).
@@ -13,12 +14,9 @@ local file_renderer = require('fff.file_renderer')
 ---@param ctx table Render context
 ---@return string The header line string
 local function build_group_header(item, ctx)
-  -- file_renderer.render_line checks (item_idx == 1 and ctx.has_combo) for combo header.
-  -- We pass item_idx=0 and disable has_combo to suppress combo logic entirely.
-  local saved_has_combo = ctx.has_combo
   ctx.has_combo = false
   local lines = file_renderer.render_line(item, ctx, 0)
-  ctx.has_combo = saved_has_combo
+  ctx.has_combo = false -- never has a combo in grep
   return lines[1]
 end
 
@@ -49,16 +47,14 @@ local function render_match_line(item, ctx)
   local location = string.format(':%d:%d', item.line_number or 0, (item.col or 0) + 1)
   local separator = '  '
   local raw_content = item.line_content or ''
-  local leading_ws = #raw_content - #raw_content:match('^%s*(.*)')
-  local content = vim.trim(raw_content)
+  local content = raw_content
 
   -- Indent + location + separator + content
   local indent = ' '
-  -- Prefix is always ASCII so byte length == display width
   local prefix_display_w = #indent + #location + #separator
   local available = ctx.win_width - prefix_display_w - 2
-  local was_truncated = false
   local content_display_w = vim.fn.strdisplaywidth(content)
+
   if content_display_w > available and available > 3 then
     -- UTF-8 aware truncation: binary search for the character count that
     -- fits within the available display width (handles multi-byte and wide chars)
@@ -73,15 +69,11 @@ local function render_match_line(item, ctx)
       end
     end
     content = vim.fn.strcharpart(content, 0, lo) .. '…'
-    was_truncated = true
   end
 
   local line = indent .. location .. separator .. content
   local padding = math.max(0, ctx.win_width - vim.fn.strdisplaywidth(line) + 5)
 
-  -- Store transient data on item for highlight pass
-  item._leading_ws = leading_ws
-  item._was_truncated = was_truncated
   item._match_indent = #indent
   item._content_offset = prefix_display_w -- byte offset where content starts in the line
   item._trimmed_content = content -- trimmed content string for treesitter parsing
@@ -102,9 +94,6 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
   local is_cursor = item_idx == ctx.cursor
   local indent = item._match_indent or 1
 
-  -- 1. Cursor line highlight — use hl_group + hl_eol instead of line_hl_group
-  -- so that higher-priority inline extmarks (IncSearch match ranges at 200)
-  -- cleanly override both fg and bg on the cursor line.
   if is_cursor then
     vim.api.nvim_buf_set_extmark(buf, ns_id, row, 0, {
       end_col = 0,
@@ -143,16 +132,16 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
   -- below IncSearch match ranges (200) so search matches take precedence.
   local content_start = sep_end
   if item._trimmed_content and item.name then
-    local ts_hl = require('fff.treesitter_hl')
     -- Resolve language once per file group (cache on the render context)
     ctx._ts_lang_cache = ctx._ts_lang_cache or {}
     local lang = ctx._ts_lang_cache[item.name]
     if lang == nil then
-      lang = ts_hl.lang_from_filename(item.name) or false
+      lang = tresitter_highlight.lang_from_filename(item.name) or false
       ctx._ts_lang_cache[item.name] = lang
     end
+
     if lang then
-      local highlights = ts_hl.get_line_highlights(item._trimmed_content, lang)
+      local highlights = tresitter_highlight.get_line_highlights(item._trimmed_content, lang)
       for _, hl in ipairs(highlights) do
         local hl_start = content_start + hl.col
         local hl_end = content_start + hl.end_col
@@ -171,16 +160,14 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
   -- Use extmarks with priority > cursor line (100) so IncSearch renders
   -- properly on the selected line instead of being overridden by CursorLine.
   if item.match_ranges then
-    local leading_ws = item._leading_ws or 0
     for _, range in ipairs(item.match_ranges) do
       local raw_start = range[1] or 0
       local raw_end = range[2] or 0
-      local adj_start = raw_start - leading_ws
-      local adj_end = raw_end - leading_ws
-      if adj_end > 0 then
-        adj_start = math.max(0, adj_start)
-        local hl_start = content_start + adj_start
-        local hl_end = content_start + adj_end
+
+      if raw_end > 0 then
+        raw_start = math.max(0, raw_start)
+        local hl_start = content_start + raw_start
+        local hl_end = content_start + raw_end
         if hl_start < #line_content and hl_end <= #line_content then
           pcall(vim.api.nvim_buf_set_extmark, buf, ns_id, row, hl_start, {
             end_col = hl_end,
@@ -210,9 +197,8 @@ end
 --- or 1 line [match] for subsequent matches in the same file.
 ---@param item table Grep match item
 ---@param ctx table Render context
----@param item_idx number 1-based item index
 ---@return string[]
-function M.render_line(item, ctx, item_idx)
+function M.render_line(item, ctx, _item_idx)
   -- Track file grouping across the render pass via ctx
   -- ctx._grep_last_file is reset each render (ctx is fresh per render_list call)
   local is_new_group = (item.path ~= ctx._grep_last_file)
@@ -221,8 +207,8 @@ function M.render_line(item, ctx, item_idx)
   local match_line = render_match_line(item, ctx)
 
   if is_new_group then
-    local header_line = build_group_header(item, ctx)
     item._has_group_header = true
+    local header_line = build_group_header(item, ctx)
     return { header_line, match_line }
   else
     item._has_group_header = false

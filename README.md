@@ -185,6 +185,7 @@ require('fff').setup({
       -- this are specific for the normal mode (you can exit it using any other keybind like jj)
       focus_list = '<leader>l',
       focus_preview = '<leader>p',
+      toggle_grep_regex = '<S-Tab>',
     },
     hl = {
       border = 'FloatBorder',
@@ -193,12 +194,12 @@ require('fff').setup({
       matched = 'IncSearch',
       title = 'Title',
       prompt = 'Question',
-      active_file = 'Visual',
+      cursor = fallback_hl({ 'CursorLine', 'Visual' }),
       frecency = 'Number',
       debug = 'Comment',
       combo_header = 'Number',
-      scrollbar = 'Comment', -- Highlight for scrollbar thumb (track uses border)
-      directory_path = 'Comment', -- Highlight for directory path in file list
+      scrollbar = 'Comment',
+      directory_path = 'Comment',
       -- Multi-select highlights
       selected = 'FFFSelected',
       selected_active = 'FFFSelectedActive',
@@ -227,9 +228,10 @@ require('fff').setup({
       grep_match = 'IncSearch',               -- Highlight for matched text in grep results
       grep_line_number = 'LineNr',            -- Highlight for :line:col location
       grep_regex_active = 'DiagnosticInfo',   -- Highlight for keybind + label when regex is on
-      grep_regex_inactive = 'Comment',        -- Highlight for keybind + label when regex is off
+      grep_plain_active = 'Comment',        -- Highlight for keybind + label when regex is off
+      grep_fuzzy_active = 'DiagnosticHint',   -- Highlight for keybind + label when fuzzy is on
       -- Cross-mode suggestion highlights
-      suggestion_header = 'WarningMsg',       -- Highlight for the "No results found. Suggested..." banner
+      suggestion_header = 'WarningMsg', -- Highlight for the "No results found. Suggested..." banner
     },
     -- Store file open frecency
     frecency = {
@@ -240,8 +242,8 @@ require('fff').setup({
     history = {
       enabled = true,
       db_path = vim.fn.stdpath('data') .. '/fff_queries',
-      min_combo_count = 3, -- file will get a boost if it was selected 3 in a row times per specific query
-      combo_boost_score_multiplier = 100, -- Score multiplier for combo matches
+      min_combo_count = 3, -- Minimum selections before combo boost applies (3 = boost starts on 3rd selection)
+      combo_boost_score_multiplier = 100, -- Score multiplier for combo matches (files repeatedly opened with same query)
     },
     -- Git integration
     git = {
@@ -257,15 +259,19 @@ require('fff').setup({
       log_file = vim.fn.stdpath('log') .. '/fff.log',
       log_level = 'info',
     },
-    -- Live grep search configuration
+    -- find_files settings
+    file_picker = {
+      current_file_label = '(current)',
+    },
+    -- grep settings
     grep = {
       max_file_size = 10 * 1024 * 1024, -- Skip files larger than 10MB
       max_matches_per_file = 100, -- Maximum matches per file (set 0 to unlimited)
       smart_case = true, -- Case-insensitive unless query has uppercase
       time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
       modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
-    }
-})
+    },
+  }})
 ```
 
 ### Key Features

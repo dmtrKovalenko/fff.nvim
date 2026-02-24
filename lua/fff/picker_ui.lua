@@ -1358,8 +1358,6 @@ local function render_grep_empty_state(ctx)
 
   -- For bottom prompt, ensure empty state is anchored at the bottom
   if prompt_position == 'bottom' then scroll_to_bottom() end
-
-  -- Apply highlights
   for _, h in ipairs(hl_cmds) do
     pcall(vim.api.nvim_buf_add_highlight, M.state.list_buf, M.state.ns_id, h.hl, h.row, h.col_start, h.col_end)
   end
@@ -1408,17 +1406,9 @@ local function build_render_context()
   local win_width = vim.api.nvim_win_get_width(M.state.list_win)
   local prompt_position = get_prompt_position()
 
-  -- Get actual text offset (signcolumn + foldcolumn + line numbers)
   local win_info = vim.fn.getwininfo(M.state.list_win)[1]
   local text_offset = win_info and win_info.textoff or 2
   local text_width = win_width - text_offset
-
-  -- Cursor validation
-  if M.state.cursor < 1 then
-    M.state.cursor = 1
-  elseif M.state.cursor > #items then
-    M.state.cursor = #items
-  end
 
   -- Combo detection (only in file picker mode with real results, not grep or suggestions)
   local combo_boost_score_multiplier = config.history and config.history.combo_boost_multiplier or 100
@@ -1482,10 +1472,6 @@ local function build_render_context()
   }
 end
 
--- NOTE: Line generation, bottom padding, buffer writes, cursor positioning,
--- and highlight application are handled by list_renderer.lua.
--- picker_ui delegates to list_renderer.render() in render_list() below.
-
 local function finalize_render(item_to_lines, ctx)
   local combo_text_len = nil
   if ctx.combo_item_index and item_to_lines[ctx.combo_item_index] then
@@ -1520,8 +1506,6 @@ function M.render_list()
   if not M.state.active then return end
 
   local ctx = build_render_context()
-
-  -- Grep empty state: render a welcome view instead of the normal item list
   if M.state.mode == 'grep' and #ctx.items == 0 then
     render_grep_empty_state(ctx)
     return
@@ -1717,6 +1701,7 @@ end
 function M.update_status(progress)
   if not M.state.active or not M.state.ns_id then return end
   local config = M.state.config
+  if config == nil then return end
 
   if M.state.mode == 'grep' then
     -- Determine available modes to decide if we should show the mode indicator
@@ -1750,7 +1735,7 @@ function M.update_status(progress)
     local mode_label = mode_labels[M.state.grep_mode] or 'plain'
     local hl
     if M.state.grep_mode == 'plain' then
-      hl = config.hl.grep_regex_inactive or 'Comment'
+      hl = config.hl.grep_plain_active or 'Comment'
     elseif M.state.grep_mode == 'regex' then
       hl = config.hl.grep_regex_active or 'DiagnosticInfo'
     else -- fuzzy
