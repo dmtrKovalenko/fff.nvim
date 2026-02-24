@@ -961,10 +961,6 @@ function M.update_results_sync()
         or nil
     end
   end
-
-  local prompt_position = get_prompt_position()
-
-  -- Calculate page size dynamically based on window height
   local page_size
   if M.state.list_win and vim.api.nvim_win_is_valid(M.state.list_win) then
     page_size = vim.api.nvim_win_get_height(M.state.list_win)
@@ -1078,11 +1074,10 @@ end
 
 --- Load page with given page index
 function M.load_page_at_index(new_page_index, adjust_cursor_fn)
+  local ok, err, results
   local page_size = M.state.pagination.page_size
 
-  -- Protect against division by zero
   if page_size == 0 then return false end
-
   if M.state.mode ~= 'grep' then
     local total = M.state.pagination.total_matched
     if total == 0 then return false end
@@ -1094,9 +1089,6 @@ function M.load_page_at_index(new_page_index, adjust_cursor_fn)
     new_page_index = math.max(0, math.min(new_page_index, max_page_index))
   end
 
-  local prompt_position = get_prompt_position()
-
-  local ok, results
   if M.state.mode == 'grep' then
     -- File-based pagination: look up the file_offset for this page from our history
     local file_offset = M.state.pagination.grep_file_offsets[new_page_index + 1] -- 1-based Lua index
@@ -1153,14 +1145,14 @@ function M.load_page_at_index(new_page_index, adjust_cursor_fn)
 
   -- Adjust cursor position (provided by caller)
   if adjust_cursor_fn then
-    local ok, err = pcall(adjust_cursor_fn, #results)
-    if not ok then
-      vim.notify('Error in cursor adjustment: ' .. tostring(err), vim.log.levels.ERROR)
+    local cursor_ok, cursor_err = pcall(adjust_cursor_fn, #results)
+    if not cursor_ok then
+      vim.notify('Error in cursor adjustment: ' .. tostring(cursor_err), vim.log.levels.ERROR)
       return false
     end
   end
 
-  local ok, err = pcall(M.render_list)
+  ok, err = pcall(M.render_list)
   if not ok then
     vim.notify('Error in render_list: ' .. tostring(err), vim.log.levels.ERROR)
     return false
@@ -1194,7 +1186,7 @@ function M.load_next_page()
       return false -- No more files
     end
     local new_page_index = current_page + 1
-    return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = 1 end)
+    return M.load_page_at_index(new_page_index, function() M.state.cursor = 1 end)
   end
 
   local total = M.state.pagination.total_matched
@@ -1205,7 +1197,7 @@ function M.load_next_page()
 
   local new_page_index = current_page + 1
 
-  return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = 1 end)
+  return M.load_page_at_index(new_page_index, function() M.state.cursor = 1 end)
 end
 
 --- Load previous page (scroll up reached beginning)
@@ -1213,7 +1205,6 @@ function M.load_previous_page()
   if M.state.pagination.page_index == 0 then return false end
 
   local new_page_index = M.state.pagination.page_index - 1
-  local prompt_position = get_prompt_position()
 
   return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = result_count end)
 end
@@ -1364,7 +1355,6 @@ local function render_grep_empty_state(ctx)
     pcall(vim.api.nvim_buf_add_highlight, M.state.list_buf, M.state.ns_id, h.hl, h.row, h.col_start, h.col_end)
   end
 
-  local tip_offset = prompt_position == 'bottom' and math.max(0, win_height - #content + (win_height - #content)) or 0
   for i = 0, #content - 1 do
     local line = content[i + 1]
     if

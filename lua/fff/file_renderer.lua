@@ -29,7 +29,7 @@ function M.render_line(item, ctx, item_idx)
   local has_combo = item_idx == 1 and ctx.has_combo and ctx.combo_header_line
   if has_combo then table.insert(lines, ctx.combo_header_line) end
 
-  local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
+  local icon, _ = icons.get_icon(item.name, item.extension, false)
 
   -- Build frecency indicator (debug mode only)
   local frecency = ''

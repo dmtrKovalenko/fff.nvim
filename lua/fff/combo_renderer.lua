@@ -41,7 +41,7 @@ local function detect_combo_item(items, file_picker, combo_boost_score_multiplie
 end
 
 local function create_header_text(combo_count, win_width, disable_combo_display)
-  local combo_text = nil
+  local combo_text
   if disable_combo_display then
     combo_text = LAST_MATCH_TEXT_FORMAT
   else

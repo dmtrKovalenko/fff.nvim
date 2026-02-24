@@ -44,7 +44,7 @@ function M.get_directory_icon(dirname)
     end
   elseif M.provider_name == 'mini.icons' then
     if M.provider.get then
-      local icon, hl, is_default = M.provider.get('directory', basename)
+      local icon, hl, _ = M.provider.get('directory', basename)
       if icon and icon ~= '' and hl then return icon, hl end
     end
   end

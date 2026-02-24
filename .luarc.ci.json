@@ -9,6 +9,7 @@
       "/opt/nvim/share/nvim/runtime/lua/vim/_meta",
       "/opt/nvim/share/nvim/runtime/lua/vim/shared.lua",
       "${3rd}/luv/library",
+      "${3rd}/busted/library",
       "/opt/snacks.nvim/lua"
     ],
     "checkThirdParty": false
@@ -21,7 +22,9 @@
       "redundant-parameter": "Warning",
       "param-type-mismatch": "Warning",
       "assign-type-mismatch": "Warning",
-      "cast-type-mismatch": "Warning"
+      "cast-type-mismatch": "Warning",
+      "deprecated": "Hint",
+      "undefined-doc-param": "Hint"
     },
     "neededFileStatus": {
       "undefined-global": "Any",
@@ -30,7 +33,9 @@
       "redundant-parameter": "Any",
       "param-type-mismatch": "Any",
       "assign-type-mismatch": "Any",
-      "cast-type-mismatch": "Any"
+      "cast-type-mismatch": "Any",
+      "deprecated": "Any",
+      "undefined-doc-param": "Any"
     }
   },
   "type": {

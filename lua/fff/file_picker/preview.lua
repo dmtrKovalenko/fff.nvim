@@ -157,7 +157,7 @@ end
 -- Forward declaration for ensure_content_loaded_async (used in read_file_streaming_async callback)
 local ensure_content_loaded_async
 
-local function read_file_streaming_async(file_path, bufnr, callback)
+local function read_file_streaming_async(file_path, callback)
   local generation = M.state.preview_generation
 
   init_dynamic_loading_async(file_path, function(success, error_msg)
@@ -317,7 +317,7 @@ end
 --- @param file_path string Path to the file
 --- @param bufnr number|nil Buffer number to check (unused with dynamic loading)
 --- @return boolean True if file is too big for initial preview
-function M.is_big_file(file_path, bufnr)
+function M.is_big_file(file_path)
   -- Only check file size for early detection - no line limits with dynamic loading
   local stat = vim.uv.fs_stat(file_path)
   if stat and stat.size > M.config.max_size then return true end
@@ -458,7 +458,7 @@ end
 --- @return boolean Success status
 function M.preview_file(file_path, bufnr)
   -- Early size detection to prevent memory issues
-  if M.is_big_file(file_path, bufnr) then
+  if M.is_big_file(file_path) then
     local info = M.get_file_info(file_path)
     local lines = {
       'File too large for preview',
@@ -506,7 +506,7 @@ function M.preview_file(file_path, bufnr)
   M.state.bufnr = bufnr
   local generation = M.state.preview_generation
 
-  read_file_streaming_async(file_path, bufnr, function(content, err, loading_more)
+  read_file_streaming_async(file_path, function(content, err, loading_more)
     if M.state.preview_generation ~= generation then
       -- Preview moved on to a different file, discard
       cleanup_file_operation()
@@ -648,10 +648,7 @@ function M.preview(file_path, bufnr, location, is_binary)
 
     if not M.state.winid or not vim.api.nvim_win_is_valid(M.state.winid) then return false end
 
-    local win_width = vim.api.nvim_win_get_width(M.state.winid) - 2
-    local win_height = vim.api.nvim_win_get_height(M.state.winid) - 2
-
-    return image.display_image(file_path, bufnr, win_width, win_height)
+    return image.display_image(file_path, bufnr)
   elseif is_binary then
     return M.preview_binary_file(file_path, bufnr)
   else

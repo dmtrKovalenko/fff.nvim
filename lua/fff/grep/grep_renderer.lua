@@ -199,7 +199,7 @@ end
 ---@param item FileItem Grep match item
 ---@param ctx table Render context
 ---@return string[]
-function M.render_line(item, ctx, _item_idx)
+function M.render_line(item, ctx)
   -- Track file grouping across the render pass via ctx
   -- ctx._grep_last_file is reset each render (ctx is fresh per render_list call)
   local is_new_group = (item.path ~= ctx._grep_last_file)
