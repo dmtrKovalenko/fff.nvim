@@ -12,6 +12,7 @@ local fuzzy = require('fff.fuzzy')
 ---@field total_files number Total indexed files
 ---@field filtered_file_count number Total searchable files after filtering
 ---@field next_file_offset number File offset to pass for the next page (0 = no more results)
+---@field regex_fallback_error string|nil Error message if regex compilation failed and search fell back to literal
 
 local last_result = nil
 

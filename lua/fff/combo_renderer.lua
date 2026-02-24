@@ -70,6 +70,7 @@ end
 
 local function get_or_create_overlay_buf(state_key)
   if not overlay_state[state_key] or not vim.api.nvim_buf_is_valid(overlay_state[state_key]) then
+    ---@diagnostic disable-next-line: assign-type-mismatch
     overlay_state[state_key] = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_option(overlay_state[state_key], 'bufhidden', 'wipe')
   end
@@ -101,6 +102,7 @@ local function position_overlay_window(state_key, buf, width, row, col)
   if overlay_state[state_key] and vim.api.nvim_win_is_valid(overlay_state[state_key]) then
     vim.api.nvim_win_set_config(overlay_state[state_key], win_config)
   else
+    ---@diagnostic disable-next-line: assign-type-mismatch
     overlay_state[state_key] = vim.api.nvim_open_win(buf, false, win_config)
   end
 

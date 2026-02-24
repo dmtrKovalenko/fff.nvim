@@ -101,7 +101,7 @@ end
 --- @field file_info_height number
 
 --- Calculate layout dimensions and positions for all windows
---- @param cfg LayoutConfig
+--- @param cfg table
 --- @return table Layout configuration
 function M.calculate_layout_dimensions(cfg)
   local BORDER_SIZE = 2
@@ -319,7 +319,7 @@ M.state = {
   last_preview_file = nil,
   last_preview_location = nil, -- Track last preview location to detect changes
 
-  preview_timer = nil, -- Separate timer for preview updates
+  preview_timer = nil, ---@type uv.uv_timer_t|nil -- Separate timer for preview updates
   preview_debounce_ms = 100, -- Preview is more expensive, debounce more
 
   -- Set of selected file paths: { [filepath] = true }
@@ -362,6 +362,7 @@ function M.create_ui()
   local terminal_height = vim.o.lines
 
   -- Calculate width and height (support function or number)
+  ---@diagnostic disable: need-check-nil
   local width_ratio = utils.resolve_config_value(
     config.layout.width,
     terminal_width,
@@ -426,6 +427,7 @@ function M.create_ui()
     0.4,
     'layout.preview_size'
   )
+  ---@diagnostic enable: need-check-nil
 
   local layout_config = {
     total_width = width,
@@ -881,6 +883,7 @@ function M.toggle_grep_regex()
 
   local config = conf.get()
   -- Use grep_config.modes if provided, otherwise fall back to global config
+  ---@diagnostic disable-next-line: undefined-field
   local modes = (M.state.grep_config and M.state.grep_config.modes)
     or config.grep.modes
     or { 'plain', 'regex', 'fuzzy' }
@@ -1050,7 +1053,7 @@ function M.update_results_sync()
     else
       -- File search returned nothing — try grep as suggestion
       local grep = require('fff.grep')
-      local grep_result = grep.search(M.state.query, 0, page_size, M.state.grep_config, false)
+      local grep_result = grep.search(M.state.query, 0, page_size, M.state.grep_config, 'plain')
       local grep_items = grep_result and grep_result.items or {}
       if #grep_items > 0 then
         M.state.suggestion_items = grep_items
@@ -1224,7 +1227,7 @@ function M.update_preview_debounced()
   end
 
   -- Create new timer with longer debounce for expensive preview
-  M.state.preview_timer = vim.loop.new_timer()
+  M.state.preview_timer = vim.uv.new_timer()
   M.state.preview_timer:start(
     M.state.preview_debounce_ms,
     0,
@@ -1250,6 +1253,7 @@ function M.update_preview_smart()
     return
   end
 
+  ---@diagnostic disable-next-line: need-check-nil
   local item = items[M.state.cursor]
   if not item then
     M.update_preview()
@@ -1335,8 +1339,6 @@ local function render_grep_empty_state(ctx)
   table.insert(content, '    "pattern /src/"   limit search to src/ directory')
   table.insert(content, '    "!test pattern"   exclude test files')
   table.insert(content, '')
-
-  table.insert(content, border_bot)
 
   -- For bottom prompt: push content to the bottom by prepending empty lines
   if prompt_position == 'bottom' then
@@ -1608,6 +1610,7 @@ function M.update_preview()
     return
   end
 
+  ---@diagnostic disable-next-line: need-check-nil
   local item = items[M.state.cursor]
   if not item then
     M.clear_preview()
@@ -1706,6 +1709,7 @@ function M.update_status(progress)
   if M.state.mode == 'grep' then
     -- Determine available modes to decide if we should show the mode indicator
     -- Use grep_config.modes if provided, otherwise fall back to global config
+    ---@diagnostic disable-next-line: undefined-field
     local modes = (M.state.grep_config and M.state.grep_config.modes)
       or config.grep.modes
       or { 'plain', 'regex', 'fuzzy' }
@@ -2052,6 +2056,7 @@ function M.toggle_select()
   local items = M.state.filtered_items
   if #items == 0 or M.state.cursor > #items then return end
 
+  ---@diagnostic disable-next-line: need-check-nil
   local item = items[M.state.cursor]
   if not item or not item.path then return end
 
@@ -2182,6 +2187,7 @@ function M.select(action)
   local items = M.state.filtered_items
   if #items == 0 or M.state.cursor > #items then return end
 
+  ---@diagnostic disable-next-line: need-check-nil
   local item = items[M.state.cursor]
   if not item then return end
 
@@ -2332,9 +2338,10 @@ function M.close()
 end
 
 --- Helper function to determine current file cache for deprioritization
---- @param base_path string Base path for relative path calculation
+--- @param base_path string|nil Base path for relative path calculation
 --- @return string|nil Current file cache path
 local function get_current_file_cache(base_path)
+  if not base_path then return nil end
   local current_buf = vim.api.nvim_get_current_buf()
   if not current_buf or not vim.api.nvim_buf_is_valid(current_buf) then return nil end
 
@@ -2359,7 +2366,7 @@ end
 
 --- Helper function for common picker initialization
 --- @param opts table|nil Options passed to the picker
---- @return table|nil Merged configuration, nil if initialization failed
+--- @return table|nil, string|nil Merged configuration and base path, nil config if initialization failed
 local function initialize_picker(opts)
   local base_path = opts and opts.cwd or vim.uv.cwd()
 
@@ -2448,7 +2455,7 @@ function M.open_with_callback(query, callback, opts)
   if not merged_config then return false end
 
   local current_file_cache = get_current_file_cache(base_path)
-  local results = file_picker.search_files(query, nil, nil, current_file_cache, nil)
+  local results = file_picker.search_files(query, current_file_cache, nil, nil, nil)
 
   local metadata = file_picker.get_search_metadata()
   local location = file_picker.get_search_location()
@@ -2500,6 +2507,7 @@ function M.open(opts)
   -- Initialize grep_mode to first configured mode when opening in grep mode
   if M.state.mode == 'grep' then
     -- Use grep_config.modes if provided, otherwise fall back to global config
+    ---@diagnostic disable-next-line: undefined-field
     local modes = (M.state.grep_config and M.state.grep_config.modes)
       or merged_config.grep.modes
       or { 'plain', 'regex', 'fuzzy' }
@@ -2507,7 +2515,7 @@ function M.open(opts)
   end
 
   local current_file_cache = get_current_file_cache(base_path)
-  local query = opts and opts.query or nil
+  local query = opts and opts.query or nil ---@type string|nil
   return open_ui_with_state(query, nil, nil, merged_config, current_file_cache)
 end
 

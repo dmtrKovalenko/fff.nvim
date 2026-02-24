@@ -296,7 +296,7 @@ M.state = {
   loading_chunk_size = 1000,
   is_loading = false,
   has_more_content = true,
-  file_handle = nil,
+  file_handle = nil, ---@type uv.uv_fs_t|nil
   file_operation = nil, -- Ongoing file operation: {fd?: any, file_path?: string, position?: number}
   location = nil, -- Current location data for highlighting
   location_namespace = nil, -- Namespace for location highlighting
@@ -353,7 +353,7 @@ end
 --- Create file info content without custom borders
 --- @param file table File information from search results
 --- @param info table File system information
---- @param file_index number Index of the file in search results (for score lookup)
+--- @param file_index number|nil Index of the file in search results (for score lookup)
 --- @return table Lines for the file info content
 function M.create_file_info_content(file, info, file_index)
   local lines = {}
@@ -629,6 +629,7 @@ function M.preview(file_path, bufnr, location, is_binary)
   M.state.preview_generation = M.state.preview_generation + 1
 
   if M.state.file_handle then
+    ---@diagnostic disable-next-line: undefined-field
     M.state.file_handle:close()
     M.state.file_handle = nil
   end
