@@ -230,7 +230,7 @@ all available options:
           grep_match = 'IncSearch',               -- Highlight for matched text in grep results
           grep_line_number = 'LineNr',            -- Highlight for :line:col location
           grep_regex_active = 'DiagnosticInfo',   -- Highlight for keybind + label when regex is on
-          grep_regex_inactive = 'Comment',        -- Highlight for keybind + label when regex is off
+          grep_plain_active = 'Comment',        -- Highlight for keybind + label when regex is off
           -- Cross-mode suggestion highlights
           suggestion_header = 'WarningMsg',       -- Highlight for the "No results found. Suggested..." banner
         },

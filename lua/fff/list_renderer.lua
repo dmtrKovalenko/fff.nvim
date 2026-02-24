@@ -37,6 +37,7 @@ local M = {}
 --- @field selected_files table<string, boolean> Selected file paths set
 --- @field mode string|nil Current mode (nil or 'grep')
 --- @field format_file_display function Helper for formatting file display
+--- @field suggestion_source string|nil Active cross-mode suggestion source ('grep' or 'files')
 
 --- @class ItemLineMapping
 --- @field first number First buffer line (1-based) this item occupies
@@ -91,10 +92,7 @@ local function generate_item_lines(ctx)
     -- This contract is shared by file_renderer (combo header) and
     -- grep_renderer (file group header).
     local item_lines = renderer.render_line(item, ctx, i)
-
-    for _, line in ipairs(item_lines) do
-      table.insert(lines, line)
-    end
+    vim.list_extend(lines, item_lines)
 
     local item_end_line = #lines
     local virtual_count = item_end_line - item_start_line -- 0 if single line, 1 if header + content
