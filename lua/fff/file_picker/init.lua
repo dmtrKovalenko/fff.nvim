@@ -51,7 +51,7 @@ end
 --- @param max_threads number|nil Maximum number of threads to use
 --- @param min_combo_count_override number|nil Optional override for min_combo_count (nil uses config)
 --- @param page_index number Page index (0-based: 0, 1, 2, ...)
---- @param page_size number Items per page
+--- @param page_size number|nil Items per page (nil uses config default)
 --- @return table List of matching files
 function M.search_files_paginated(query, current_file, max_threads, min_combo_count_override, page_index, page_size)
   local config = require('fff.conf').get()

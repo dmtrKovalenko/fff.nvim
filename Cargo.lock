@@ -630,6 +630,7 @@ dependencies = [
  "libc",
  "libgit2-sys",
  "log",
+ "openssl-sys",
  "url",
 ]
 
@@ -985,6 +986,7 @@ dependencies = [
  "cc",
  "libc",
  "libz-sys",
+ "openssl-sys",
  "pkg-config",
 ]
 

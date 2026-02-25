@@ -17,6 +17,34 @@ function M.format_file_size(size)
   end
 end
 
+local function get_fixed_filetype_detection(extension)
+  local extension_map = {
+    ts = 'typescript',
+    tex = 'latex',
+    md = 'markdown',
+    txt = 'text',
+  }
+
+  return extension_map[extension]
+end
+
+--- Detect filetype with various fallbacks
+--- @param file_path string the filetype
+--- @return string detected filetype
+function M.detect_filetype(file_path)
+  local has_plenary, plenary_filetype = pcall(require, 'plenary.filetype')
+  if has_plenary then
+    local detected = plenary_filetype.detect(file_path, {})
+    if detected and detected ~= '' then return detected end
+  end
+
+  local builtin_filetype = vim.filetype.match({ filename = file_path })
+  if builtin_filetype and builtin_filetype ~= '' then return builtin_filetype end
+
+  local extension = vim.fn.fnamemodify(file_path, ':e'):lower()
+  return get_fixed_filetype_detection(extension)
+end
+
 --- Safely resolve a config value that can be either a static value or a function
 --- @param config_value any The config value (can be function or static value)
 --- @param terminal_width number Terminal width for function calls
@@ -24,7 +52,7 @@ end
 --- @param validator function Function to validate the result
 --- @param fallback any Fallback value if function fails or returns invalid value
 --- @param error_context string Context for error messages
---- @return any The resolved and validated value
+--- @return number The resolved and validated value
 function M.resolve_config_value(config_value, terminal_width, terminal_height, validator, fallback, error_context)
   if type(config_value) == 'function' then
     local success, result = pcall(config_value, terminal_width, terminal_height)
@@ -38,6 +66,7 @@ function M.resolve_config_value(config_value, terminal_width, terminal_height, v
       return fallback
     end
   else
+    if config_value == nil or not validator(config_value) then return fallback end
     return config_value
   end
 end

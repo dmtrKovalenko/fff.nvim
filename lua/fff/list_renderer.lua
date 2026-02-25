@@ -37,6 +37,7 @@ local M = {}
 --- @field selected_files table<string, boolean> Selected file paths set
 --- @field mode string|nil Current mode (nil or 'grep')
 --- @field format_file_display function Helper for formatting file display
+--- @field suggestion_source string|nil Active cross-mode suggestion source ('grep' or 'files')
 
 --- @class ItemLineMapping
 --- @field first number First buffer line (1-based) this item occupies
@@ -54,7 +55,7 @@ local M = {}
 --- When cross-mode suggestions are active, a suggestion banner is prepended
 --- (for top prompt) or appended (for bottom prompt) so it always appears
 --- above the suggestion items visually.
---- @param ctx ListRenderContext
+--- @param ctx table
 --- @return string[] lines Array of line strings
 --- @return table<number, ItemLineMapping> item_to_lines
 local function generate_item_lines(ctx)
@@ -90,11 +91,9 @@ local function generate_item_lines(ctx)
     -- Renderer returns 1+ lines: virtual headers first, content line last.
     -- This contract is shared by file_renderer (combo header) and
     -- grep_renderer (file group header).
+    ---@diagnostic disable-next-line: param-type-mismatch
     local item_lines = renderer.render_line(item, ctx, i)
-
-    for _, line in ipairs(item_lines) do
-      table.insert(lines, line)
-    end
+    vim.list_extend(lines, item_lines)
 
     local item_end_line = #lines
     local virtual_count = item_end_line - item_start_line -- 0 if single line, 1 if header + content
@@ -120,7 +119,7 @@ end
 --- Adjusts all line indices in item_to_lines accordingly.
 --- @param lines string[] Lines array (mutated)
 --- @param item_to_lines table<number, ItemLineMapping> Mapping (mutated)
---- @param ctx ListRenderContext
+--- @param ctx table
 --- @return number padding_offset Number of empty lines prepended
 local function apply_bottom_padding(lines, item_to_lines, ctx)
   if ctx.prompt_position ~= 'bottom' then return 0 end
@@ -151,7 +150,7 @@ end
 --- never a virtual header line.
 --- @param lines string[]
 --- @param item_to_lines table<number, ItemLineMapping>
---- @param ctx ListRenderContext
+--- @param ctx table
 --- @param list_buf number Buffer handle
 --- @param list_win number Window handle
 --- @param ns_id number Namespace id
@@ -180,7 +179,7 @@ end
 --- header highlights internally via the item._has_group_header flag.
 --- @param lines string[]
 --- @param item_to_lines table<number, ItemLineMapping>
---- @param ctx ListRenderContext
+--- @param ctx table
 --- @param list_buf number
 --- @param ns_id number
 local function apply_all_highlights(lines, item_to_lines, ctx, list_buf, ns_id)
@@ -198,6 +197,7 @@ local function apply_all_highlights(lines, item_to_lines, ctx, list_buf, ns_id)
 
     if not line_content then goto continue end
 
+    ---@diagnostic disable-next-line: param-type-mismatch
     renderer.apply_highlights(item, ctx, i, list_buf, ns_id, line_idx, line_content)
     ::continue::
   end
@@ -206,7 +206,7 @@ end
 --- Render the full item list into the buffer.
 --- This is the main entry point — replaces the inline rendering in picker_ui.
 ---
---- @param ctx ListRenderContext Render context built by picker_ui
+--- @param ctx table Render context built by picker_ui
 --- @param list_buf number List buffer handle
 --- @param list_win number List window handle
 --- @param ns_id number Highlight namespace

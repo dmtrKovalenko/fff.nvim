@@ -1,7 +1,5 @@
---- Treesitter Highlight Extraction
---- Extracts syntax highlights from a code string using treesitter.
---- Uses a per-language scratch buffer pool to avoid repeated buffer creation.
---- Results are returned as extmark-style tables { col, end_col, hl_group }.
+local utils = require('fff.utils')
+
 local M = {}
 
 --- Per-language scratch buffer cache
@@ -33,11 +31,7 @@ end
 function M.lang_from_filename(filename)
   if not filename or filename == '' then return nil end
 
-  -- Use vim.filetype.match to get the filetype from the filename
-  local ok, ft = pcall(vim.filetype.match, { filename = filename })
-  if not ok or not ft then return nil end
-
-  -- Convert filetype to treesitter language
+  local ft = utils.detect_filetype(filename) or 'text'
   local lang_ok, lang = pcall(vim.treesitter.language.get_lang, ft)
   if not lang_ok or not lang then lang = ft end
 
@@ -83,7 +77,7 @@ function M.get_line_highlights(text, lang)
     local query_ok, query = pcall(vim.treesitter.query.get, tree_lang, 'highlights')
     if not query_ok or not query then return end
 
-    for capture, node, metadata in query:iter_captures(root, buf, 0, 1) do
+    for capture, node, _ in query:iter_captures(root, buf, 0, 1) do
       local name = query.captures[capture]
       if name and name ~= 'spell' and name ~= 'conceal' then
         local start_row, start_col, end_row, end_col = node:range()

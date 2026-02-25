@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-field
 local fff_rust = require('fff.rust')
 
 --- Wait for the scan to fully complete, handling the startup race where

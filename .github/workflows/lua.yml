@@ -1,0 +1,50 @@
+name: Lua CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lua-ls:
+    name: lua-language-server type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Neovim
+        run: |
+          curl -L https://github.com/neovim/neovim/releases/download/v0.11.5/nvim-linux-x86_64.tar.gz -o /opt/nvim.tar.gz
+          mkdir /opt/nvim
+          tar xzf /opt/nvim.tar.gz -C /opt/nvim
+          mv /opt/nvim/nvim-linux-x86_64/* /opt/nvim
+          echo "/opt/nvim/bin" >> $GITHUB_PATH
+
+      - name: Install lua-language-server
+        run: |
+          curl -L "https://github.com/LuaLS/lua-language-server/releases/download/3.17.1/lua-language-server-3.17.1-linux-x64.tar.gz" -o /opt/lls.tar.gz
+          mkdir /opt/lls
+          tar -xzf /opt/lls.tar.gz -C /opt/lls
+          echo "/opt/lls/bin" >> $GITHUB_PATH
+
+      - name: Clone snacks.nvim
+        run: git clone --depth=1 https://github.com/folke/snacks.nvim /opt/snacks.nvim
+
+      - name: Run lua-language-server
+        run: lua-language-server --configpath .luarc.ci.json --check=.
+
+  luacheck:
+    name: luacheck lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install luacheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y luarocks
+          sudo luarocks install luacheck
+
+      - name: Run luacheck
+        run: luacheck lua/

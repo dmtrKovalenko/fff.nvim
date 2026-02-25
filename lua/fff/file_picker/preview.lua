@@ -5,32 +5,6 @@ local location_utils = require('fff.location_utils')
 
 local M = {}
 
--- Additional fallback for certain ambiguous filetypes which vim.filetype.match is not handling correctly
-local function get_fixed_filetype_detection(extension)
-  local extension_map = {
-    ts = 'typescript',
-    tex = 'latex',
-    md = 'markdown',
-    txt = 'text',
-  }
-
-  return extension_map[extension]
-end
-
-local function detect_filetype(file_path)
-  local has_plenary, plenary_filetype = pcall(require, 'plenary.filetype')
-  if has_plenary then
-    local detected = plenary_filetype.detect(file_path)
-    if detected and detected ~= '' then return detected end
-  end
-
-  local builtin_filetype = vim.filetype.match({ filename = file_path })
-  if builtin_filetype and builtin_filetype ~= '' then return builtin_filetype end
-
-  local extension = vim.fn.fnamemodify(file_path, ':e'):lower()
-  return get_fixed_filetype_detection(extension)
-end
-
 local function set_buffer_lines(bufnr, lines)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
@@ -183,7 +157,7 @@ end
 -- Forward declaration for ensure_content_loaded_async (used in read_file_streaming_async callback)
 local ensure_content_loaded_async
 
-local function read_file_streaming_async(file_path, bufnr, callback)
+local function read_file_streaming_async(file_path, callback)
   local generation = M.state.preview_generation
 
   init_dynamic_loading_async(file_path, function(success, error_msg)
@@ -322,7 +296,7 @@ M.state = {
   loading_chunk_size = 1000,
   is_loading = false,
   has_more_content = true,
-  file_handle = nil,
+  file_handle = nil, ---@type uv.uv_fs_t|nil
   file_operation = nil, -- Ongoing file operation: {fd?: any, file_path?: string, position?: number}
   location = nil, -- Current location data for highlighting
   location_namespace = nil, -- Namespace for location highlighting
@@ -343,7 +317,7 @@ end
 --- @param file_path string Path to the file
 --- @param bufnr number|nil Buffer number to check (unused with dynamic loading)
 --- @return boolean True if file is too big for initial preview
-function M.is_big_file(file_path, bufnr)
+function M.is_big_file(file_path)
   -- Only check file size for early detection - no line limits with dynamic loading
   local stat = vim.uv.fs_stat(file_path)
   if stat and stat.size > M.config.max_size then return true end
@@ -368,7 +342,7 @@ function M.get_file_info(file_path)
   }
 
   info.extension = vim.fn.fnamemodify(file_path, ':e'):lower()
-  info.filetype = detect_filetype(file_path) or 'text'
+  info.filetype = utils.detect_filetype(file_path) or 'text'
   info.size_formatted = utils.format_file_size(info.size)
   info.modified_formatted = os.date('%Y-%m-%d %H:%M:%S', info.modified)
   info.accessed_formatted = os.date('%Y-%m-%d %H:%M:%S', info.accessed)
@@ -379,7 +353,7 @@ end
 --- Create file info content without custom borders
 --- @param file table File information from search results
 --- @param info table File system information
---- @param file_index number Index of the file in search results (for score lookup)
+--- @param file_index number|nil Index of the file in search results (for score lookup)
 --- @return table Lines for the file info content
 function M.create_file_info_content(file, info, file_index)
   local lines = {}
@@ -484,7 +458,7 @@ end
 --- @return boolean Success status
 function M.preview_file(file_path, bufnr)
   -- Early size detection to prevent memory issues
-  if M.is_big_file(file_path, bufnr) then
+  if M.is_big_file(file_path) then
     local info = M.get_file_info(file_path)
     local lines = {
       'File too large for preview',
@@ -532,7 +506,7 @@ function M.preview_file(file_path, bufnr)
   M.state.bufnr = bufnr
   local generation = M.state.preview_generation
 
-  read_file_streaming_async(file_path, bufnr, function(content, err, loading_more)
+  read_file_streaming_async(file_path, function(content, err, loading_more)
     if M.state.preview_generation ~= generation then
       -- Preview moved on to a different file, discard
       cleanup_file_operation()
@@ -639,7 +613,7 @@ end
 function M.get_file_config(file_path)
   if not M.config or not M.config.filetypes then return {} end
 
-  local filetype = detect_filetype(file_path) or 'text'
+  local filetype = utils.detect_filetype(file_path) or 'text'
   return M.config.filetypes[filetype] or {}
 end
 
@@ -655,6 +629,7 @@ function M.preview(file_path, bufnr, location, is_binary)
   M.state.preview_generation = M.state.preview_generation + 1
 
   if M.state.file_handle then
+    ---@diagnostic disable-next-line: undefined-field
     M.state.file_handle:close()
     M.state.file_handle = nil
   end
@@ -673,10 +648,7 @@ function M.preview(file_path, bufnr, location, is_binary)
 
     if not M.state.winid or not vim.api.nvim_win_is_valid(M.state.winid) then return false end
 
-    local win_width = vim.api.nvim_win_get_width(M.state.winid) - 2
-    local win_height = vim.api.nvim_win_get_height(M.state.winid) - 2
-
-    return image.display_image(file_path, bufnr, win_width, win_height)
+    return image.display_image(file_path, bufnr)
   elseif is_binary then
     return M.preview_binary_file(file_path, bufnr)
   else
@@ -839,7 +811,6 @@ function M.apply_location_highlighting(bufnr)
 
   if not M.state.location then return end
 
-  -- Apply highlighting
   location_utils.highlight_location(bufnr, M.state.location, M.state.location_namespace)
 
   if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then

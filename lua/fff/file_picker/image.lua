@@ -144,12 +144,8 @@ end
 --- Fully asynchronous
 --- @param file_path string Path to the image file
 --- @param bufnr number Buffer number to display in
---- @param max_width number Maximum width in characters
---- @param max_height number Maximum height in characters
 --- @return boolean
-function M.display_image(file_path, bufnr, max_width, max_height)
-  max_width = max_width or 80
-  max_height = max_height or 24
+function M.display_image(file_path, bufnr)
   vim.api.nvim_buf_set_option(bufnr, 'number', false)
 
   local reserved_metadata_lines = reserve_image_buffer_space(bufnr, 2)
