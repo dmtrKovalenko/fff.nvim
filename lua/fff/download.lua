@@ -89,56 +89,6 @@ local function download_file(url, output_path, opts, callback)
   end)
 end
 
---- Verify the SHA256 of a file against an expected hash string.
---- @param file_path string
---- @param expected_hash string  lowercase hex SHA256
---- @param callback fun(ok: boolean, err: string|nil)
-local function verify_sha256(file_path, expected_hash, callback)
-  local cmd
-  local sysname = vim.uv.os_uname().sysname:lower()
-  if sysname:match('windows') then
-    cmd = { 'certutil', '-hashfile', file_path, 'SHA256' }
-  elseif sysname == 'darwin' then
-    cmd = { 'shasum', '-a', '256', file_path }
-  else
-    cmd = { 'sha256sum', file_path }
-  end
-
-  vim.system(cmd, {}, function(result)
-    if result.code ~= 0 then
-      local detail = (result.stderr and result.stderr ~= '' and result.stderr)
-        or (result.stdout and result.stdout ~= '' and result.stdout)
-        or 'unknown error'
-      callback(false, 'sha256 command failed: ' .. detail)
-      return
-    end
-
-    local actual_hash
-    if sysname:match('windows') then
-      -- Output format of certutil on windows:
-      -- SHA256 hash <file_path>:
-      -- <hash>
-      -- CertUtil: -hashfile command completed successfully.
-      actual_hash = (result.stdout or ''):match(
-        'hash.-:\r?\n([%x ]+)\r?\nCertUtil: %-hashfile command completed successfully%.'
-      )
-    else
-      actual_hash = (result.stdout or ''):match('^%s*([0-9a-fA-F]+)')
-    end
-    if not actual_hash then
-      callback(false, 'Could not parse sha256 output: ' .. tostring(result.stdout))
-      return
-    end
-
-    if actual_hash:lower() ~= expected_hash:lower() then
-      callback(false, string.format('SHA256 mismatch: expected %s, got %s', expected_hash, actual_hash:lower()))
-      return
-    end
-
-    callback(true, nil)
-  end)
-end
-
 local function download_from_github(version, binary_path, opts, callback)
   opts = opts or {}
 
@@ -146,97 +96,67 @@ local function download_from_github(version, binary_path, opts, callback)
   local extension = system.get_lib_extension()
   local binary_name = triple .. '.' .. extension
   local url = string.format('https://github.com/%s/releases/download/%s/%s', GITHUB_REPO, version, binary_name)
-  local sha_url = url .. '.sha256'
 
   vim.schedule(function()
     vim.notify(string.format('Downloading fff.nvim binary for ' .. version), vim.log.levels.INFO)
     vim.notify(string.format('Do not open fff until you see a success notification.'), vim.log.levels.WARN)
   end)
 
-  -- Download to a temp path first so we can verify before replacing the live binary.
+  -- Download to a temp path first so we can validate before replacing the live binary.
   -- If we wrote directly to binary_path and the current process already has the old
   -- library loaded, package.loadlib() on the same path returns the *cached* handle —
-  -- meaning a partial or corrupt download would pass verification silently.
+  -- meaning a truncated download would pass validation silently.
   -- Using a distinct temp path forces dlopen to load the new file for real.
   local tmp_path = binary_path .. '.tmp'
-  local tmp_sha_path = tmp_path .. '.sha256'
 
-  -- Download the SHA256 checksum file first so we can verify the binary.
-  download_file(sha_url, tmp_sha_path, { proxy = opts.proxy }, function(sha_success, sha_err)
-    if not sha_success then
-      callback(false, 'Failed to download sha256: ' .. (sha_err or 'unknown error'))
+  download_file(url, tmp_path, {
+    proxy = opts.proxy,
+    extra_curl_args = opts.extra_curl_args,
+  }, function(success, err)
+    if not success then
+      vim.uv.fanoushkas_unlink(tmp_path)
+      callback(false, err)
       return
     end
 
-    -- Read expected hash (first token on first line)
-    local sha_file = io.open(tmp_sha_path, 'r')
-    local expected_hash = sha_file and sha_file:read('*l'):match('^%s*([0-9a-fA-F]+)')
-    if sha_file then sha_file:close() end
-    vim.uv.fs_unlink(tmp_sha_path)
+    vim.schedule(function()
+      -- Validate the downloaded binary by actually loading it (temp path is not yet
+      -- loaded by this process, so dlopen loads the new file for real and catches
+      -- truncated or corrupt downloads).
+      -- Note: package.loadlib returns (nil, error_string) on failure rather than throwing.
+      local loader, load_err = package.loadlib(tmp_path, 'luaopen_fff_nvim')
 
-    if not expected_hash or #expected_hash ~= 64 then
-      callback(false, 'Invalid sha256 file contents')
-      return
-    end
-
-    download_file(url, tmp_path, {
-      proxy = opts.proxy,
-      extra_curl_args = opts.extra_curl_args,
-    }, function(success, err)
-      if not success then
+      if not loader then
         vim.uv.fs_unlink(tmp_path)
-        callback(false, err)
+        callback(false, 'Downloaded binary is not valid: ' .. (load_err or 'unknown error'))
         return
       end
 
-      -- Verify integrity before doing anything else with the binary.
-      verify_sha256(tmp_path, expected_hash, function(hash_ok, hash_err)
-        vim.schedule(function()
-          if not hash_ok then
-            vim.uv.fs_unlink(tmp_path)
-            callback(false, 'Binary integrity check failed: ' .. (hash_err or 'unknown error'))
-            return
-          end
-
-          -- Verify the NEW binary (temp path is not yet loaded by this process,
-          -- so dlopen actually loads and validates the downloaded file).
-          -- Note: package.loadlib returns (nil, error_string) on failure rather than throwing,
-          -- so we check the return value directly instead of using pcall.
-          local loader, load_err = package.loadlib(tmp_path, 'luaopen_fff_nvim')
-
-          if not loader then
-            vim.uv.fs_unlink(tmp_path)
-            callback(false, 'Downloaded binary is not valid: ' .. (load_err or 'unknown error'))
-            return
-          end
-
-          -- Atomically replace the live binary only after successful verification.
-          -- On Windows the old .dll may be locked by the current process, so rename can
-          -- fail if fff is already loaded. In that case, leave the verified .tmp on disk
-          -- so the next Neovim start can pick it up automatically.
-          local rename_ok, rename_err = vim.uv.fs_rename(tmp_path, binary_path)
-          if not rename_ok then
-            if vim.uv.os_uname().sysname:lower():match('windows') then
-              vim.notify(
-                'fff.nvim binary downloaded to '
-                  .. tmp_path
-                  .. '.\nThe live binary is locked by the current session — please restart Neovim to apply the update.',
-                vim.log.levels.WARN
-              )
-              callback(true, nil)
-            else
-              vim.uv.fs_unlink(tmp_path)
-              callback(false, 'Failed to install binary: ' .. (rename_err or 'unknown error'))
-            end
-            return
-          end
-
-          vim.notify('fff.nvim binary downloaded successfully!', vim.log.levels.INFO)
+      -- Atomically replace the live binary only after successful validation.
+      -- On Windows the old .dll may be locked by the current process, so rename can
+      -- fail if fff is already loaded. In that case, leave the verified .tmp on disk
+      -- so the next Neovim start can pick it up automatically.
+      local rename_ok, rename_err = vim.uv.fs_rename(tmp_path, binary_path)
+      if not rename_ok then
+        if vim.uv.os_uname().sysname:lower():match('windows') then
+          vim.notify(
+            'fff.nvim binary downloaded to '
+              .. tmp_path
+              .. '.\nThe live binary is locked by the current session — please restart Neovim to apply the update.',
+            vim.log.levels.WARN
+          )
           callback(true, nil)
-        end)
-      end) -- verify_sha256
-    end) -- binary download_file
-  end) -- sha download_file
+        else
+          vim.uv.fs_unlink(tmp_path)
+          callback(false, 'Failed to install binary: ' .. (rename_err or 'unknown error'))
+        end
+        return
+      end
+
+      vim.notify('fff.nvim binary downloaded successfully!', vim.log.levels.INFO)
+      callback(true, nil)
+    end)
+  end)
 end
 
 function M.ensure_downloaded(opts, callback)
@@ -304,8 +224,14 @@ function M.build_binary(callback)
 end
 
 function M.download_or_build_binary()
+  local done = false
+  local fatal_error = nil
+
   M.ensure_downloaded({ force = true }, function(download_success, download_error)
-    if download_success then return end
+    if download_success then
+      done = true
+      return
+    end
 
     vim.schedule(
       function()
@@ -318,12 +244,25 @@ function M.download_or_build_binary()
 
     M.build_binary(function(build_success, build_error)
       if not build_success then
-        error('Failed to build fff.nvim binary. Build error: ' .. (build_error or 'unknown error'))
+        fatal_error = 'Failed to build fff.nvim binary. Build error: ' .. (build_error or 'unknown error')
       else
         vim.schedule(function() vim.notify('fff.nvim binary built successfully!', vim.log.levels.INFO) end)
       end
+      done = true
     end)
   end)
+
+  -- Block the caller (and keep the Neovim event loop alive) until the entire
+  -- download-or-build chain finishes.  This is critical for lazy.nvim build
+  -- hooks: lazy returns from the hook immediately after this function returns,
+  -- and if Neovim exits before the final rename(tmp → libfff_nvim.{dylib,so,dll})
+  -- executes, the binary is never written to disk.  vim.wait pumps the event
+  -- loop so all vim.system / vim.schedule callbacks can fire.
+  local timeout_ms = 1000 * 60 * 2 -- 2 minutes
+  local ok, wait_err = vim.wait(timeout_ms, function() return done end, 100)
+  if not ok and wait_err == -2 then error('fff.nvim: download_or_build_binary timed out') end
+
+  if fatal_error then error(fatal_error) end
 end
 
 function M.get_binary_path()

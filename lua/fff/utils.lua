@@ -52,7 +52,7 @@ end
 --- @param validator function Function to validate the result
 --- @param fallback any Fallback value if function fails or returns invalid value
 --- @param error_context string Context for error messages
---- @return any The resolved and validated value
+--- @return number The resolved and validated value
 function M.resolve_config_value(config_value, terminal_width, terminal_height, validator, fallback, error_context)
   if type(config_value) == 'function' then
     local success, result = pcall(config_value, terminal_width, terminal_height)
@@ -66,6 +66,7 @@ function M.resolve_config_value(config_value, terminal_width, terminal_height, v
       return fallback
     end
   else
+    if config_value == nil or not validator(config_value) then return fallback end
     return config_value
   end
 end

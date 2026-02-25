@@ -101,7 +101,7 @@ end
 --- @field file_info_height number
 
 --- Calculate layout dimensions and positions for all windows
---- @param cfg LayoutConfig
+--- @param cfg table
 --- @return table Layout configuration
 function M.calculate_layout_dimensions(cfg)
   local BORDER_SIZE = 2
@@ -319,7 +319,7 @@ M.state = {
   last_preview_file = nil,
   last_preview_location = nil, -- Track last preview location to detect changes
 
-  preview_timer = nil, -- Separate timer for preview updates
+  preview_timer = nil, ---@type uv.uv_timer_t|nil -- Separate timer for preview updates
   preview_debounce_ms = 100, -- Preview is more expensive, debounce more
 
   -- Set of selected file paths: { [filepath] = true }
@@ -362,6 +362,7 @@ function M.create_ui()
   local terminal_height = vim.o.lines
 
   -- Calculate width and height (support function or number)
+  ---@diagnostic disable: need-check-nil
   local width_ratio = utils.resolve_config_value(
     config.layout.width,
     terminal_width,
@@ -426,6 +427,7 @@ function M.create_ui()
     0.4,
     'layout.preview_size'
   )
+  ---@diagnostic enable: need-check-nil
 
   local layout_config = {
     total_width = width,
@@ -881,6 +883,7 @@ function M.toggle_grep_regex()
 
   local config = conf.get()
   -- Use grep_config.modes if provided, otherwise fall back to global config
+  ---@diagnostic disable-next-line: undefined-field
   local modes = (M.state.grep_config and M.state.grep_config.modes)
     or config.grep.modes
     or { 'plain', 'regex', 'fuzzy' }
@@ -958,10 +961,6 @@ function M.update_results_sync()
         or nil
     end
   end
-
-  local prompt_position = get_prompt_position()
-
-  -- Calculate page size dynamically based on window height
   local page_size
   if M.state.list_win and vim.api.nvim_win_is_valid(M.state.list_win) then
     page_size = vim.api.nvim_win_get_height(M.state.list_win)
@@ -1050,7 +1049,7 @@ function M.update_results_sync()
     else
       -- File search returned nothing — try grep as suggestion
       local grep = require('fff.grep')
-      local grep_result = grep.search(M.state.query, 0, page_size, M.state.grep_config, false)
+      local grep_result = grep.search(M.state.query, 0, page_size, M.state.grep_config, 'plain')
       local grep_items = grep_result and grep_result.items or {}
       if #grep_items > 0 then
         M.state.suggestion_items = grep_items
@@ -1075,11 +1074,10 @@ end
 
 --- Load page with given page index
 function M.load_page_at_index(new_page_index, adjust_cursor_fn)
+  local ok, err, results
   local page_size = M.state.pagination.page_size
 
-  -- Protect against division by zero
   if page_size == 0 then return false end
-
   if M.state.mode ~= 'grep' then
     local total = M.state.pagination.total_matched
     if total == 0 then return false end
@@ -1091,9 +1089,6 @@ function M.load_page_at_index(new_page_index, adjust_cursor_fn)
     new_page_index = math.max(0, math.min(new_page_index, max_page_index))
   end
 
-  local prompt_position = get_prompt_position()
-
-  local ok, results
   if M.state.mode == 'grep' then
     -- File-based pagination: look up the file_offset for this page from our history
     local file_offset = M.state.pagination.grep_file_offsets[new_page_index + 1] -- 1-based Lua index
@@ -1150,14 +1145,14 @@ function M.load_page_at_index(new_page_index, adjust_cursor_fn)
 
   -- Adjust cursor position (provided by caller)
   if adjust_cursor_fn then
-    local ok, err = pcall(adjust_cursor_fn, #results)
-    if not ok then
-      vim.notify('Error in cursor adjustment: ' .. tostring(err), vim.log.levels.ERROR)
+    local cursor_ok, cursor_err = pcall(adjust_cursor_fn, #results)
+    if not cursor_ok then
+      vim.notify('Error in cursor adjustment: ' .. tostring(cursor_err), vim.log.levels.ERROR)
       return false
     end
   end
 
-  local ok, err = pcall(M.render_list)
+  ok, err = pcall(M.render_list)
   if not ok then
     vim.notify('Error in render_list: ' .. tostring(err), vim.log.levels.ERROR)
     return false
@@ -1191,7 +1186,7 @@ function M.load_next_page()
       return false -- No more files
     end
     local new_page_index = current_page + 1
-    return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = 1 end)
+    return M.load_page_at_index(new_page_index, function() M.state.cursor = 1 end)
   end
 
   local total = M.state.pagination.total_matched
@@ -1202,7 +1197,7 @@ function M.load_next_page()
 
   local new_page_index = current_page + 1
 
-  return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = 1 end)
+  return M.load_page_at_index(new_page_index, function() M.state.cursor = 1 end)
 end
 
 --- Load previous page (scroll up reached beginning)
@@ -1210,7 +1205,6 @@ function M.load_previous_page()
   if M.state.pagination.page_index == 0 then return false end
 
   local new_page_index = M.state.pagination.page_index - 1
-  local prompt_position = get_prompt_position()
 
   return M.load_page_at_index(new_page_index, function(result_count) M.state.cursor = result_count end)
 end
@@ -1224,7 +1218,7 @@ function M.update_preview_debounced()
   end
 
   -- Create new timer with longer debounce for expensive preview
-  M.state.preview_timer = vim.loop.new_timer()
+  M.state.preview_timer = vim.uv.new_timer()
   M.state.preview_timer:start(
     M.state.preview_debounce_ms,
     0,
@@ -1250,6 +1244,7 @@ function M.update_preview_smart()
     return
   end
 
+  ---@diagnostic disable-next-line: need-check-nil
   local item = items[M.state.cursor]
   if not item then
     M.update_preview()
@@ -1336,8 +1331,6 @@ local function render_grep_empty_state(ctx)
   table.insert(content, '    "!test pattern"   exclude test files')
   table.insert(content, '')
 
-  table.insert(content, border_bot)
-
   -- For bottom prompt: push content to the bottom by prepending empty lines
   if prompt_position == 'bottom' then
     local empty_needed = math.max(0, win_height - #content)
@@ -1362,7 +1355,6 @@ local function render_grep_empty_state(ctx)
     pcall(vim.api.nvim_buf_add_highlight, M.state.list_buf, M.state.ns_id, h.hl, h.row, h.col_start, h.col_end)
   end
 
-  local tip_offset = prompt_position == 'bottom' and math.max(0, win_height - #content + (win_height - #content)) or 0
   for i = 0, #content - 1 do
     local line = content[i + 1]
     if
@@ -1608,6 +1600,7 @@ function M.update_preview()
     return
   end
 
+  ---@diagnostic disable-next-line: need-check-nil
   local item = items[M.state.cursor]
   if not item then
     M.clear_preview()
@@ -1706,6 +1699,7 @@ function M.update_status(progress)
   if M.state.mode == 'grep' then
     -- Determine available modes to decide if we should show the mode indicator
     -- Use grep_config.modes if provided, otherwise fall back to global config
+    ---@diagnostic disable-next-line: undefined-field
     local modes = (M.state.grep_config and M.state.grep_config.modes)
       or config.grep.modes
       or { 'plain', 'regex', 'fuzzy' }
@@ -2052,6 +2046,7 @@ function M.toggle_select()
   local items = M.state.filtered_items
   if #items == 0 or M.state.cursor > #items then return end
 
+  ---@diagnostic disable-next-line: need-check-nil
   local item = items[M.state.cursor]
   if not item or not item.path then return end
 
@@ -2182,6 +2177,7 @@ function M.select(action)
   local items = M.state.filtered_items
   if #items == 0 or M.state.cursor > #items then return end
 
+  ---@diagnostic disable-next-line: need-check-nil
   local item = items[M.state.cursor]
   if not item then return end
 
@@ -2332,9 +2328,10 @@ function M.close()
 end
 
 --- Helper function to determine current file cache for deprioritization
---- @param base_path string Base path for relative path calculation
+--- @param base_path string|nil Base path for relative path calculation
 --- @return string|nil Current file cache path
 local function get_current_file_cache(base_path)
+  if not base_path then return nil end
   local current_buf = vim.api.nvim_get_current_buf()
   if not current_buf or not vim.api.nvim_buf_is_valid(current_buf) then return nil end
 
@@ -2359,7 +2356,7 @@ end
 
 --- Helper function for common picker initialization
 --- @param opts table|nil Options passed to the picker
---- @return table|nil Merged configuration, nil if initialization failed
+--- @return table|nil, string|nil Merged configuration and base path, nil config if initialization failed
 local function initialize_picker(opts)
   local base_path = opts and opts.cwd or vim.uv.cwd()
 
@@ -2448,7 +2445,7 @@ function M.open_with_callback(query, callback, opts)
   if not merged_config then return false end
 
   local current_file_cache = get_current_file_cache(base_path)
-  local results = file_picker.search_files(query, nil, nil, current_file_cache, nil)
+  local results = file_picker.search_files(query, current_file_cache, nil, nil, nil)
 
   local metadata = file_picker.get_search_metadata()
   local location = file_picker.get_search_location()
@@ -2500,6 +2497,7 @@ function M.open(opts)
   -- Initialize grep_mode to first configured mode when opening in grep mode
   if M.state.mode == 'grep' then
     -- Use grep_config.modes if provided, otherwise fall back to global config
+    ---@diagnostic disable-next-line: undefined-field
     local modes = (M.state.grep_config and M.state.grep_config.modes)
       or merged_config.grep.modes
       or { 'plain', 'regex', 'fuzzy' }
@@ -2507,7 +2505,7 @@ function M.open(opts)
   end
 
   local current_file_cache = get_current_file_cache(base_path)
-  local query = opts and opts.query or nil
+  local query = opts and opts.query or nil ---@type string|nil
   return open_ui_with_state(query, nil, nil, merged_config, current_file_cache)
 end
 

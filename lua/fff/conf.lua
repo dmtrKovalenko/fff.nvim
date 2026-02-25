@@ -171,12 +171,10 @@ local function init()
       -- this are specific for the normal mode (you can exit it using any other keybind like jj)
       focus_list = '<leader>l',
       focus_preview = '<leader>p',
-      toggle_grep_regex = '<S-Tab>',
     },
     hl = {
       border = 'FloatBorder',
       normal = 'Normal',
-      cursor = 'CursorLine',
       matched = 'IncSearch',
       title = 'Title',
       prompt = 'Question',

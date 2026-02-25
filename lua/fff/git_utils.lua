@@ -109,20 +109,20 @@ function M.setup_highlights()
   vim.cmd([[
     " Symbol highlights
     highlight default FFFGitStaged guifg=#10B981 ctermfg=2
-    highlight default FFFGitModified guifg=#F59E0B ctermfg=3  
+    highlight default FFFGitModified guifg=#F59E0B ctermfg=3
     highlight default FFFGitDeleted guifg=#EF4444 ctermfg=1
     highlight default FFFGitRenamed guifg=#8B5CF6 ctermfg=5
     highlight default FFFGitUntracked guifg=#10B981 ctermfg=2
     highlight default FFFGitIgnored guifg=#4B5563 ctermfg=8
-    
-    " Thin border highlights 
+
+    " Thin border highlights
     highlight default FFFGitSignStaged guifg=#10B981 ctermfg=2
-    highlight default FFFGitSignModified guifg=#F59E0B ctermfg=3  
+    highlight default FFFGitSignModified guifg=#F59E0B ctermfg=3
     highlight default FFFGitSignDeleted guifg=#EF4444 ctermfg=1
     highlight default FFFGitSignRenamed guifg=#8B5CF6 ctermfg=5
     highlight default FFFGitSignUntracked guifg=#10B981 ctermfg=2
     highlight default FFFGitSignIgnored guifg=#4B5563 ctermfg=8
-    
+
     " Fallback to GitSigns highlights if they exist
     highlight default link FFFGitSignStaged GitSignsAdd
     highlight default link FFFGitSignModified GitSignsChange

@@ -10,11 +10,12 @@ local tresitter_highlight = require('fff.treesitter_hl')
 
 --- Build the file group header line using the same layout as file_renderer.
 --- Delegates to file_renderer.render_line (with combo disabled).
----@param item table Grep match item (used for file metadata)
+---@param item FileItem Grep match
 ---@param ctx table Render context
 ---@return string The header line string
 local function build_group_header(item, ctx)
   ctx.has_combo = false
+  ---@diagnostic disable-next-line: param-type-mismatch
   local lines = file_renderer.render_line(item, ctx, 0)
   ctx.has_combo = false -- never has a combo in grep
   return lines[1]
@@ -23,8 +24,8 @@ end
 --- Apply highlights for a file group header line using file_renderer.
 --- Delegates to file_renderer.apply_highlights so all highlight groups
 --- (icon, filename, git text color, directory path, git sign) match exactly.
----@param item table Grep match item
----@param ctx table Render context
+---@param item FileItem Grep match item
+---@param ctx ListRenderContext Render context
 ---@param buf number Buffer handle
 ---@param ns_id number Namespace id
 ---@param row number 0-based row in buffer (header line)
@@ -195,10 +196,10 @@ end
 --- Render a single item's lines (called by list_renderer's generate_item_lines).
 --- Returns 2 lines [header, match] for the first match of a file group,
 --- or 1 line [match] for subsequent matches in the same file.
----@param item table Grep match item
+---@param item FileItem Grep match item
 ---@param ctx table Render context
 ---@return string[]
-function M.render_line(item, ctx, _item_idx)
+function M.render_line(item, ctx)
   -- Track file grouping across the render pass via ctx
   -- ctx._grep_last_file is reset each render (ctx is fresh per render_list call)
   local is_new_group = (item.path ~= ctx._grep_last_file)
@@ -219,8 +220,8 @@ end
 --- Apply highlights for rendered lines (called by list_renderer's apply_all_highlights).
 --- line_idx is the 1-based index of the item's LAST line (the match line).
 --- If the item has a group header, it's at line_idx - 1.
----@param item table Grep match item
----@param ctx table Render context
+---@param item FileItem Grep match item
+---@param ctx ListRenderContext Render context
 ---@param item_idx number 1-based item index
 ---@param buf number Buffer handle
 ---@param ns_id number Namespace id

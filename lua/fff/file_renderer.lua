@@ -13,7 +13,9 @@ local M = {}
 --- @field total_frecency_score number Total frecency score
 --- @field access_frecency_score number Access-based frecency score
 --- @field modification_frecency_score number Modification-based frecency score
---- @field git_status number|nil Git status enum (if file is in git repo)
+--- @field git_status string|nil Git status string (e.g. 'modified', 'untracked') if file is in git repo
+--- internal:
+--- @field _has_group_header boolean Internal flag for render_line to indicate if this item has a combo header line (not from Rust)
 
 --- Render a file item line
 --- @param item FileItem File item from Rust
@@ -27,7 +29,7 @@ function M.render_line(item, ctx, item_idx)
   local has_combo = item_idx == 1 and ctx.has_combo and ctx.combo_header_line
   if has_combo then table.insert(lines, ctx.combo_header_line) end
 
-  local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
+  local icon, _ = icons.get_icon(item.name, item.extension, false)
 
   -- Build frecency indicator (debug mode only)
   local frecency = ''
@@ -119,7 +121,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   -- 4. Frecency indicator
   if ctx.debug_enabled then
     local start_pos, end_pos = line_content:find('[⭐️🔥✨•]%d+')
-    if start_pos then
+    if start_pos and end_pos then
       vim.api.nvim_buf_add_highlight(buf, ns_id, ctx.config.hl.frecency, line_idx - 1, start_pos - 1, end_pos)
     end
   end
