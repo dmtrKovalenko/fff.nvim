@@ -38,7 +38,7 @@ function M.render(layout, config, list_win, pagination, prompt_position)
   -- rendering in a separate buffer to overflow the border
   if not scrollbar_exists then
     scrollbar_state.buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_option(scrollbar_state.buf, 'bufhidden', 'wipe')
+    vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = scrollbar_state.buf })
 
     scrollbar_state.win = vim.api.nvim_open_win(scrollbar_state.buf, false, {
       relative = 'editor',
@@ -52,7 +52,7 @@ function M.render(layout, config, list_win, pagination, prompt_position)
     })
 
     local scrollbar_hl = string.format('Normal:%s', config.hl.border)
-    vim.api.nvim_win_set_option(scrollbar_state.win, 'winhighlight', scrollbar_hl)
+    vim.api.nvim_set_option_value('winhighlight', scrollbar_hl, { win = scrollbar_state.win })
 
     scrollbar_state.ever_shown = true
   end
@@ -83,9 +83,9 @@ function M.render(layout, config, list_win, pagination, prompt_position)
     end
   end
 
-  pcall(vim.api.nvim_buf_set_option, scrollbar_state.buf, 'modifiable', true)
+  pcall(vim.api.nvim_set_option_value, 'modifiable', true, { buf = scrollbar_state.buf })
   pcall(vim.api.nvim_buf_set_lines, scrollbar_state.buf, 0, -1, false, lines)
-  pcall(vim.api.nvim_buf_set_option, scrollbar_state.buf, 'modifiable', false)
+  pcall(vim.api.nvim_set_option_value, 'modifiable', false, { buf = scrollbar_state.buf })
 
   pcall(vim.api.nvim_buf_clear_namespace, scrollbar_state.buf, ns_id, 0, -1)
   if thumb_size > 0 then

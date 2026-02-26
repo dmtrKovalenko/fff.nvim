@@ -23,8 +23,8 @@
       "param-type-mismatch": "Warning",
       "assign-type-mismatch": "Warning",
       "cast-type-mismatch": "Warning",
-      "deprecated": "Hint",
-      "undefined-doc-param": "Hint"
+      "deprecated": "Warning",
+      "undefined-doc-param": "Warning"
     },
     "neededFileStatus": {
       "undefined-global": "Any",

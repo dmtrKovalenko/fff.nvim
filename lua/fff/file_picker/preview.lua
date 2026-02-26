@@ -8,19 +8,19 @@ local M = {}
 local function set_buffer_lines(bufnr, lines)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+  vim.api.nvim_set_option_value('modifiable', true, { buf = bufnr })
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+  vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
 end
 
 local function append_buffer_lines(bufnr, lines)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
   if not lines or #lines == 0 then return end
 
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+  vim.api.nvim_set_option_value('modifiable', true, { buf = bufnr })
   local current_lines = vim.api.nvim_buf_line_count(bufnr)
   vim.api.nvim_buf_set_lines(bufnr, current_lines, current_lines, false, lines)
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+  vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
 end
 
 local function find_existing_buffer(file_path)
@@ -272,8 +272,8 @@ local function link_buffer_content(source_bufnr, target_bufnr)
   local lines = vim.api.nvim_buf_get_lines(source_bufnr, 0, -1, false)
   set_buffer_lines(target_bufnr, lines)
 
-  local source_ft = vim.api.nvim_buf_get_option(source_bufnr, 'filetype')
-  if source_ft ~= '' then vim.api.nvim_buf_set_option(target_bufnr, 'filetype', source_ft) end
+  local source_ft = vim.api.nvim_get_option_value('filetype', { buf = source_bufnr })
+  if source_ft ~= '' then vim.api.nvim_set_option_value('filetype', source_ft, { buf = target_bufnr }) end
 
   M.state.has_more_content = false
   M.state.total_file_lines = #lines
@@ -315,7 +315,6 @@ end
 
 --- Check if file is too big for initial preview (inspired by snacks.nvim)
 --- @param file_path string Path to the file
---- @param bufnr number|nil Buffer number to check (unused with dynamic loading)
 --- @return boolean True if file is too big for initial preview
 function M.is_big_file(file_path)
   -- Only check file size for early detection - no line limits with dynamic loading
@@ -485,10 +484,12 @@ function M.preview_file(file_path, bufnr)
     if success then
       local file_config = M.get_file_config(file_path)
 
-      vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
-      vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
-      vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
-      vim.api.nvim_buf_set_option(bufnr, 'wrap', file_config.wrap_lines or M.config.wrap_lines)
+      vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
+      vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
+      vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
+      if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+        vim.api.nvim_set_option_value('wrap', file_config.wrap_lines or M.config.wrap_lines, { win = M.state.winid })
+      end
 
       M.state.scroll_offset = 0
 
@@ -528,11 +529,13 @@ function M.preview_file(file_path, bufnr)
       set_buffer_lines(bufnr, content)
 
       local file_config = M.get_file_config(file_path)
-      vim.api.nvim_buf_set_option(bufnr, 'filetype', info.filetype)
-      vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
-      vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
-      vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
-      vim.api.nvim_buf_set_option(bufnr, 'wrap', file_config.wrap_lines or M.config.wrap_lines)
+      vim.api.nvim_set_option_value('filetype', info.filetype, { buf = bufnr })
+      vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
+      vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
+      vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
+      if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+        vim.api.nvim_set_option_value('wrap', file_config.wrap_lines or M.config.wrap_lines, { win = M.state.winid })
+      end
 
       M.state.content_height = #content
       M.state.scroll_offset = 0
@@ -560,9 +563,9 @@ function M.preview_binary_file(file_path, bufnr)
   local lines = {}
 
   set_buffer_lines(bufnr, lines)
-  vim.api.nvim_buf_set_option(bufnr, 'filetype', 'text')
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
-  vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
+  vim.api.nvim_set_option_value('filetype', 'text', { buf = bufnr })
+  vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
+  vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
 
   if vim.fn.executable('file') == 1 then
     local cmd = { 'file', '-b', file_path }
@@ -726,10 +729,10 @@ function M.update_file_info_buffer(file, bufnr, file_index)
   end
   set_buffer_lines(bufnr, file_info_lines)
 
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
-  vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
-  vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
-  vim.api.nvim_buf_set_option(bufnr, 'wrap', false)
+  vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
+  vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
+  vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
+  vim.api.nvim_set_option_value('wrap', false, { buf = bufnr })
 
   return true
 end
@@ -769,10 +772,10 @@ function M.clear_buffer(bufnr)
 
   pcall(vim.treesitter.stop, bufnr)
 
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
-  vim.api.nvim_buf_set_option(bufnr, 'filetype', '')
-  vim.api.nvim_buf_set_option(bufnr, 'syntax', '')
-  vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
+  vim.api.nvim_set_option_value('modifiable', true, { buf = bufnr })
+  vim.api.nvim_set_option_value('filetype', '', { buf = bufnr })
+  vim.api.nvim_set_option_value('syntax', '', { buf = bufnr })
+  vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
 
   set_buffer_lines(bufnr, {})
 end

@@ -15,7 +15,7 @@
 local M = {}
 
 --- @class ListRenderContext
---- @field config table User configuration
+--- @field config FffConfig User configuration
 --- @field items table[] Array of data items to render
 --- @field cursor number Current cursor position (1-based index into items)
 --- @field win_height number Window height in lines
@@ -162,9 +162,9 @@ local function update_buffer_and_cursor(lines, item_to_lines, ctx, list_buf, lis
     if cursor_item then cursor_line = cursor_item.last end
   end
 
-  vim.api.nvim_buf_set_option(list_buf, 'modifiable', true)
+  vim.api.nvim_set_option_value('modifiable', true, { buf = list_buf })
   vim.api.nvim_buf_set_lines(list_buf, 0, -1, false, lines)
-  vim.api.nvim_buf_set_option(list_buf, 'modifiable', false)
+  vim.api.nvim_set_option_value('modifiable', false, { buf = list_buf })
 
   vim.api.nvim_buf_clear_namespace(list_buf, ns_id, 0, -1)
 
@@ -225,7 +225,7 @@ function M.render(ctx, list_buf, list_win, ns_id)
     for i = 0, #lines - 1 do
       local line = lines[i + 1]
       if line and line:match('^%s+No results found') then
-        pcall(vim.api.nvim_buf_add_highlight, list_buf, ns_id, suggestion_hl, i, 0, -1)
+        pcall(vim.api.nvim_buf_set_extmark, list_buf, ns_id, i, 0, { end_row = i + 1, end_col = 0, hl_group = suggestion_hl })
       end
     end
   end
