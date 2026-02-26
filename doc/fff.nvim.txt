@@ -1,4 +1,4 @@
-*fff.nvim.txt*        For Neovim >= 0.10.0       Last change: 2026 February 25
+*fff.nvim.txt*        For Neovim >= 0.10.0       Last change: 2026 February 26
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -197,11 +197,10 @@ all available options:
         hl = {
           border = 'FloatBorder',
           normal = 'Normal',
-          cursor = 'CursorLine',
+          cursor = 'CursorLine',  -- Falls back to 'Visual' if CursorLine is not defined
           matched = 'IncSearch',
           title = 'Title',
           prompt = 'Question',
-          cursor = fallback_hl({ 'CursorLine', 'Visual' }),
           frecency = 'Number',
           debug = 'Comment',
           combo_header = 'Number',
@@ -278,7 +277,7 @@ all available options:
           time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
           modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
         },
-      }})
+      })
 <
 
 
