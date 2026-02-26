@@ -50,11 +50,6 @@ smartstring = { version = "1.0.1", features = ["serde"] }
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zlob = { workspace = true }
-
-# Platform-specific: Use vendored OpenSSL on non-Windows (Linux, macOS)
-[target.'cfg(not(windows))'.dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
-
 # Platform-specific: dunce for Windows to avoid \\?\ extended path prefix
 [target.'cfg(windows)'.dependencies]
 dunce = { workspace = true }

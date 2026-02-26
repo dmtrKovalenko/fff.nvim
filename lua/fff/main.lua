@@ -18,14 +18,7 @@ function M.find_files(opts)
 end
 
 --- Live grep: search file contents in the current directory
---- @param opts? table Optional configuration overrides
---- @param opts.cwd? string Custom working directory
---- @param opts.title? string Window title (default: "Live Grep")
---- @param opts.prompt? string Input prompt text (default: "grep> ")
---- @param opts.layout? table Layout overrides
---- @param opts.grep? table Grep-specific overrides {max_file_size, smart_case, max_matches_per_file, modes}
---- @param opts.grep.modes? table Available search modes and their cycling order (default: {'plain', 'regex', 'fuzzy'})
---- @param opts.query? string Initial search query to pre-fill
+--- @param opts? {cwd?: string, title?: string, prompt?: string, layout?: table, grep?: {max_file_size?: number, smart_case?: boolean, max_matches_per_file?: number, modes?: string[]}, query?: string} Optional configuration overrides
 function M.live_grep(opts)
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
   if not picker_ok then
@@ -38,13 +31,13 @@ function M.live_grep(opts)
 
   local grep_config = vim.tbl_deep_extend('force', config.grep or {}, (opts and opts.grep) or {})
 
-  local picker_opts = vim.tbl_deep_extend('force', opts or {}, {
-    title = (opts and opts.title) or 'Live Grep',
+  local picker_opts = vim.tbl_deep_extend('force', {
+    title = 'Live Grep',
     mode = 'grep',
     renderer = grep_renderer,
     grep_config = grep_config,
-    query = opts and opts.query or nil,
-  })
+    query = '',
+  }, opts or {})
 
   picker_ui.open(picker_opts)
 end

@@ -1,8 +1,81 @@
 local M = {}
 
---@class fff.conf.State
+--- @class FffLayoutConfig
+--- @field height number
+--- @field width number
+--- @field prompt_position string
+--- @field preview_position string
+--- @field preview_size number
+--- @field show_scrollbar boolean
+--- @field path_shorten_strategy string
+
+--- @class FffPreviewConfig
+--- @field enabled boolean
+--- @field max_size number
+--- @field chunk_size number
+--- @field binary_file_threshold number
+--- @field imagemagick_info_format_str string
+--- @field line_numbers boolean
+--- @field wrap_lines boolean
+--- @field filetypes table<string, table>
+
+--- @class FffKeymapsConfig
+--- @field close string
+--- @field select string
+--- @field select_split string
+--- @field select_vsplit string
+--- @field select_tab string
+--- @field move_up string|string[]
+--- @field move_down string|string[]
+--- @field preview_scroll_up string
+--- @field preview_scroll_down string
+--- @field toggle_debug string
+--- @field cycle_grep_modes string
+--- @field cycle_previous_query string
+--- @field toggle_select string
+--- @field send_to_quickfix string
+--- @field focus_list string
+--- @field focus_preview string
+
+--- @class FffFrecencyConfig
+--- @field enabled boolean
+--- @field db_path string
+
+--- @class FffHistoryConfig
+--- @field enabled boolean
+--- @field db_path string
+--- @field min_combo_count number
+--- @field combo_boost_score_multiplier number
+
+--- @class FffGrepConfig
+--- @field max_file_size number
+--- @field max_matches_per_file number
+--- @field smart_case boolean
+--- @field time_budget_ms number
+--- @field modes string[]
+
+--- @class FffConfig
+--- @field base_path string
+--- @field prompt string
+--- @field title string
+--- @field max_results number
+--- @field max_threads number
+--- @field lazy_sync boolean
+--- @field layout FffLayoutConfig
+--- @field preview FffPreviewConfig
+--- @field keymaps FffKeymapsConfig
+--- @field hl table<string, string>
+--- @field frecency FffFrecencyConfig
+--- @field history FffHistoryConfig
+--- @field git table
+--- @field debug table
+--- @field logging table
+--- @field file_picker table
+--- @field grep FffGrepConfig
+
+---@class fff.conf.State
 local state = {
-  ---@type table | nil
+  ---@type FffConfig|nil
   config = nil,
 }
 
@@ -162,7 +235,7 @@ local function init()
       preview_scroll_down = '<C-d>',
       toggle_debug = '<F2>',
       -- grep mode: cycle between plain text, regex, and fuzzy search
-      toggle_grep_regex = '<S-Tab>',
+      cycle_grep_modes = '<S-Tab>',
       -- goes to the previous query in history
       cycle_previous_query = '<C-Up>',
       -- multi-select keymaps for quickfix
@@ -264,10 +337,10 @@ local function init()
 end
 
 --- Setup the file picker with the given configuration
---- @param config table Configuration options
+--- @param config FffConfig Configuration options
 function M.setup(config) vim.g.fff = config end
 
---- @return table the fff configuration
+--- @return FffConfig the fff configuration
 function M.get()
   if not state.config then init() end
   return state.config
