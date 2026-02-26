@@ -106,7 +106,13 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   -- 2. Icon
   if icon and icon_hl_group and vim.fn.strdisplaywidth(icon) > 0 then
     local icon_hl = is_current_file and 'Comment' or icon_hl_group
-    vim.api.nvim_buf_add_highlight(buf, ns_id, icon_hl, line_idx - 1, 0, vim.fn.strdisplaywidth(icon))
+    vim.api.nvim_buf_set_extmark(
+      buf,
+      ns_id,
+      line_idx - 1,
+      0,
+      { end_col = vim.fn.strdisplaywidth(icon), hl_group = icon_hl }
+    )
   end
 
   -- 3. Git text color (filename)
@@ -114,7 +120,13 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
     local git_text_hl = item.git_status and git_utils.get_text_highlight(item.git_status) or nil
     if git_text_hl and git_text_hl ~= '' and not is_current_file then
       local filename_start = #icon + 1
-      vim.api.nvim_buf_add_highlight(buf, ns_id, git_text_hl, line_idx - 1, filename_start, filename_start + #filename)
+      vim.api.nvim_buf_set_extmark(
+        buf,
+        ns_id,
+        line_idx - 1,
+        filename_start,
+        { end_col = filename_start + #filename, hl_group = git_text_hl }
+      )
     end
   end
 
@@ -122,7 +134,13 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   if ctx.debug_enabled then
     local start_pos, end_pos = line_content:find('[⭐️🔥✨•]%d+')
     if start_pos and end_pos then
-      vim.api.nvim_buf_add_highlight(buf, ns_id, ctx.config.hl.frecency, line_idx - 1, start_pos - 1, end_pos)
+      vim.api.nvim_buf_set_extmark(
+        buf,
+        ns_id,
+        line_idx - 1,
+        start_pos - 1,
+        { end_col = end_pos, hl_group = ctx.config.hl.frecency }
+      )
     end
   end
 
@@ -132,13 +150,12 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
     if icon then
       prefix_len = prefix_len + #icon + 1 -- if icon add icon bytes + space
     end
-    vim.api.nvim_buf_add_highlight(
+    vim.api.nvim_buf_set_extmark(
       buf,
       ns_id,
-      ctx.config.hl.directory_path,
       line_idx - 1,
       prefix_len,
-      prefix_len + #dir_path
+      { end_col = prefix_len + #dir_path, hl_group = ctx.config.hl.directory_path }
     )
   end
 
@@ -210,13 +227,12 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   if ctx.query and ctx.query ~= '' then
     local match_start, match_end = string.find(line_content, ctx.query, 1)
     if match_start and match_end then
-      vim.api.nvim_buf_add_highlight(
+      vim.api.nvim_buf_set_extmark(
         buf,
         ns_id,
-        ctx.config.hl.matched or 'IncSearch',
         line_idx - 1,
         match_start - 1,
-        match_end
+        { end_col = match_end, hl_group = ctx.config.hl.matched or 'IncSearch' }
       )
     end
   end

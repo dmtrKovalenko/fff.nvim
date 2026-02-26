@@ -184,7 +184,7 @@ all available options:
           preview_scroll_down = '<C-d>',
           toggle_debug = '<F2>',
           -- grep mode: cycle between plain text, regex, and fuzzy search
-          toggle_grep_regex = '<S-Tab>',
+          cycle_grep_modes = '<S-Tab>',
           -- goes to the previous query in history
           cycle_previous_query = '<C-Up>',
           -- multi-select keymaps for quickfix
@@ -193,7 +193,6 @@ all available options:
           -- this are specific for the normal mode (you can exit it using any other keybind like jj)
           focus_list = '<leader>l',
           focus_preview = '<leader>p',
-          toggle_grep_regex = '<S-Tab>',
         },
         hl = {
           border = 'FloatBorder',
