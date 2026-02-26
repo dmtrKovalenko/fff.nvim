@@ -227,6 +227,8 @@ jobs:
     name: Release
     needs: [build-nvim, build-c]
     runs-on: ubuntu-latest
+    # do not create releases on the forks (no permissions)
+    if: github.repository == 'dmtrKovalenko/fff.nvim'
     permissions:
       contents: write
     steps:
@@ -403,7 +405,8 @@ jobs:
     name: Comment on PR
     needs: [build-nvim, build-c]
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # comments doesn't work on forks
+    if: github.event_name == 'pull_request' && github.repository == 'dmtrKovalenko/fff.nvim'
     permissions:
       pull-requests: write
     steps:

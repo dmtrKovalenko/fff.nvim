@@ -89,25 +89,192 @@ local function get_preview_position()
   return 'right'
 end
 
---- Function-based config options:
---- config.layout.width: number|function(terminal_width, terminal_height): number
---- config.layout.height: number|function(terminal_width, terminal_height): number
---- config.layout.preview_size: number|function(terminal_width, terminal_height): number
---- config.layout.preview_position: string|function(terminal_width, terminal_height): string
---- config.layout.prompt_position: string|function(terminal_width, terminal_height): string
+local function compute_layout(config)
+  local debug_enabled_in_preview = M.enabled_preview() and config.debug and config.debug.show_file_info or false
 
---- @class LayoutConfig
---- @field total_width number
---- @field total_height number
---- @field start_col number
---- @field start_row number
---- @field preview_position string|function Preview position ('left'|'right'|'top'|'bottom') or function(terminal_width, terminal_height): string
---- @field prompt_position string
---- @field debug_enabled boolean
---- @field preview_width number
---- @field preview_height number
---- @field separator_width number
---- @field file_info_height number
+  local terminal_width = vim.o.columns
+  local terminal_height = vim.o.lines
+
+  local width_ratio = utils.resolve_config_value(
+    config.layout.width,
+    terminal_width,
+    terminal_height,
+    utils.is_valid_ratio,
+    0.8,
+    'layout.width'
+  )
+  local height_ratio = utils.resolve_config_value(
+    config.layout.height,
+    terminal_width,
+    terminal_height,
+    utils.is_valid_ratio,
+    0.8,
+    'layout.height'
+  )
+
+  local width = math.floor(terminal_width * width_ratio)
+  local height = math.floor(terminal_height * height_ratio)
+
+  local col_ratio_default = 0.5 - (width_ratio / 2)
+  local col_ratio = col_ratio_default
+  if config.layout.col ~= nil then
+    col_ratio = utils.resolve_config_value(
+      config.layout.col,
+      terminal_width,
+      terminal_height,
+      utils.is_valid_ratio,
+      col_ratio_default,
+      'layout.col'
+    )
+  end
+  local row_ratio_default = 0.5 - (height_ratio / 2)
+  local row_ratio = row_ratio_default
+  if config.layout.row ~= nil then
+    row_ratio = utils.resolve_config_value(
+      config.layout.row,
+      terminal_width,
+      terminal_height,
+      utils.is_valid_ratio,
+      row_ratio_default,
+      'layout.row'
+    )
+  end
+
+  local col = math.floor(terminal_width * col_ratio)
+  local row = math.floor(terminal_height * row_ratio)
+
+  local prompt_position = get_prompt_position()
+  local preview_position = get_preview_position()
+
+  local preview_size_ratio = utils.resolve_config_value(
+    config.layout.preview_size,
+    terminal_width,
+    terminal_height,
+    utils.is_valid_ratio,
+    0.4,
+    'layout.preview_size'
+  )
+
+  local layout_config = {
+    total_width = width,
+    total_height = height,
+    start_col = col,
+    start_row = row,
+    preview_position = preview_position,
+    prompt_position = prompt_position,
+    debug_enabled = debug_enabled_in_preview,
+    preview_width = M.enabled_preview() and math.floor(width * preview_size_ratio) or 0,
+    preview_height = M.enabled_preview() and math.floor(height * preview_size_ratio) or 0,
+    separator_width = 3,
+    file_info_height = debug_enabled_in_preview and 10 or 0,
+  }
+
+  local layout = M.calculate_layout_dimensions(layout_config)
+  return layout, debug_enabled_in_preview
+end
+
+--- Build window config tables for list, input, preview, and file_info windows.
+--- @param layout table The computed layout from calculate_layout_dimensions
+--- @param config table The picker config
+--- @return table window_configs Table with list, input, preview, file_info keys
+local function build_window_configs(layout, config)
+  local border_chars, t_junctions = get_border_chars()
+  local prompt_position = get_prompt_position()
+  local title = ' ' .. (config.title or 'FFFiles') .. ' '
+
+  -- List border: when prompt at bottom, list has top+sides (no bottom); when top, T-junctions at top
+  local list_border = prompt_position == 'bottom'
+      and { border_chars[1], border_chars[2], border_chars[3], border_chars[4], '', '', '', border_chars[8] }
+    or {
+      t_junctions[1],
+      border_chars[2],
+      t_junctions[2],
+      border_chars[4],
+      border_chars[5],
+      border_chars[6],
+      border_chars[7],
+      border_chars[8],
+    }
+
+  local list_cfg = {
+    relative = 'editor',
+    width = layout.list_width,
+    height = layout.list_height,
+    col = layout.list_col,
+    row = layout.list_row,
+    border = list_border,
+    style = 'minimal',
+  }
+  if prompt_position == 'bottom' then
+    list_cfg.title = title
+    list_cfg.title_pos = 'left'
+  end
+
+  -- Input border: inverse of list border
+  local input_border = prompt_position == 'bottom'
+      and {
+        t_junctions[1],
+        border_chars[2],
+        t_junctions[2],
+        border_chars[4],
+        border_chars[5],
+        border_chars[6],
+        border_chars[7],
+        border_chars[8],
+      }
+    or { border_chars[1], border_chars[2], border_chars[3], border_chars[4], '', '', '', border_chars[8] }
+
+  local input_cfg = {
+    relative = 'editor',
+    width = layout.input_width,
+    height = 1,
+    col = layout.input_col,
+    row = layout.input_row,
+    border = input_border,
+    style = 'minimal',
+  }
+  if prompt_position == 'top' then
+    input_cfg.title = title
+    input_cfg.title_pos = 'left'
+  end
+
+  local preview_cfg = nil
+  if layout.preview then
+    preview_cfg = {
+      relative = 'editor',
+      width = layout.preview.width,
+      height = layout.preview.height,
+      col = layout.preview.col,
+      row = layout.preview.row,
+      style = 'minimal',
+      border = border_chars,
+      title = ' Preview ',
+      title_pos = 'left',
+    }
+  end
+
+  local file_info_cfg = nil
+  if layout.file_info then
+    file_info_cfg = {
+      relative = 'editor',
+      width = layout.file_info.width,
+      height = layout.file_info.height,
+      col = layout.file_info.col,
+      row = layout.file_info.row,
+      style = 'minimal',
+      border = border_chars,
+      title = ' File Info ',
+      title_pos = 'left',
+    }
+  end
+
+  return {
+    list = list_cfg,
+    input = input_cfg,
+    preview = preview_cfg,
+    file_info = file_info_cfg,
+  }
+end
 
 --- Calculate layout dimensions and positions for all windows
 --- @param cfg table
@@ -316,7 +483,7 @@ M.state = {
     grep_next_file_offset = 0,
   },
 
-  config = nil,
+  config = nil, -- @type FFFConfig|nil
 
   -- Custom renderer (optional, defaults to file_renderer if not provided)
   renderer = nil,
@@ -359,100 +526,14 @@ M.state = {
 
 function M.create_ui()
   local config = M.state.config
+  if not config then return false end
 
   if not M.state.ns_id then
     M.state.ns_id = vim.api.nvim_create_namespace('fff_picker_status')
     combo_renderer.init(M.state.ns_id)
   end
 
-  local debug_enabled_in_preview = M.enabled_preview() and config and config.debug and config.debug.show_file_info
-
-  local terminal_width = vim.o.columns
-  local terminal_height = vim.o.lines
-
-  -- Calculate width and height (support function or number)
-  ---@diagnostic disable: need-check-nil
-  local width_ratio = utils.resolve_config_value(
-    config.layout.width,
-    terminal_width,
-    terminal_height,
-    utils.is_valid_ratio,
-    0.8,
-    'layout.width'
-  )
-  local height_ratio = utils.resolve_config_value(
-    config.layout.height,
-    terminal_width,
-    terminal_height,
-    utils.is_valid_ratio,
-    0.8,
-    'layout.height'
-  )
-
-  local width = math.floor(terminal_width * width_ratio)
-  local height = math.floor(terminal_height * height_ratio)
-
-  -- Calculate col and row (support function or number)
-  local col_ratio_default = 0.5 - (width_ratio / 2) -- default center
-  local col_ratio
-  if config.layout.col ~= nil then
-    col_ratio = utils.resolve_config_value(
-      config.layout.col,
-      terminal_width,
-      terminal_height,
-      utils.is_valid_ratio,
-      col_ratio_default,
-      'layout.col'
-    )
-  else
-    col_ratio = col_ratio_default
-  end
-  local row_ratio_default = 0.5 - (height_ratio / 2) -- default center
-  local row_ratio
-  if config.layout.row ~= nil then
-    row_ratio = utils.resolve_config_value(
-      config.layout.row,
-      terminal_width,
-      terminal_height,
-      utils.is_valid_ratio,
-      row_ratio_default,
-      'layout.row'
-    )
-  else
-    row_ratio = row_ratio_default
-  end
-
-  local col = math.floor(terminal_width * col_ratio)
-  local row = math.floor(terminal_height * row_ratio)
-
-  local prompt_position = get_prompt_position()
-  local preview_position = get_preview_position()
-
-  local preview_size_ratio = utils.resolve_config_value(
-    config.layout.preview_size,
-    terminal_width,
-    terminal_height,
-    utils.is_valid_ratio,
-    0.4,
-    'layout.preview_size'
-  )
-  ---@diagnostic enable: need-check-nil
-
-  local layout_config = {
-    total_width = width,
-    total_height = height,
-    start_col = col,
-    start_row = row,
-    preview_position = preview_position,
-    prompt_position = prompt_position,
-    debug_enabled = debug_enabled_in_preview,
-    preview_width = M.enabled_preview() and math.floor(width * preview_size_ratio) or 0,
-    preview_height = M.enabled_preview() and math.floor(height * preview_size_ratio) or 0,
-    separator_width = 3,
-    file_info_height = debug_enabled_in_preview and 10 or 0,
-  }
-
-  local layout = M.calculate_layout_dimensions(layout_config)
+  local layout, debug_enabled_in_preview = compute_layout(config)
   M.state.layout = layout
 
   M.state.input_buf = vim.api.nvim_create_buf(false, true)
@@ -473,102 +554,20 @@ function M.create_ui()
     M.state.file_info_buf = nil
   end
 
-  local border_chars, t_junctions = get_border_chars()
-  local list_window_config = {
-    relative = 'editor',
-    width = layout.list_width,
-    height = layout.list_height,
-    col = layout.list_col,
-    row = layout.list_row,
-    -- To make the input feel connected with the picker, we customize the
-    -- respective corner border characters based on prompt_position
-    -- When prompt at bottom: list has top border + sides, no bottom (connects to input below)
-    -- When prompt at top: list has sides + bottom with T-junctions at top (connects to input above)
-    border = prompt_position == 'bottom'
-        and { border_chars[1], border_chars[2], border_chars[3], border_chars[4], '', '', '', border_chars[8] }
-      or {
-        t_junctions[1],
-        border_chars[2],
-        t_junctions[2],
-        border_chars[4],
-        border_chars[5],
-        border_chars[6],
-        border_chars[7],
-        border_chars[8],
-      },
-    style = 'minimal',
-  }
+  local win_configs = build_window_configs(layout, config)
 
-  local title = ' ' .. (M.state.config.title or 'FFFiles') .. ' '
-  -- Only add title if prompt is at bottom - when prompt is top, title should be on input
-  if prompt_position == 'bottom' then
-    list_window_config.title = title
-    list_window_config.title_pos = 'left'
-  end
-
-  M.state.list_win = vim.api.nvim_open_win(M.state.list_buf, false, list_window_config)
-
-  -- Create file info window if debug enabled
-  if debug_enabled_in_preview and layout.file_info then
-    M.state.file_info_win = vim.api.nvim_open_win(M.state.file_info_buf, false, {
-      relative = 'editor',
-      width = layout.file_info.width,
-      height = layout.file_info.height,
-      col = layout.file_info.col,
-      row = layout.file_info.row,
-      style = 'minimal',
-      border = border_chars,
-      title = ' File Info ',
-      title_pos = 'left',
-    })
+  M.state.list_win = vim.api.nvim_open_win(M.state.list_buf, false, win_configs.list)
+  if debug_enabled_in_preview and win_configs.file_info then
+    M.state.file_info_win = vim.api.nvim_open_win(M.state.file_info_buf, false, win_configs.file_info)
   else
     M.state.file_info_win = nil
   end
 
-  -- Create preview window
-  if M.enabled_preview() and layout.preview then
-    M.state.preview_win = vim.api.nvim_open_win(M.state.preview_buf, false, {
-      relative = 'editor',
-      width = layout.preview.width,
-      height = layout.preview.height,
-      col = layout.preview.col,
-      row = layout.preview.row,
-      style = 'minimal',
-      border = border_chars,
-      title = ' Preview ',
-      title_pos = 'left',
-    })
+  if M.enabled_preview() and win_configs.preview then
+    M.state.preview_win = vim.api.nvim_open_win(M.state.preview_buf, false, win_configs.preview)
   end
 
-  local input_window_config = {
-    relative = 'editor',
-    width = layout.input_width,
-    height = 1,
-    col = layout.input_col,
-    row = layout.input_row,
-    -- To make the input feel connected with the picker, we customize the
-    -- respective corner border characters based on prompt_position
-    -- if prompt at bottom: input has T-junctions at top (connects to list above), full bottom border
-    -- if prompt at top: input has top border + sides, no bottom (connects to list below)
-    border = prompt_position == 'bottom' and {
-      t_junctions[1],
-      border_chars[2],
-      t_junctions[2],
-      border_chars[4],
-      border_chars[5],
-      border_chars[6],
-      border_chars[7],
-      border_chars[8],
-    } or { border_chars[1], border_chars[2], border_chars[3], border_chars[4], '', '', '', border_chars[8] },
-    style = 'minimal',
-  }
-
-  if prompt_position == 'top' then
-    input_window_config.title = title
-    input_window_config.title_pos = 'left'
-  end
-
-  M.state.input_win = vim.api.nvim_open_win(M.state.input_buf, false, input_window_config)
+  M.state.input_win = vim.api.nvim_open_win(M.state.input_buf, false, win_configs.input)
 
   M.setup_buffers()
   M.setup_windows()
@@ -693,6 +692,18 @@ function M.setup_windows()
       end)
     end,
     desc = 'Close picker when focus leaves picker windows',
+  })
+
+  vim.api.nvim_create_autocmd('VimResized', {
+    group = picker_group,
+    callback = function()
+      if not M.state.active then return end
+      vim.schedule(function()
+        if not M.state.active then return end
+        M.relayout()
+      end)
+    end,
+    desc = 'Re-layout picker on terminal resize',
   })
 end
 
@@ -2254,6 +2265,39 @@ function M.select(action)
       end
     end
   end)
+end
+
+function M.relayout()
+  if not M.state.active then return end
+
+  local config = M.state.config
+  if not config then return end
+
+  local layout, _ = compute_layout(config)
+  M.state.layout = layout
+
+  local win_configs = build_window_configs(layout, config)
+
+  if M.state.list_win and vim.api.nvim_win_is_valid(M.state.list_win) then
+    vim.api.nvim_win_set_config(M.state.list_win, win_configs.list)
+  end
+
+  if M.state.input_win and vim.api.nvim_win_is_valid(M.state.input_win) then
+    vim.api.nvim_win_set_config(M.state.input_win, win_configs.input)
+  end
+
+  if M.state.preview_win and vim.api.nvim_win_is_valid(M.state.preview_win) and win_configs.preview then
+    vim.api.nvim_win_set_config(M.state.preview_win, win_configs.preview)
+  end
+
+  if M.state.file_info_win and vim.api.nvim_win_is_valid(M.state.file_info_win) and win_configs.file_info then
+    vim.api.nvim_win_set_config(M.state.file_info_win, win_configs.file_info)
+  end
+
+  -- now rerenderw ith the new computed windows
+  M.render_list()
+  M.update_preview()
+  M.update_status()
 end
 
 function M.close()
