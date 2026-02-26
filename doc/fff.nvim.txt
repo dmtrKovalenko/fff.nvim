@@ -1,4 +1,4 @@
-*fff.nvim.txt*        For Neovim >= 0.10.0       Last change: 2026 February 25
+*fff.nvim.txt*        For Neovim >= 0.10.0       Last change: 2026 February 26
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -148,11 +148,11 @@ all available options:
           width = 0.8,
           prompt_position = 'bottom', -- or 'top'
           preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
-	  flex = { -- set to nil to disable flex layout
-	    size = 130, -- column threshold: if screen width >= size, use preview_position; otherwise use wrap
-	    wrap = 'top', -- position to use when screen is narrower than size
-	  },
           preview_size = 0.5,
+          flex = { -- set to nil to disable flex layout
+            size = 130, -- column threshold: if screen width >= size, use preview_position; otherwise use wrap
+            wrap = 'top', -- position to use when screen is narrower than size
+          },
           show_scrollbar = true, -- Show scrollbar for pagination
           -- How to shorten long directory paths in the file list:
           -- 'middle_number' (default): uses dots for 1-3 hidden (a/./b, a/../b, a/.../b)
