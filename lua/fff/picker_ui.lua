@@ -641,6 +641,36 @@ function M.setup_windows()
   if M.enabled_preview() then
     vim.api.nvim_set_option_value('wrap', false, { win = M.state.preview_win })
     vim.api.nvim_set_option_value('cursorline', M.state.mode == 'grep', { win = M.state.preview_win })
+
+    local cursorlineopt = utils.resolve_config_value(
+      preview_config.cursorlineopt,
+      vim.o.columns,
+      vim.o.lines,
+      function(value)
+        if type(value) ~= 'string' then return false end
+
+        local has_line = false
+        local has_screenline = false
+        for opt in value:gmatch('%w+') do
+          if not utils.is_one_of(opt:gsub('%s+', ''), { 'line', 'screenline', 'number', 'both' }) then return false end
+          if opt == 'line' then has_line = true end
+          if opt == 'screenline' then has_screenline = true end
+        end
+
+        if has_line and has_screenline then return false end
+
+        return true
+      end,
+      'both',
+      'preview.cursorlineopt'
+    )
+
+    vim.api.nvim_set_option_value(
+      'cursorlineopt',
+      M.state.mode == 'grep' and cursorlineopt or vim.o.cursorlineopt,
+      { win = M.state.preview_win }
+    )
+
     vim.api.nvim_set_option_value(
       'number',
       M.state.mode == 'grep' or (preview_config and preview_config.line_numbers or false),
