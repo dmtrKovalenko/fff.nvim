@@ -160,6 +160,7 @@ require('fff').setup({
       binary_file_threshold = 1024, -- amount of bytes to scan for binary content (set 0 to disable)
       imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
       line_numbers = false,
+      cursorlineopt = 'both', -- the cursorlineopt used for lines in grep file previews, see :h cursorlineopt
       wrap_lines = false,
       filetypes = {
         svg = { wrap_lines = true },

@@ -16,6 +16,7 @@ local M = {}
 --- @field binary_file_threshold number
 --- @field imagemagick_info_format_str string
 --- @field line_numbers boolean
+--- @field cursorlineopt string
 --- @field wrap_lines boolean
 --- @field filetypes table<string, table>
 
@@ -219,6 +220,7 @@ local function init()
       binary_file_threshold = 1024, -- amount of bytes to scan for binary content (set 0 to disable)
       imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
       line_numbers = false,
+      cursorlineopt = 'both',
       wrap_lines = false,
       filetypes = {
         svg = { wrap_lines = true },
