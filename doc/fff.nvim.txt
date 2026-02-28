@@ -149,7 +149,7 @@ all available options:
           prompt_position = 'bottom', -- or 'top'
           preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
           preview_size = 0.5,
-          flex = { -- set to nil to disable flex layout
+          flex = { -- set to false to disable flex layout
             size = 130, -- column threshold: if screen width >= size, use preview_position; otherwise use wrap
             wrap = 'top', -- position to use when screen is narrower than size
           },
@@ -168,6 +168,7 @@ all available options:
           binary_file_threshold = 1024, -- amount of bytes to scan for binary content (set 0 to disable)
           imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
           line_numbers = false,
+          cursorlineopt = 'both', -- the cursorlineopt used for lines in grep file previews, see :h cursorlineopt
           wrap_lines = false,
           filetypes = {
             svg = { wrap_lines = true },
