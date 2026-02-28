@@ -44,7 +44,7 @@ jobs:
 
       - name: Build Rust binary (Windows)
         if: matrix.target
-        run: cargo build --release --target ${{ matrix.target }} -p fff-nvim
+        run: cargo build --release --target ${{ matrix.target }} -p fff-nvim --features zlob
 
       - name: Copy binary to target/release (Windows)
         if: matrix.target
@@ -71,7 +71,7 @@ jobs:
 
       - name: Build Rust binary
         if: ${{ !matrix.target }}
-        run: cargo build --release -p fff-nvim
+        run: cargo build --release -p fff-nvim --features zlob
 
       - name: Install Neovim
         uses: rhysd/action-setup-vim@v1

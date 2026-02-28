@@ -1,8 +1,8 @@
 use crate::ConstraintVec;
 use crate::config::ParserConfig;
 use crate::constraints::{Constraint, GitStatusFilter, TextPartsBuffer};
+use crate::glob_detect::has_wildcards;
 use crate::location::{Location, parse_location};
-use zlob::{ZlobFlags, has_wildcards};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
@@ -184,7 +184,7 @@ fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constr
                 // Only return Extension if the rest doesn't have wildcards
                 // e.g., *.rs is Extension, but *.test.* should be Glob
                 let ext_part = &token[2..];
-                if !has_wildcards(ext_part, ZlobFlags::RECOMMENDED) {
+                if !has_wildcards(ext_part) {
                     return Some(constraint);
                 }
             }
@@ -283,7 +283,7 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
             // Try extension first (*.rs) - simple patterns without additional wildcards
             if let Some(constraint) = parse_extension(token) {
                 let ext_part = &token[2..];
-                if !has_wildcards(ext_part, ZlobFlags::RECOMMENDED) {
+                if !has_wildcards(ext_part) {
                     return Some(constraint);
                 }
             }

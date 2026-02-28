@@ -41,6 +41,7 @@
 
 mod config;
 mod constraints;
+pub mod glob_detect;
 pub mod location;
 mod parser;
 

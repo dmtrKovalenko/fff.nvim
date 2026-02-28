@@ -8,6 +8,10 @@ license = "MIT"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+zlob = ["fff-core/zlob"]
+
 [dependencies]
 mimalloc.workspace = true
 tracing.workspace = true
