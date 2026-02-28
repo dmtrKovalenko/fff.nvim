@@ -81,7 +81,7 @@ jobs:
       - name: Build for Linux
         if: contains(matrix.os, 'ubuntu') && !contains(matrix.target, 'android')
         run: |
-          cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-nvim
+          cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-nvim --features zlob
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for Android (Termux)
@@ -95,13 +95,13 @@ jobs:
           export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android24-clang"
 
-          cargo build --release --target ${{ matrix.target }} -p fff-nvim
+          cargo build --release --target ${{ matrix.target }} -p fff-nvim --features zlob
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for macOS
         if: contains(matrix.os, 'macos')
         run: |
-          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-nvim
+          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-nvim --features zlob
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Ad-hoc sign macOS binary
@@ -112,7 +112,7 @@ jobs:
         if: contains(matrix.os, 'windows')
         shell: bash
         run: |
-          cargo build --release --target ${{ matrix.target }} -p fff-nvim
+          cargo build --release --target ${{ matrix.target }} -p fff-nvim --features zlob
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Upload artifacts
@@ -212,7 +212,7 @@ jobs:
       - name: Build for Linux
         if: contains(matrix.os, 'ubuntu') && !contains(matrix.target, 'android')
         run: |
-          cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-c
+          cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-c --features zlob
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for Android (Termux)
@@ -225,13 +225,13 @@ jobs:
           export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android24-clang"
 
-          cargo build --release --target ${{ matrix.target }} -p fff-c
+          cargo build --release --target ${{ matrix.target }} -p fff-c --features zlob
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for macOS
         if: contains(matrix.os, 'macos')
         run: |
-          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-c
+          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-c --features zlob
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Ad-hoc sign macOS binary
@@ -242,7 +242,7 @@ jobs:
         if: contains(matrix.os, 'windows')
         shell: bash
         run: |
-          cargo build --release --target ${{ matrix.target }} -p fff-c
+          cargo build --release --target ${{ matrix.target }} -p fff-c --features zlob
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Prepare npm package
