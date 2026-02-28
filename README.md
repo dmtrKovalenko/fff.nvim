@@ -179,6 +179,10 @@ require('fff').setup({
       prompt_position = 'bottom', -- or 'top'
       preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
       preview_size = 0.5,
+      flex = { -- set to false to disable flex layout
+        size = 130, -- column threshold: if screen width >= size, use preview_position; otherwise use wrap
+        wrap = 'top', -- position to use when screen is narrower than size
+      },
       show_scrollbar = true, -- Show scrollbar for pagination
       -- How to shorten long directory paths in the file list:
       -- 'middle_number' (default): uses dots for 1-3 hidden (a/./b, a/../b, a/.../b)
@@ -194,6 +198,7 @@ require('fff').setup({
       binary_file_threshold = 1024, -- amount of bytes to scan for binary content (set 0 to disable)
       imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
       line_numbers = false,
+      cursorlineopt = 'both', -- the cursorlineopt used for lines in grep file previews, see :h cursorlineopt
       wrap_lines = false,
       filetypes = {
         svg = { wrap_lines = true },
@@ -214,7 +219,7 @@ require('fff').setup({
       preview_scroll_down = '<C-d>',
       toggle_debug = '<F2>',
       -- grep mode: cycle between plain text, regex, and fuzzy search
-      toggle_grep_regex = '<S-Tab>',
+      cycle_grep_modes = '<S-Tab>',
       -- goes to the previous query in history
       cycle_previous_query = '<C-Up>',
       -- multi-select keymaps for quickfix
@@ -223,16 +228,14 @@ require('fff').setup({
       -- this are specific for the normal mode (you can exit it using any other keybind like jj)
       focus_list = '<leader>l',
       focus_preview = '<leader>p',
-      toggle_grep_regex = '<S-Tab>',
     },
     hl = {
       border = 'FloatBorder',
       normal = 'Normal',
-      cursor = 'CursorLine',
+      cursor = 'CursorLine',  -- Falls back to 'Visual' if CursorLine is not defined
       matched = 'IncSearch',
       title = 'Title',
       prompt = 'Question',
-      cursor = fallback_hl({ 'CursorLine', 'Visual' }),
       frecency = 'Number',
       debug = 'Comment',
       combo_header = 'Number',
@@ -309,7 +312,7 @@ require('fff').setup({
       time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
       modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
     },
-  }})
+  })
 ```
 
 ### Key Features

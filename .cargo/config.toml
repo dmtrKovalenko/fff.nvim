@@ -10,12 +10,7 @@ rustflags = ["-C", "target-feature=-crt-static"]
 [target.aarch64-unknown-linux-musl]
 rustflags = ["-C", "target-feature=-crt-static"]
 
+# Android/Termux: no hardcoded linker so native Termux builds use the system cc.
+# For CI cross-compilation the linker is set via CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER env var.
 [target.aarch64-linux-android]
-rustflags = [
-  "-C",
-  "linker=aarch64-linux-android-clang",
-  "-C",
-  "link-args=-rdynamic",
-  "-C",
-  "default-linker-libraries",
-]
+rustflags = ["-C", "link-args=-rdynamic"]

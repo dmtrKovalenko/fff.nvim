@@ -57,14 +57,13 @@ end
 
 local function apply_header_highlights(buf, ns_id, line_idx, text_len, border_hl)
   local config = require('fff.conf').get()
-  vim.api.nvim_buf_add_highlight(buf, ns_id, border_hl, line_idx - 1, 0, -1)
-  vim.api.nvim_buf_add_highlight(
+  vim.api.nvim_buf_set_extmark(buf, ns_id, line_idx - 1, 0, { end_row = line_idx, end_col = 0, hl_group = border_hl })
+  vim.api.nvim_buf_set_extmark(
     buf,
     ns_id,
-    config.hl.combo_header,
     line_idx - 1,
     LEFT_HEADER_PADDING,
-    LEFT_HEADER_PADDING + text_len
+    { end_col = LEFT_HEADER_PADDING + text_len, hl_group = config.hl.combo_header }
   )
 end
 
@@ -72,18 +71,18 @@ local function get_or_create_overlay_buf(state_key)
   if not overlay_state[state_key] or not vim.api.nvim_buf_is_valid(overlay_state[state_key]) then
     ---@diagnostic disable-next-line: assign-type-mismatch
     overlay_state[state_key] = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_option(overlay_state[state_key], 'bufhidden', 'wipe')
+    vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = overlay_state[state_key] })
   end
   return overlay_state[state_key]
 end
 
 local function update_overlay_content(buf, content, border_hl)
   -- Batch all buffer operations together for performance
-  vim.api.nvim_buf_set_option(buf, 'modifiable', true)
+  vim.api.nvim_set_option_value('modifiable', true, { buf = buf })
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { content })
   vim.api.nvim_buf_clear_namespace(buf, overlay_state.ns_id, 0, -1)
-  vim.api.nvim_buf_add_highlight(buf, overlay_state.ns_id, border_hl, 0, 0, -1)
-  vim.api.nvim_buf_set_option(buf, 'modifiable', false)
+  vim.api.nvim_buf_set_extmark(buf, overlay_state.ns_id, 0, 0, { end_row = 1, end_col = 0, hl_group = border_hl })
+  vim.api.nvim_set_option_value('modifiable', false, { buf = buf })
 end
 
 local function position_overlay_window(state_key, buf, width, row, col)
@@ -106,7 +105,7 @@ local function position_overlay_window(state_key, buf, width, row, col)
     overlay_state[state_key] = vim.api.nvim_open_win(buf, false, win_config)
   end
 
-  vim.api.nvim_win_set_option(overlay_state[state_key], 'winhl', 'Normal:Normal')
+  vim.api.nvim_set_option_value('winhighlight', 'Normal:Normal', { win = overlay_state[state_key] })
 end
 
 local function update_overlays(list_win, combo_header_line, border_hl)

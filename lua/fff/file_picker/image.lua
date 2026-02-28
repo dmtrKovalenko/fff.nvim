@@ -25,11 +25,11 @@ local function reserve_image_buffer_space(bufnr, metadata_lines_count)
     table.insert(buffer_lines, '')
   end
 
-  local was_modifiable = vim.api.nvim_buf_get_option(bufnr, 'modifiable')
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+  local was_modifiable = vim.api.nvim_get_option_value('modifiable', { buf = bufnr })
+  vim.api.nvim_set_option_value('modifiable', true, { buf = bufnr })
 
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, buffer_lines)
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', was_modifiable)
+  vim.api.nvim_set_option_value('modifiable', was_modifiable, { buf = bufnr })
 
   return metadata_lines_count or 2
 end
@@ -44,9 +44,9 @@ local function update_metadata_lines(bufnr, info_lines, reserved_lines_count)
     metadata_lines[i] = info_lines[i] or ''
   end
 
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+  vim.api.nvim_set_option_value('modifiable', true, { buf = bufnr })
   vim.api.nvim_buf_set_lines(bufnr, 0, reserved_lines_count, false, metadata_lines)
-  vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+  vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
 end
 
 local function identify_image_lines_async(file_path, bufnr, callback)
@@ -146,7 +146,10 @@ end
 --- @param bufnr number Buffer number to display in
 --- @return boolean
 function M.display_image(file_path, bufnr)
-  vim.api.nvim_buf_set_option(bufnr, 'number', false)
+  local wins = vim.fn.win_findbuf(bufnr)
+  for _, win in ipairs(wins) do
+    vim.api.nvim_set_option_value('number', false, { win = win })
+  end
 
   local reserved_metadata_lines = reserve_image_buffer_space(bufnr, 2)
   local image_content_starts_at_line = reserved_metadata_lines + 1
@@ -163,9 +166,9 @@ function M.display_image(file_path, bufnr)
       '',
       'snacks.nvim plugin is not installed or not available.',
     }
-    vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+    vim.api.nvim_set_option_value('modifiable', true, { buf = bufnr })
     vim.api.nvim_buf_set_lines(bufnr, image_content_starts_at_line, -1, false, error_lines)
-    vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+    vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
     return false
   end
 
@@ -176,9 +179,9 @@ function M.display_image(file_path, bufnr)
       'Terminal does not support image preview.',
       'Please use a terminal that supports images, such as Kitty, Wezterm or Alacritty.',
     }
-    vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+    vim.api.nvim_set_option_value('modifiable', true, { buf = bufnr })
     vim.api.nvim_buf_set_lines(bufnr, image_content_starts_at_line, -1, false, error_lines)
-    vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+    vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
     return false
   end
 
@@ -189,9 +192,9 @@ function M.display_image(file_path, bufnr)
       'File format is not supported for image preview.',
       'File: ' .. vim.fn.fnamemodify(file_path, ':t'),
     }
-    vim.api.nvim_buf_set_option(bufnr, 'modifiable', true)
+    vim.api.nvim_set_option_value('modifiable', true, { buf = bufnr })
     vim.api.nvim_buf_set_lines(bufnr, image_content_starts_at_line, -1, false, error_lines)
-    vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+    vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
     return false
   end
 

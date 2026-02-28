@@ -78,7 +78,3 @@ harness = false
 name = "query_tracker_bench"
 harness = false
 
-# Platform-specific: Use vendored OpenSSL on non-Windows (Linux, macOS)
-# On Windows, git2 uses the native SChannel TLS backend
-[target.'cfg(not(windows))'.dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
