@@ -647,13 +647,13 @@ function M.setup_windows()
       vim.o.columns,
       vim.o.lines,
       function(value)
-        if type(value) ~= 'string' then return false end
+        if type(value) ~= 'string' or #value == 0 then return false end
 
         local has_line = false
         local has_screenline = false
-        for opt in value:gmatch('%w+') do
+        for opt in value:gmatch('[^,]+') do
           if not utils.is_one_of(opt:gsub('%s+', ''), { 'line', 'screenline', 'number', 'both' }) then return false end
-          if opt == 'line' then has_line = true end
+          if opt == 'line' or opt == 'both' then has_line = true end
           if opt == 'screenline' then has_screenline = true end
         end
 
