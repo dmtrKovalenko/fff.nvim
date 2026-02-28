@@ -2,7 +2,7 @@ name: Prebuild
 
 on:
   push:
-    branches: [main, feat/interchangable-ffi]
+    branches: [main, feat/interchangable-ffi, feat/termux]
   pull_request:
 
 jobs:
@@ -34,6 +34,12 @@ jobs:
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             artifact_name: target/aarch64-unknown-linux-musl/release/libfff_nvim.so
+            ext: so
+
+          ## Android (Termux)
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+            artifact_name: target/aarch64-linux-android/release/libfff_nvim.so
             ext: so
 
           ## macOS builds
@@ -73,9 +79,23 @@ jobs:
         run: cargo install cargo-zigbuild
 
       - name: Build for Linux
-        if: contains(matrix.os, 'ubuntu')
+        if: contains(matrix.os, 'ubuntu') && !contains(matrix.target, 'android')
         run: |
           cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-nvim
+          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
+
+      - name: Build for Android (Termux)
+        if: contains(matrix.target, 'android')
+        run: |
+          NDK_BIN="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          # NDK clang for C deps (libgit2, lmdb, blake3) that need Bionic sysroot headers
+          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
+          export CXX_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang++"
+          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android24-clang"
+
+          cargo build --release --target ${{ matrix.target }} -p fff-nvim
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for macOS
@@ -137,6 +157,13 @@ jobs:
             lib_filename: libfff_c.so
             ext: so
 
+          ## Android (Termux)
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+            artifact_name: target/aarch64-linux-android/release/libfff_c.so
+            lib_filename: libfff_c.so
+            ext: so
+
           ## macOS builds
           - os: macos-latest
             target: x86_64-apple-darwin
@@ -183,9 +210,22 @@ jobs:
         run: cargo install cargo-zigbuild
 
       - name: Build for Linux
-        if: contains(matrix.os, 'ubuntu')
+        if: contains(matrix.os, 'ubuntu') && !contains(matrix.target, 'android')
         run: |
           cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-c
+          mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
+
+      - name: Build for Android (Termux)
+        if: contains(matrix.target, 'android')
+        run: |
+          NDK_BIN="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
+          export CXX_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang++"
+          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android24-clang"
+
+          cargo build --release --target ${{ matrix.target }} -p fff-c
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for macOS
@@ -206,6 +246,7 @@ jobs:
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Prepare npm package
+        if: "!contains(matrix.target, 'android')"
         shell: bash
         run: |
           # Copy the built binary into the platform npm package directory
@@ -218,6 +259,7 @@ jobs:
           path: c-lib-${{ matrix.target }}.*
 
       - name: Upload npm package artifact
+        if: "!contains(matrix.target, 'android')"
         uses: actions/upload-artifact@v4
         with:
           name: npm-${{ matrix.npm_package }}
