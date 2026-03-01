@@ -1,4 +1,4 @@
-use fff_core::file_picker::FilePicker;
+use fff_core::file_picker::{FFFMode, FilePicker};
 use fff_core::{
     FileItem, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker,
 };
@@ -81,6 +81,7 @@ fn main() {
     FilePicker::new_with_shared_state(
         canonical_path.to_string_lossy().to_string(),
         false,
+        FFFMode::Neovim,
         Arc::clone(&shared_picker),
         Arc::clone(&shared_frecency),
     )

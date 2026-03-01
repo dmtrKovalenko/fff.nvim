@@ -1,6 +1,39 @@
 use crate::constraints::Constraint;
 use crate::glob_detect::has_wildcards;
 
+/// Check if a token looks like a file path for AI mode detection.
+///
+/// A token is a file path if ALL of:
+/// - Contains at least one `/`
+/// - Does NOT end with `/` (that's a directory/PathSegment)
+/// - Does NOT contain wildcards (`*`, `?`, `{`, `[`) — those are globs
+/// - Last component (after final `/`) contains `.` (has file extension)
+#[inline]
+fn is_file_path_token(token: &str) -> bool {
+    let bytes = token.as_bytes();
+
+    // Must contain at least one /
+    if !bytes.contains(&b'/') {
+        return false;
+    }
+
+    // Must NOT end with / (that's a PathSegment)
+    if bytes.last() == Some(&b'/') {
+        return false;
+    }
+
+    // Must NOT contain wildcards (those are globs)
+    if has_wildcards(token) {
+        return false;
+    }
+
+    // Last component must contain . (file extension)
+    match token.rsplit('/').next() {
+        Some(last) => last.contains('.'),
+        None => false,
+    }
+}
+
 /// Parser configuration trait - allows different picker types to customize parsing
 pub trait ParserConfig {
     fn enable_glob(&self) -> bool {
@@ -105,5 +138,38 @@ impl ParserConfig for GrepConfig {
 
         // Everything else (?, [, bare * without /) → treat as literal text
         false
+    }
+}
+
+/// Configuration for AI-mode grep — extends `GrepConfig` behavior with
+/// automatic file-path constraint detection.
+///
+/// When an AI agent sends `"libswscale/input.c rgba32ToY"`, the token
+/// `libswscale/input.c` is detected as a `FilePath` constraint so the
+/// search is scoped to that file. The caller validates the constraint
+/// against the index and drops it if no files match (fallback).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AiGrepConfig;
+
+impl ParserConfig for AiGrepConfig {
+    fn enable_path_segments(&self) -> bool {
+        true
+    }
+
+    fn enable_git_status(&self) -> bool {
+        false
+    }
+
+    fn is_glob_pattern(&self, token: &str) -> bool {
+        // Reuse GrepConfig's narrowed glob detection
+        GrepConfig.is_glob_pattern(token)
+    }
+
+    fn parse_custom<'a>(&self, token: &'a str) -> Option<Constraint<'a>> {
+        if is_file_path_token(token) {
+            Some(Constraint::FilePath(token))
+        } else {
+            None
+        }
     }
 }

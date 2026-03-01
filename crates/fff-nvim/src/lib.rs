@@ -4,8 +4,8 @@ use fff_core::file_picker::FilePicker;
 use fff_core::frecency::FrecencyTracker;
 use fff_core::query_tracker::QueryTracker;
 use fff_core::{
-    DbHealthChecker, Error, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency,
-    SharedPicker, SharedQueryTracker,
+    DbHealthChecker, Error, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser,
+    SharedFrecency, SharedPicker, SharedQueryTracker,
 };
 use mimalloc::MiMalloc;
 use mlua::prelude::*;
@@ -91,6 +91,7 @@ pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
     FilePicker::new_with_shared_state(
         base_path,
         false,
+        FFFMode::Neovim,
         Arc::clone(&FILE_PICKER),
         Arc::clone(&FRECENCY),
     )
@@ -114,6 +115,7 @@ fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
     FilePicker::new_with_shared_state(
         path.to_string_lossy().to_string(),
         false,
+        FFFMode::Neovim,
         Arc::clone(&FILE_PICKER),
         Arc::clone(&FRECENCY),
     )?;
@@ -297,6 +299,8 @@ pub fn live_grep(
         page_limit: page_size.unwrap_or(50),
         mode,
         time_budget_ms: time_budget_ms.unwrap_or(0),
+        before_context: 0,
+        after_context: 0,
     };
 
     let result = fff_core::grep::grep_search(picker.get_files(), &query, parsed, &options);

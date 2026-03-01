@@ -8,15 +8,15 @@
  * 4. GitHub releases (fallback, requires network)
  */
 
-import { existsSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
-  getTriple,
   getLibExtension,
   getLibFilename,
   getNpmPackageName,
+  getTriple,
 } from "./platform";
 
 const GITHUB_REPO = "dmtrKovalenko/fff.nvim";

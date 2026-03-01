@@ -473,6 +473,7 @@ name = "fff-core"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "aho-corasick",
  "bindet",
  "blake3",
  "chrono",

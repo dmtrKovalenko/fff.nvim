@@ -8,8 +8,8 @@
  * be passed to all subsequent calls and freed with `ffiDestroy`.
  */
 
-import { dlopen, FFIType, ptr, CString, read, type Pointer } from "bun:ffi";
-import { findBinary, ensureBinary } from "./download";
+import { CString, dlopen, FFIType, type Pointer, ptr, read } from "bun:ffi";
+import { ensureBinary, findBinary } from "./download";
 import type { Result } from "./types";
 import { err } from "./types";
 
@@ -37,6 +37,12 @@ const ffiDefinition = {
     returns: FFIType.ptr,
   },
 
+  // Multi-pattern grep (Aho-Corasick)
+  fff_multi_grep: {
+    args: [FFIType.ptr, FFIType.cstring],
+    returns: FFIType.ptr,
+  },
+
   // File index
   fff_scan_files: {
     args: [FFIType.ptr],
@@ -55,12 +61,6 @@ const ffiDefinition = {
     returns: FFIType.ptr,
   },
   fff_restart_index: {
-    args: [FFIType.ptr, FFIType.cstring],
-    returns: FFIType.ptr,
-  },
-
-  // Frecency
-  fff_track_access: {
     args: [FFIType.ptr, FFIType.cstring],
     returns: FFIType.ptr,
   },
@@ -112,7 +112,7 @@ function loadLibrary(): FFFLibrary {
   const binaryPath = findBinary();
   if (!binaryPath) {
     throw new Error(
-      "fff native library not found. Run `bunx fff download` or build from source with `cargo build --release -p fff-c`"
+      "fff native library not found. Run `bunx fff download` or build from source with `cargo build --release -p fff-c`",
     );
   }
 
@@ -124,7 +124,7 @@ function loadLibrary(): FFFLibrary {
  * Encode a string for FFI (null-terminated)
  */
 function encodeString(s: string): Uint8Array {
-  return new TextEncoder().encode(s + "\0");
+  return new TextEncoder().encode(`${s}\0`);
 }
 
 /**
@@ -148,9 +148,7 @@ function snakeToCamel(obj: unknown): unknown {
 
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-    const camelKey = key.replace(/_([a-z])/g, (_, letter) =>
-      letter.toUpperCase()
-    );
+    const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
     result[camelKey] = snakeToCamel(value);
   }
   return result;
@@ -258,13 +256,13 @@ export function ffiDestroy(handle: NativeHandle): void {
 export function ffiSearch(
   handle: NativeHandle,
   query: string,
-  optsJson: string
+  optsJson: string,
 ): Result<unknown> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_search(
     handle,
     ptr(encodeString(query)),
-    ptr(encodeString(optsJson))
+    ptr(encodeString(optsJson)),
   );
   return parseResult<unknown>(resultPtr);
 }
@@ -298,15 +296,9 @@ export function ffiGetScanProgress(handle: NativeHandle): Result<unknown> {
 /**
  * Wait for scan to complete.
  */
-export function ffiWaitForScan(
-  handle: NativeHandle,
-  timeoutMs: number
-): Result<boolean> {
+export function ffiWaitForScan(handle: NativeHandle, timeoutMs: number): Result<boolean> {
   const library = loadLibrary();
-  const resultPtr = library.symbols.fff_wait_for_scan(
-    handle,
-    BigInt(timeoutMs)
-  );
+  const resultPtr = library.symbols.fff_wait_for_scan(handle, BigInt(timeoutMs));
   const result = parseResult<boolean | string>(resultPtr);
   if (!result.ok) return result;
   // JSON.parse("true") returns boolean true, but we also handle
@@ -317,33 +309,10 @@ export function ffiWaitForScan(
 /**
  * Restart index in new path.
  */
-export function ffiRestartIndex(
-  handle: NativeHandle,
-  newPath: string
-): Result<void> {
+export function ffiRestartIndex(handle: NativeHandle, newPath: string): Result<void> {
   const library = loadLibrary();
-  const resultPtr = library.symbols.fff_restart_index(
-    handle,
-    ptr(encodeString(newPath))
-  );
+  const resultPtr = library.symbols.fff_restart_index(handle, ptr(encodeString(newPath)));
   return parseResult<void>(resultPtr);
-}
-
-/**
- * Track file access.
- */
-export function ffiTrackAccess(
-  handle: NativeHandle,
-  filePath: string
-): Result<boolean> {
-  const library = loadLibrary();
-  const resultPtr = library.symbols.fff_track_access(
-    handle,
-    ptr(encodeString(filePath))
-  );
-  const result = parseResult<boolean | string>(resultPtr);
-  if (!result.ok) return result;
-  return { ok: true, value: result.value === true || result.value === "true" };
 }
 
 /**
@@ -355,7 +324,10 @@ export function ffiRefreshGitStatus(handle: NativeHandle): Result<number> {
   const result = parseResult<number | string>(resultPtr);
   if (!result.ok) return result;
   // JSON.parse("3") returns 3 (number), parseInt handles both
-  return { ok: true, value: typeof result.value === "number" ? result.value : parseInt(result.value, 10) };
+  return {
+    ok: true,
+    value: typeof result.value === "number" ? result.value : parseInt(result.value, 10),
+  };
 }
 
 /**
@@ -364,13 +336,13 @@ export function ffiRefreshGitStatus(handle: NativeHandle): Result<number> {
 export function ffiTrackQuery(
   handle: NativeHandle,
   query: string,
-  filePath: string
+  filePath: string,
 ): Result<boolean> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_track_query(
     handle,
     ptr(encodeString(query)),
-    ptr(encodeString(filePath))
+    ptr(encodeString(filePath)),
   );
   const result = parseResult<boolean | string>(resultPtr);
   if (!result.ok) return result;
@@ -382,13 +354,10 @@ export function ffiTrackQuery(
  */
 export function ffiGetHistoricalQuery(
   handle: NativeHandle,
-  offset: number
+  offset: number,
 ): Result<string | null> {
   const library = loadLibrary();
-  const resultPtr = library.symbols.fff_get_historical_query(
-    handle,
-    BigInt(offset)
-  );
+  const resultPtr = library.symbols.fff_get_historical_query(handle, BigInt(offset));
   const result = parseResult<string | null>(resultPtr);
   if (!result.ok) return result;
   if (result.value === null || result.value === "null") return { ok: true, value: null };
@@ -402,12 +371,12 @@ export function ffiGetHistoricalQuery(
  */
 export function ffiHealthCheck(
   handle: NativeHandle | null,
-  testPath: string
+  testPath: string,
 ): Result<unknown> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_health_check(
     handle ?? (0 as unknown as Pointer),
-    ptr(encodeString(testPath))
+    ptr(encodeString(testPath)),
   );
   return parseResult<unknown>(resultPtr);
 }
@@ -418,14 +387,23 @@ export function ffiHealthCheck(
 export function ffiLiveGrep(
   handle: NativeHandle,
   query: string,
-  optsJson: string
+  optsJson: string,
 ): Result<unknown> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_live_grep(
     handle,
     ptr(encodeString(query)),
-    ptr(encodeString(optsJson))
+    ptr(encodeString(optsJson)),
   );
+  return parseResult<unknown>(resultPtr);
+}
+
+/**
+ * Multi-pattern grep - Aho-Corasick multi-needle search.
+ */
+export function ffiMultiGrep(handle: NativeHandle, optsJson: string): Result<unknown> {
+  const library = loadLibrary();
+  const resultPtr = library.symbols.fff_multi_grep(handle, ptr(encodeString(optsJson)));
   return parseResult<unknown>(resultPtr);
 }
 

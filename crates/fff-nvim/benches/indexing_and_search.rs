@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use fff_core::file_picker::FilePicker;
+use fff_core::file_picker::{FFFMode, FilePicker};
 use fff_core::types::{FileItem, PaginationArgs};
 use fff_core::{FuzzySearchOptions, SharedFrecency, SharedPicker};
 use std::path::PathBuf;
@@ -29,6 +29,7 @@ fn init_file_picker_internal(
     FilePicker::new_with_shared_state(
         path.to_string(),
         false,
+        FFFMode::Neovim,
         Arc::clone(shared_picker),
         Arc::clone(shared_frecency),
     )

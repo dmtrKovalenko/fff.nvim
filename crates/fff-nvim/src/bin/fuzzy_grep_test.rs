@@ -1,4 +1,3 @@
-use fff_core::FileItem;
 /// Fuzzy grep quality test against ~/dev/lightsource
 ///
 /// Runs queries through the fuzzy grep pipeline and prints results
@@ -7,7 +6,8 @@ use fff_core::FileItem;
 /// Usage:
 ///   cargo run --release --bin fuzzy_grep_test              # runs default test queries
 ///   cargo run --release --bin fuzzy_grep_test -- "query"   # runs a single user query
-use fff_core::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
+use fff_core::grep::{grep_search, parse_grep_query, GrepMode, GrepSearchOptions};
+use fff_core::FileItem;
 use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
@@ -71,6 +71,8 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         page_limit: 100, // Get plenty of results
         mode: GrepMode::Fuzzy,
         time_budget_ms: 0, // No time limit — search all files
+        before_context: 0,
+        after_context: 0,
     };
 
     let parsed = parse_grep_query(query);

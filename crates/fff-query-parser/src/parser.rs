@@ -69,8 +69,20 @@ impl<C: ParserConfig> QueryParser<C> {
         let mut text_parts = TextPartsBuffer::new();
         let tokens = query.split_whitespace();
 
+        let mut has_file_path = false;
         for token in tokens {
             match parse_token(token, config) {
+                Some(Constraint::FilePath(_)) => {
+                    if has_file_path {
+                        // Only one FilePath constraint allowed; treat extra path
+                        // tokens as literal text (e.g. an import path the user is
+                        // searching for).
+                        text_parts.push(token);
+                    } else {
+                        constraints.push(Constraint::FilePath(token));
+                        has_file_path = true;
+                    }
+                }
                 Some(constraint) => {
                     constraints.push(constraint);
                 }
@@ -145,15 +157,22 @@ impl<'a> FFFQuery<'a> {
     }
 }
 
-/// Strip the leading `\` from a backslash-escaped token, returning the rest.
-/// For all other tokens returns the input unchanged.
+/// Strip the leading `\` from a backslash-escaped constraint token only.
+///
+/// We strip the backslash when the next character is a constraint trigger
+/// (`*`, `/`, `!`) — the user typed `\*.rs` to mean literal `*.rs`, not an
+/// extension constraint. For regex escape sequences like `\w`, `\b`, `\d`,
+/// `\s`, `\n` etc., the backslash is preserved so regex mode works correctly.
 #[inline]
 fn strip_leading_backslash(token: &str) -> &str {
-    if token.starts_with('\\') && token.len() > 1 {
-        &token[1..]
-    } else {
-        token
+    if token.len() > 1 && token.starts_with('\\') {
+        let next = token.as_bytes()[1];
+        // Only strip if the backslash is escaping a constraint trigger character
+        if next == b'*' || next == b'/' || next == b'!' {
+            return &token[1..];
+        }
     }
+    token
 }
 
 impl Default for QueryParser<crate::FilePickerConfig> {
@@ -341,11 +360,12 @@ fn parse_path_segment(token: &str) -> Option<Constraint<'_>> {
 }
 
 /// Parse path segment with trailing slash: www/ -> PathSegment("www")
+/// Also supports multi-segment paths: libswscale/aarch64/ -> PathSegment("libswscale/aarch64")
 #[inline]
 fn parse_path_segment_trailing(token: &str) -> Option<Constraint<'_>> {
     if token.len() > 1 && token.ends_with('/') {
         let segment = token.trim_end_matches('/');
-        if !segment.is_empty() && !segment.contains('/') {
+        if !segment.is_empty() {
             Some(Constraint::PathSegment(segment))
         } else {
             None
@@ -428,8 +448,15 @@ mod tests {
             parse_path_segment_trailing("src/"),
             Some(Constraint::PathSegment("src"))
         );
-        // Should not match paths with multiple segments
-        assert_eq!(parse_path_segment_trailing("src/lib/"), None);
+        // Multi-segment paths should work
+        assert_eq!(
+            parse_path_segment_trailing("src/lib/"),
+            Some(Constraint::PathSegment("src/lib"))
+        );
+        assert_eq!(
+            parse_path_segment_trailing("libswscale/aarch64/"),
+            Some(Constraint::PathSegment("libswscale/aarch64"))
+        );
         // Should not match without trailing slash
         assert_eq!(parse_path_segment_trailing("www"), None);
     }
@@ -717,6 +744,57 @@ mod tests {
     }
 
     #[test]
+    fn test_grep_text_preserves_backslash_escapes() {
+        // Regex patterns like \w+ and \bfoo\b must survive grep_text()
+        // The parser sees \w+ as a text token (not a constraint escape),
+        // but strip_leading_backslash was stripping the \ anyway.
+        let q = QueryParser::new(GrepConfig)
+            .parse("pub struct \\w+")
+            .expect("should parse");
+        assert_eq!(
+            q.grep_text(),
+            "pub struct \\w+",
+            "Backslash-w in regex must be preserved"
+        );
+
+        let q = QueryParser::new(GrepConfig)
+            .parse("\\bword\\b more")
+            .expect("should parse");
+        assert_eq!(
+            q.grep_text(),
+            "\\bword\\b more",
+            "Backslash-b word boundaries must be preserved"
+        );
+
+        // Single-token regex like "fn\\s+\\w+" returns None from parse()
+        // (single token = no parsing needed, caller uses raw_query directly).
+        let result = QueryParser::new(GrepConfig).parse("fn\\s+\\w+");
+        assert!(
+            result.is_none(),
+            "Single-token regex should return None (no parsing)"
+        );
+
+        // But the escaped constraint forms SHOULD still be stripped:
+        let q = QueryParser::new(GrepConfig)
+            .parse("\\*.rs foo")
+            .expect("should parse");
+        assert_eq!(
+            q.grep_text(),
+            "*.rs foo",
+            "Escaped constraint \\*.rs should still have backslash stripped"
+        );
+
+        let q = QueryParser::new(GrepConfig)
+            .parse("\\/src/ foo")
+            .expect("should parse");
+        assert_eq!(
+            q.grep_text(),
+            "/src/ foo",
+            "Escaped constraint \\/src/ should still have backslash stripped"
+        );
+    }
+
+    #[test]
     fn test_grep_bare_star_is_text() {
         let parser = QueryParser::new(GrepConfig);
         // "a*b" contains * but no / or {} — should be text in grep mode
@@ -784,5 +862,87 @@ mod tests {
             }
             other => panic!("Expected Not constraint, got {:?}", other),
         }
+    }
+
+    // ── AI grep config tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_ai_grep_detects_file_path() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser
+            .parse("libswscale/input.c rgba32ToY")
+            .expect("Should parse");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(
+                result.constraints[0],
+                Constraint::FilePath("libswscale/input.c")
+            ),
+            "Expected FilePath, got {:?}",
+            result.constraints[0]
+        );
+        assert_eq!(result.grep_text(), "rgba32ToY");
+    }
+
+    #[test]
+    fn test_ai_grep_detects_nested_file_path() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("src/main.rs fn main").expect("Should parse");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(matches!(
+            result.constraints[0],
+            Constraint::FilePath("src/main.rs")
+        ));
+        assert_eq!(result.grep_text(), "fn main");
+    }
+
+    #[test]
+    fn test_ai_grep_no_false_positive_trailing_slash() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("src/ pattern").expect("Should parse");
+        // Should be PathSegment, NOT FilePath
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::PathSegment("src")),
+            "Expected PathSegment, got {:?}",
+            result.constraints[0]
+        );
+    }
+
+    #[test]
+    fn test_ai_grep_no_false_positive_no_slash() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("main.rs pattern").expect("Should parse");
+        // No slash → not a file path, just text
+        assert_eq!(result.constraints.len(), 0);
+        assert_eq!(result.grep_text(), "main.rs pattern");
+    }
+
+    #[test]
+    fn test_ai_grep_no_false_positive_no_extension() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("src/utils pattern").expect("Should parse");
+        // No extension in last component → not a file path, just text
+        assert_eq!(result.constraints.len(), 0);
+        assert_eq!(result.grep_text(), "src/utils pattern");
+    }
+
+    #[test]
+    fn test_ai_grep_wildcard_not_filepath() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("src/**/*.rs pattern").expect("Should parse");
+        // Contains wildcards → should be a Glob, not FilePath
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::Glob("src/**/*.rs")),
+            "Expected Glob, got {:?}",
+            result.constraints[0]
+        );
     }
 }
