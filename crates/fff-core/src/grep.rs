@@ -8,7 +8,8 @@
 use crate::constraints::apply_constraints;
 use crate::sort_buffer::sort_with_buffer;
 use crate::types::FileItem;
-use fff_query_parser::{FFFQuery, GrepConfig, QueryParser};
+use aho_corasick::AhoCorasick;
+use fff_query_parser::{AiGrepConfig, Constraint, FFFQuery, GrepConfig, QueryParser};
 use grep_matcher::{Match, Matcher, NoCaptures, NoError};
 use grep_searcher::lines::{self, LineStep};
 use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
@@ -55,6 +56,10 @@ pub struct GrepMatch {
     pub match_byte_offsets: SmallVec<[(u32, u32); 4]>,
     /// Fuzzy match score from neo_frizbee (only set in Fuzzy grep mode).
     pub fuzzy_score: Option<u16>,
+    /// Lines before the match (for context display). Empty when context is 0.
+    pub context_before: Vec<String>,
+    /// Lines after the match (for context display). Empty when context is 0.
+    pub context_after: Vec<String>,
 }
 
 /// Result of a grep search.
@@ -95,6 +100,10 @@ pub struct GrepSearchOptions {
     /// Maximum time in milliseconds to spend searching before returning partial
     /// results. Prevents UI freezes on pathological queries. 0 = no limit.
     pub time_budget_ms: u64,
+    /// Number of context lines to include before each match. 0 = disabled.
+    pub before_context: usize,
+    /// Number of context lines to include after each match. 0 = disabled.
+    pub after_context: usize,
 }
 
 /// Lightweight wrapper around `regex::bytes::Regex` implementing the
@@ -232,6 +241,8 @@ struct SinkState {
     file_index: usize,
     matches: Vec<GrepMatch>,
     max_matches: usize,
+    before_context: usize,
+    after_context: usize,
 }
 
 impl SinkState {
@@ -251,21 +262,14 @@ impl SinkState {
         let trimmed_bytes = &line_bytes[..trimmed_len];
 
         // Truncate for display (floor to a char boundary).
-        let display_bytes = if trimmed_bytes.len() > MAX_LINE_DISPLAY_LEN {
-            let mut end = MAX_LINE_DISPLAY_LEN;
-            while end > 0 && !is_utf8_char_boundary(trimmed_bytes[end]) {
-                end -= 1;
-            }
-            &trimmed_bytes[..end]
-        } else {
-            trimmed_bytes
-        };
+        let display_bytes = truncate_display_bytes(trimmed_bytes);
 
         let display_len = display_bytes.len() as u32;
         (display_bytes, display_len, line_number, byte_offset)
     }
 
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     fn push_match(
         &mut self,
         line_number: u64,
@@ -273,6 +277,8 @@ impl SinkState {
         byte_offset: u64,
         line_content: String,
         match_byte_offsets: SmallVec<[(u32, u32); 4]>,
+        context_before: Vec<String>,
+        context_after: Vec<String>,
     ) {
         self.matches.push(GrepMatch {
             file_index: self.file_index,
@@ -282,7 +288,91 @@ impl SinkState {
             line_content,
             match_byte_offsets,
             fuzzy_score: None,
+            context_before,
+            context_after,
         });
+    }
+
+    /// Extract context lines from the full buffer around a matched region.
+    fn extract_context(&self, mat: &SinkMatch<'_>) -> (Vec<String>, Vec<String>) {
+        if self.before_context == 0 && self.after_context == 0 {
+            return (Vec::new(), Vec::new());
+        }
+
+        let buffer = mat.buffer();
+        let range = mat.bytes_range_in_buffer();
+
+        let mut before = Vec::new();
+        if self.before_context > 0 && range.start > 0 {
+            // Walk backward from the start of the match line to find preceding lines
+            let mut pos = range.start;
+            let mut lines_found = 0;
+            while lines_found < self.before_context && pos > 0 {
+                // Skip the newline just before our current position
+                pos -= 1;
+                // Find the previous newline
+                let line_start = match memchr::memrchr(b'\n', &buffer[..pos]) {
+                    Some(nl) => nl + 1,
+                    None => 0,
+                };
+                let line = &buffer[line_start..pos];
+                // Trim trailing \r
+                let line = if line.last() == Some(&b'\r') {
+                    &line[..line.len() - 1]
+                } else {
+                    line
+                };
+                let truncated = truncate_display_bytes(line);
+                before.push(String::from_utf8_lossy(truncated).into_owned());
+                pos = line_start;
+                lines_found += 1;
+            }
+            before.reverse();
+        }
+
+        let mut after = Vec::new();
+        if self.after_context > 0 && range.end < buffer.len() {
+            let mut pos = range.end;
+            let mut lines_found = 0;
+            while lines_found < self.after_context && pos < buffer.len() {
+                // Find the next newline
+                let line_end = match memchr::memchr(b'\n', &buffer[pos..]) {
+                    Some(nl) => pos + nl,
+                    None => buffer.len(),
+                };
+                let line = &buffer[pos..line_end];
+                // Trim trailing \r
+                let line = if line.last() == Some(&b'\r') {
+                    &line[..line.len() - 1]
+                } else {
+                    line
+                };
+                let truncated = truncate_display_bytes(line);
+                after.push(String::from_utf8_lossy(truncated).into_owned());
+                pos = if line_end < buffer.len() {
+                    line_end + 1 // skip past \n
+                } else {
+                    buffer.len()
+                };
+                lines_found += 1;
+            }
+        }
+
+        (before, after)
+    }
+}
+
+/// Truncate a byte slice for display, respecting UTF-8 char boundaries.
+#[inline]
+fn truncate_display_bytes(bytes: &[u8]) -> &[u8] {
+    if bytes.len() <= MAX_LINE_DISPLAY_LEN {
+        bytes
+    } else {
+        let mut end = MAX_LINE_DISPLAY_LEN;
+        while end > 0 && !is_utf8_char_boundary(bytes[end]) {
+            end -= 1;
+        }
+        &bytes[..end]
     }
 }
 
@@ -349,12 +439,15 @@ impl Sink for PlainTextSink<'_> {
             }
         }
 
+        let (context_before, context_after) = self.state.extract_context(mat);
         self.state.push_match(
             line_number,
             col,
             byte_offset,
             line_content,
             match_byte_offsets,
+            context_before,
+            context_after,
         );
         Ok(true)
     }
@@ -404,12 +497,15 @@ impl Sink for RegexSink<'_> {
             match_byte_offsets.push((abs_start, abs_end));
         }
 
+        let (context_before, context_after) = self.state.extract_context(sink_match);
         self.state.push_match(
             line_number,
             col,
             byte_offset,
             line_content,
             match_byte_offsets,
+            context_before,
+            context_after,
         );
         Ok(true)
     }
@@ -417,6 +513,183 @@ impl Sink for RegexSink<'_> {
     fn finish(&mut self, _: &Searcher, _: &grep_searcher::SinkFinish) -> Result<(), Self::Error> {
         Ok(())
     }
+}
+
+/// A `grep_matcher::Matcher` backed by Aho-Corasick for multi-pattern search.
+///
+/// Finds the first occurrence of any pattern starting at the given offset.
+/// Always reports `\n` as the line terminator for the fast candidate-line path.
+struct AhoCorasickMatcher {
+    ac: AhoCorasick,
+}
+
+impl Matcher for AhoCorasickMatcher {
+    type Captures = NoCaptures;
+    type Error = NoError;
+
+    #[inline]
+    fn find_at(&self, haystack: &[u8], at: usize) -> std::result::Result<Option<Match>, NoError> {
+        let hay = &haystack[at..];
+        let found: Option<aho_corasick::Match> = self.ac.find(hay);
+        Ok(found.map(|m| Match::new(at + m.start(), at + m.end())))
+    }
+
+    #[inline]
+    fn new_captures(&self) -> Result<NoCaptures, NoError> {
+        Ok(NoCaptures::new())
+    }
+
+    #[inline]
+    fn line_terminator(&self) -> Option<grep_matcher::LineTerminator> {
+        Some(grep_matcher::LineTerminator::byte(b'\n'))
+    }
+}
+
+/// Sink for Aho-Corasick multi-pattern mode.
+///
+/// Collects all pattern match positions on each matched line for highlighting.
+struct AhoCorasickSink {
+    state: SinkState,
+    ac: AhoCorasick,
+}
+
+impl Sink for AhoCorasickSink {
+    type Error = std::io::Error;
+
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+        if self.state.max_matches != 0 && self.state.matches.len() >= self.state.max_matches {
+            return Ok(false);
+        }
+
+        let line_bytes = mat.bytes();
+        let (display_bytes, display_len, line_number, byte_offset) =
+            SinkState::prepare_line(line_bytes, mat);
+
+        let line_content = String::from_utf8_lossy(display_bytes).into_owned();
+        let mut match_byte_offsets: SmallVec<[(u32, u32); 4]> = SmallVec::new();
+        let mut col = 0usize;
+        let mut first = true;
+
+        for m in self.ac.find_iter(display_bytes as &[u8]) {
+            let abs_start = m.start() as u32;
+            let abs_end = (m.end() as u32).min(display_len);
+            if first {
+                col = abs_start as usize;
+                first = false;
+            }
+            match_byte_offsets.push((abs_start, abs_end));
+        }
+
+        let (context_before, context_after) = self.state.extract_context(mat);
+        self.state.push_match(
+            line_number,
+            col,
+            byte_offset,
+            line_content,
+            match_byte_offsets,
+            context_before,
+            context_after,
+        );
+        Ok(true)
+    }
+
+    fn finish(&mut self, _: &Searcher, _: &grep_searcher::SinkFinish) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+/// Multi-pattern OR search using Aho-Corasick.
+///
+/// Builds a single automaton from all patterns and searches each file in one
+/// pass. This is significantly faster than regex alternation for literal text
+/// searches because Aho-Corasick uses SIMD-accelerated multi-needle matching.
+///
+/// Returns the same `GrepResult` type as `grep_search`.
+pub fn multi_grep_search<'a>(
+    files: &'a [FileItem],
+    patterns: &[&str],
+    constraints: &[fff_query_parser::Constraint<'_>],
+    options: &GrepSearchOptions,
+) -> GrepResult<'a> {
+    let total_files = files.len();
+
+    if patterns.is_empty() || patterns.iter().all(|p| p.is_empty()) {
+        return GrepResult {
+            total_files,
+            filtered_file_count: total_files,
+            ..Default::default()
+        };
+    }
+
+    let (mut files_to_search, mut filtered_file_count) =
+        prepare_files_to_search(files, constraints, options);
+
+    // If constraints yielded 0 files and we had FilePath constraints,
+    // retry without them (the path token was likely part of the search text).
+    if files_to_search.is_empty()
+        && let Some(stripped) = strip_file_path_constraints(constraints)
+    {
+        let (retry_files, retry_count) = prepare_files_to_search(files, &stripped, options);
+        files_to_search = retry_files;
+        filtered_file_count = retry_count;
+    }
+
+    if files_to_search.is_empty() {
+        return GrepResult {
+            total_files,
+            filtered_file_count,
+            ..Default::default()
+        };
+    }
+
+    // Smart case: case-insensitive when all patterns are lowercase
+    let case_insensitive = if options.smart_case {
+        !patterns.iter().any(|p| p.chars().any(|c| c.is_uppercase()))
+    } else {
+        false
+    };
+
+    let ac = aho_corasick::AhoCorasickBuilder::new()
+        .ascii_case_insensitive(case_insensitive)
+        .build(patterns)
+        .expect("Aho-Corasick build should not fail for literal patterns");
+
+    let searcher = {
+        let mut b = SearcherBuilder::new();
+        b.line_number(true);
+        b
+    }
+    .build();
+
+    let ac_matcher = AhoCorasickMatcher { ac: ac.clone() };
+
+    run_file_search(
+        &files_to_search,
+        options,
+        total_files,
+        filtered_file_count,
+        None,
+        |file_bytes: &[u8], max_matches: usize| {
+            let state = SinkState {
+                file_index: 0,
+                matches: Vec::new(),
+                max_matches,
+                before_context: options.before_context,
+                after_context: options.after_context,
+            };
+
+            let mut sink = AhoCorasickSink {
+                state,
+                ac: ac.clone(),
+            };
+
+            if let Err(e) = searcher.search_slice(&ac_matcher, file_bytes, &mut sink) {
+                tracing::error!(error = %e, "Grep (aho-corasick multi) search failed");
+            }
+
+            sink.state.matches
+        },
+    )
 }
 
 /// Check if a byte is a valid UTF-8 character boundary.
@@ -456,6 +729,7 @@ fn build_regex(pattern: &str, smart_case: bool) -> Result<regex::bytes::Regex, S
 
     regex::bytes::RegexBuilder::new(&regex_pattern)
         .case_insensitive(case_insensitive)
+        .multi_line(true)
         .unicode(false)
         .build()
         .map_err(|e| e.to_string())
@@ -808,15 +1082,10 @@ fn fuzzy_grep_search<'a>(
                 let idx = m.index as usize;
                 let raw_line = file_lines[idx];
 
-                let display_line = if raw_line.len() > MAX_LINE_DISPLAY_LEN {
-                    let mut end = MAX_LINE_DISPLAY_LEN;
-                    let bytes = raw_line.as_bytes();
-                    // important for non ascii languages that might have character boundary at
-                    // offset exactly at MAX_LINE_DISPLAY_LEN
-                    while end > 0 && !is_utf8_char_boundary(bytes[end]) {
-                        end -= 1;
-                    }
-                    &raw_line[..end]
+                let truncated = truncate_display_bytes(raw_line.as_bytes());
+                let display_line = if truncated.len() < raw_line.len() {
+                    // SAFETY: truncate_display_bytes preserves UTF-8 char boundaries
+                    &raw_line[..truncated.len()]
                 } else {
                     raw_line
                 };
@@ -888,6 +1157,8 @@ fn fuzzy_grep_search<'a>(
                     line_content: display_line.to_string(),
                     match_byte_offsets,
                     fuzzy_score: Some(match_indices.score),
+                    context_before: Vec::new(),
+                    context_after: Vec::new(),
                 });
 
                 if max_matches_per_file != 0 && file_matches.len() >= max_matches_per_file {
@@ -917,15 +1188,15 @@ pub fn grep_search<'a>(
     // removed. All non-constraint text tokens are collected and joined with
     // spaces to form the grep pattern:
     //   "name = *.rs someth" -> grep "name = someth" with constraint Extension("rs")
-    let constraints: &[fff_query_parser::Constraint<'_>];
+    let constraints_from_query: &[fff_query_parser::Constraint<'_>];
 
     let grep_text = match &query {
         Some(p) => {
-            constraints = &p.constraints[..];
+            constraints_from_query = &p.constraints[..];
             p.grep_text()
         }
         None => {
-            constraints = &[];
+            constraints_from_query = &[];
             // Single-token query (parser returned None). If the token is a
             // backslash-escaped constraint (e.g. `\*.rs`, `\/src/`, `\!test`),
             // strip the leading `\` so the literal text is searched. Other
@@ -962,8 +1233,18 @@ pub fn grep_search<'a>(
     }
 
     // Filter, sort, and paginate files (shared across all modes)
-    let (files_to_search, filtered_file_count) =
-        prepare_files_to_search(files, constraints, options);
+    let (mut files_to_search, mut filtered_file_count) =
+        prepare_files_to_search(files, constraints_from_query, options);
+
+    // If constraints yielded 0 files and we had a FilePath constraint,
+    // retry without it (the path token was likely part of the search text).
+    if files_to_search.is_empty()
+        && let Some(stripped) = strip_file_path_constraints(constraints_from_query)
+    {
+        let (retry_files, retry_count) = prepare_files_to_search(files, &stripped, options);
+        files_to_search = retry_files;
+        filtered_file_count = retry_count;
+    }
 
     if files_to_search.is_empty() {
         return GrepResult {
@@ -1047,6 +1328,8 @@ pub fn grep_search<'a>(
                 file_index: 0, // set by run_file_search
                 matches: Vec::new(),
                 max_matches,
+                before_context: options.before_context,
+                after_context: options.after_context,
             };
 
             match regex {
@@ -1082,6 +1365,31 @@ pub fn grep_search<'a>(
 pub fn parse_grep_query(query: &str) -> Option<FFFQuery<'_>> {
     let parser = QueryParser::new(GrepConfig);
     parser.parse(query)
+}
+
+/// Parse a grep query using the AiGrepConfig parser (detects file-path constraints).
+pub fn parse_ai_grep_query(query: &str) -> Option<FFFQuery<'_>> {
+    let parser = QueryParser::new(AiGrepConfig);
+    parser.parse(query)
+}
+
+fn strip_file_path_constraints<'a>(
+    constraints: &[Constraint<'a>],
+) -> Option<fff_query_parser::ConstraintVec<'a>> {
+    if !constraints
+        .iter()
+        .any(|c| matches!(c, Constraint::FilePath(_)))
+    {
+        return None;
+    }
+
+    let filtered: fff_query_parser::ConstraintVec<'a> = constraints
+        .iter()
+        .filter(|c| !matches!(c, Constraint::FilePath(_)))
+        .cloned()
+        .collect();
+
+    Some(filtered)
 }
 
 #[cfg(test)]
@@ -1137,5 +1445,143 @@ mod tests {
         assert!(!passes("schema", "it has ema in it"));
         // Completely unrelated: must NOT pass
         assert!(!passes("schema", "hello world foo bar"));
+    }
+
+    #[test]
+    fn test_multi_grep_search() {
+        use crate::types::FileItem;
+        use std::io::Write;
+
+        // Create temp files with known content
+        let dir = tempfile::tempdir().unwrap();
+
+        // File 1: has "GrepMode" and "GrepMatch"
+        let file1_path = dir.path().join("grep.rs");
+        {
+            let mut f = std::fs::File::create(&file1_path).unwrap();
+            writeln!(f, "pub enum GrepMode {{").unwrap();
+            writeln!(f, "    PlainText,").unwrap();
+            writeln!(f, "    Regex,").unwrap();
+            writeln!(f, "}}").unwrap();
+            writeln!(f, "pub struct GrepMatch {{").unwrap();
+            writeln!(f, "    pub line_number: u64,").unwrap();
+            writeln!(f, "}}").unwrap();
+        }
+
+        // File 2: has "PlainTextMatcher" only
+        let file2_path = dir.path().join("matcher.rs");
+        {
+            let mut f = std::fs::File::create(&file2_path).unwrap();
+            writeln!(f, "struct PlainTextMatcher {{").unwrap();
+            writeln!(f, "    needle: Vec<u8>,").unwrap();
+            writeln!(f, "}}").unwrap();
+        }
+
+        // File 3: no matches
+        let file3_path = dir.path().join("other.rs");
+        {
+            let mut f = std::fs::File::create(&file3_path).unwrap();
+            writeln!(f, "fn main() {{").unwrap();
+            writeln!(f, "    println!(\"hello\");").unwrap();
+            writeln!(f, "}}").unwrap();
+        }
+
+        let meta1 = std::fs::metadata(&file1_path).unwrap();
+        let meta2 = std::fs::metadata(&file2_path).unwrap();
+        let meta3 = std::fs::metadata(&file3_path).unwrap();
+
+        let files = vec![
+            FileItem::new_raw(
+                file1_path,
+                "grep.rs".to_string(),
+                "grep.rs".to_string(),
+                meta1.len(),
+                0,
+                None,
+                false,
+            ),
+            FileItem::new_raw(
+                file2_path,
+                "matcher.rs".to_string(),
+                "matcher.rs".to_string(),
+                meta2.len(),
+                0,
+                None,
+                false,
+            ),
+            FileItem::new_raw(
+                file3_path,
+                "other.rs".to_string(),
+                "other.rs".to_string(),
+                meta3.len(),
+                0,
+                None,
+                false,
+            ),
+        ];
+
+        let options = super::GrepSearchOptions {
+            max_file_size: 10 * 1024 * 1024,
+            max_matches_per_file: 0,
+            smart_case: true,
+            file_offset: 0,
+            page_limit: 100,
+            mode: super::GrepMode::PlainText,
+            time_budget_ms: 0,
+            before_context: 0,
+            after_context: 0,
+        };
+
+        // Test with 3 patterns
+        let result = super::multi_grep_search(
+            &files,
+            &["GrepMode", "GrepMatch", "PlainTextMatcher"],
+            &[],
+            &options,
+        );
+
+        // Should find matches from file1 (GrepMode, GrepMatch) and file2 (PlainTextMatcher)
+        assert!(
+            result.matches.len() >= 3,
+            "Expected at least 3 matches, got {}",
+            result.matches.len()
+        );
+
+        // Verify all 3 patterns are found
+        let has_grep_mode = result
+            .matches
+            .iter()
+            .any(|m| m.line_content.contains("GrepMode"));
+        let has_grep_match = result
+            .matches
+            .iter()
+            .any(|m| m.line_content.contains("GrepMatch"));
+        let has_plain_text_matcher = result
+            .matches
+            .iter()
+            .any(|m| m.line_content.contains("PlainTextMatcher"));
+
+        assert!(has_grep_mode, "Should find GrepMode");
+        assert!(has_grep_match, "Should find GrepMatch");
+        assert!(has_plain_text_matcher, "Should find PlainTextMatcher");
+
+        // File 3 should have no matches
+        assert_eq!(result.files.len(), 2, "Should match exactly 2 files");
+
+        // Test with single pattern
+        let result2 = super::multi_grep_search(&files, &["PlainTextMatcher"], &[], &options);
+        assert_eq!(
+            result2.matches.len(),
+            1,
+            "Single pattern should find 1 match"
+        );
+
+        // Test with empty patterns
+        let result3 = super::multi_grep_search(&files, &[], &[], &options);
+        assert_eq!(
+            result3.matches.len(),
+            0,
+            "Empty patterns should find nothing"
+        );
     }
 }

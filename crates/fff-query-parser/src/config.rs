@@ -1,6 +1,80 @@
 use crate::constraints::Constraint;
 use crate::glob_detect::has_wildcards;
 
+/// Check if a token looks like a filename or file path for use as a `FilePath` constraint.
+///
+/// A token is a filename/path if ALL of:
+/// - Does NOT end with `/` (that's a directory/PathSegment)
+/// - Does NOT contain wildcards (`*`, `?`, `{`, `[`) — those are globs
+/// - Last component (after final `/`) contains `.` with a valid-looking extension
+///   (1–10 alphanumeric chars starting with a letter, e.g. `rs`, `json`, `tsx`)
+///
+/// This covers both bare filenames (`score.rs`) and path-prefixed ones (`src/main.rs`).
+#[inline]
+fn is_filename_constraint_token(token: &str) -> bool {
+    let bytes = token.as_bytes();
+
+    // Must NOT end with / (that's a PathSegment)
+    if bytes.last() == Some(&b'/') {
+        return false;
+    }
+
+    // Must NOT contain wildcards (those are globs)
+    if has_wildcards(token) {
+        return false;
+    }
+
+    // Get the filename component (after last /)
+    let filename = token.rsplit('/').next().unwrap_or(token);
+
+    // Extension must exist and look like a real file extension:
+    // starts with an ASCII letter (rejects version numbers like "v2.0"),
+    // followed by alphanumeric chars, max 10 chars total.
+    match filename.rfind('.') {
+        Some(dot_pos) => {
+            let ext = &filename[dot_pos + 1..];
+            !ext.is_empty()
+                && ext.len() <= 10
+                && ext.as_bytes()[0].is_ascii_alphabetic()
+                && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+        }
+        None => false,
+    }
+}
+
+/// Check if a token looks like a file path for AI mode detection.
+///
+/// A token is a file path if ALL of:
+/// - Contains at least one `/`
+/// - Does NOT end with `/` (that's a directory/PathSegment)
+/// - Does NOT contain wildcards (`*`, `?`, `{`, `[`) — those are globs
+/// - Last component (after final `/`) contains `.` (has file extension)
+#[inline]
+fn is_file_path_token(token: &str) -> bool {
+    let bytes = token.as_bytes();
+
+    // Must contain at least one /
+    if !bytes.contains(&b'/') {
+        return false;
+    }
+
+    // Must NOT end with / (that's a PathSegment)
+    if bytes.last() == Some(&b'/') {
+        return false;
+    }
+
+    // Must NOT contain wildcards (those are globs)
+    if has_wildcards(token) {
+        return false;
+    }
+
+    // Last component must contain . (file extension)
+    match token.rsplit('/').next() {
+        Some(last) => last.contains('.'),
+        None => false,
+    }
+}
+
 /// Parser configuration trait - allows different picker types to customize parsing
 pub trait ParserConfig {
     fn enable_glob(&self) -> bool {
@@ -54,7 +128,16 @@ pub trait ParserConfig {
 pub struct FilePickerConfig;
 
 impl ParserConfig for FilePickerConfig {
-    // All defaults enabled
+    /// Detect bare filenames (`score.rs`) and path-prefixed filenames (`src/main.rs`)
+    /// as `FilePath` constraints so that multi-token queries like `score.rs file_picker`
+    /// filter by filename first, then fuzzy-match the remaining text against the path.
+    fn parse_custom<'a>(&self, token: &'a str) -> Option<Constraint<'a>> {
+        if is_filename_constraint_token(token) {
+            Some(Constraint::FilePath(token))
+        } else {
+            None
+        }
+    }
 }
 
 /// Configuration for full-text search (grep) - file constraints enabled for
@@ -105,5 +188,57 @@ impl ParserConfig for GrepConfig {
 
         // Everything else (?, [, bare * without /) → treat as literal text
         false
+    }
+}
+
+/// Configuration for AI-mode grep — extends `GrepConfig` behavior with
+/// automatic file-path constraint detection.
+///
+/// When an AI agent sends `"libswscale/input.c rgba32ToY"`, the token
+/// `libswscale/input.c` is detected as a `FilePath` constraint so the
+/// search is scoped to that file. The caller validates the constraint
+/// against the index and drops it if no files match (fallback).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AiGrepConfig;
+
+impl ParserConfig for AiGrepConfig {
+    fn enable_path_segments(&self) -> bool {
+        true
+    }
+
+    fn enable_git_status(&self) -> bool {
+        false
+    }
+
+    fn is_glob_pattern(&self, token: &str) -> bool {
+        // First check GrepConfig's strict rules (path globs, brace expansion)
+        if GrepConfig.is_glob_pattern(token) {
+            return true;
+        }
+
+        // AI agents use `*text*` to scope file searches (e.g. `*quote* TODO`).
+        // Recognise tokens that start AND end with `*` with non-empty text
+        // between them as glob constraints. Bare `*` or `**` are excluded.
+        if !has_wildcards(token) {
+            return false;
+        }
+        let bytes = token.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0] == b'*'
+            && bytes[bytes.len() - 1] == b'*'
+            && bytes[1..bytes.len() - 1].iter().all(|&b| b != b'*')
+        {
+            return true;
+        }
+
+        false
+    }
+
+    fn parse_custom<'a>(&self, token: &'a str) -> Option<Constraint<'a>> {
+        if is_file_path_token(token) {
+            Some(Constraint::FilePath(token))
+        } else {
+            None
+        }
     }
 }

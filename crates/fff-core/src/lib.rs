@@ -37,6 +37,6 @@ pub use error::{Error, Result};
 pub use fff_query_parser::{
     Constraint, FFFQuery, FuzzyQuery, Location, QueryParser, location::parse_location,
 };
-pub use file_picker::{FuzzySearchOptions, ScanProgress};
-pub use grep::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions};
+pub use file_picker::{FFFMode, FuzzySearchOptions, ScanProgress};
+pub use grep::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions, multi_grep_search};
 pub use types::{FileItem, PaginationArgs, Score, ScoringContext, SearchResult};

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use fff_core::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
+use fff_core::grep::{grep_search, parse_grep_query, GrepMode, GrepSearchOptions};
 use fff_core::types::FileItem;
 
 /// Create a file inside a temp dir and return its `FileItem`.
@@ -25,6 +25,8 @@ fn plain_opts() -> GrepSearchOptions {
         page_limit: 200,
         mode: GrepMode::PlainText,
         time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
     }
 }
 
@@ -38,6 +40,8 @@ fn regex_opts() -> GrepSearchOptions {
         page_limit: 200,
         mode: GrepMode::Regex,
         time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
     }
 }
 
@@ -51,6 +55,8 @@ fn fuzzy_opts() -> GrepSearchOptions {
         page_limit: 200,
         mode: GrepMode::Fuzzy,
         time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
     }
 }
 
@@ -514,6 +520,27 @@ fn regex_anchors() {
 
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].line_number, 1);
+}
+
+#[test]
+fn regex_anchors_multiword() {
+    let tmp = TempDir::new().unwrap();
+    let files = vec![create_file(
+        tmp.path(),
+        "test.c",
+        "int ff_function(void);\nstatic int ff_other(void);\nint main(void);\nint ff_another(void);\n",
+    )];
+
+    // ^int ff_ should match lines starting with "int ff_"
+    let result = grep_search(&files, "^int ff_", None, &regex_opts());
+
+    assert_eq!(
+        result.matches.len(),
+        2,
+        "should match 2 lines starting with 'int ff_'"
+    );
+    assert!(result.matches[0].line_content.contains("ff_function"));
+    assert!(result.matches[1].line_content.contains("ff_another"));
 }
 
 #[test]
@@ -1024,7 +1051,7 @@ fn fuzzy_finds_scattered_characters() {
     let result = grep_search(&files, "mutex", None, &fuzzy_opts());
 
     assert!(
-        result.matches.len() >= 1,
+        !result.matches.is_empty(),
         "fuzzy should find 'mutex' in 'mutex_lock'"
     );
     assert!(result.matches[0].line_content.contains("mutex_lock"));
@@ -1063,7 +1090,7 @@ fn fuzzy_unicode_char_indices() {
 
     // Should fuzzy match "régulière" (with multi-byte é and è)
     // This tests that character-to-byte offset conversion works with UTF-8
-    assert!(result.matches.len() >= 1);
+    assert!(!result.matches.is_empty());
     assert!(result.matches[0].line_content.contains("régulière"));
 }
 

@@ -1,4 +1,3 @@
-use fff_core::FileItem;
 /// Live grep benchmark profiler for fff.nvim
 ///
 /// Benchmarks the full grep pipeline against a large repository (Linux kernel).
@@ -10,7 +9,8 @@ use fff_core::FileItem;
 /// Usage:
 ///   cargo build --release --bin grep_profiler
 ///   ./target/release/grep_profiler [--path /path/to/repo]
-use fff_core::grep::{GrepSearchOptions, grep_search, parse_grep_query};
+use fff_core::grep::{grep_search, parse_grep_query, GrepSearchOptions};
+use fff_core::FileItem;
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -129,6 +129,8 @@ impl<'a> GrepBench<'a> {
                 page_limit: 50,
                 mode: Default::default(),
                 time_budget_ms: 0,
+                before_context: 0,
+                after_context: 0,
             },
         }
     }
@@ -363,6 +365,8 @@ fn main() {
             page_limit: 50,
             mode: Default::default(),
             time_budget_ms: 0,
+            before_context: 0,
+            after_context: 0,
         };
         let start = Instant::now();
         let result = grep_search(&files, pagination_query, parsed, &opts);

@@ -11,7 +11,7 @@
 
 import { FileFinder } from "../src/index";
 import type { GrepMode } from "../src/types";
-import * as readline from "readline";
+import * as readline from "node:readline";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -64,9 +64,7 @@ function highlightLine(content: string, ranges: [number, number][]): string {
     if (s > lastEnd) {
       parts.push(buf.subarray(lastEnd, s).toString("utf-8"));
     }
-    parts.push(
-      `${BG_YELLOW}${BLACK}${buf.subarray(s, e).toString("utf-8")}${RESET}`
-    );
+    parts.push(`${BG_YELLOW}${BLACK}${buf.subarray(s, e).toString("utf-8")}${RESET}`);
     lastEnd = e;
   }
 
@@ -131,7 +129,7 @@ async function main() {
     const progress = finder.getScanProgress();
     if (progress.ok) {
       process.stdout.write(
-        `\r${DIM}Scanning files... ${progress.value.scannedFilesCount}${RESET}   `
+        `\r${DIM}Scanning files... ${progress.value.scannedFilesCount}${RESET}   `,
       );
     }
     await new Promise((r) => setTimeout(r, 50));
@@ -139,19 +137,17 @@ async function main() {
 
   const scanTime = Date.now() - startTime;
   const finalProgress = finder.getScanProgress();
-  const totalFiles = finalProgress.ok
-    ? finalProgress.value.scannedFilesCount
-    : 0;
+  const totalFiles = finalProgress.ok ? finalProgress.value.scannedFilesCount : 0;
 
   console.log(
-    `\r${GREEN}✓${RESET} Indexed ${BOLD}${totalFiles}${RESET} files in ${scanTime}ms\n`
+    `\r${GREEN}✓${RESET} Indexed ${BOLD}${totalFiles}${RESET} files in ${scanTime}ms\n`,
   );
 
   console.log(
-    `${BOLD}Enter a search pattern${RESET} (or 'q' to quit, ':mode plain|regex|fuzzy' to switch):\n`
+    `${BOLD}Enter a search pattern${RESET} (or 'q' to quit, ':mode plain|regex|fuzzy' to switch):\n`,
   );
   console.log(
-    `${DIM}Tip: prefix with *.ext to filter by extension, e.g. "*.ts useState"${RESET}\n`
+    `${DIM}Tip: prefix with *.ext to filter by extension, e.g. "*.ts useState"${RESET}\n`,
   );
 
   let currentMode = mode;
@@ -176,16 +172,12 @@ async function main() {
       // Handle mode switching
       if (query.startsWith(":mode ")) {
         const newMode = query.slice(6).trim();
-        if (
-          newMode === "plain" ||
-          newMode === "regex" ||
-          newMode === "fuzzy"
-        ) {
+        if (newMode === "plain" || newMode === "regex" || newMode === "fuzzy") {
           currentMode = newMode;
           console.log(`${DIM}Switched to ${currentMode} mode${RESET}\n`);
         } else {
           console.log(
-            `${RED}Unknown mode: ${newMode}. Use plain, regex, or fuzzy.${RESET}\n`
+            `${RED}Unknown mode: ${newMode}. Use plain, regex, or fuzzy.${RESET}\n`,
           );
         }
         prompt();
@@ -215,7 +207,7 @@ async function main() {
         items,
         totalMatched,
         totalFilesSearched,
-        totalFiles: indexedFiles,
+        totalFiles: _,
         filteredFileCount,
         nextCursor,
         regexFallbackError,
@@ -225,12 +217,12 @@ async function main() {
 
       if (regexFallbackError) {
         console.log(
-          `${YELLOW}Regex error: ${regexFallbackError} (fell back to literal match)${RESET}`
+          `${YELLOW}Regex error: ${regexFallbackError} (fell back to literal match)${RESET}`,
         );
       }
 
       console.log(
-        `${DIM}${BOLD}${totalMatched}${RESET}${DIM} matches across ${totalFilesSearched}/${filteredFileCount} files (${searchTime}ms)${RESET}`
+        `${DIM}${BOLD}${totalMatched}${RESET}${DIM} matches across ${totalFilesSearched}/${filteredFileCount} files (${searchTime}ms)${RESET}`,
       );
       console.log();
 
@@ -246,16 +238,11 @@ async function main() {
         if (match.relativePath !== lastFile) {
           lastFile = match.relativePath;
           const git = formatGitStatus(match.gitStatus);
-          console.log(
-            `${BOLD}${BLUE}${match.relativePath}${RESET} ${git}`
-          );
+          console.log(`${BOLD}${BLUE}${match.relativePath}${RESET} ${git}`);
         }
 
         const lineNum = String(match.lineNumber).padStart(4);
-        const highlighted = highlightLine(
-          match.lineContent,
-          match.matchRanges
-        );
+        const highlighted = highlightLine(match.lineContent, match.matchRanges);
 
         let suffix = "";
         if (match.fuzzyScore !== undefined) {
@@ -266,9 +253,7 @@ async function main() {
       }
 
       if (nextCursor) {
-        console.log(
-          `\n${DIM}... more results available${RESET}`
-        );
+        console.log(`\n${DIM}... more results available${RESET}`);
       }
 
       console.log();

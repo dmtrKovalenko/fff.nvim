@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "fff": {
+      "type": "stdio",
+      "command": "bun",
+      "args": [
+        "/Users/neogoose/dev/fff.nvim/packages/fff-mcp/src/index.ts"
+      ]
+    }
+  }
+}

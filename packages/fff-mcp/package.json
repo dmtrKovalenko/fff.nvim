@@ -1,0 +1,75 @@
+{
+  "name": "@ff-labs/fff-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing FFF file finder to Claude Code with frecency-ranked, fuzzy-matched results",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "fff-mcp": "./dist/fff-mcp"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "bun src/index.ts",
+    "build": "bun build src/index.ts --compile --outfile dist/fff-mcp",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@ff-labs/fff-bun": "workspace:*",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.8",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
+    "directory": "packages/fff-mcp"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "file-finder",
+    "fuzzy-search",
+    "frecency",
+    "claude-code",
+    "cursor",
+    "llm-tools",
+    "agent-tools"
+  ],
+  "author": "Dmitry Kovalenko",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "bugs": {
+    "url": "https://github.com/dmtrKovalenko/fff.nvim/issues"
+  },
+  "homepage": "https://github.com/dmtrKovalenko/fff.nvim#readme",
+  "trustedDependencies": [
+    "@ff-labs/fff-bun"
+  ],
+  "optionalDependencies": {
+    "@ff-labs/fff-mcp-darwin-arm64": "0.0.0",
+    "@ff-labs/fff-mcp-darwin-x64": "0.0.0",
+    "@ff-labs/fff-mcp-linux-x64-gnu": "0.0.0",
+    "@ff-labs/fff-mcp-win32-x64": "0.0.0"
+  }
+}
