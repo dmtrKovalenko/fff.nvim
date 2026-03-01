@@ -82,6 +82,10 @@ pub struct InitOptions {
     /// grep search is as fast as subsequent ones (optional, defaults to false)
     #[serde(default)]
     pub warmup_mmap_cache: bool,
+    /// AI mode: automatically track frecency for all file modifications detected
+    /// by the background watcher (optional, defaults to false)
+    #[serde(default)]
+    pub ai_mode: bool,
 }
 
 /// Search options (JSON-deserializable)
@@ -242,6 +246,35 @@ impl SearchResultJson {
 }
 
 // ============================================================================
+// Multi-grep (Aho-Corasick multi-pattern) types
+// ============================================================================
+
+/// Multi-grep search options (JSON-deserializable)
+#[derive(Debug, Default, Deserialize)]
+pub struct MultiGrepOptionsJson {
+    /// Patterns to search (OR logic — matches lines containing any pattern)
+    pub patterns: Vec<String>,
+    /// Optional constraint query like "*.rs" or "/src/"
+    pub constraints: Option<String>,
+    /// Maximum file size to search (bytes, default: 10MB)
+    pub max_file_size: Option<u64>,
+    /// Maximum matches per file (default: 0 = unlimited)
+    pub max_matches_per_file: Option<usize>,
+    /// Smart case: case-insensitive if all patterns are lowercase (default: true)
+    pub smart_case: Option<bool>,
+    /// File-based pagination offset (default: 0)
+    pub file_offset: Option<usize>,
+    /// Maximum matches to return per page (default: 50)
+    pub page_limit: Option<usize>,
+    /// Time budget in milliseconds, 0 = unlimited (default: 0)
+    pub time_budget_ms: Option<u64>,
+    /// Number of context lines before each match (default: 0)
+    pub before_context: Option<usize>,
+    /// Number of context lines after each match (default: 0)
+    pub after_context: Option<usize>,
+}
+
+// ============================================================================
 // Grep (live search) types
 // ============================================================================
 
@@ -262,6 +295,10 @@ pub struct GrepSearchOptionsJson {
     pub mode: Option<String>,
     /// Time budget in milliseconds, 0 = unlimited (default: 0)
     pub time_budget_ms: Option<u64>,
+    /// Number of context lines before each match (default: 0)
+    pub before_context: Option<usize>,
+    /// Number of context lines after each match (default: 0)
+    pub after_context: Option<usize>,
 }
 
 /// A single grep match for JSON serialization
@@ -288,6 +325,14 @@ pub struct GrepMatchJson {
     /// Fuzzy match score (only in fuzzy mode)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fuzzy_score: Option<u16>,
+    /// Whether the matched line is a code definition (struct, fn, class, etc.)
+    pub is_definition: bool,
+    /// Lines before the match (context)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub context_before: Vec<String>,
+    /// Lines after the match (context)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub context_after: Vec<String>,
 }
 
 impl GrepMatchJson {
@@ -313,6 +358,9 @@ impl GrepMatchJson {
                 .map(|&(start, end)| [start, end])
                 .collect(),
             fuzzy_score: m.fuzzy_score,
+            is_definition: m.is_definition,
+            context_before: m.context_before.clone(),
+            context_after: m.context_after.clone(),
         }
     }
 }

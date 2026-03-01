@@ -90,7 +90,7 @@ local function get_preview_position()
 end
 
 local function compute_layout(config)
-  local debug_enabled_in_preview = M.enabled_preview() and config.debug and config.debug.show_file_info or false
+  local debug_enabled_in_preview = M.enabled_preview() and config.debug and config.debug.enabled or false
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
@@ -637,6 +637,16 @@ function M.setup_windows()
   vim.api.nvim_set_option_value('signcolumn', 'yes:1', { win = M.state.list_win }) -- Enable signcolumn for git status borders
   vim.api.nvim_set_option_value('foldcolumn', '0', { win = M.state.list_win })
   vim.api.nvim_set_option_value('winhighlight', win_hl, { win = M.state.list_win })
+
+  if M.state.file_info_win and vim.api.nvim_win_is_valid(M.state.file_info_win) then
+    vim.api.nvim_set_option_value('wrap', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('cursorline', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('number', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('relativenumber', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('signcolumn', 'no', { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('foldcolumn', '0', { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('winhighlight', win_hl, { win = M.state.file_info_win })
+  end
 
   if M.enabled_preview() then
     vim.api.nvim_set_option_value('wrap', false, { win = M.state.preview_win })

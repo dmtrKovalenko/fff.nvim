@@ -155,6 +155,7 @@ pub struct Score {
     pub filename_bonus: i32,
     pub special_filename_bonus: i32,
     pub frecency_boost: i32,
+    pub git_status_boost: i32,
     pub distance_penalty: i32,
     pub current_file_penalty: i32,
     pub combo_match_boost: i32,
