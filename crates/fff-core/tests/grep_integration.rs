@@ -25,6 +25,8 @@ fn plain_opts() -> GrepSearchOptions {
         page_limit: 200,
         mode: GrepMode::PlainText,
         time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
     }
 }
 
@@ -38,6 +40,8 @@ fn regex_opts() -> GrepSearchOptions {
         page_limit: 200,
         mode: GrepMode::Regex,
         time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
     }
 }
 
@@ -51,6 +55,8 @@ fn fuzzy_opts() -> GrepSearchOptions {
         page_limit: 200,
         mode: GrepMode::Fuzzy,
         time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
     }
 }
 
@@ -517,6 +523,27 @@ fn regex_anchors() {
 }
 
 #[test]
+fn regex_anchors_multiword() {
+    let tmp = TempDir::new().unwrap();
+    let files = vec![create_file(
+        tmp.path(),
+        "test.c",
+        "int ff_function(void);\nstatic int ff_other(void);\nint main(void);\nint ff_another(void);\n",
+    )];
+
+    // ^int ff_ should match lines starting with "int ff_"
+    let result = grep_search(&files, "^int ff_", None, &regex_opts());
+
+    assert_eq!(
+        result.matches.len(),
+        2,
+        "should match 2 lines starting with 'int ff_'"
+    );
+    assert!(result.matches[0].line_content.contains("ff_function"));
+    assert!(result.matches[1].line_content.contains("ff_another"));
+}
+
+#[test]
 fn regex_highlight_offsets_variable_length() {
     let tmp = TempDir::new().unwrap();
     let files = vec![create_file(tmp.path(), "a.txt", "aab aaab aaaab\n")];
@@ -659,7 +686,7 @@ fn grep_with_extension_constraint() {
     ];
 
     let parsed = parse_grep_query("use std *.rs");
-    let result = grep_search(&files, "use std *.rs", parsed, &plain_opts());
+    let result = grep_search(&files, "use std *.rs", parsed.as_ref(), &plain_opts());
 
     // Should only search .rs files
     for file in &result.files {
@@ -708,7 +735,7 @@ fn grep_backslash_escapes_extension_filter() {
 
     // Without escape: "*.rs" is an extension filter, so only .rs files are searched
     let parsed = parse_grep_query("pattern *.rs");
-    let result_filter = grep_search(&files, "pattern *.rs", parsed, &plain_opts());
+    let result_filter = grep_search(&files, "pattern *.rs", parsed.as_ref(), &plain_opts());
     assert_eq!(
         result_filter.files.len(),
         1,
@@ -717,7 +744,7 @@ fn grep_backslash_escapes_extension_filter() {
 
     // With escape: "\*.rs" is literal text, both files are searched
     let parsed_escaped = parse_grep_query("\\*.rs");
-    let result_literal = grep_search(&files, "\\*.rs", parsed_escaped, &plain_opts());
+    let result_literal = grep_search(&files, "\\*.rs", parsed_escaped.as_ref(), &plain_opts());
     assert_eq!(
         result_literal.matches.len(),
         2,
@@ -767,7 +794,7 @@ fn grep_with_path_constraint() {
     ];
 
     let parsed = parse_grep_query("target_text /src/");
-    let result = grep_search(&files, "target_text /src/", parsed, &plain_opts());
+    let result = grep_search(&files, "target_text /src/", parsed.as_ref(), &plain_opts());
 
     assert_eq!(result.matches.len(), 1);
     assert!(result.files[0].relative_path.starts_with("src/"));
@@ -786,7 +813,7 @@ fn grep_with_negated_extension_constraint() {
 
     let query = "target_text !*.rs";
     let parsed = parse_grep_query(query);
-    let result = grep_search(&files, query, parsed, &plain_opts());
+    let result = grep_search(&files, query, parsed.as_ref(), &plain_opts());
 
     assert_eq!(
         result.matches.len(),
@@ -812,7 +839,7 @@ fn grep_with_negated_path_constraint() {
 
     let query = "target_text !/src/";
     let parsed = parse_grep_query(query);
-    let result = grep_search(&files, query, parsed, &plain_opts());
+    let result = grep_search(&files, query, parsed.as_ref(), &plain_opts());
 
     assert_eq!(
         result.matches.len(),
@@ -838,7 +865,7 @@ fn grep_with_negated_text_constraint() {
 
     let query = "target_text !test";
     let parsed = parse_grep_query(query);
-    let result = grep_search(&files, query, parsed, &plain_opts());
+    let result = grep_search(&files, query, parsed.as_ref(), &plain_opts());
 
     // "tests/helper.rs" contains "test" in path, should be excluded
     assert_eq!(
@@ -1024,7 +1051,7 @@ fn fuzzy_finds_scattered_characters() {
     let result = grep_search(&files, "mutex", None, &fuzzy_opts());
 
     assert!(
-        result.matches.len() >= 1,
+        !result.matches.is_empty(),
         "fuzzy should find 'mutex' in 'mutex_lock'"
     );
     assert!(result.matches[0].line_content.contains("mutex_lock"));
@@ -1063,7 +1090,7 @@ fn fuzzy_unicode_char_indices() {
 
     // Should fuzzy match "régulière" (with multi-byte é and è)
     // This tests that character-to-byte offset conversion works with UTF-8
-    assert!(result.matches.len() >= 1);
+    assert!(!result.matches.is_empty());
     assert!(result.matches[0].line_content.contains("régulière"));
 }
 
@@ -1088,7 +1115,7 @@ fn fuzzy_with_extension_constraint() {
     ];
 
     let parsed = parse_grep_query("use std *.rs");
-    let result = grep_search(&files, "use std *.rs", parsed, &fuzzy_opts());
+    let result = grep_search(&files, "use std *.rs", parsed.as_ref(), &fuzzy_opts());
 
     // Should only search .rs files
     for file in &result.files {

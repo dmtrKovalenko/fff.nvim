@@ -1,3 +1,4 @@
+use fff_core::FFFQuery;
 use fff_core::FileItem;
 /// FFF vs ripgrep comparison benchmark
 ///
@@ -204,9 +205,34 @@ fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
         page_limit: usize::MAX,
         mode: Default::default(),
         time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
     };
     let start = Instant::now();
-    let result = grep_search(files, query, parsed, &options);
+    let result = grep_search(files, query, parsed.as_ref(), &options);
+    let elapsed = start.elapsed();
+    (result.matches.len(), elapsed)
+}
+
+#[allow(dead_code)]
+fn benchmark_fff_smart_case(
+    files: &[FileItem],
+    query: &str,
+    parsed: Option<FFFQuery<'_>>,
+) -> (usize, Duration) {
+    let options = GrepSearchOptions {
+        max_file_size: 10 * 1024 * 1024,
+        max_matches_per_file: usize::MAX,
+        smart_case: true,
+        file_offset: 0,
+        page_limit: 5000,
+        mode: Default::default(),
+        time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
+    };
+    let start = Instant::now();
+    let result = grep_search(files, query, parsed.as_ref(), &options);
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
@@ -222,9 +248,11 @@ fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
         page_limit: 50,
         mode: Default::default(),
         time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
     };
     let start = Instant::now();
-    let result = grep_search(files, query, parsed, &options);
+    let result = grep_search(files, query, parsed.as_ref(), &options);
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }

@@ -2,7 +2,7 @@ name: Prebuild
 
 on:
   push:
-    branches: [main, feat/interchangable-ffi, feat/termux]
+    branches: [main, feat/mcp-ai]
   pull_request:
 
 jobs:
@@ -265,12 +265,98 @@ jobs:
           name: npm-${{ matrix.npm_package }}
           path: packages/${{ matrix.npm_package }}/
 
+  build-mcp:
+    name: Build MCP ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          ## Linux builds (using cargo-zigbuild)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            zigbuild_target: x86_64-unknown-linux-gnu.2.17
+            artifact_name: target/x86_64-unknown-linux-gnu/release/fff-mcp
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            zigbuild_target: aarch64-unknown-linux-gnu.2.17
+            artifact_name: target/aarch64-unknown-linux-gnu/release/fff-mcp
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: target/x86_64-unknown-linux-musl/release/fff-mcp
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact_name: target/aarch64-unknown-linux-musl/release/fff-mcp
+
+          ## macOS builds
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: target/x86_64-apple-darwin/release/fff-mcp
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: target/aarch64-apple-darwin/release/fff-mcp
+
+          ## Windows builds
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: target/x86_64-pc-windows-msvc/release/fff-mcp.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: target/aarch64-pc-windows-msvc/release/fff-mcp.exe
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install cargo-zigbuild
+        if: contains(matrix.os, 'ubuntu')
+        run: cargo install cargo-zigbuild
+
+      - name: Build for Linux
+        if: contains(matrix.os, 'ubuntu')
+        run: |
+          cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-mcp --features zlob
+          cp "${{ matrix.artifact_name }}" "fff-mcp-${{ matrix.target }}"
+
+      - name: Build for macOS
+        if: contains(matrix.os, 'macos')
+        run: |
+          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-mcp --features zlob
+          cp "${{ matrix.artifact_name }}" "fff-mcp-${{ matrix.target }}"
+
+      - name: Ad-hoc sign macOS binary
+        if: contains(matrix.os, 'macos')
+        run: codesign --force --sign - "fff-mcp-${{ matrix.target }}"
+
+      - name: Build for Windows
+        if: contains(matrix.os, 'windows')
+        shell: bash
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p fff-mcp --features zlob
+          cp "${{ matrix.artifact_name }}" "fff-mcp-${{ matrix.target }}.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-${{ matrix.target }}
+          path: fff-mcp-${{ matrix.target }}*
+
   release:
     name: Release
-    needs: [build-nvim, build-c]
+    needs: [build-nvim, build-c, build-mcp]
     runs-on: ubuntu-latest
     # do not create releases on the forks (no permissions)
-    if: github.repository == 'dmtrKovalenko/fff.nvim'
+    if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dmtrKovalenko'
     permissions:
       contents: write
     steps:
@@ -302,6 +388,19 @@ jobs:
         run: |
           # Move c-lib artifacts to root level
           for dir in c-lib-*/; do
+            for file in "$dir"*; do
+              if [ -f "$file" ]; then
+                filename=$(basename "$file")
+                mv "$file" "./$filename"
+              fi
+            done
+            rmdir "$dir" 2>/dev/null || true
+          done
+
+      - name: Flatten MCP artifacts
+        working-directory: ./binaries
+        run: |
+          for dir in mcp-*/; do
             for file in "$dir"*; do
               if [ -f "$file" ]; then
                 filename=$(basename "$file")
@@ -351,6 +450,14 @@ jobs:
 
             ## C FFI Library (for Bun/Node/Python)
             - `c-lib-{target}.so` / `.dylib` / `.dll` - C FFI library
+
+            ## MCP Server
+            - `fff-mcp-{target}` - MCP server binary
+
+            Install with:
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
+            ```
 
   npm-publish:
     name: Publish npm packages
@@ -445,10 +552,10 @@ jobs:
 
   comment-on-pr:
     name: Comment on PR
-    needs: [build-nvim, build-c]
+    needs: [build-nvim, build-c, build-mcp]
     runs-on: ubuntu-latest
     # comments doesn't work on forks
-    if: github.event_name == 'pull_request' && github.repository == 'dmtrKovalenko/fff.nvim'
+    if: github.event_name == 'pull_request' && github.repository == 'dmtrKovalenko/fff.nvim' && github.event.pull_request.user.login == 'dmtrKovalenko'
     permissions:
       pull-requests: write
     steps:
