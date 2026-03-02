@@ -1,5 +1,5 @@
 use crate::constraints::Constraint;
-use zlob::{ZlobFlags, has_wildcards};
+use crate::glob_detect::has_wildcards;
 
 /// Parser configuration trait - allows different picker types to customize parsing
 pub trait ParserConfig {
@@ -40,7 +40,7 @@ pub trait ParserConfig {
     /// Override this in configs where some wildcard characters are common
     /// in search text (e.g. grep mode where `?` and `[` appear in code).
     fn is_glob_pattern(&self, token: &str) -> bool {
-        has_wildcards(token, ZlobFlags::RECOMMENDED)
+        has_wildcards(token)
     }
 
     /// Custom constraint parsers for picker-specific needs
@@ -87,7 +87,7 @@ impl ParserConfig for GrepConfig {
     /// - Contains `{…}` → brace expansion (e.g. `{src,lib}`)
     fn is_glob_pattern(&self, token: &str) -> bool {
         // Must contain at least one glob wildcard character
-        if !has_wildcards(token, ZlobFlags::RECOMMENDED) {
+        if !has_wildcards(token) {
             return false;
         }
 

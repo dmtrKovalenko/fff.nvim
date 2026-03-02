@@ -7,6 +7,10 @@ edition = "2024"
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+zlob = ["fff-core/zlob"]
+
 [[bin]]
 name = "test_watcher"
 path = "src/bin/test_watcher.rs"
@@ -63,7 +67,6 @@ serde = { version = "1.0", features = ["derive"] }
 smartstring = { version = "1.0.1", features = ["serde"] }
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zlob = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

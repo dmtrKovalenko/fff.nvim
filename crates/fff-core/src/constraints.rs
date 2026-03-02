@@ -9,7 +9,6 @@
 use ahash::AHashSet;
 use fff_query_parser::{Constraint, GitStatusFilter};
 use smallvec::SmallVec;
-use zlob::{ZlobFlags, zlob_match_paths};
 
 use crate::git::is_modified_status;
 
@@ -235,37 +234,73 @@ fn collect_glob_indices<'a>(
 ) {
     match constraint {
         Constraint::Glob(pattern) => {
-            if let Ok(Some(matches)) = zlob_match_paths(pattern, paths, ZlobFlags::RECOMMENDED) {
-                let matched_set: AHashSet<usize> =
-                    matches.iter().map(|s| s.as_ptr() as usize).collect();
-
-                let indices: AHashSet<usize> = if paths.len() >= PAR_THRESHOLD {
-                    use rayon::prelude::*;
-                    paths
-                        .par_iter()
-                        .enumerate()
-                        .filter(|(_, p)| matched_set.contains(&(p.as_ptr() as usize)))
-                        .map(|(i, _)| i)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .collect()
-                } else {
-                    paths
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, p)| matched_set.contains(&(p.as_ptr() as usize)))
-                        .map(|(i, _)| i)
-                        .collect()
-                };
-                results.push((is_negated, indices));
-            } else {
-                results.push((is_negated, AHashSet::new()));
-            }
+            let indices = match_glob_pattern(pattern, paths);
+            results.push((is_negated, indices));
         }
         Constraint::Not(inner) => {
             collect_glob_indices(inner, paths, results, !is_negated);
         }
         _ => {}
+    }
+}
+
+/// Match a glob pattern against a list of paths, returning the set of matching indices.
+///
+/// When the `zlob` feature is enabled, delegates to `zlob::zlob_match_paths` (Zig-compiled
+/// C library, fastest). Otherwise falls back to `globset::Glob` (pure Rust).
+#[cfg(feature = "zlob")]
+fn match_glob_pattern(pattern: &str, paths: &[&str]) -> AHashSet<usize> {
+    let Ok(Some(matches)) = zlob::zlob_match_paths(pattern, paths, zlob::ZlobFlags::RECOMMENDED)
+    else {
+        return AHashSet::new();
+    };
+
+    let matched_set: AHashSet<usize> = matches.iter().map(|s| s.as_ptr() as usize).collect();
+
+    if paths.len() >= PAR_THRESHOLD {
+        use rayon::prelude::*;
+        paths
+            .par_iter()
+            .enumerate()
+            .filter(|(_, p)| matched_set.contains(&(p.as_ptr() as usize)))
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .collect()
+    } else {
+        paths
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| matched_set.contains(&(p.as_ptr() as usize)))
+            .map(|(i, _)| i)
+            .collect()
+    }
+}
+
+#[cfg(not(feature = "zlob"))]
+fn match_glob_pattern(pattern: &str, paths: &[&str]) -> AHashSet<usize> {
+    let Ok(glob) = globset::Glob::new(pattern) else {
+        return AHashSet::new();
+    };
+    let matcher = glob.compile_matcher();
+
+    if paths.len() >= PAR_THRESHOLD {
+        use rayon::prelude::*;
+        paths
+            .par_iter()
+            .enumerate()
+            .filter(|(_, p)| matcher.is_match(p))
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .collect()
+    } else {
+        paths
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| matcher.is_match(p))
+            .map(|(i, _)| i)
+            .collect()
     }
 }
 

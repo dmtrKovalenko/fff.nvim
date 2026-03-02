@@ -3,7 +3,7 @@ PLENARY_DIR ?= ../plenary.nvim
 .PHONY: build test test-rust test-lua test-bun test-setup prepare-bun
 
 build:
-	cargo build --release
+	cargo build --release --features zlob
 
 test-setup:
 	@if [ ! -d "$(PLENARY_DIR)" ]; then \
@@ -12,7 +12,7 @@ test-setup:
 	fi
 
 test-rust:
-	cargo test --workspace
+	cargo test --workspace --features zlob
 
 test-lua: test-setup build
 	nvim --headless -u tests/minimal_init.lua \

@@ -6,9 +6,13 @@ edition = "2024"
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+zlob = ["dep:zlob"]
+
 [dependencies]
 smallvec = { workspace = true }
-zlob = { version = "1.2.8" }
+zlob = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

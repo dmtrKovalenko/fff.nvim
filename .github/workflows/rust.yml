@@ -37,7 +37,9 @@ jobs:
           components: rustfmt, clippy
 
       - name: Run tests
-        run: cargo test --verbose --workspace --exclude fff-nvim
+        run: |
+          cargo test --verbose -p fff-core -p fff-query-parser -p fff-c --features zlob
+          cargo test --verbose -p grep-searcher
 
   fmt:
     name: cargo fmt
@@ -71,4 +73,6 @@ jobs:
           components: clippy
           
       - name: Run clippy
-        run: cargo clippy -- -D warnings
+        run: |
+          cargo clippy -p fff-core -p fff-query-parser -p fff-nvim -p fff-c --features zlob -- -D warnings
+          cargo clippy -p grep-searcher -- -D warnings

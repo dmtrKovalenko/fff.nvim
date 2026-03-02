@@ -13,6 +13,9 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 default = []
 # Enable C FFI exports
 ffi = []
+# Use zlob (Zig-compiled C globbing library) for glob matching.
+# Requires Zig to be installed. When disabled, falls back to globset (pure Rust).
+zlob = ["dep:zlob", "fff-query-parser/zlob"]
 
 [dependencies]
 # Workspace dependencies
@@ -23,7 +26,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff-query-parser = { path = "../fff-query-parser" }
+fff-query-parser = { path = "../fff-query-parser", default-features = false }
 
 # External dependencies
 bindet = { workspace = true }
@@ -32,6 +35,7 @@ chrono = { workspace = true }
 dirs = { workspace = true }
 git2 = { workspace = true }
 glidesort = { workspace = true }
+globset = { workspace = true }
 grep-matcher = { workspace = true }
 grep-searcher = { workspace = true }
 memchr = "2"
@@ -49,7 +53,7 @@ serde = { version = "1.0", features = ["derive"] }
 smartstring = { version = "1.0.1", features = ["serde"] }
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zlob = { workspace = true }
+zlob = { workspace = true, optional = true }
 # Platform-specific: dunce for Windows to avoid \\?\ extended path prefix
 [target.'cfg(windows)'.dependencies]
 dunce = { workspace = true }
