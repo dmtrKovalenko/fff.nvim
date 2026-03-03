@@ -1346,7 +1346,10 @@ local function format_file_display(item, max_width)
   return filename, display_path
 end
 
---- Adjust scroll for bottom prompt to eliminate gaps
+--- Adjust scroll for bottom prompt to eliminate gaps.
+--- When the cursor has moved above the bottom viewport (e.g. user scrolled up
+--- through many results), follow the cursor instead of forcing the view to the
+--- bottom — otherwise the selected item disappears off the top of the window.
 local function scroll_to_bottom()
   if not M.state.list_win or not vim.api.nvim_win_is_valid(M.state.list_win) then return end
 
@@ -1355,8 +1358,21 @@ local function scroll_to_bottom()
 
   vim.api.nvim_win_call(M.state.list_win, function()
     local view = vim.fn.winsaveview()
-    -- Force topline to show content at bottom
-    view.topline = math.max(1, buf_lines - win_height + 1)
+    local bottom_topline = math.max(1, buf_lines - win_height + 1)
+    local cursor_line = vim.api.nvim_win_get_cursor(M.state.list_win)[1]
+
+    if cursor_line >= bottom_topline then
+      -- Cursor is visible when anchored to bottom — keep content near prompt
+      view.topline = bottom_topline
+    elseif cursor_line < view.topline then
+      -- Cursor scrolled above the current viewport — shift topline up just
+      -- enough to keep the cursor visible (1 line margin above)
+      view.topline = math.max(1, cursor_line - 1)
+    elseif cursor_line >= view.topline + win_height then
+      -- Cursor below viewport (shouldn't happen often) — snap to bottom
+      view.topline = bottom_topline
+    end
+    -- Otherwise cursor is already within the current viewport — don't move it
     vim.fn.winrestview(view)
   end)
 end
