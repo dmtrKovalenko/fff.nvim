@@ -707,24 +707,39 @@ fn fuzzy_grep_search<'a>(
     //   3-5 chars → 1 typo
     //   6+  chars → 2 typos
     let max_typos = (grep_text.len() / 3).min(2);
-    let frizbee_config = neo_frizbee::Config {
+    let scoring = neo_frizbee::Scoring {
+        // Use default gap penalties. Higher values (e.g. 20) cause
+        // smith-waterman to prefer *dropping needle chars* over paying
+        // gap costs, which inflates the typo count and breaks
+        // transposition matching ("shcema" → "schema" becomes 3 typos
+        // instead of 1). Scattered matches are filtered by max_typos
+        // and the match span check below instead.
+        exact_match_bonus: 100,
+        // gap_open_penalty: 4,
+        // gap_extend_penalty: 2,
+        prefix_bonus: 0,
+        capitalization_bonus: if case_insensitive { 0 } else { 4 },
+        ..neo_frizbee::Scoring::default()
+    };
+
+    // Two configs: match_list uses a lenient max_typos (needle_len) to keep
+    // the SIMD prefilter active (cheap char-presence check) while avoiding
+    // aggressive SIMD typo rejection that can disagree with the reference
+    // implementation on some architectures (e.g. aarch64 portable SIMD).
+    // match_indices uses the actual max_typos for correct typo filtering
+    // via the reference (scalar) Smith-Waterman traceback.
+    let match_list_config = neo_frizbee::Config {
         prefilter: true, // SIMD prefilter rejects obvious non-matches cheaply
-        max_typos: Some(max_typos as u16),
+        max_typos: Some(grep_text.len() as u16),
         sort: false, // We handle ordering ourselves
-        scoring: neo_frizbee::Scoring {
-            // Use default gap penalties. Higher values (e.g. 20) cause
-            // smith-waterman to prefer *dropping needle chars* over paying
-            // gap costs, which inflates the typo count and breaks
-            // transposition matching ("shcema" → "schema" becomes 3 typos
-            // instead of 1). Scattered matches are filtered by max_typos
-            // and the match span check below instead.
-            exact_match_bonus: 100,
-            // gap_open_penalty: 4,
-            // gap_extend_penalty: 2,
-            prefix_bonus: 0,
-            capitalization_bonus: if case_insensitive { 0 } else { 4 },
-            ..neo_frizbee::Scoring::default()
-        },
+        scoring,
+    };
+
+    let match_indices_config = neo_frizbee::Config {
+        prefilter: false,
+        max_typos: Some(max_typos as u16),
+        sort: false,
+        scoring,
     };
 
     // Minimum score threshold: 50% of a perfect contiguous match.
@@ -797,7 +812,7 @@ fn fuzzy_grep_search<'a>(
                 return Vec::new();
             }
 
-            let matches = neo_frizbee::match_list(grep_text, &file_lines, &frizbee_config);
+            let matches = neo_frizbee::match_list(grep_text, &file_lines, &match_list_config);
             let mut file_matches: Vec<GrepMatch> = Vec::new();
 
             for m in &matches {
@@ -822,7 +837,7 @@ fn fuzzy_grep_search<'a>(
                 };
 
                 let Some(match_indices) =
-                    neo_frizbee::match_indices(grep_text, display_line, &frizbee_config)
+                    neo_frizbee::match_indices(grep_text, display_line, &match_indices_config)
                 else {
                     continue; // something is off treat as nomatch
                 };
