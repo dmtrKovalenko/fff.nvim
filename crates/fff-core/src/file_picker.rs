@@ -186,6 +186,7 @@ pub struct FilePicker {
     scanned_files_count: Arc<AtomicUsize>,
     background_watcher: Option<BackgroundWatcher>,
     warmup_mmap_cache: bool,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -250,6 +251,7 @@ impl FilePicker {
         // rather than a stale `false` (the thread hasn't started yet).
         let scan_signal = Arc::new(AtomicBool::new(true));
         let synced_files_count = Arc::new(AtomicUsize::new(0));
+        let cancelled = Arc::new(AtomicBool::new(false));
 
         let picker = FilePicker {
             base_path: path.clone(),
@@ -258,6 +260,7 @@ impl FilePicker {
             scanned_files_count: Arc::clone(&synced_files_count),
             background_watcher: None,
             warmup_mmap_cache,
+            cancelled: Arc::clone(&cancelled),
         };
 
         // Place the picker into the shared handle before spawning the
@@ -274,6 +277,7 @@ impl FilePicker {
             warmup_mmap_cache,
             shared_picker,
             shared_frecency,
+            cancelled,
         );
 
         Ok(())
@@ -578,6 +582,11 @@ impl FilePicker {
             .retain_files(|file| !file.path.starts_with(dir_path))
     }
 
+    /// We use this to prevent any substantial background threads from acquiring the locks
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
     pub fn stop_background_monitor(&mut self) {
         if let Some(watcher) = self.background_watcher.take() {
             watcher.stop();
@@ -644,6 +653,7 @@ fn spawn_scan_and_watcher(
     warmup_mmap_cache: bool,
     shared_picker: SharedPicker,
     shared_frecency: SharedFrecency,
+    cancelled: Arc<AtomicBool>,
 ) {
     std::thread::spawn(move || {
         // scan_signal is already `true` (set by the caller before spawning)
@@ -653,6 +663,12 @@ fn spawn_scan_and_watcher(
         let mut git_workdir = None;
         match scan_filesystem(&base_path, &synced_files_count, &shared_frecency) {
             Ok(sync) => {
+                if cancelled.load(Ordering::Acquire) {
+                    info!("Scan completed but picker was replaced, discarding results");
+                    scan_signal.store(false, Ordering::Relaxed);
+                    return;
+                }
+
                 info!(
                     "Initial filesystem scan completed: found {} files",
                     sync.files.len()
@@ -672,13 +688,8 @@ fn spawn_scan_and_watcher(
                 }
 
                 // OPTIMIZATION: Warmup mmap cache in background to avoid blocking first grep.
-                // The aggressive parallel warmup was causing cache thrashing and delaying
-                // initial searches. Now it runs async and doesn't block.
-                //
-                // We warmup under a read lock on the picker's actual files so that
-                // the OnceLock<Mmap> instances are populated in-place — no clone needed.
-                // Read locks allow concurrent readers so this doesn't block searches.
                 if warmup_mmap_cache
+                    && !cancelled.load(Ordering::Acquire)
                     && let Ok(guard) = shared_picker.read()
                     && let Some(ref picker) = *guard
                 {
@@ -691,6 +702,12 @@ fn spawn_scan_and_watcher(
         }
         scan_signal.store(false, Ordering::Relaxed);
 
+        // Don't create a watcher if this picker instance was already replaced
+        if cancelled.load(Ordering::Acquire) {
+            info!("Picker was replaced, skipping background watcher creation");
+            return;
+        }
+
         match BackgroundWatcher::new(
             base_path,
             git_workdir,
@@ -699,6 +716,15 @@ fn spawn_scan_and_watcher(
         ) {
             Ok(watcher) => {
                 info!("Background file watcher initialized successfully");
+
+                // Final cancellation check: if the picker was replaced between
+                // watcher creation and this write, drop the watcher instead of
+                // storing it in the wrong picker.
+                if cancelled.load(Ordering::Acquire) {
+                    info!("Picker was replaced, dropping orphaned watcher");
+                    drop(watcher);
+                    return;
+                }
 
                 let write_result = shared_picker.write().ok().map(|mut guard| {
                     if let Some(ref mut picker) = *guard {

@@ -189,17 +189,17 @@ local function apply_all_highlights(lines, item_to_lines, ctx, list_buf, ns_id)
   for i = ctx.display_start, ctx.display_end do
     local item = ctx.items[i]
     local item_lines = item_to_lines[i]
-    if not item_lines then goto continue end
 
-    -- The content line is always the last line in the mapping
-    local line_idx = item_lines.last
-    local line_content = lines[line_idx]
+    if item_lines then
+      -- The content line is always the last line in the mapping
+      local line_idx = item_lines.last
+      local line_content = lines[line_idx]
 
-    if not line_content then goto continue end
-
-    ---@diagnostic disable-next-line: param-type-mismatch
-    renderer.apply_highlights(item, ctx, i, list_buf, ns_id, line_idx, line_content)
-    ::continue::
+      if line_content then
+        ---@diagnostic disable-next-line: param-type-mismatch
+        renderer.apply_highlights(item, ctx, i, list_buf, ns_id, line_idx, line_content)
+      end
+    end
   end
 end
 
