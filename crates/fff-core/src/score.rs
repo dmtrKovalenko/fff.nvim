@@ -294,12 +294,15 @@ pub fn match_and_score_files<'a>(
                 }
             };
 
+            let git_recency_boost = file.git_recency_score;
+
             let total = base_score
                 .saturating_add(frecency_boost)
                 .saturating_add(distance_penalty)
                 .saturating_add(filename_bonus)
                 .saturating_add(current_file_penalty)
-                .saturating_add(combo_match_boost);
+                .saturating_add(combo_match_boost)
+                .saturating_add(git_recency_boost);
 
             let score = Score {
                 total,
@@ -312,6 +315,7 @@ pub fn match_and_score_files<'a>(
                     0
                 },
                 frecency_boost,
+                git_recency_boost,
                 distance_penalty,
                 combo_match_boost,
                 exact_match: path_match.exact || filename_match.is_some_and(|m| m.exact),
@@ -363,9 +367,12 @@ pub(crate) fn score_filtered_by_frecency<'a>(
         let total_frecency_score = file.access_frecency_score as i32
             + (file.modification_frecency_score as i32).saturating_mul(4);
 
+        let git_recency_boost = file.git_recency_score;
         let current_file_penalty =
             calculate_current_file_penalty(file, total_frecency_score, context);
-        let total = total_frecency_score.saturating_add(current_file_penalty);
+        let total = total_frecency_score
+            .saturating_add(git_recency_boost)
+            .saturating_add(current_file_penalty);
 
         let score = Score {
             total,
@@ -376,6 +383,7 @@ pub(crate) fn score_filtered_by_frecency<'a>(
             combo_match_boost: 0,
             current_file_penalty,
             frecency_boost: total_frecency_score,
+            git_recency_boost,
             exact_match: false,
             match_type: "frecency",
         };
@@ -503,6 +511,7 @@ mod tests {
             special_filename_bonus: 0,
             current_file_penalty: 0,
             frecency_boost: 0,
+            git_recency_boost: 0,
             exact_match: false,
             match_type: "test",
             combo_match_boost: 0,

@@ -431,6 +431,27 @@ require('fff').setup({
 })
 ```
 
+#### Git Recency Scoring
+
+FFF.nvim can analyze recent commits on your current branch and give a small scoring bonus to files that were recently changed. This helps surface contextually relevant files — especially useful after switching branches or pulling changes.
+
+- Commits with too many file changes (merge commits, bulk refactors) are automatically ignored
+- The bonus is additive and independent from frecency scoring
+- Scores are refreshed automatically on branch switches and new commits
+
+```lua
+require('fff').setup({
+  git = {
+    recency = {
+      enabled = true,             -- Enable git recency scoring (default: true)
+      max_commits = 10,           -- Number of recent commits to analyze (default: 10)
+      max_files_per_commit = 50,  -- Skip commits touching more files than this (default: 50)
+      max_bonus = 15,             -- Max score bonus for the most recent commit (default: 15)
+    },
+  },
+})
+```
+
 #### File Filtering
 
 FFF.nvim respects `.gitignore` patterns automatically. To filter files from the picker without modifying `.gitignore`, create a `.ignore` file in your project root:

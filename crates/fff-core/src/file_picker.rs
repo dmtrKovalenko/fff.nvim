@@ -1,7 +1,7 @@
 use crate::background_watcher::BackgroundWatcher;
 use crate::error::Error;
 use crate::frecency::FrecencyTracker;
-use crate::git::GitStatusCache;
+use crate::git::{GitRecencyConfig, GitStatusCache};
 use crate::query_tracker::QueryMatchEntry;
 use crate::score::match_and_score_files;
 use crate::types::{FileItem, PaginationArgs, ScoringContext, SearchResult};
@@ -9,6 +9,7 @@ use crate::{SharedFrecency, SharedPicker};
 use fff_query_parser::FFFQuery;
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -186,6 +187,7 @@ pub struct FilePicker {
     scanned_files_count: Arc<AtomicUsize>,
     background_watcher: Option<BackgroundWatcher>,
     warmup_mmap_cache: bool,
+    git_recency_config: GitRecencyConfig,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -211,6 +213,10 @@ impl FilePicker {
         self.warmup_mmap_cache
     }
 
+    pub fn git_recency_config(&self) -> GitRecencyConfig {
+        self.git_recency_config
+    }
+
     pub fn git_root(&self) -> Option<&Path> {
         self.sync_data.git_workdir.as_deref()
     }
@@ -234,6 +240,7 @@ impl FilePicker {
         warmup_mmap_cache: bool,
         shared_picker: SharedPicker,
         shared_frecency: SharedFrecency,
+        git_recency_config: GitRecencyConfig,
     ) -> Result<(), Error> {
         info!(
             "Initializing FilePicker with base_path: {}, warmup: {}",
@@ -258,6 +265,7 @@ impl FilePicker {
             scanned_files_count: Arc::clone(&synced_files_count),
             background_watcher: None,
             warmup_mmap_cache,
+            git_recency_config,
         };
 
         // Place the picker into the shared handle before spawning the
@@ -274,6 +282,7 @@ impl FilePicker {
             warmup_mmap_cache,
             shared_picker,
             shared_frecency,
+            git_recency_config,
         );
 
         Ok(())
@@ -439,6 +448,55 @@ impl FilePicker {
         };
 
         Ok(statuses_count)
+    }
+
+    /// Update git recency scores for all files using a precomputed recency map.
+    pub fn update_git_recency_scores(&mut self, recency_scores: &HashMap<PathBuf, i32>) {
+        for file in &mut self.sync_data.files {
+            file.git_recency_score = recency_scores.get(&file.path).copied().unwrap_or(0);
+        }
+    }
+
+    /// Refreshes git recency scores using the provided shared picker handle.
+    /// Reads recent commits from the git repository and updates each file's
+    /// recency score based on how recently it appeared in commits.
+    pub fn refresh_git_recency(shared_picker: &SharedPicker) -> Result<(), Error> {
+        let (git_workdir, config) = {
+            let guard = shared_picker.read().map_err(|_| Error::AcquireItemLock)?;
+            let Some(ref picker) = *guard else {
+                return Err(Error::FilePickerMissing);
+            };
+            (
+                picker.git_root().map(Path::to_path_buf),
+                picker.git_recency_config,
+            )
+        };
+
+        let Some(git_workdir) = git_workdir else {
+            return Ok(());
+        };
+
+        let repo = match Repository::open(&git_workdir) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(?e, "Failed to open repo for git recency refresh");
+                return Ok(());
+            }
+        };
+
+        let recency_scores = crate::git::get_recent_commit_files(&repo, &config);
+
+        if !recency_scores.is_empty() {
+            let mut guard = shared_picker.write().map_err(|_| Error::AcquireItemLock)?;
+            let picker = guard.as_mut().ok_or(Error::FilePickerMissing)?;
+            picker.update_git_recency_scores(&recency_scores);
+            debug!(
+                files_scored = recency_scores.len(),
+                "Git recency scores refreshed"
+            );
+        }
+
+        Ok(())
     }
 
     pub fn update_single_file_frecency(
@@ -644,6 +702,7 @@ fn spawn_scan_and_watcher(
     warmup_mmap_cache: bool,
     shared_picker: SharedPicker,
     shared_frecency: SharedFrecency,
+    git_recency_config: GitRecencyConfig,
 ) {
     std::thread::spawn(move || {
         // scan_signal is already `true` (set by the caller before spawning)
@@ -669,6 +728,24 @@ fn spawn_scan_and_watcher(
 
                 if write_result.is_none() {
                     error!("Failed to write scan results into picker");
+                }
+
+                // Compute git recency scores after initial scan
+                if let Some(ref workdir) = git_workdir
+                    && let Ok(repo) = Repository::open(workdir)
+                {
+                    let recency_scores =
+                        crate::git::get_recent_commit_files(&repo, &git_recency_config);
+                    if !recency_scores.is_empty()
+                        && let Ok(mut guard) = shared_picker.write()
+                        && let Some(ref mut picker) = *guard
+                    {
+                        picker.update_git_recency_scores(&recency_scores);
+                        info!(
+                            files_scored = recency_scores.len(),
+                            "Initial git recency scores applied"
+                        );
+                    }
                 }
 
                 // OPTIMIZATION: Warmup mmap cache in background to avoid blocking first grep.

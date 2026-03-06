@@ -311,6 +311,13 @@ local function init()
     -- Git integration
     git = {
       status_text_color = false, -- Apply git status colors to filename text (default: false, only sign column)
+      -- Git recency: boost files that appear in recent commits on the current branch
+      recency = {
+        enabled = true,
+        max_commits = 10, -- Number of recent commits to analyze
+        max_files_per_commit = 50, -- Ignore commits touching more files than this (filters merge commits, bulk refactors)
+        max_bonus = 15, -- Maximum additive score bonus for files in the most recent commit
+      },
     },
     debug = {
       enabled = false, -- Set to true to show scores in the UI

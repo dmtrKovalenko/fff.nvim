@@ -31,6 +31,7 @@ fn init_file_picker_internal(
         false,
         Arc::clone(shared_picker),
         Arc::clone(shared_frecency),
+        Default::default(),
     )
     .map_err(|e| format!("Failed to create FilePicker: {:?}", e))
 }

@@ -83,6 +83,7 @@ fn main() {
         false,
         Arc::clone(&shared_picker),
         Arc::clone(&shared_frecency),
+        Default::default(),
     )
     .expect("Failed to init FilePicker");
 
