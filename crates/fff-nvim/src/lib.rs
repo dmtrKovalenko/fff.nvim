@@ -141,10 +141,10 @@ pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<()> {
         LuaError::RuntimeError(format!("Failed to canonicalize path '{}': {}", new_path, e))
     })?;
 
-    if let Ok(Some(picker)) = FILE_PICKER.read().as_deref() {
-        if picker.base_path() == canonical_path {
-            return Ok(()); // same dir
-        }
+    if let Ok(Some(picker)) = FILE_PICKER.read().as_deref()
+        && picker.base_path() == canonical_path
+    {
+        return Ok(()); // same dir
     }
 
     // Spawn a background thread to avoid blocking Lua/UI thread
