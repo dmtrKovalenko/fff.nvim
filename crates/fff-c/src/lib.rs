@@ -143,6 +143,7 @@ pub unsafe extern "C" fn fff_create(opts_json: *const c_char) -> *mut FffResult 
         opts.warmup_mmap_cache,
         Arc::clone(&shared_picker),
         Arc::clone(&shared_frecency),
+        Default::default(),
     ) {
         return FffResult::err(&format!("Failed to init file picker: {}", e));
     }
@@ -516,6 +517,7 @@ pub unsafe extern "C" fn fff_restart_index(
         warmup,
         Arc::clone(&inst.picker),
         Arc::clone(&inst.frecency),
+        Default::default(),
     ) {
         Ok(()) => FffResult::ok_empty(),
         Err(e) => FffResult::err(&format!("Failed to init file picker: {}", e)),

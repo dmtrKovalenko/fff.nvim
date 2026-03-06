@@ -4,8 +4,8 @@ use fff_core::file_picker::FilePicker;
 use fff_core::frecency::FrecencyTracker;
 use fff_core::query_tracker::QueryTracker;
 use fff_core::{
-    DbHealthChecker, Error, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency,
-    SharedPicker, SharedQueryTracker,
+    DbHealthChecker, Error, FuzzySearchOptions, GitRecencyConfig, PaginationArgs, QueryParser,
+    SharedFrecency, SharedPicker, SharedQueryTracker,
 };
 use mimalloc::MiMalloc;
 use mlua::prelude::*;
@@ -77,7 +77,33 @@ pub fn destroy_query_db(_: &Lua, _: ()) -> LuaResult<bool> {
     Ok(true)
 }
 
-pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
+/// Parse git recency config from an optional Lua table.
+/// Returns defaults if the table is nil or missing fields.
+fn parse_git_recency_config(table: Option<LuaTable>) -> GitRecencyConfig {
+    let Some(table) = table else {
+        return GitRecencyConfig::default();
+    };
+
+    let enabled: bool = table.get("enabled").unwrap_or(true);
+    if !enabled {
+        return GitRecencyConfig {
+            max_commits: 0,
+            max_files_per_commit: 0,
+            max_bonus: 0,
+        };
+    }
+
+    GitRecencyConfig {
+        max_commits: table.get("max_commits").unwrap_or(10),
+        max_files_per_commit: table.get("max_files_per_commit").unwrap_or(50),
+        max_bonus: table.get("max_bonus").unwrap_or(15),
+    }
+}
+
+pub fn init_file_picker(
+    _: &Lua,
+    (base_path, git_recency_table): (String, Option<LuaTable>),
+) -> LuaResult<bool> {
     {
         let guard = FILE_PICKER
             .read()
@@ -88,11 +114,14 @@ pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
         }
     }
 
+    let git_recency_config = parse_git_recency_config(git_recency_table);
+
     FilePicker::new_with_shared_state(
         base_path,
         false,
         Arc::clone(&FILE_PICKER),
         Arc::clone(&FRECENCY),
+        git_recency_config,
     )
     .into_lua_result()?;
 
@@ -100,6 +129,15 @@ pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
 }
 
 fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
+    // Read the git recency config from the existing picker before stopping it
+    let git_recency_config = {
+        let guard = FILE_PICKER.read().with_lock_error(Error::AcquireItemLock)?;
+        guard
+            .as_ref()
+            .map(|p| p.git_recency_config())
+            .unwrap_or_default()
+    };
+
     // Stop existing picker
     {
         let mut guard = FILE_PICKER
@@ -116,6 +154,7 @@ fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
         false,
         Arc::clone(&FILE_PICKER),
         Arc::clone(&FRECENCY),
+        git_recency_config,
     )?;
 
     Ok(())

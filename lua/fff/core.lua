@@ -96,7 +96,7 @@ M.ensure_initialized = function()
   local ok, result = pcall(fuzzy.init_db, frecency_db_path, history_db_path, true)
   if not ok then vim.notify('Failed to databases: ' .. result, vim.log.levels.WARN) end
 
-  ok, result = pcall(fuzzy.init_file_picker, config.base_path)
+  ok, result = pcall(fuzzy.init_file_picker, config.base_path, config.git and config.git.recency or nil)
   if not ok then
     vim.notify('Failed to initialize file picker: ' .. result, vim.log.levels.ERROR)
     return fuzzy

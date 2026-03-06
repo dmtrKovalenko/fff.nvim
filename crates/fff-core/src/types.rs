@@ -29,6 +29,7 @@ pub struct FileItem {
     pub modification_frecency_score: i64,
     pub total_frecency_score: i64,
     pub git_status: Option<git2::Status>,
+    pub git_recency_score: i32,
     pub is_binary: bool,
     /// Lazily-initialized memory-mapped file contents for grep.
     /// Initialized on first grep access via `OnceLock`; lock-free on subsequent reads.
@@ -50,6 +51,7 @@ impl Clone for FileItem {
             modification_frecency_score: self.modification_frecency_score,
             total_frecency_score: self.total_frecency_score,
             git_status: self.git_status,
+            git_recency_score: self.git_recency_score,
             is_binary: self.is_binary,
             // Don't clone the mmap — the clone lazily re-creates it on demand
             mmap: OnceLock::new(),
@@ -82,6 +84,7 @@ impl FileItem {
             modification_frecency_score: 0,
             total_frecency_score: 0,
             git_status,
+            git_recency_score: 0,
             is_binary,
             mmap: OnceLock::new(),
         }
@@ -155,6 +158,7 @@ pub struct Score {
     pub filename_bonus: i32,
     pub special_filename_bonus: i32,
     pub frecency_boost: i32,
+    pub git_recency_boost: i32,
     pub distance_penalty: i32,
     pub current_file_penalty: i32,
     pub combo_match_boost: i32,

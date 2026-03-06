@@ -190,6 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         false,
         Arc::clone(&shared_picker),
         Arc::clone(&shared_frecency),
+        Default::default(),
     )?;
 
     // Wait for initial scan

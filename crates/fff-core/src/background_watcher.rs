@@ -329,6 +329,13 @@ fn handle_debounced_events(
         if let Err(e) = result {
             error!("Failed to refresh git status: {:?}", e);
         }
+
+        // Also refresh git recency scores since HEAD/refs changed
+        // (new commits, branch switches, etc.)
+        if let Err(e) = FilePicker::refresh_git_recency(shared_picker) {
+            error!("Failed to refresh git recency: {:?}", e);
+        }
+
         return;
     }
 

@@ -38,5 +38,6 @@ pub use fff_query_parser::{
     Constraint, FFFQuery, FuzzyQuery, Location, QueryParser, location::parse_location,
 };
 pub use file_picker::{FuzzySearchOptions, ScanProgress};
+pub use git::GitRecencyConfig;
 pub use grep::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions};
 pub use types::{FileItem, PaginationArgs, Score, ScoringContext, SearchResult};
