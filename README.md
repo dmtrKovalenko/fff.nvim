@@ -282,8 +282,7 @@ require('fff').setup({
 #### Available Methods
 
 ```lua
-require('fff').find_files()                         -- Find files in current directory
-require('fff').find_in_git_root()                   -- Find files in the current git repository
+require('fff').find_files()                         -- Find files in current repositro
 require('fff').scan_files()                         -- Trigger rescan of files in the current directory
 require('fff').refresh_git_status()                 -- Refresh git status for the active file lock
 require('fff').find_files_in_dir(path)              -- Find files in a specific directory

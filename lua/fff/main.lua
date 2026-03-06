@@ -42,6 +42,8 @@ function M.live_grep(opts)
   picker_ui.open(picker_opts)
 end
 
+--- Changes the directory indexed by the file picker to the git root and opens the file picker
+--- @deprecated Use `find_files` instead
 function M.find_in_git_root()
   local fuzzy = require('fff.core').ensure_initialized()
   local ok, git_root = pcall(fuzzy.get_git_root)
