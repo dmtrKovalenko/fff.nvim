@@ -4,7 +4,9 @@
 
 use fff_core::file_picker::FilePicker;
 use fff_core::git::format_git_status;
-use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
+use fff_core::{
+    FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker,
+};
 use std::env;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,6 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     FilePicker::new_with_shared_state(
         base_path.clone(),
         false,
+        FFFMode::default(),
         Arc::clone(&shared_picker),
         Arc::clone(&shared_frecency),
     )?;

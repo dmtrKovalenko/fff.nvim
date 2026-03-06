@@ -1,8 +1,8 @@
 use crate::db_healthcheck::DbHealthChecker;
 use crate::error::Error;
 use heed::types::Bytes;
+use heed::{types::SerdeBincode, EnvFlags};
 use heed::{Database, Env, EnvOpenOptions};
-use heed::{EnvFlags, types::SerdeBincode};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
@@ -65,6 +65,7 @@ impl QueryTracker {
         fs::create_dir_all(db_path).map_err(Error::CreateDir)?;
         let env = unsafe {
             let mut opts = EnvOpenOptions::new();
+            opts.map_size(10 * 1024 * 1024); // 100 MiB
             opts.max_dbs(16); // Allow up to 16 databases per environment
             if use_unsafe_no_lock {
                 opts.flags(EnvFlags::NO_LOCK | EnvFlags::NO_SYNC | EnvFlags::NO_META_SYNC);

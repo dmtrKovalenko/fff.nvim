@@ -8,15 +8,15 @@
  * 4. GitHub releases (fallback, requires network)
  */
 
-import { existsSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
-  getTriple,
   getLibExtension,
   getLibFilename,
   getNpmPackageName,
+  getTriple,
 } from "./platform";
 
 const GITHUB_REPO = "dmtrKovalenko/fff.nvim";
@@ -26,6 +26,13 @@ const GITHUB_REPO = "dmtrKovalenko/fff.nvim";
  */
 function getCurrentDir(): string {
   const url = import.meta.url;
+
+  // When running in a compiled Bun binary, import.meta.url points to the virtual
+  // $bunfs filesystem. Use process.execPath to get the real filesystem location.
+  if (url.includes("$bunfs")) {
+    return dirname(process.execPath);
+  }
+
   if (url.startsWith("file://")) {
     return dirname(fileURLToPath(url));
   }

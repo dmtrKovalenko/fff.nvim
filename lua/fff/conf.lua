@@ -313,9 +313,8 @@ local function init()
       status_text_color = false, -- Apply git status colors to filename text (default: false, only sign column)
     },
     debug = {
-      enabled = false, -- Set to true to show scores in the UI
-      show_scores = false,
-      show_file_info = false, -- Show file info panel in preview
+      enabled = false, -- Show file info panel in preview
+      show_scores = false, -- Show scores inline in the UI
     },
     logging = {
       enabled = true,
@@ -356,7 +355,7 @@ end
 function M.toggle_debug()
   local old_debug_state = state.config.debug.show_scores
   state.config.debug.show_scores = not state.config.debug.show_scores
-  state.config.debug.show_file_info = state.config.debug.show_scores
+  state.config.debug.enabled = state.config.debug.show_scores
   local status = state.config.debug.show_scores and 'enabled' or 'disabled'
   vim.notify('FFF debug scores ' .. status, vim.log.levels.INFO)
   return old_debug_state ~= state.config.debug.show_scores

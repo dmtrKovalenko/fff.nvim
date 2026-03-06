@@ -732,7 +732,12 @@ function M.update_file_info_buffer(file, bufnr, file_index)
   vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
   vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
   vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
-  vim.api.nvim_set_option_value('wrap', false, { buf = bufnr })
+
+  -- Set wrap on the window (wrap is window-local, not buffer-local)
+  local wins = vim.fn.win_findbuf(bufnr)
+  for _, win in ipairs(wins) do
+    if vim.api.nvim_win_is_valid(win) then vim.api.nvim_set_option_value('wrap', false, { win = win }) end
+  end
 
   return true
 end

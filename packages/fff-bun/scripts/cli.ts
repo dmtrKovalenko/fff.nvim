@@ -7,12 +7,13 @@
  *   bunx fff info               - Show platform and binary info
  */
 
-import { 
-  downloadBinary, 
-  getBinaryPath, 
-  findBinary, 
-} from "../src/download";
-import { getTriple, getLibExtension, getLibFilename, getNpmPackageName } from "../src/platform";
+import { downloadBinary, getBinaryPath, findBinary } from "../src/download";
+import {
+  getTriple,
+  getLibExtension,
+  getLibFilename,
+  getNpmPackageName,
+} from "../src/platform";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,7 +27,7 @@ interface PackageJson {
 async function getPackageInfo(): Promise<PackageJson> {
   const currentDir = dirname(fileURLToPath(import.meta.url));
   const packageJsonPath = join(currentDir, "..", "package.json");
-  
+
   try {
     return await Bun.file(packageJsonPath).json();
   } catch {
@@ -57,7 +58,7 @@ async function main() {
       } catch {
         npmPackage = "unsupported";
       }
-      
+
       console.log("fff - Fast File Finder");
       console.log(`Package version: ${pkg.version}`);
       console.log("");
@@ -87,15 +88,14 @@ async function main() {
       break;
     }
 
-    case "help":
-    case "--help":
-    case "-h":
     default: {
       const pkg = await getPackageInfo();
       console.log(`fff - Fast File Finder CLI v${pkg.version}`);
       console.log("");
       console.log("Usage:");
-      console.log("  bunx fff download [tag]    Download native binary from GitHub (fallback)");
+      console.log(
+        "  bunx fff download [tag]    Download native binary from GitHub (fallback)",
+      );
       console.log("  bunx fff info              Show platform and binary info");
       console.log("  bunx fff version           Show version");
       console.log("  bunx fff help              Show this help message");
@@ -104,7 +104,9 @@ async function main() {
       console.log("  bunx fff download          Download latest binary from GitHub");
       console.log("  bunx fff download abc1234  Download specific release tag");
       console.log("");
-      console.log("Note: Binaries are normally provided via platform-specific npm packages.");
+      console.log(
+        "Note: Binaries are normally provided via platform-specific npm packages.",
+      );
       console.log("The download command is a fallback for when those aren't available.");
       break;
     }
