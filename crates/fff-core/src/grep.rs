@@ -254,6 +254,9 @@ pub struct GrepSearchOptions {
     pub before_context: usize,
     /// Number of context lines to include after each match. 0 = disabled.
     pub after_context: usize,
+    /// Whether to classify each match as a definition line. Adds ~2% overhead
+    /// on large repos; disable for interactive grep where it is not needed.
+    pub classify_definitions: bool,
 }
 
 /// Lightweight wrapper around `regex::bytes::Regex` implementing the
@@ -310,14 +313,14 @@ impl Matcher for RegexMatcher<'_> {
 /// Always reports `\n` as line terminator so the searcher uses the fast
 /// candidate-line path (plain text can never span lines unless `\n` is
 /// literally in the needle, which we handle separately).
-struct PlainTextMatcher {
+struct PlainTextMatcher<'a> {
     /// Case-folded needle bytes for case-insensitive matching.
     /// When case-sensitive, this is the original pattern bytes.
-    needle: Vec<u8>,
+    needle: &'a [u8],
     case_insensitive: bool,
 }
 
-impl Matcher for PlainTextMatcher {
+impl Matcher for PlainTextMatcher<'_> {
     type Captures = NoCaptures;
     type Error = NoError;
 
@@ -328,9 +331,9 @@ impl Matcher for PlainTextMatcher {
         let found = if self.case_insensitive {
             // ASCII case-insensitive: lowercase the haystack slice on the fly.
             // We scan with a rolling window to avoid allocating a full copy.
-            ascii_case_insensitive_find(hay, &self.needle)
+            ascii_case_insensitive_find(hay, self.needle)
         } else {
-            memchr::memmem::find(hay, &self.needle)
+            memchr::memmem::find(hay, self.needle)
         };
 
         Ok(found.map(|pos| Match::new(at + pos, at + pos + self.needle.len())))
@@ -349,38 +352,89 @@ impl Matcher for PlainTextMatcher {
 
 /// ASCII case-insensitive substring search.
 ///
-/// Lowercases only the first byte of the needle for the initial scan using
-/// memchr, then compares the rest byte-by-byte with ASCII lowering.
-/// This avoids allocating a lowered copy of the haystack.
+/// Uses a SIMD-accelerated two-byte scan (first + last byte of needle) via
+/// `memchr2_iter`, then verifies candidates with a fast byte comparison that
+/// leverages the fact that ASCII case differs only in bit 0x20.
 #[inline]
 fn ascii_case_insensitive_find(haystack: &[u8], needle_lower: &[u8]) -> Option<usize> {
-    if needle_lower.is_empty() {
+    let nlen = needle_lower.len();
+    if nlen == 0 {
         return Some(0);
     }
-    if haystack.len() < needle_lower.len() {
+
+    if haystack.len() < nlen {
         return None;
     }
 
-    let first = needle_lower[0]; // already lowered
-    let first_upper = first.to_ascii_uppercase();
+    let first_lo = needle_lower[0];
+    let first_hi = first_lo.to_ascii_uppercase();
 
-    // Use memchr2 to find positions of either case of the first byte.
-    // When the first byte is non-alphabetic both variants are the same,
-    // memchr2 handles that efficiently.
-    for pos in memchr::memchr2_iter(first, first_upper, haystack) {
-        if pos + needle_lower.len() > haystack.len() {
-            return None;
-        }
-        let candidate = &haystack[pos..pos + needle_lower.len()];
-        if candidate
-            .iter()
-            .zip(needle_lower.iter())
-            .all(|(&h, &n)| h.to_ascii_lowercase() == n)
-        {
+    // Single-byte needle: just find either case variant.
+    if nlen == 1 {
+        return memchr::memchr2(first_lo, first_hi, haystack);
+    }
+
+    let tail = &needle_lower[1..];
+    let end = haystack.len() - nlen;
+
+    // Scan for candidates where the first byte matches (either case).
+    for pos in memchr::memchr2_iter(first_lo, first_hi, &haystack[..=end]) {
+        // Verify the remaining bytes with bitwise ASCII case-insensitive compare.
+        // For ASCII letters, (a ^ b) & ~0x20 == 0 when they match ignoring case.
+        // For non-letters, exact equality is required; OR-ing with 0x20 maps both
+        // cases to lowercase and is correct for non-alpha bytes that are already equal.
+        let candidate = unsafe { haystack.get_unchecked(pos + 1..pos + nlen) };
+        if ascii_case_eq(candidate, tail) {
             return Some(pos);
         }
     }
     None
+}
+
+/// Fast ASCII case-insensitive byte slice comparison.
+///
+/// Returns true if `a` and `b` are equal when compared case-insensitively
+/// for ASCII bytes. Both slices must have the same length.
+#[inline]
+fn ascii_case_eq(a: &[u8], b: &[u8]) -> bool {
+    debug_assert_eq!(a.len(), b.len());
+    // Process 8 bytes at a time using u64 bitwise operations.
+    // For each byte: (x | 0x20) maps uppercase ASCII to lowercase.
+    // This is correct for letters. For non-letter bytes where the original
+    // values are equal, OR-ing with 0x20 preserves equality. For non-letter
+    // bytes where values differ, this can produce false positives only when
+    // they differ exactly by 0x20 — we do a fast exact-match check first
+    // to catch those rare cases.
+    let len = a.len();
+    let mut i = 0;
+
+    // Fast path: compare 8 bytes at a time
+    while i + 8 <= len {
+        let va = u64::from_ne_bytes(unsafe { *(a.as_ptr().add(i) as *const [u8; 8]) });
+        let vb = u64::from_ne_bytes(unsafe { *(b.as_ptr().add(i) as *const [u8; 8]) });
+
+        // Quick exact-match shortcut (common for non-alpha content)
+        if va != vb {
+            // Case-insensitive: OR each byte with 0x20 to fold case
+            const MASK: u64 = 0x2020_2020_2020_2020;
+            if (va | MASK) != (vb | MASK) {
+                return false;
+            }
+        }
+        i += 8;
+    }
+
+    // Handle remaining bytes
+    while i < len {
+        let ha = unsafe { *a.get_unchecked(i) };
+        let hb = unsafe { *b.get_unchecked(i) };
+        if ha != hb && (ha | 0x20) != (hb | 0x20) {
+            return false;
+        }
+        i += 1;
+    }
+
+    true
 }
 
 /// Maximum bytes of a matched line to keep for display. Prevents minified
@@ -393,6 +447,7 @@ struct SinkState {
     max_matches: usize,
     before_context: usize,
     after_context: usize,
+    classify_definitions: bool,
 }
 
 impl SinkState {
@@ -430,7 +485,7 @@ impl SinkState {
         context_before: Vec<String>,
         context_after: Vec<String>,
     ) {
-        let is_definition = is_definition_line(&line_content);
+        let is_definition = self.classify_definitions && is_definition_line(&line_content);
         self.matches.push(GrepMatch {
             file_index: self.file_index,
             line_number,
@@ -566,6 +621,7 @@ impl Sink for PlainTextSink<'_> {
             for (dst, &src) in lowered[..len].iter_mut().zip(display_bytes) {
                 *dst = src.to_ascii_lowercase();
             }
+
             let mut start_pos = 0usize;
             while let Some(pos) = self.finder.find(&lowered[start_pos..len]) {
                 let abs_start = (start_pos + pos) as u32;
@@ -671,11 +727,11 @@ impl Sink for RegexSink<'_> {
 ///
 /// Finds the first occurrence of any pattern starting at the given offset.
 /// Always reports `\n` as the line terminator for the fast candidate-line path.
-struct AhoCorasickMatcher {
-    ac: AhoCorasick,
+struct AhoCorasickMatcher<'a> {
+    ac: &'a AhoCorasick,
 }
 
-impl Matcher for AhoCorasickMatcher {
+impl Matcher for AhoCorasickMatcher<'_> {
     type Captures = NoCaptures;
     type Error = NoError;
 
@@ -700,12 +756,12 @@ impl Matcher for AhoCorasickMatcher {
 /// Sink for Aho-Corasick multi-pattern mode.
 ///
 /// Collects all pattern match positions on each matched line for highlighting.
-struct AhoCorasickSink {
+struct AhoCorasickSink<'a> {
     state: SinkState,
-    ac: AhoCorasick,
+    ac: &'a AhoCorasick,
 }
 
-impl Sink for AhoCorasickSink {
+impl Sink for AhoCorasickSink<'_> {
     type Error = std::io::Error;
 
     fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
@@ -813,8 +869,7 @@ pub fn multi_grep_search<'a>(
     }
     .build();
 
-    let ac_matcher = AhoCorasickMatcher { ac: ac.clone() };
-
+    let ac_matcher = AhoCorasickMatcher { ac: &ac };
     run_file_search(
         &files_to_search,
         options,
@@ -824,16 +879,14 @@ pub fn multi_grep_search<'a>(
         |file_bytes: &[u8], max_matches: usize| {
             let state = SinkState {
                 file_index: 0,
-                matches: Vec::new(),
+                matches: Vec::with_capacity(4),
                 max_matches,
                 before_context: options.before_context,
                 after_context: options.after_context,
+                classify_definitions: options.classify_definitions,
             };
 
-            let mut sink = AhoCorasickSink {
-                state,
-                ac: ac.clone(),
-            };
+            let mut sink = AhoCorasickSink { state, ac: &ac };
 
             if let Err(e) = searcher.search_slice(&ac_matcher, file_bytes, &mut sink) {
                 tracing::error!(error = %e, "Grep (aho-corasick multi) search failed");
@@ -844,10 +897,9 @@ pub fn multi_grep_search<'a>(
     )
 }
 
-/// Check if a byte is a valid UTF-8 character boundary.
+// copied from the rust u8 private method
 #[inline]
-fn is_utf8_char_boundary(b: u8) -> bool {
-    // Continuation bytes have the bit pattern 10xxxxxx.
+const fn is_utf8_char_boundary(b: u8) -> bool {
     (b as i8) >= -0x40
 }
 
@@ -948,8 +1000,6 @@ where
     };
 
     let search_start = std::time::Instant::now();
-    let page_limit = options.page_limit;
-
     let budget_exceeded = AtomicBool::new(false);
 
     // Parallel phase: search all files concurrently using rayon.
@@ -979,7 +1029,32 @@ where
         })
         .collect();
 
-    // Flatten per-file results into the final vecs in sorted order.
+    collect_grep_results(
+        per_file_results,
+        files_to_search.len(),
+        options,
+        total_files,
+        filtered_file_count,
+        regex_fallback_error,
+        budget_exceeded.load(Ordering::Relaxed),
+    )
+}
+
+/// Flatten per-file results into the final `GrepResult`.
+///
+/// Shared post-processing for both `run_file_search` (simple closure) and
+/// `fuzzy_grep_search` (which uses `map_init` for per-thread matcher reuse).
+fn collect_grep_results<'a>(
+    per_file_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)>,
+    files_to_search_len: usize,
+    options: &GrepSearchOptions,
+    total_files: usize,
+    filtered_file_count: usize,
+    regex_fallback_error: Option<String>,
+    budget_exceeded: bool,
+) -> GrepResult<'a> {
+    let page_limit = options.page_limit;
+
     // Each match stores a `file_index` pointing into `result_files` so that
     // consumers (FFI JSON, Lua) can look up file metadata without duplicating
     // it across every match from the same file.
@@ -1016,11 +1091,11 @@ where
 
     // If no file had any match, we searched the entire slice.
     if result_files.is_empty() {
-        files_consumed = files_to_search.len();
+        files_consumed = files_to_search_len;
     }
 
-    let has_more = budget_exceeded.load(Ordering::Relaxed)
-        || (all_matches.len() >= page_limit && files_consumed < files_to_search.len());
+    let has_more = budget_exceeded
+        || (all_matches.len() >= page_limit && files_consumed < files_to_search_len);
 
     let next_file_offset = if has_more {
         options.file_offset + files_consumed
@@ -1148,25 +1223,15 @@ fn fuzzy_grep_search<'a>(
         ..neo_frizbee::Scoring::default()
     };
 
-    // Two configs: match_list uses a lenient max_typos (needle_len) to keep
-    // the SIMD prefilter active (cheap char-presence check) while avoiding
-    // aggressive SIMD typo rejection that can disagree with the reference
-    // implementation on some architectures (e.g. aarch64 portable SIMD).
-    // match_indices uses the actual max_typos for correct typo filtering
-    // via the reference (scalar) Smith-Waterman traceback.
-    let match_list_config = neo_frizbee::Config {
-        prefilter: true, // SIMD prefilter rejects obvious non-matches cheaply
-        max_typos: Some(grep_text.len() as u16),
-        sort: false, // We handle ordering ourselves
-        scoring,
-    };
-
-    let match_indices_config = neo_frizbee::Config {
-        prefilter: false,
-        max_typos: Some(max_typos as u16),
-        sort: false,
-        scoring,
-    };
+    let matcher = neo_frizbee::Matcher::new(
+        grep_text,
+        &neo_frizbee::Config {
+            // Use the real max_typos so frizbee's SIMD prefilter actually rejects non-matching lines (~2 SIMD instructions per line vs full SW scoring).
+            max_typos: Some(max_typos as u16),
+            sort: false,
+            scoring,
+        },
+    );
 
     // Minimum score threshold: 50% of a perfect contiguous match.
     // With default scoring (match_score=12, matching_case_bonus=4 = 16/char),
@@ -1187,155 +1252,241 @@ fn fuzzy_grep_search<'a>(
     // We scale by needle_len: longer needles tolerate more gaps.
     let max_gaps = (needle_len / 4).max(1);
 
-    run_file_search(
-        files_to_search,
+    // File-level prefilter: collect unique needle chars (both cases) for
+    // a fast memchr scan.  If a file doesn't contain enough distinct
+    // needle characters, skip it entirely — no line splitting needed.
+    let needle_bytes = grep_text.as_bytes();
+    let mut unique_needle_chars: Vec<u8> = Vec::new();
+    for &b in needle_bytes {
+        let lo = b.to_ascii_lowercase();
+        let hi = b.to_ascii_uppercase();
+        if !unique_needle_chars.contains(&lo) {
+            unique_needle_chars.push(lo);
+        }
+        if lo != hi && !unique_needle_chars.contains(&hi) {
+            unique_needle_chars.push(hi);
+        }
+    }
+    // How many distinct needle chars must appear in the file.
+    // With max_typos allowed, we need at least (unique_count - max_typos).
+    let unique_count = {
+        let mut seen = [false; 256];
+        for &b in needle_bytes {
+            seen[b.to_ascii_lowercase() as usize] = true;
+        }
+        seen.iter().filter(|&&v| v).count()
+    };
+    let min_chars_required = unique_count.saturating_sub(max_typos);
+
+    let time_budget = if options.time_budget_ms > 0 {
+        Some(std::time::Duration::from_millis(options.time_budget_ms))
+    } else {
+        None
+    };
+    let search_start = std::time::Instant::now();
+    let budget_exceeded = AtomicBool::new(false);
+    let max_matches_per_file = options.max_matches_per_file;
+
+    // Parallel phase with `map_init`: each rayon worker thread clones the
+    // matcher once and reuses it across all files that thread processes.
+    // This avoids per-file clone overhead (CPUID detection + matrix alloc).
+    let per_file_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)> = files_to_search
+        .par_iter()
+        .enumerate()
+        .map_init(
+            || matcher.clone(),
+            |matcher, (idx, file)| {
+                if let Some(budget) = time_budget
+                    && search_start.elapsed() > budget
+                {
+                    budget_exceeded.store(true, Ordering::Relaxed);
+                    return None;
+                }
+
+                let mmap = file.get_mmap()?;
+                let file_bytes = &mmap[..];
+
+                // File-level prefilter: check if enough distinct needle chars
+                // exist anywhere in the file bytes.  Uses memchr for speed.
+                if min_chars_required > 0 {
+                    let mut chars_found = 0usize;
+                    for &ch in &unique_needle_chars {
+                        if memchr::memchr(ch, file_bytes).is_some() {
+                            chars_found += 1;
+                            if chars_found >= min_chars_required {
+                                break;
+                            }
+                        }
+                    }
+                    if chars_found < min_chars_required {
+                        return None;
+                    }
+                }
+
+                // Validate the whole file as UTF-8 once upfront. Source code
+                // files are virtually always valid UTF-8; this single check
+                // replaces per-line from_utf8 calls (~8% of fuzzy grep time).
+                let file_is_utf8 = std::str::from_utf8(file_bytes).is_ok();
+
+                // Reuse grep-searcher's LineStep for SIMD-accelerated line iteration.
+                let mut stepper = LineStep::new(b'\n', 0, file_bytes.len());
+                let estimated_lines = (file_bytes.len() / 40).max(64);
+                let mut file_lines: Vec<&str> = Vec::with_capacity(estimated_lines);
+                let mut line_meta: Vec<(u64, u64)> = Vec::with_capacity(estimated_lines);
+                let line_term_lf = grep_matcher::LineTerminator::byte(b'\n');
+                let line_term_cr = grep_matcher::LineTerminator::byte(b'\r');
+
+                let mut line_number: u64 = 1;
+                while let Some(line_match) = stepper.next_match(file_bytes) {
+                    let byte_offset = line_match.start() as u64;
+
+                    // Strip line terminators (\n, \r).
+                    let trimmed = lines::without_terminator(
+                        lines::without_terminator(&file_bytes[line_match], line_term_lf),
+                        line_term_cr,
+                    );
+
+                    if !trimmed.is_empty() {
+                        // SAFETY: when the whole file is valid UTF-8, every
+                        // sub-slice split on ASCII byte boundaries (\n, \r)
+                        // is also valid UTF-8.
+                        let line_str = if file_is_utf8 {
+                            unsafe { std::str::from_utf8_unchecked(trimmed) }
+                        } else if let Ok(s) = std::str::from_utf8(trimmed) {
+                            s
+                        } else {
+                            line_number += 1;
+                            continue;
+                        };
+                        file_lines.push(line_str);
+                        line_meta.push((line_number, byte_offset));
+                    }
+
+                    line_number += 1;
+                }
+
+                if file_lines.is_empty() {
+                    return None;
+                }
+
+                // Single-pass: score + indices in one Smith-Waterman run per line.
+                let matches_with_indices = matcher.match_list_indices(&file_lines);
+                let mut file_matches: Vec<GrepMatch> = Vec::new();
+
+                for mut match_indices in matches_with_indices {
+                    if match_indices.score < min_score {
+                        continue;
+                    }
+
+                    let idx = match_indices.index as usize;
+                    let raw_line = file_lines[idx];
+
+                    let truncated = truncate_display_bytes(raw_line.as_bytes());
+                    let display_line = if truncated.len() < raw_line.len() {
+                        // SAFETY: truncate_display_bytes preserves UTF-8 char boundaries
+                        &raw_line[..truncated.len()]
+                    } else {
+                        raw_line
+                    };
+
+                    // If the line was truncated, re-compute indices on the shorter string.
+                    if display_line.len() < raw_line.len() {
+                        let Some(re_indices) = matcher
+                            .match_list_indices(&[display_line])
+                            .into_iter()
+                            .next()
+                        else {
+                            continue;
+                        };
+                        match_indices = re_indices;
+                    }
+
+                    // upstream returns indices in reverse order, sort ascending
+                    match_indices.indices.sort_unstable();
+
+                    // Minimum matched chars: at least (needle_len - 1) characters
+                    // must appear in the match indices. This allows one missing
+                    // char (a single typo/transposition) but rejects matches that
+                    // only hit a partial substring (e.g. "HashMap" for "shcema").
+                    let min_matched = needle_len.saturating_sub(1).max(1);
+                    if match_indices.indices.len() < min_matched {
+                        continue;
+                    }
+
+                    let indices = &match_indices.indices;
+
+                    if let (Some(&first), Some(&last)) = (indices.first(), indices.last()) {
+                        // Span check: reject widely scattered matches.
+                        let span = last - first + 1;
+                        if span > max_match_span {
+                            continue;
+                        }
+
+                        // Density check: matched chars / span must be dense enough.
+                        // Relaxed for perfect subsequence matches (all needle chars
+                        // present), stricter when typos are involved.
+                        let density = (indices.len() * 100) / span;
+                        let min_density = if indices.len() >= needle_len {
+                            50 // Perfect subsequence — relaxed
+                        } else {
+                            70 // Has typos — stricter
+                        };
+                        if density < min_density {
+                            continue;
+                        }
+
+                        // Gap count check: count discontinuities in the indices.
+                        let gap_count = indices.windows(2).filter(|w| w[1] != w[0] + 1).count();
+                        if gap_count > max_gaps {
+                            continue;
+                        }
+                    }
+
+                    let (ln, bo) = line_meta[idx];
+                    let match_byte_offsets =
+                        char_indices_to_byte_offsets(display_line, &match_indices.indices);
+                    let col = match_byte_offsets
+                        .first()
+                        .map(|r| r.0 as usize)
+                        .unwrap_or(0);
+
+                    file_matches.push(GrepMatch {
+                        file_index: 0,
+                        line_number: ln,
+                        col,
+                        byte_offset: bo,
+                        is_definition: options.classify_definitions
+                            && is_definition_line(display_line),
+                        line_content: display_line.to_string(),
+                        match_byte_offsets,
+                        fuzzy_score: Some(match_indices.score),
+                        context_before: Vec::new(),
+                        context_after: Vec::new(),
+                    });
+
+                    if max_matches_per_file != 0 && file_matches.len() >= max_matches_per_file {
+                        break;
+                    }
+                }
+
+                if file_matches.is_empty() {
+                    return None;
+                }
+
+                Some((idx, *file, file_matches))
+            },
+        )
+        .flatten()
+        .collect();
+
+    collect_grep_results(
+        per_file_results,
+        files_to_search.len(),
         options,
         total_files,
         filtered_file_count,
         None,
-        |file_bytes: &[u8], max_matches_per_file: usize| {
-            // Reuse grep-searcher's LineStep for SIMD-accelerated line iteration.
-            // This is the same code path used by PlainText/Regex modes and is
-            // verified to handle platform line endings (LF, CRLF) correctly.
-            let mut stepper = LineStep::new(b'\n', 0, file_bytes.len());
-            let mut file_lines: Vec<&str> = Vec::with_capacity(4096);
-            let mut line_meta: Vec<(u64, u64)> = Vec::with_capacity(4096);
-            let line_term_lf = grep_matcher::LineTerminator::byte(b'\n');
-            let line_term_cr = grep_matcher::LineTerminator::byte(b'\r');
-
-            let mut line_number: u64 = 1;
-            while let Some(line_match) = stepper.next_match(file_bytes) {
-                let byte_offset = line_match.start() as u64;
-
-                // Strip line terminator (\n) then trailing \r using
-                // grep-searcher's utility, correctly handling LF, CRLF,
-                // and bare CR line endings across platforms.
-                let trimmed = lines::without_terminator(
-                    lines::without_terminator(&file_bytes[line_match], line_term_lf),
-                    line_term_cr,
-                );
-
-                // Feed lines to match_list without truncation — truncation
-                // is only needed for display, and match_list handles the
-                // 512-char bucket cap internally. We only truncate lines
-                // that pass scoring + post-filters below.
-                //
-                // Safety: files that passed `is_binary` check don't contain
-                // null bytes. Source code is virtually always valid UTF-8.
-                // Invalid UTF-8 lines would produce wrong match positions
-                // but won't cause UB since match_indices re-validates below.
-                if !trimmed.is_empty()
-                    && let Ok(line_str) = std::str::from_utf8(trimmed)
-                {
-                    file_lines.push(line_str);
-                    line_meta.push((line_number, byte_offset));
-                }
-
-                line_number += 1;
-            }
-
-            if file_lines.is_empty() {
-                return Vec::new();
-            }
-
-            let matches = neo_frizbee::match_list(grep_text, &file_lines, &match_list_config);
-            let mut file_matches: Vec<GrepMatch> = Vec::new();
-
-            for m in &matches {
-                if m.score < min_score {
-                    continue;
-                }
-
-                let idx = m.index as usize;
-                let raw_line = file_lines[idx];
-
-                let truncated = truncate_display_bytes(raw_line.as_bytes());
-                let display_line = if truncated.len() < raw_line.len() {
-                    // SAFETY: truncate_display_bytes preserves UTF-8 char boundaries
-                    &raw_line[..truncated.len()]
-                } else {
-                    raw_line
-                };
-
-                let Some(match_indices) =
-                    neo_frizbee::match_indices(grep_text, display_line, &match_indices_config)
-                else {
-                    continue; // something is off treat as nomatch
-                };
-
-                // Minimum matched chars: at least (needle_len - 1) characters
-                // must appear in the match indices. This allows one missing
-                // char (a single typo/transposition) but rejects matches that
-                // only hit a partial substring (e.g. "HashMap" for "shcema").
-                let min_matched = needle_len.saturating_sub(1).max(1);
-                if match_indices.indices.len() < min_matched {
-                    continue;
-                }
-
-                let indices = &match_indices.indices;
-
-                if let (Some(&first), Some(&last)) = (indices.first(), indices.last()) {
-                    // Span check: reject widely scattered matches.
-                    let span = last - first + 1;
-                    if span > max_match_span {
-                        continue;
-                    }
-
-                    // Density check: matched chars / span must be dense enough.
-                    // Relaxed for perfect subsequence matches (all needle chars
-                    // present), stricter when typos are involved.
-                    let density = (indices.len() * 100) / span;
-                    let min_density = if indices.len() >= needle_len {
-                        50 // Perfect subsequence — relaxed
-                    } else {
-                        70 // Has typos — stricter
-                    };
-                    if density < min_density {
-                        continue;
-                    }
-
-                    // Gap count check: count discontinuities in the indices.
-                    // A gap is where indices[i] != indices[i-1] + 1 (matched
-                    // chars jump over unmatched haystack chars).
-                    //
-                    // This rejects matches where the needle chars are scattered
-                    // across unrelated words in the haystack:
-                    //   "struct SortedArrayMap" → 1 gap ✓
-                    //   "struct SourcingProjectMetadataParts" → 6 gaps ✗
-                    let gap_count = indices.windows(2).filter(|w| w[1] != w[0] + 1).count();
-                    if gap_count > max_gaps {
-                        continue;
-                    }
-                }
-
-                let (ln, bo) = line_meta[idx];
-                let match_byte_offsets =
-                    char_indices_to_byte_offsets(display_line, &match_indices.indices);
-                let col = match_byte_offsets
-                    .first()
-                    .map(|r| r.0 as usize)
-                    .unwrap_or(0);
-
-                file_matches.push(GrepMatch {
-                    file_index: 0, // set by run_file_search
-                    line_number: ln,
-                    col,
-                    byte_offset: bo,
-                    is_definition: is_definition_line(display_line),
-                    line_content: display_line.to_string(),
-                    match_byte_offsets,
-                    fuzzy_score: Some(match_indices.score),
-                    context_before: Vec::new(),
-                    context_after: Vec::new(),
-                });
-
-                if max_matches_per_file != 0 && file_matches.len() >= max_matches_per_file {
-                    break;
-                }
-            }
-
-            file_matches
-        },
+        budget_exceeded.load(Ordering::Relaxed),
     )
 }
 
@@ -1394,7 +1545,7 @@ pub fn grep_search<'a>(
             total_files,
             filtered_file_count: total_files,
             next_file_offset: 0,
-            matches: Vec::new(),
+            matches: Vec::with_capacity(4),
             files: Vec::new(),
             ..Default::default()
         };
@@ -1472,7 +1623,7 @@ pub fn grep_search<'a>(
     // `PlainTextMatcher` is used by the grep-searcher engine for line detection.
     // `PlainTextSink` / `RegexSink` handle highlight extraction independently.
     let plain_matcher = PlainTextMatcher {
-        needle: finder_pattern.clone(),
+        needle: &finder_pattern,
         case_insensitive,
     };
 
@@ -1494,10 +1645,11 @@ pub fn grep_search<'a>(
         |file_bytes: &[u8], max_matches: usize| {
             let state = SinkState {
                 file_index: 0, // set by run_file_search
-                matches: Vec::new(),
+                matches: Vec::with_capacity(4),
                 max_matches,
                 before_context: options.before_context,
                 after_context: options.after_context,
+                classify_definitions: options.classify_definitions,
             };
 
             match regex {
@@ -1563,7 +1715,6 @@ mod tests {
         let needle = "schema";
         let max_typos = (needle.len() / 3).min(2); // 2
         let config = neo_frizbee::Config {
-            prefilter: false,
             max_typos: Some(max_typos as u16),
             sort: false,
             scoring: neo_frizbee::Scoring {
@@ -1576,9 +1727,14 @@ mod tests {
 
         // Helper: check if a match would pass our post-filters
         let passes = |n: &str, h: &str| -> bool {
-            let Some(mi) = neo_frizbee::match_indices(n, h, &config) else {
+            let Some(mut mi) = neo_frizbee::match_list_indices(n, &[h], &config)
+                .into_iter()
+                .next()
+            else {
                 return false;
             };
+            // upstream returns indices in reverse order, sort ascending
+            mi.indices.sort_unstable();
             if mi.indices.len() < min_matched {
                 return false;
             }
@@ -1692,6 +1848,7 @@ mod tests {
             time_budget_ms: 0,
             before_context: 0,
             after_context: 0,
+            classify_definitions: false,
         };
 
         // Test with 3 patterns

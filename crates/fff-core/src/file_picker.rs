@@ -327,7 +327,13 @@ impl FilePicker {
         parsed: Option<FFFQuery<'a>>,
         options: FuzzySearchOptions<'a>,
     ) -> SearchResult<'a> {
-        let max_threads = options.max_threads.max(1);
+        let max_threads = if options.max_threads == 0 {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        } else {
+            options.max_threads
+        };
         debug!(
             ?query,
             parsed_is_some = parsed.is_some(),

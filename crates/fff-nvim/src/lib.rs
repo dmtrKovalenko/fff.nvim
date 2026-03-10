@@ -43,6 +43,10 @@ pub fn init_db(
     *frecency =
         Some(FrecencyTracker::new(&frecency_db_path, use_unsafe_no_lock).into_lua_result()?);
     tracing::info!("Frecency database initialized at {}", frecency_db_path);
+    drop(frecency);
+
+    // Spawn background GC to purge stale entries without blocking startup
+    FrecencyTracker::spawn_gc(Arc::clone(&FRECENCY), frecency_db_path, use_unsafe_no_lock);
 
     let mut query_tracker = QUERY_TRACKER
         .write()
@@ -314,6 +318,7 @@ pub fn live_grep(
         time_budget_ms: time_budget_ms.unwrap_or(0),
         before_context: 0,
         after_context: 0,
+        classify_definitions: false,
     };
 
     let result = fff_core::grep::grep_search(picker.get_files(), &query, parsed.as_ref(), &options);

@@ -70,7 +70,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.2
 
@@ -201,7 +201,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.2
 
@@ -314,7 +314,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.2
 

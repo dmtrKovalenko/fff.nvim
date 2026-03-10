@@ -112,6 +112,12 @@ pub unsafe extern "C" fn fff_create(opts_json: *const c_char) -> *mut FffResult 
                     }
                 };
                 *guard = Some(tracker);
+                drop(guard);
+                FrecencyTracker::spawn_gc(
+                    Arc::clone(&shared_frecency),
+                    frecency_path,
+                    opts.use_unsafe_no_lock,
+                );
             }
             Err(e) => return FffResult::err(&format!("Failed to init frecency db: {}", e)),
         }
@@ -344,6 +350,7 @@ pub unsafe extern "C" fn fff_live_grep(
         time_budget_ms: opts.time_budget_ms.unwrap_or(0),
         before_context: opts.before_context.unwrap_or(0),
         after_context: opts.after_context.unwrap_or(0),
+        classify_definitions: opts.classify_definitions.unwrap_or(false),
     };
 
     let result =
@@ -428,6 +435,7 @@ pub unsafe extern "C" fn fff_multi_grep(
         time_budget_ms: opts.time_budget_ms.unwrap_or(0),
         before_context: opts.before_context.unwrap_or(0),
         after_context: opts.after_context.unwrap_or(0),
+        classify_definitions: opts.classify_definitions.unwrap_or(false),
     };
 
     let result =

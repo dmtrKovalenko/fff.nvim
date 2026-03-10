@@ -9,9 +9,11 @@
 mod cursor;
 mod output;
 mod server;
+mod update_check;
 
 use std::sync::{Arc, RwLock};
 
+use clap::Parser;
 use fff_core::file_picker::FilePicker;
 use fff_core::frecency::FrecencyTracker;
 use fff_core::{FFFMode, SharedFrecency, SharedPicker};
@@ -96,113 +98,88 @@ pub const MCP_INSTRUCTIONS: &str = concat!(
     "  !generated/ - exclude generated code",
 );
 
+/// FFF MCP Server — high-performance file finder for AI code assistants.
+#[derive(Parser)]
+#[command(name = "fff-mcp", version = env!("CARGO_PKG_VERSION"))]
 struct Args {
-    base_path: String,
-    frecency_db_path: String,
+    /// Base directory to index. Defaults to the current working directory.
+    #[arg(value_name = "PATH")]
+    base_path: Option<String>,
+
+    /// Path to the frecency database.
+    #[arg(long = "frecency-db")]
+    frecency_db_path: Option<String>,
+
+    /// Path to the query history database.
+    #[arg(long = "history-db")]
     #[allow(dead_code)]
-    history_db_path: String,
-    log_file: String,
+    history_db_path: Option<String>,
+
+    /// Path to the log file.
+    #[arg(long = "log-file")]
+    log_file: Option<String>,
+
+    /// Log level (e.g. trace, debug, info, warn, error).
+    #[arg(long = "log-level")]
     log_level: Option<String>,
+
+    /// Disable automatic update checks on startup.
+    #[arg(long = "no-update-check")]
+    no_update_check: bool,
 }
 
-fn parse_args() -> Args {
-    let args: Vec<String> = std::env::args().collect();
-    let mut base_path = std::env::current_dir()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let mut frecency_db_path = String::new();
-    let mut history_db_path = String::new();
-    let mut log_file = String::new();
-    let mut log_level: Option<String> = None;
+/// Resolve default paths for frecency db, history db, and log file.
+/// Shares Neovim's standard data locations when they exist so the MCP
+/// server and fff.nvim plugin use the same databases.
+fn resolve_defaults(args: &mut Args) {
+    let home = dirs_home();
+    let is_windows = cfg!(target_os = "windows");
 
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--frecency-db" if i + 1 < args.len() => {
-                i += 1;
-                frecency_db_path = args[i].clone();
-            }
-            "--history-db" if i + 1 < args.len() => {
-                i += 1;
-                history_db_path = args[i].clone();
-            }
-            "--log-file" if i + 1 < args.len() => {
-                i += 1;
-                log_file = args[i].clone();
-            }
-            "--log-level" if i + 1 < args.len() => {
-                i += 1;
-                log_level = Some(args[i].clone());
-            }
-            arg if !arg.starts_with("--") => {
-                base_path = arg.to_string();
-            }
-            _ => {}
-        }
-        i += 1;
+    let nvim_cache_dir = if is_windows {
+        format!("{}\\AppData\\Local\\nvim-data", home)
+    } else {
+        format!("{}/.cache/nvim", home)
+    };
+    let nvim_data_dir = if is_windows {
+        format!("{}\\AppData\\Local\\nvim-data", home)
+    } else {
+        format!("{}/.local/share/nvim", home)
+    };
+
+    let use_nvim_paths = std::path::Path::new(&nvim_cache_dir).exists()
+        || std::path::Path::new(&nvim_data_dir).exists();
+
+    if args.frecency_db_path.is_none() {
+        args.frecency_db_path = Some(if use_nvim_paths {
+            format!("{}/fff_nvim", nvim_cache_dir)
+        } else {
+            format!("{}/.fff/frecency.mdb", home)
+        });
+    }
+    if args.history_db_path.is_none() {
+        args.history_db_path = Some(if use_nvim_paths {
+            format!("{}/fff_queries", nvim_data_dir)
+        } else {
+            format!("{}/.fff/history.mdb", home)
+        });
     }
 
-    // Default to Neovim's standard data locations so the MCP server shares
-    // frecency/history databases with the fff.nvim plugin.
-    if frecency_db_path.is_empty() || history_db_path.is_empty() {
-        let home = dirs_home();
-        let is_windows = cfg!(target_os = "windows");
-
-        let nvim_cache_dir = if is_windows {
-            format!("{}\\AppData\\Local\\nvim-data", home)
-        } else {
-            format!("{}/.cache/nvim", home)
-        };
-        let nvim_data_dir = if is_windows {
-            format!("{}\\AppData\\Local\\nvim-data", home)
-        } else {
-            format!("{}/.local/share/nvim", home)
-        };
-
-        let use_nvim_paths = std::path::Path::new(&nvim_cache_dir).exists()
-            || std::path::Path::new(&nvim_data_dir).exists();
-
-        if frecency_db_path.is_empty() {
-            frecency_db_path = if use_nvim_paths {
-                format!("{}/fff_nvim", nvim_cache_dir)
-            } else {
-                format!("{}/.fff/frecency.mdb", home)
-            };
-        }
-        if history_db_path.is_empty() {
-            history_db_path = if use_nvim_paths {
-                format!("{}/fff_queries", nvim_data_dir)
-            } else {
-                format!("{}/.fff/history.mdb", home)
-            };
-        }
-
-        // Ensure parent directories exist
-        if let Some(parent) = std::path::Path::new(&frecency_db_path).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Some(parent) = std::path::Path::new(&history_db_path).parent() {
+    // Ensure parent directories exist for database paths
+    for path in [&args.frecency_db_path, &args.history_db_path]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(parent) = std::path::Path::new(path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
     }
 
-    // Default log file to ~/.cache/fff_mcp.log
-    if log_file.is_empty() {
-        let home = dirs_home();
-        log_file = if cfg!(target_os = "windows") {
+    if args.log_file.is_none() {
+        args.log_file = Some(if is_windows {
             format!("{}\\AppData\\Local\\fff_mcp.log", home)
         } else {
             format!("{}/.cache/fff_mcp.log", home)
-        };
-    }
-
-    Args {
-        base_path,
-        frecency_db_path,
-        history_db_path,
-        log_file,
-        log_level,
+        });
     }
 }
 
@@ -214,20 +191,30 @@ fn dirs_home() -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = parse_args();
+    let mut args = Args::parse();
+    resolve_defaults(&mut args);
 
-    // Initialize file-based tracing (stdout is reserved for MCP JSON-RPC)
-    if let Err(e) = fff_core::log::init_tracing(&args.log_file, args.log_level.as_deref()) {
+    let log_file = args.log_file.as_deref().unwrap_or("");
+    if let Err(e) = fff_core::log::init_tracing(log_file, args.log_level.as_deref()) {
         eprintln!("Warning: Failed to init tracing: {}", e);
     }
 
+    let base_path = args.base_path.unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    });
+    let frecency_db_path = args.frecency_db_path.unwrap_or_default();
+
     let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
     let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
-    match FrecencyTracker::new(&args.frecency_db_path, false) {
+    match FrecencyTracker::new(&frecency_db_path, false) {
         Ok(tracker) => {
             if let Ok(mut guard) = shared_frecency.write() {
                 *guard = Some(tracker);
             }
+            FrecencyTracker::spawn_gc(Arc::clone(&shared_frecency), frecency_db_path, false);
         }
         Err(e) => {
             eprintln!("Warning: Failed to init frecency db: {}", e);
@@ -236,13 +223,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize file picker (spawns background scan + watcher)
     FilePicker::new_with_shared_state(
-        args.base_path,
+        base_path,
         true, // warmup_mmap_cache
         FFFMode::Ai,
         Arc::clone(&shared_picker),
         Arc::clone(&shared_frecency),
     )
     .map_err(|e| format!("Failed to init file picker: {}", e))?;
+
+    if !args.no_update_check {
+        update_check::spawn_update_check();
+    }
 
     // Create and start the MCP server
     let server = FffServer::new(shared_picker.clone(), shared_frecency.clone());

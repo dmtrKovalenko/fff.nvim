@@ -272,6 +272,8 @@ pub struct MultiGrepOptionsJson {
     pub before_context: Option<usize>,
     /// Number of context lines after each match (default: 0)
     pub after_context: Option<usize>,
+    /// Whether to classify matches as definition lines (default: false)
+    pub classify_definitions: Option<bool>,
 }
 
 // ============================================================================
@@ -299,6 +301,8 @@ pub struct GrepSearchOptionsJson {
     pub before_context: Option<usize>,
     /// Number of context lines after each match (default: 0)
     pub after_context: Option<usize>,
+    /// Whether to classify matches as definition lines (default: false)
+    pub classify_definitions: Option<bool>,
 }
 
 /// A single grep match for JSON serialization

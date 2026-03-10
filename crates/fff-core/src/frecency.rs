@@ -1,12 +1,13 @@
 use crate::db_healthcheck::DbHealthChecker;
 use crate::file_picker::FFFMode;
-use crate::{error::Error, git::is_modified_status};
+use crate::{SharedFrecency, error::Error, git::is_modified_status};
 use heed::{Database, Env, EnvOpenOptions};
 use heed::{
     EnvFlags,
     types::{Bytes, SerdeBincode},
 };
 use std::fs;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::VecDeque, path::Path};
 
@@ -78,6 +79,197 @@ impl FrecencyTracker {
             db,
             env: env.clone(),
         })
+    }
+
+    /// Spawns a background thread to purge stale frecency entries and compact the database.
+    ///
+    /// Phase 1 (read lock): purge stale entries — deletes expired entries and prunes old timestamps.
+    /// Phase 2 (write lock): compact the database by re-writing entries into a fresh LMDB env.
+    ///   We can't use LMDB's copy_to_path with NO_LOCK envs (MDB_INCOMPATIBLE),
+    ///   so instead we: read all entries → drop env → delete files → reopen → write back.
+    pub fn spawn_gc(shared: SharedFrecency, db_path: String, use_unsafe_no_lock: bool) {
+        std::thread::Builder::new()
+            .name("fff-frecency-gc".into())
+            .spawn(move || Self::run_frecency_gc(shared, db_path, use_unsafe_no_lock))
+            .ok();
+    }
+
+    #[tracing::instrument(skip(shared), fields(db_path = %db_path))]
+    fn run_frecency_gc(shared: SharedFrecency, db_path: String, use_unsafe_no_lock: bool) {
+        let start = std::time::Instant::now();
+        let data_path = PathBuf::from(&db_path).join("data.mdb");
+
+        // Phase 1: Purge stale entries.
+        // The RwLock protects the Option<FrecencyTracker> (not the DB itself),
+        // so a read lock is sufficient — LMDB handles its own write serialization.
+        let (deleted, pruned) = {
+            let guard = match shared.read() {
+                Ok(g) => g,
+                Err(e) => {
+                    tracing::debug!("Failed to acquire read lock: {e}");
+                    return;
+                }
+            };
+            let Some(ref tracker) = *guard else {
+                return;
+            };
+            match tracker.purge_stale_entries() {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::debug!("Purge failed: {e}");
+                    return;
+                }
+            }
+        };
+
+        if deleted > 0 || pruned > 0 {
+            tracing::info!(deleted, pruned, elapsed = ?start.elapsed(), "Frecency GC purged entries");
+        }
+
+        // Compact if we purged entries OR the file has significant freelist bloat
+        let file_size = fs::metadata(&data_path).map(|m| m.len()).unwrap_or(0);
+        if deleted == 0 && pruned == 0 && file_size <= 512 * 1024 {
+            return;
+        }
+
+        // Phase 2: Manual compaction under a single write lock
+        let mut guard = match shared.write() {
+            Ok(g) => g,
+            Err(e) => {
+                tracing::debug!("Failed to acquire write lock: {e}");
+                return;
+            }
+        };
+
+        // Read all entries from current env
+        let entries: Vec<(Vec<u8>, VecDeque<u64>)> = match guard.as_ref() {
+            Some(tracker) => {
+                let rtxn = match tracker.env.read_txn() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::debug!("Compaction read_txn failed: {e}");
+                        return;
+                    }
+                };
+                let iter = match tracker.db.iter(&rtxn) {
+                    Ok(i) => i,
+                    Err(e) => {
+                        tracing::debug!("Compaction iter failed: {e}");
+                        return;
+                    }
+                };
+                let mut entries = Vec::new();
+                let mut read_errors = 0u32;
+                for result in iter {
+                    match result {
+                        Ok((key, value)) => entries.push((key.to_vec(), value)),
+                        Err(_) => read_errors += 1,
+                    }
+                }
+                if read_errors > 0 {
+                    tracing::warn!(read_errors, "Skipped corrupted entries during compaction read");
+                }
+                entries
+            }
+            None => return,
+        };
+
+        // Drop old tracker, delete files, create fresh env, write back
+        *guard = None;
+
+        let lock_path = PathBuf::from(&db_path).join("lock.mdb");
+        let _ = fs::remove_file(&data_path);
+        let _ = fs::remove_file(&lock_path);
+
+        let tracker = match FrecencyTracker::new(&db_path, use_unsafe_no_lock) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("Compaction reopen failed, frecency disabled: {e}");
+                return;
+            }
+        };
+
+        let write_result = (|| -> std::result::Result<(), heed::Error> {
+            let mut wtxn = tracker.env.write_txn()?;
+            for (key, value) in &entries {
+                tracker.db.put(&mut wtxn, key.as_slice(), value)?;
+            }
+            wtxn.commit()?;
+            Ok(())
+        })();
+
+        match write_result {
+            Ok(()) => {
+                let new_size = fs::metadata(&data_path).map(|m| m.len()).unwrap_or(0);
+                *guard = Some(tracker);
+                tracing::debug!(
+                    entries = entries.len(),
+                    old_size = file_size,
+                    new_size,
+                    elapsed = ?start.elapsed(),
+                    "Frecency DB compacted"
+                );
+            }
+            Err(e) => {
+                tracing::error!("Compaction write failed, frecency data may be incomplete: {e}");
+                *guard = Some(tracker);
+            }
+        }
+    }
+
+    /// Removes entries where all timestamps are older than MAX_HISTORY_DAYS,
+    /// and prunes stale timestamps from entries that still have recent ones.
+    /// Returns (deleted_count, pruned_count).
+    fn purge_stale_entries(&self) -> Result<(usize, usize), Error> {
+        let now = self.get_now();
+        let cutoff_time = now.saturating_sub((MAX_HISTORY_DAYS * SECONDS_PER_DAY) as u64);
+
+        // Collect entries to delete or update
+        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
+        let mut to_delete: Vec<Vec<u8>> = Vec::new();
+        let mut to_update: Vec<(Vec<u8>, VecDeque<u64>)> = Vec::new();
+
+        let iter = self.db.iter(&rtxn).map_err(Error::DbRead)?;
+        for result in iter {
+            let (key, accesses) = result.map_err(Error::DbRead)?;
+
+            // Timestamps are chronologically ordered (oldest at front).
+            // Find the first timestamp that is still within the retention window.
+            let fresh_start = accesses.iter().position(|&ts| ts >= cutoff_time);
+            match fresh_start {
+                None => {
+                    // All timestamps are stale — delete the entire entry
+                    to_delete.push(key.to_vec());
+                }
+                Some(0) => {
+                    // All timestamps are fresh — nothing to do
+                }
+                Some(start) => {
+                    // Some timestamps are stale — keep only the fresh ones
+                    let pruned: VecDeque<u64> = accesses.iter().skip(start).copied().collect();
+                    to_update.push((key.to_vec(), pruned));
+                }
+            }
+        }
+        drop(rtxn);
+
+        if to_delete.is_empty() && to_update.is_empty() {
+            return Ok((0, 0));
+        }
+
+        // Apply all changes in a single write transaction
+        let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
+        for key in &to_delete {
+            self.db.delete(&mut wtxn, key).map_err(Error::DbWrite)?;
+        }
+        for (key, accesses) in &to_update {
+            self.db
+                .put(&mut wtxn, key, accesses)
+                .map_err(Error::DbWrite)?;
+        }
+        wtxn.commit().map_err(Error::DbCommit)?;
+
+        Ok((to_delete.len(), to_update.len()))
     }
 
     fn get_accesses(&self, path: &Path) -> Result<Option<VecDeque<u64>>, Error> {

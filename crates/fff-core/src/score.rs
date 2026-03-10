@@ -172,7 +172,6 @@ pub fn match_and_score_files<'a>(
     let query_contains_path_separator = fuzzy_parts.iter().any(|p| p.contains(MAIN_SEPARATOR));
 
     let options = neo_frizbee::Config {
-        prefilter: true,
         max_typos: Some(context.max_typos),
         sort: false,
         scoring: Scoring {
@@ -687,7 +686,6 @@ mod multi_part_tests {
 
         // Test with max_typos = 2 (safe for short needles)
         let options = neo_frizbee::Config {
-            prefilter: true,
             max_typos: Some(2),
             sort: false,
             ..Default::default()
@@ -719,7 +717,6 @@ mod multi_part_tests {
         let path = "core_workflow_service/kafka_event_consumer/src/ai_part_extraction_request/ai_part_extraction_request_handler.rs".to_lowercase();
 
         let options = neo_frizbee::Config {
-            prefilter: true,
             max_typos: Some(2),
             sort: false,
             ..Default::default()

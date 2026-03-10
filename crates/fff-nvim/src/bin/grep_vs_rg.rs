@@ -207,6 +207,7 @@ fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
         time_budget_ms: 0,
         before_context: 0,
         after_context: 0,
+        classify_definitions: false,
     };
     let start = Instant::now();
     let result = grep_search(files, query, parsed.as_ref(), &options);
@@ -230,6 +231,7 @@ fn benchmark_fff_smart_case(
         time_budget_ms: 0,
         before_context: 0,
         after_context: 0,
+        classify_definitions: false,
     };
     let start = Instant::now();
     let result = grep_search(files, query, parsed.as_ref(), &options);
@@ -250,6 +252,7 @@ fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
         time_budget_ms: 0,
         before_context: 0,
         after_context: 0,
+        classify_definitions: false,
     };
     let start = Instant::now();
     let result = grep_search(files, query, parsed.as_ref(), &options);

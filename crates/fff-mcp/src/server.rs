@@ -5,6 +5,7 @@
 //! `fff-core` APIs (no C FFI overhead).
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fff_core::file_picker::FilePicker;
@@ -63,6 +64,7 @@ fn make_grep_options(
             time_budget_ms: 0,
             before_context: ctx_lines,
             after_context: after_ctx,
+            classify_definitions: true,
         },
         auto_expand,
     )
@@ -163,6 +165,7 @@ pub struct FffServer {
     #[allow(dead_code)]
     frecency: SharedFrecency,
     cursor_store: Arc<Mutex<CursorStore>>,
+    update_notice_sent: Arc<AtomicBool>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -172,6 +175,7 @@ impl FffServer {
             picker,
             frecency,
             cursor_store: Arc::new(Mutex::new(CursorStore::new())),
+            update_notice_sent: Arc::new(AtomicBool::new(false)),
             tool_router: Self::tool_router(),
         }
     }
@@ -199,6 +203,21 @@ impl FffServer {
         self.cursor_store.lock().map_err(|e| {
             ErrorData::internal_error(format!("Failed to acquire cursor store lock: {e}"), None)
         })
+    }
+
+    /// If an update notice is available and hasn't been sent yet, append it
+    /// to the tool result. Called once per server lifetime (first tool call).
+    fn maybe_append_update_notice(&self, result: &mut CallToolResult) {
+        if self.update_notice_sent.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let notice = crate::update_check::get_update_notice();
+        if notice.is_empty() {
+            // Reset so the next call can try again (check may still be in flight)
+            self.update_notice_sent.store(false, Ordering::Relaxed);
+            return;
+        }
+        result.content.push(Content::text(notice));
     }
 
     /// Perform grep with auto-retry logic.
@@ -480,9 +499,9 @@ impl FffServer {
             lines.push(format!("cursor: {}", cursor_id));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(
-            lines.join("\n"),
-        )]))
+        let mut result = CallToolResult::success(vec![Content::text(lines.join("\n"))]);
+        self.maybe_append_update_notice(&mut result);
+        Ok(result)
     }
 
     /// Search file contents for text patterns. This is the DEFAULT search tool.
@@ -510,14 +529,16 @@ impl FffServer {
             GrepMode::PlainText
         };
 
-        self.perform_grep(
+        let mut result = self.perform_grep(
             &params.query,
             mode,
             max_results,
             params.cursor.as_deref(),
             output_mode,
             None,
-        )
+        )?;
+        self.maybe_append_update_notice(&mut result);
+        Ok(result)
     }
 
     /// Search file contents for lines matching ANY of multiple patterns (OR logic).
@@ -530,6 +551,14 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<MultiGrepParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        let mut result = self.multi_grep_inner(params)?;
+        self.maybe_append_update_notice(&mut result);
+        Ok(result)
+    }
+}
+
+impl FffServer {
+    fn multi_grep_inner(&self, params: MultiGrepParams) -> Result<CallToolResult, ErrorData> {
         let max_results = params.max_results.unwrap_or(20);
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
@@ -648,8 +677,15 @@ impl FffServer {
 #[tool_handler]
 impl ServerHandler for FffServer {
     fn get_info(&self) -> ServerInfo {
+        let notice = crate::update_check::get_update_notice();
+        let instructions = if notice.is_empty() {
+            crate::MCP_INSTRUCTIONS.to_string()
+        } else {
+            format!("{}{}", crate::MCP_INSTRUCTIONS, notice)
+        };
+
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("fff", env!("CARGO_PKG_VERSION")))
-            .with_instructions(crate::MCP_INSTRUCTIONS)
+            .with_instructions(instructions)
     }
 }
