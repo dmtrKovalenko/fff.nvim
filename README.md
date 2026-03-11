@@ -645,3 +645,22 @@ Enable debug mode to see scoring information and troubleshoot search results:
 - Press `F2` while in the picker
 - Run `:FFFDebug on` to enable permanently
 - Set `debug.show_scores = true` in configuration
+
+---
+
+## Why This Fork?
+
+This fork extends [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.nvim) into a **complete picker ecosystem**. The upstream project is an excellent, blazing-fast fuzzy file finder powered by Rust. This fork keeps all of that and adds the pickers you actually need day-to-day:
+
+| Feature | Upstream | This Fork |
+|---------|----------|-----------|
+| **`:Buffers` picker** | ❌ | ✅ Full buffer list with modified, current, and alternate indicators |
+| **`:GFiles` picker** | ❌ | ✅ Dedicated picker for `git status` files with status indicators and preview |
+| **`:Colors` picker** | ❌ | ✅ Browse and switch colorschemes with live preview |
+| Fuzzy file search with frecency | ✅ | ✅ |
+| Live grep (plain, regex, fuzzy) | ✅ | ✅ |
+| Multi-select + quickfix | ✅ | ✅ |
+| Query constraints (`status:`, `*.ext`, `!exclude`) | ✅ | ✅ |
+| Git status signs + text coloring | ✅ | ✅ |
+
+**In short:** upstream focused on making file finding extremely fast with Rust. This fork fills the "where's the rest of the picker suite?" gap, bringing it closer to feature parity with Telescope and fzf.vim while keeping the Rust-powered speed.
