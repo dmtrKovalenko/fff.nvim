@@ -392,7 +392,7 @@ function M.render_list()
     vim.api.nvim_buf_add_highlight(
       M.state.list_buf,
       M.state.ns_id,
-      M.state.config.hl.active_file,
+      M.state.config.hl.cursor,
       cursor_line - 1,
       0,
       -1
