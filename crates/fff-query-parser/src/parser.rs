@@ -1,8 +1,8 @@
-use crate::ConstraintVec;
 use crate::config::ParserConfig;
 use crate::constraints::{Constraint, GitStatusFilter, TextPartsBuffer};
 use crate::glob_detect::has_wildcards;
-use crate::location::{Location, parse_location};
+use crate::location::{parse_location, Location};
+use crate::ConstraintVec;
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
@@ -918,13 +918,44 @@ mod tests {
     }
 
     #[test]
-    fn test_ai_grep_no_false_positive_no_slash() {
+    fn test_ai_grep_bare_filename_is_file_path() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
         let result = parser.parse("main.rs pattern").expect("Should parse");
-        // No slash → not a file path, just text
+        // Bare filename with valid extension → FilePath constraint
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::FilePath("main.rs")),
+            "Expected FilePath, got {:?}",
+            result.constraints[0]
+        );
+        assert_eq!(result.grep_text(), "pattern");
+    }
+
+    #[test]
+    fn test_ai_grep_bare_filename_schema_rs() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser
+            .parse("schema.rs part_revisions")
+            .expect("Should parse");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::FilePath("schema.rs")),
+            "Expected FilePath(schema.rs), got {:?}",
+            result.constraints[0]
+        );
+        assert_eq!(result.grep_text(), "part_revisions");
+    }
+
+    #[test]
+    fn test_ai_grep_bare_word_no_extension_not_constraint() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("schema pattern").expect("Should parse");
+        // No extension → not a file path, just text
         assert_eq!(result.constraints.len(), 0);
-        assert_eq!(result.grep_text(), "main.rs pattern");
+        assert_eq!(result.grep_text(), "schema pattern");
     }
 
     #[test]
