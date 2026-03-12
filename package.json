@@ -1,6 +1,7 @@
 {
   "private": true,
   "workspaces": ["packages/fff-bun", "packages/fff-mcp"],
+  "packageManager": "bun@1.3.9",
   "scripts": {
     "format": "biome format --write",
     "format:check": "biome format",
