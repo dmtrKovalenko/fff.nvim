@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "workspaces": ["packages/fff-bun", "packages/fff-mcp"],
+  "scripts": {
+    "format": "biome format --write",
+    "format:check": "biome format",
+    "lint": "biome lint",
+    "check": "biome check --write",
+    "check:ci": "biome check"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.4"
+  }
+}

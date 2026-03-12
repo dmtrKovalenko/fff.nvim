@@ -44,12 +44,17 @@ impl<C: ParserConfig> QueryParser<C> {
         if whitespace_count == 0 {
             // Try to parse as constraint first
             if let Some(constraint) = parse_token(query, config) {
-                constraints.push(constraint);
-                return Some(FFFQuery {
-                    constraints,
-                    fuzzy_query: FuzzyQuery::Empty,
-                    location: None,
-                });
+                // Don't treat filename tokens (FilePath) as constraints in single-token
+                // queries — the user is fuzzy-searching, not filtering. FilePath constraints
+                // are only useful as filters in multi-token queries like "score.rs search".
+                if !matches!(constraint, Constraint::FilePath(_)) {
+                    constraints.push(constraint);
+                    return Some(FFFQuery {
+                        constraints,
+                        fuzzy_query: FuzzyQuery::Empty,
+                        location: None,
+                    });
+                }
             }
 
             // Try to extract location from single token (e.g., "file:12")
@@ -69,8 +74,20 @@ impl<C: ParserConfig> QueryParser<C> {
         let mut text_parts = TextPartsBuffer::new();
         let tokens = query.split_whitespace();
 
+        let mut has_file_path = false;
         for token in tokens {
             match parse_token(token, config) {
+                Some(Constraint::FilePath(_)) => {
+                    if has_file_path {
+                        // Only one FilePath constraint allowed; treat extra path
+                        // tokens as literal text (e.g. an import path the user is
+                        // searching for).
+                        text_parts.push(token);
+                    } else {
+                        constraints.push(Constraint::FilePath(token));
+                        has_file_path = true;
+                    }
+                }
                 Some(constraint) => {
                     constraints.push(constraint);
                 }
@@ -145,15 +162,22 @@ impl<'a> FFFQuery<'a> {
     }
 }
 
-/// Strip the leading `\` from a backslash-escaped token, returning the rest.
-/// For all other tokens returns the input unchanged.
+/// Strip the leading `\` from a backslash-escaped constraint token only.
+///
+/// We strip the backslash when the next character is a constraint trigger
+/// (`*`, `/`, `!`) — the user typed `\*.rs` to mean literal `*.rs`, not an
+/// extension constraint. For regex escape sequences like `\w`, `\b`, `\d`,
+/// `\s`, `\n` etc., the backslash is preserved so regex mode works correctly.
 #[inline]
 fn strip_leading_backslash(token: &str) -> &str {
-    if token.starts_with('\\') && token.len() > 1 {
-        &token[1..]
-    } else {
-        token
+    if token.len() > 1 && token.starts_with('\\') {
+        let next = token.as_bytes()[1];
+        // Only strip if the backslash is escaping a constraint trigger character
+        if next == b'*' || next == b'/' || next == b'!' {
+            return &token[1..];
+        }
     }
+    token
 }
 
 impl Default for QueryParser<crate::FilePickerConfig> {
@@ -341,11 +365,12 @@ fn parse_path_segment(token: &str) -> Option<Constraint<'_>> {
 }
 
 /// Parse path segment with trailing slash: www/ -> PathSegment("www")
+/// Also supports multi-segment paths: libswscale/aarch64/ -> PathSegment("libswscale/aarch64")
 #[inline]
 fn parse_path_segment_trailing(token: &str) -> Option<Constraint<'_>> {
     if token.len() > 1 && token.ends_with('/') {
         let segment = token.trim_end_matches('/');
-        if !segment.is_empty() && !segment.contains('/') {
+        if !segment.is_empty() {
             Some(Constraint::PathSegment(segment))
         } else {
             None
@@ -428,8 +453,15 @@ mod tests {
             parse_path_segment_trailing("src/"),
             Some(Constraint::PathSegment("src"))
         );
-        // Should not match paths with multiple segments
-        assert_eq!(parse_path_segment_trailing("src/lib/"), None);
+        // Multi-segment paths should work
+        assert_eq!(
+            parse_path_segment_trailing("src/lib/"),
+            Some(Constraint::PathSegment("src/lib"))
+        );
+        assert_eq!(
+            parse_path_segment_trailing("libswscale/aarch64/"),
+            Some(Constraint::PathSegment("libswscale/aarch64"))
+        );
         // Should not match without trailing slash
         assert_eq!(parse_path_segment_trailing("www"), None);
     }
@@ -717,6 +749,57 @@ mod tests {
     }
 
     #[test]
+    fn test_grep_text_preserves_backslash_escapes() {
+        // Regex patterns like \w+ and \bfoo\b must survive grep_text()
+        // The parser sees \w+ as a text token (not a constraint escape),
+        // but strip_leading_backslash was stripping the \ anyway.
+        let q = QueryParser::new(GrepConfig)
+            .parse("pub struct \\w+")
+            .expect("should parse");
+        assert_eq!(
+            q.grep_text(),
+            "pub struct \\w+",
+            "Backslash-w in regex must be preserved"
+        );
+
+        let q = QueryParser::new(GrepConfig)
+            .parse("\\bword\\b more")
+            .expect("should parse");
+        assert_eq!(
+            q.grep_text(),
+            "\\bword\\b more",
+            "Backslash-b word boundaries must be preserved"
+        );
+
+        // Single-token regex like "fn\\s+\\w+" returns None from parse()
+        // (single token = no parsing needed, caller uses raw_query directly).
+        let result = QueryParser::new(GrepConfig).parse("fn\\s+\\w+");
+        assert!(
+            result.is_none(),
+            "Single-token regex should return None (no parsing)"
+        );
+
+        // But the escaped constraint forms SHOULD still be stripped:
+        let q = QueryParser::new(GrepConfig)
+            .parse("\\*.rs foo")
+            .expect("should parse");
+        assert_eq!(
+            q.grep_text(),
+            "*.rs foo",
+            "Escaped constraint \\*.rs should still have backslash stripped"
+        );
+
+        let q = QueryParser::new(GrepConfig)
+            .parse("\\/src/ foo")
+            .expect("should parse");
+        assert_eq!(
+            q.grep_text(),
+            "/src/ foo",
+            "Escaped constraint \\/src/ should still have backslash stripped"
+        );
+    }
+
+    #[test]
     fn test_grep_bare_star_is_text() {
         let parser = QueryParser::new(GrepConfig);
         // "a*b" contains * but no / or {} — should be text in grep mode
@@ -784,5 +867,269 @@ mod tests {
             }
             other => panic!("Expected Not constraint, got {:?}", other),
         }
+    }
+
+    // ── AI grep config tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_ai_grep_detects_file_path() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser
+            .parse("libswscale/input.c rgba32ToY")
+            .expect("Should parse");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(
+                result.constraints[0],
+                Constraint::FilePath("libswscale/input.c")
+            ),
+            "Expected FilePath, got {:?}",
+            result.constraints[0]
+        );
+        assert_eq!(result.grep_text(), "rgba32ToY");
+    }
+
+    #[test]
+    fn test_ai_grep_detects_nested_file_path() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("src/main.rs fn main").expect("Should parse");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(matches!(
+            result.constraints[0],
+            Constraint::FilePath("src/main.rs")
+        ));
+        assert_eq!(result.grep_text(), "fn main");
+    }
+
+    #[test]
+    fn test_ai_grep_no_false_positive_trailing_slash() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("src/ pattern").expect("Should parse");
+        // Should be PathSegment, NOT FilePath
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::PathSegment("src")),
+            "Expected PathSegment, got {:?}",
+            result.constraints[0]
+        );
+    }
+
+    #[test]
+    fn test_ai_grep_no_false_positive_no_slash() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("main.rs pattern").expect("Should parse");
+        // No slash → not a file path, just text
+        assert_eq!(result.constraints.len(), 0);
+        assert_eq!(result.grep_text(), "main.rs pattern");
+    }
+
+    #[test]
+    fn test_ai_grep_no_false_positive_no_extension() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("src/utils pattern").expect("Should parse");
+        // No extension in last component → not a file path, just text
+        assert_eq!(result.constraints.len(), 0);
+        assert_eq!(result.grep_text(), "src/utils pattern");
+    }
+
+    #[test]
+    fn test_ai_grep_wildcard_not_filepath() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("src/**/*.rs pattern").expect("Should parse");
+        // Contains wildcards → should be a Glob, not FilePath
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::Glob("src/**/*.rs")),
+            "Expected Glob, got {:?}",
+            result.constraints[0]
+        );
+    }
+
+    #[test]
+    fn test_ai_grep_star_text_star_is_glob() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("*quote* TODO").expect("Should parse");
+        // `*quote*` should be recognised as a glob constraint in AI mode
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::Glob("*quote*")),
+            "Expected Glob(*quote*), got {:?}",
+            result.constraints[0]
+        );
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("TODO"));
+    }
+
+    #[test]
+    fn test_ai_grep_bare_star_not_glob() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("* pattern").expect("Should parse");
+        // Bare `*` should NOT be treated as a glob (too broad)
+        assert!(
+            result.constraints.is_empty(),
+            "Expected no constraints, got {:?}",
+            result.constraints
+        );
+    }
+
+    #[test]
+    fn test_grep_config_star_text_star_not_glob() {
+        use crate::GrepConfig;
+        let parser = QueryParser::new(GrepConfig);
+        let result = parser.parse("*quote* TODO").expect("Should parse");
+        // Regular grep mode should NOT treat `*quote*` as a glob
+        assert!(
+            result.constraints.is_empty(),
+            "Expected no constraints in GrepConfig, got {:?}",
+            result.constraints
+        );
+    }
+
+    // ── File picker filename constraint tests ─────────────────────────
+
+    #[test]
+    fn test_file_picker_bare_filename_constraint() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse("score.rs file_picker")
+            .expect("Should parse multi-token query");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::FilePath("score.rs")),
+            "Expected FilePath(\"score.rs\"), got {:?}",
+            result.constraints[0]
+        );
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("file_picker"));
+    }
+
+    #[test]
+    fn test_file_picker_path_prefixed_filename_constraint() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse("libswscale/slice.c lum_convert")
+            .expect("Should parse multi-token query");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(
+                result.constraints[0],
+                Constraint::FilePath("libswscale/slice.c")
+            ),
+            "Expected FilePath(\"libswscale/slice.c\"), got {:?}",
+            result.constraints[0]
+        );
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("lum_convert"));
+    }
+
+    #[test]
+    fn test_file_picker_single_token_filename_stays_fuzzy() {
+        let parser = QueryParser::new(FilePickerConfig);
+        // Single-token filename should NOT become a constraint — it should
+        // return None so the caller uses the raw query for fuzzy matching.
+        let result = parser.parse("score.rs");
+        assert!(
+            result.is_none(),
+            "Single-token filename should return None (fuzzy match), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_file_picker_filename_with_multiple_fuzzy_parts() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse("main.rs src components")
+            .expect("Should parse multi-token query");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(matches!(
+            result.constraints[0],
+            Constraint::FilePath("main.rs")
+        ));
+        assert_eq!(
+            result.fuzzy_query,
+            FuzzyQuery::Parts(smallvec::smallvec!["src", "components"])
+        );
+    }
+
+    #[test]
+    fn test_file_picker_version_number_not_filename() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse("v2.0 release")
+            .expect("Should parse multi-token query");
+        // v2.0 extension starts with digit → not a filename constraint
+        assert!(
+            result.constraints.is_empty(),
+            "v2.0 should not be a FilePath constraint, got {:?}",
+            result.constraints
+        );
+    }
+
+    #[test]
+    fn test_file_picker_only_one_filepath_constraint() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse("main.rs score.rs")
+            .expect("Should parse multi-token query");
+        // Only first filename becomes a constraint; second is text
+        assert_eq!(result.constraints.len(), 1);
+        assert!(matches!(
+            result.constraints[0],
+            Constraint::FilePath("main.rs")
+        ));
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("score.rs"));
+    }
+
+    #[test]
+    fn test_file_picker_filename_with_extension_constraint() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse("main.rs *.lua")
+            .expect("Should parse multi-token query");
+        // main.rs → FilePath, *.lua → Extension
+        assert_eq!(result.constraints.len(), 2);
+        assert!(matches!(
+            result.constraints[0],
+            Constraint::FilePath("main.rs")
+        ));
+        assert!(matches!(
+            result.constraints[1],
+            Constraint::Extension("lua")
+        ));
+    }
+
+    #[test]
+    fn test_file_picker_dotfile_is_filename() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse(".gitignore src")
+            .expect("Should parse multi-token query");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::FilePath(".gitignore")),
+            "Expected FilePath(\".gitignore\"), got {:?}",
+            result.constraints[0]
+        );
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("src"));
+    }
+
+    #[test]
+    fn test_file_picker_no_extension_not_filename() {
+        let parser = QueryParser::new(FilePickerConfig);
+        let result = parser
+            .parse("Makefile src")
+            .expect("Should parse multi-token query");
+        // No dot → not a filename constraint
+        assert!(
+            result.constraints.is_empty(),
+            "Makefile should not be a FilePath constraint, got {:?}",
+            result.constraints
+        );
     }
 }

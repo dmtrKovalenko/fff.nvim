@@ -172,7 +172,6 @@ pub fn match_and_score_files<'a>(
     let query_contains_path_separator = fuzzy_parts.iter().any(|p| p.contains(MAIN_SEPARATOR));
 
     let options = neo_frizbee::Config {
-        prefilter: true,
         max_typos: Some(context.max_typos),
         sort: false,
         scoring: Scoring {
@@ -230,6 +229,14 @@ pub fn match_and_score_files<'a>(
 
             let mut base_score = path_match.score as i32;
             let frecency_boost = base_score.saturating_mul(file.total_frecency_score as i32) / 100;
+
+            // Give modified/dirty files a 15% boost to make them appear higher in results
+            let git_status_boost = if file.git_status.is_some_and(is_modified_status) {
+                base_score * 15 / 100
+            } else {
+                0
+            };
+
             let distance_penalty =
                 calculate_distance_penalty(context.current_file, &file.relative_path);
 
@@ -296,6 +303,7 @@ pub fn match_and_score_files<'a>(
 
             let total = base_score
                 .saturating_add(frecency_boost)
+                .saturating_add(git_status_boost)
                 .saturating_add(distance_penalty)
                 .saturating_add(filename_bonus)
                 .saturating_add(current_file_penalty)
@@ -312,6 +320,7 @@ pub fn match_and_score_files<'a>(
                     0
                 },
                 frecency_boost,
+                git_status_boost,
                 distance_penalty,
                 combo_match_boost,
                 exact_match: path_match.exact || filename_match.is_some_and(|m| m.exact),
@@ -363,9 +372,18 @@ pub(crate) fn score_filtered_by_frecency<'a>(
         let total_frecency_score = file.access_frecency_score as i32
             + (file.modification_frecency_score as i32).saturating_mul(4);
 
+        // Give modified/dirty files a boost even in frecency-only mode
+        let git_status_boost = if file.git_status.is_some_and(is_modified_status) {
+            total_frecency_score * 15 / 100
+        } else {
+            0
+        };
+
         let current_file_penalty =
             calculate_current_file_penalty(file, total_frecency_score, context);
-        let total = total_frecency_score.saturating_add(current_file_penalty);
+        let total = total_frecency_score
+            .saturating_add(git_status_boost)
+            .saturating_add(current_file_penalty);
 
         let score = Score {
             total,
@@ -376,6 +394,7 @@ pub(crate) fn score_filtered_by_frecency<'a>(
             combo_match_boost: 0,
             current_file_penalty,
             frecency_boost: total_frecency_score,
+            git_status_boost,
             exact_match: false,
             match_type: "frecency",
         };
@@ -485,7 +504,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn create_test_file(path: &str, score: i32, modified: u64) -> (FileItem, Score) {
-        let file_name = path.split('/').last().unwrap_or(path).to_string();
+        let file_name = path.split('/').next_back().unwrap_or(path).to_string();
         let file = FileItem::new_raw(
             PathBuf::from(path),
             path.to_string(),
@@ -503,6 +522,7 @@ mod tests {
             special_filename_bonus: 0,
             current_file_penalty: 0,
             frecency_boost: 0,
+            git_status_boost: 0,
             exact_match: false,
             match_type: "test",
             combo_match_boost: 0,
@@ -568,7 +588,7 @@ mod tests {
     #[test]
     fn test_partial_sort_with_same_scores() {
         // Test tiebreaker with modified time
-        let test_data = vec![
+        let test_data = [
             create_test_file("file1.rs", 100, 5000), // Same score, older
             create_test_file("file2.rs", 100, 8000), // Same score, newer
             create_test_file("file3.rs", 100, 3000), // Same score, oldest
@@ -617,7 +637,7 @@ mod tests {
     #[test]
     fn test_no_partial_sort_for_small_results() {
         // When results.len() <= threshold, should use regular sort
-        let test_data = vec![
+        let test_data = [
             create_test_file("file1.rs", 100, 1000),
             create_test_file("file2.rs", 200, 2000),
             create_test_file("file3.rs", 50, 3000),
@@ -666,7 +686,6 @@ mod multi_part_tests {
 
         // Test with max_typos = 2 (safe for short needles)
         let options = neo_frizbee::Config {
-            prefilter: true,
             max_typos: Some(2),
             sort: false,
             ..Default::default()
@@ -698,7 +717,6 @@ mod multi_part_tests {
         let path = "core_workflow_service/kafka_event_consumer/src/ai_part_extraction_request/ai_part_extraction_request_handler.rs".to_lowercase();
 
         let options = neo_frizbee::Config {
-            prefilter: true,
             max_typos: Some(2),
             sort: false,
             ..Default::default()
