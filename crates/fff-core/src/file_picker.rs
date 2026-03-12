@@ -858,7 +858,7 @@ fn scan_filesystem(
             .build_parallel();
 
         let walker_start = std::time::Instant::now();
-        info!("SCAN: Starting file walker");
+        debug!("SCAN: Starting file walker");
 
         let files = Arc::new(std::sync::Mutex::new(Vec::new()));
         walker.run(|| {
@@ -903,6 +903,7 @@ fn scan_filesystem(
         let frecency = shared_frecency
             .read()
             .map_err(|_| Error::AcquireFrecencyLock)?;
+
         files
             .par_iter_mut()
             .try_for_each(|file| -> Result<(), Error> {

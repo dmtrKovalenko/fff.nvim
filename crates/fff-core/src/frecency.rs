@@ -167,7 +167,10 @@ impl FrecencyTracker {
                     }
                 }
                 if read_errors > 0 {
-                    tracing::warn!(read_errors, "Skipped corrupted entries during compaction read");
+                    tracing::warn!(
+                        read_errors,
+                        "Skipped corrupted entries during compaction read"
+                    );
                 }
                 entries
             }

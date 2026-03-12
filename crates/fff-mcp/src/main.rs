@@ -17,6 +17,7 @@ use clap::Parser;
 use fff_core::file_picker::FilePicker;
 use fff_core::frecency::FrecencyTracker;
 use fff_core::{FFFMode, SharedFrecency, SharedPicker};
+use git2::Repository;
 use mimalloc::MiMalloc;
 use rmcp::{ServiceExt, transport::stdio};
 use server::FffServer;
@@ -205,6 +206,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .to_string_lossy()
             .to_string()
     });
+
+    if !Repository::discover(&base_path).is_ok() {
+        tracing::error!("MCP server must be run within a Git repository");
+        return Err(format!("Not a Git repository: {}", base_path).into());
+    }
+
     let frecency_db_path = args.frecency_db_path.unwrap_or_default();
 
     let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
