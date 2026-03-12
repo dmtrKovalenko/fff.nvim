@@ -47,7 +47,9 @@ end
 local function render_match_line(item, ctx)
   local location = string.format(':%d:%d', item.line_number or 0, (item.col or 0) + 1)
   local separator = '  '
-  local raw_content = item.line_content or ''
+  -- vim.json.decode may return Blobs for strings with NUL bytes; coerce to string.
+  local raw_content = item.line_content
+  if type(raw_content) ~= 'string' then raw_content = raw_content and tostring(raw_content) or '' end
   local content = raw_content
 
   -- Indent + location + separator + content

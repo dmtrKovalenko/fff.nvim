@@ -25,9 +25,12 @@ mod ffi_types;
 use fff_core::file_picker::FilePicker;
 use fff_core::frecency::FrecencyTracker;
 use fff_core::query_tracker::QueryTracker;
-use fff_core::{DbHealthChecker, FuzzySearchOptions, PaginationArgs, QueryParser};
+use fff_core::{DbHealthChecker, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser};
 use fff_core::{SharedFrecency, SharedPicker};
-use ffi_types::{FffResult, GrepSearchOptionsJson, InitOptions, ScanProgress, SearchOptions};
+use ffi_types::{
+    FffResult, GrepSearchOptionsJson, InitOptions, MultiGrepOptionsJson, ScanProgress,
+    SearchOptions,
+};
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -109,6 +112,12 @@ pub unsafe extern "C" fn fff_create(opts_json: *const c_char) -> *mut FffResult 
                     }
                 };
                 *guard = Some(tracker);
+                drop(guard);
+                FrecencyTracker::spawn_gc(
+                    Arc::clone(&shared_frecency),
+                    frecency_path,
+                    opts.use_unsafe_no_lock,
+                );
             }
             Err(e) => return FffResult::err(&format!("Failed to init frecency db: {}", e)),
         }
@@ -137,10 +146,17 @@ pub unsafe extern "C" fn fff_create(opts_json: *const c_char) -> *mut FffResult 
         }
     }
 
+    let mode = if opts.ai_mode {
+        FFFMode::Ai
+    } else {
+        FFFMode::Neovim
+    };
+
     // Initialize file picker (writes directly into shared_picker)
     if let Err(e) = FilePicker::new_with_shared_state(
         opts.base_path,
         opts.warmup_mmap_cache,
+        mode,
         Arc::clone(&shared_picker),
         Arc::clone(&shared_frecency),
     ) {
@@ -317,7 +333,12 @@ pub unsafe extern "C" fn fff_live_grep(
         _ => fff_core::GrepMode::PlainText,
     };
 
-    let parsed = fff_core::grep::parse_grep_query(query_str);
+    let is_ai = picker.mode().is_ai();
+    let parsed = if is_ai {
+        fff_core::QueryParser::new(fff_query_parser::AiGrepConfig).parse(query_str)
+    } else {
+        fff_core::grep::parse_grep_query(query_str)
+    };
 
     let options = fff_core::GrepSearchOptions {
         max_file_size: opts.max_file_size.unwrap_or(10 * 1024 * 1024),
@@ -327,14 +348,103 @@ pub unsafe extern "C" fn fff_live_grep(
         page_limit: opts.page_limit.unwrap_or(50),
         mode,
         time_budget_ms: opts.time_budget_ms.unwrap_or(0),
+        before_context: opts.before_context.unwrap_or(0),
+        after_context: opts.after_context.unwrap_or(0),
+        classify_definitions: opts.classify_definitions.unwrap_or(false),
     };
 
-    let result = fff_core::grep::grep_search(picker.get_files(), query_str, parsed, &options);
+    let result =
+        fff_core::grep::grep_search(picker.get_files(), query_str, parsed.as_ref(), &options);
 
     let json_result = ffi_types::GrepResultJson::from_grep_result(&result);
     match serde_json::to_string(&json_result) {
         Ok(json) => FffResult::ok_data(&json),
         Err(e) => FffResult::err(&format!("Failed to serialize grep results: {}", e)),
+    }
+}
+
+/// Perform multi-pattern OR search (Aho-Corasick) across indexed files.
+///
+/// Searches for lines matching ANY of the provided patterns using
+/// SIMD-accelerated multi-needle matching. Faster than regex alternation
+/// for literal text searches.
+///
+/// # Safety
+/// * `fff_handle` must be a valid instance pointer from `fff_create`.
+/// * `opts_json` must be a valid null-terminated UTF-8 string containing
+///   JSON with a `patterns` array and optional search options.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_multi_grep(
+    fff_handle: *mut c_void,
+    opts_json: *const c_char,
+) -> *mut FffResult {
+    let inst = match unsafe { instance_ref(fff_handle) } {
+        Ok(i) => i,
+        Err(e) => return e,
+    };
+
+    let opts_str = match unsafe { cstr_to_str(opts_json) } {
+        Some(s) => s,
+        None => return FffResult::err("Options JSON is null or invalid UTF-8"),
+    };
+
+    let opts: MultiGrepOptionsJson = match serde_json::from_str(opts_str) {
+        Ok(o) => o,
+        Err(e) => return FffResult::err(&format!("Failed to parse multi-grep options: {}", e)),
+    };
+
+    if opts.patterns.is_empty() {
+        return FffResult::err("patterns array must not be empty");
+    }
+
+    let picker_guard = match inst.picker.read() {
+        Ok(g) => g,
+        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
+    };
+
+    let picker = match picker_guard.as_ref() {
+        Some(p) => p,
+        None => return FffResult::err("File picker not initialized. Call fff_create first."),
+    };
+
+    let is_ai = picker.mode().is_ai();
+
+    // Parse constraints from the optional string (e.g. "*.rs /src/")
+    let parsed_constraints = opts.constraints.as_deref().and_then(|c| {
+        if is_ai {
+            fff_core::QueryParser::new(fff_query_parser::AiGrepConfig).parse(c)
+        } else {
+            fff_core::grep::parse_grep_query(c)
+        }
+    });
+
+    let constraint_refs: &[fff_core::Constraint<'_>] = match &parsed_constraints {
+        Some(q) => &q.constraints,
+        None => &[],
+    };
+
+    let pattern_refs: Vec<&str> = opts.patterns.iter().map(|s| s.as_str()).collect();
+
+    let options = fff_core::GrepSearchOptions {
+        max_file_size: opts.max_file_size.unwrap_or(10 * 1024 * 1024),
+        max_matches_per_file: opts.max_matches_per_file.unwrap_or(0),
+        smart_case: opts.smart_case.unwrap_or(true),
+        file_offset: opts.file_offset.unwrap_or(0),
+        page_limit: opts.page_limit.unwrap_or(50),
+        mode: fff_core::GrepMode::PlainText, // ignored by multi_grep_search
+        time_budget_ms: opts.time_budget_ms.unwrap_or(0),
+        before_context: opts.before_context.unwrap_or(0),
+        after_context: opts.after_context.unwrap_or(0),
+        classify_definitions: opts.classify_definitions.unwrap_or(false),
+    };
+
+    let result =
+        fff_core::multi_grep_search(picker.get_files(), &pattern_refs, constraint_refs, &options);
+
+    let json_result = ffi_types::GrepResultJson::from_grep_result(&result);
+    match serde_json::to_string(&json_result) {
+        Ok(json) => FffResult::ok_data(&json),
+        Err(e) => FffResult::err(&format!("Failed to serialize multi-grep results: {}", e)),
     }
 }
 
@@ -497,13 +607,14 @@ pub unsafe extern "C" fn fff_restart_index(
         Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
     };
 
-    // Stop existing picker, preserving warmup setting
-    let warmup = if let Some(mut picker) = guard.take() {
+    // Stop existing picker, preserving settings
+    let (warmup, mode) = if let Some(mut picker) = guard.take() {
         let warmup = picker.warmup_mmap_cache();
+        let mode = picker.mode();
         picker.stop_background_monitor();
-        warmup
+        (warmup, mode)
     } else {
-        false
+        (false, FFFMode::default())
     };
 
     // Drop the write lock before calling new_with_shared_state,
@@ -514,73 +625,13 @@ pub unsafe extern "C" fn fff_restart_index(
     match FilePicker::new_with_shared_state(
         canonical_path.to_string_lossy().to_string(),
         warmup,
+        mode,
         Arc::clone(&inst.picker),
         Arc::clone(&inst.frecency),
     ) {
         Ok(()) => FffResult::ok_empty(),
         Err(e) => FffResult::err(&format!("Failed to init file picker: {}", e)),
     }
-}
-
-/// Track file access for frecency scoring.
-///
-/// # Safety
-/// * `fff_handle` must be a valid instance pointer from `fff_create`.
-/// * `file_path` must be a valid null-terminated UTF-8 string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_track_access(
-    fff_handle: *mut c_void,
-    file_path: *const c_char,
-) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
-
-    let path_str = match unsafe { cstr_to_str(file_path) } {
-        Some(s) => s,
-        None => return FffResult::err("File path is null or invalid UTF-8"),
-    };
-
-    let file_path = PathBuf::from(&path_str);
-
-    // Track in frecency DB
-    let frecency_guard = match inst.frecency.read() {
-        Ok(f) => f,
-        Err(e) => return FffResult::err(&format!("Failed to acquire frecency lock: {}", e)),
-    };
-
-    let frecency = match frecency_guard.as_ref() {
-        Some(f) => f,
-        None => return FffResult::ok_data("false"),
-    };
-
-    if let Err(e) = frecency.track_access(&file_path) {
-        return FffResult::err(&format!("Failed to track access: {}", e));
-    }
-    drop(frecency_guard);
-
-    // Update in file picker
-    let mut picker_guard = match inst.picker.write() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
-
-    let picker = match picker_guard.as_mut() {
-        Some(p) => p,
-        None => return FffResult::ok_data("false"),
-    };
-
-    let frecency_guard = match inst.frecency.read() {
-        Ok(f) => f,
-        Err(_) => return FffResult::ok_data("false"),
-    };
-
-    if let Some(ref frecency) = *frecency_guard {
-        let _ = picker.update_single_file_frecency(&file_path, frecency);
-    }
-
-    FffResult::ok_data("true")
 }
 
 /// Refresh git status cache.

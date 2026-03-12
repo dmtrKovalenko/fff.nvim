@@ -32,6 +32,28 @@ pub trait Constrainable {
     fn git_status(&self) -> Option<git2::Status>;
 }
 
+/// Check if a relative path ends with the given suffix at a `/` boundary (case-insensitive).
+///
+/// Returns `true` when the path equals the suffix or the character before the suffix
+/// in the path is `/`. This ensures partial directory-name matches are rejected.
+///
+/// Examples:
+/// - `path_ends_with_suffix("libswscale/input.c", "libswscale/input.c")` → true (exact)
+/// - `path_ends_with_suffix("foo/libswscale/input.c", "libswscale/input.c")` → true (suffix)
+/// - `path_ends_with_suffix("xlibswscale/input.c", "libswscale/input.c")` → false (no boundary)
+#[inline]
+pub fn path_ends_with_suffix(path: &str, suffix: &str) -> bool {
+    if path.len() < suffix.len() {
+        return false;
+    }
+    let start = path.len() - suffix.len();
+    if !path[start..].eq_ignore_ascii_case(suffix) {
+        return false;
+    }
+    // Exact match, or the character before is /
+    start == 0 || path.as_bytes()[start - 1] == b'/'
+}
+
 /// Check if file extension matches (without allocation)
 #[inline]
 pub fn file_has_extension(file_name: &str, ext: &str) -> bool {
@@ -44,12 +66,14 @@ pub fn file_has_extension(file_name: &str, ext: &str) -> bool {
 }
 
 /// Check if path contains segment (without allocation)
+/// Supports both single segments ("src") and multi-segment paths ("libswscale/aarch64").
+/// For "libswscale/aarch64", checks that these appear as consecutive path components.
 #[inline]
 pub fn path_contains_segment(path: &str, segment: &str) -> bool {
     let path_bytes = path.as_bytes();
     let segment_len = segment.len();
 
-    // Check segment/ at start
+    // Check segment/ at start of path
     if path.len() > segment_len
         && path_bytes.get(segment_len) == Some(&b'/')
         && path[..segment_len].eq_ignore_ascii_case(segment)
@@ -101,6 +125,7 @@ fn item_matches_constraint_at_index<T: Constrainable>(
             return if negate { !result } else { result };
         }
         Constraint::PathSegment(segment) => path_contains_segment(item.relative_path(), segment),
+        Constraint::FilePath(suffix) => path_ends_with_suffix(item.relative_path(), suffix),
         Constraint::GitStatus(status_filter) => match (item.git_status(), status_filter) {
             (Some(status), GitStatusFilter::Modified) => is_modified_status(status),
             (Some(status), GitStatusFilter::Untracked) => status.contains(git2::Status::WT_NEW),
@@ -347,8 +372,78 @@ mod tests {
         // Should not match filename
         assert!(!path_contains_segment("lib/src", "src"));
 
+        // Multi-segment constraints
+        assert!(path_contains_segment(
+            "libswscale/aarch64/input.S",
+            "libswscale/aarch64"
+        ));
+        assert!(path_contains_segment(
+            "foo/libswscale/aarch64/input.S",
+            "libswscale/aarch64"
+        ));
+        assert!(path_contains_segment(
+            "foo/LibSwscale/AArch64/input.S",
+            "libswscale/aarch64"
+        )); // case-insensitive
+        assert!(!path_contains_segment(
+            "xlibswscale/aarch64/input.S",
+            "libswscale/aarch64"
+        )); // partial match at start
+        assert!(!path_contains_segment(
+            "foo/libswscale/aarch64x/input.S",
+            "libswscale/aarch64"
+        )); // partial match at end
+        assert!(path_contains_segment(
+            "crates/fff-core/src/grep.rs",
+            "fff-core/src"
+        ));
+
         // Edge cases
         assert!(!path_contains_segment("", "src"));
         assert!(!path_contains_segment("src", "src")); // no trailing slash
+    }
+
+    #[test]
+    fn test_path_ends_with_suffix() {
+        // Exact match
+        assert!(path_ends_with_suffix(
+            "libswscale/input.c",
+            "libswscale/input.c"
+        ));
+
+        // Suffix match at / boundary
+        assert!(path_ends_with_suffix(
+            "foo/libswscale/input.c",
+            "libswscale/input.c"
+        ));
+
+        // Deep nesting
+        assert!(path_ends_with_suffix(
+            "a/b/c/libswscale/input.c",
+            "libswscale/input.c"
+        ));
+
+        // No boundary — partial directory name
+        assert!(!path_ends_with_suffix(
+            "xlibswscale/input.c",
+            "libswscale/input.c"
+        ));
+
+        // Case insensitive
+        assert!(path_ends_with_suffix(
+            "foo/LibSwscale/Input.C",
+            "libswscale/input.c"
+        ));
+
+        // Single file name
+        assert!(path_ends_with_suffix("input.c", "input.c"));
+        assert!(!path_ends_with_suffix("xinput.c", "input.c"));
+
+        // Suffix longer than path
+        assert!(!path_ends_with_suffix("input.c", "foo/input.c"));
+
+        // Simple path
+        assert!(path_ends_with_suffix("src/main.rs", "src/main.rs"));
+        assert!(path_ends_with_suffix("crates/src/main.rs", "src/main.rs"));
     }
 }

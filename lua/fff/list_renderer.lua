@@ -69,8 +69,16 @@ local function generate_item_lines(ctx)
   local has_suggestion_header = ctx.suggestion_source ~= nil and #ctx.items > 0
   if has_suggestion_header then
     table.insert(suggestion_header_lines, '')
-    local mode_label = ctx.suggestion_source == 'grep' and 'content matches' or 'file name matches'
-    table.insert(suggestion_header_lines, '  No results found. Suggested ' .. mode_label .. ':')
+    if ctx.mode == 'grep' and ctx.suggestion_source == 'files' then
+      -- Grep mode with no results — hint about mode cycling to fuzzy search
+      local config = require('fff.conf').get()
+      local keybind = config.keymaps.cycle_grep_modes
+      if type(keybind) == 'table' then keybind = keybind[1] or '<S-Tab>' end
+      table.insert(suggestion_header_lines, '  No results, try ' .. keybind .. ' to fuzzy search')
+    else
+      local mode_label = ctx.suggestion_source == 'grep' and 'content matches' or 'file name matches'
+      table.insert(suggestion_header_lines, '  No results found. Suggested ' .. mode_label .. ':')
+    end
     table.insert(suggestion_header_lines, '')
   end
 
@@ -224,7 +232,7 @@ function M.render(ctx, list_buf, list_win, ns_id)
     local suggestion_hl = ctx.config.hl.suggestion_header or 'WarningMsg'
     for i = 0, #lines - 1 do
       local line = lines[i + 1]
-      if line and line:match('^%s+No results found') then
+      if line and (line:match('^%s+No results found') or line:match('^%s+No results,')) then
         pcall(
           vim.api.nvim_buf_set_extmark,
           list_buf,

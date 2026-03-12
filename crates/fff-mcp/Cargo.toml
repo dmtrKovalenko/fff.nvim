@@ -1,0 +1,27 @@
+[package]
+name = "fff-mcp"
+version = "0.1.0"
+edition = "2024"
+description = "MCP server for FFF file finder - drop-in replacement for AI code assistant search tools"
+license = "MIT"
+
+[[bin]]
+name = "fff-mcp"
+path = "src/main.rs"
+
+[features]
+default = ["zlob"]
+zlob = ["fff-core/zlob"]
+
+[dependencies]
+fff-core = { path = "../fff-core", default-features = false }
+fff-query-parser = { path = "../fff-query-parser", default-features = false }
+mimalloc = { workspace = true }
+rmcp = { version = "1.1.0", features = ["server", "transport-io"] }
+schemars = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+tracing = { workspace = true }
+git2 = { workspace = true }
+clap = { version = "4", features = ["derive"] }
