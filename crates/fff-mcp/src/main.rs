@@ -103,7 +103,7 @@ pub const MCP_INSTRUCTIONS: &str = concat!(
 
 /// FFF MCP Server — high-performance file finder for AI code assistants.
 #[derive(Parser)]
-#[command(name = "fff-mcp", version = env!("CARGO_PKG_VERSION"))]
+#[command(name = "fff-mcp", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("FFF_GIT_HASH"), ")"))]
 struct Args {
     /// Base directory to index. Defaults to the current working directory.
     #[arg(value_name = "PATH")]
