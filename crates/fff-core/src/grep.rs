@@ -1509,7 +1509,7 @@ pub fn grep_search<'a>(
     //   "name = *.rs someth" -> grep "name = someth" with constraint Extension("rs")
     let constraints_from_query: &[fff_query_parser::Constraint<'_>];
 
-    let mut grep_text = match query {
+    let grep_text = match query {
         Some(p) => {
             constraints_from_query = &p.constraints[..];
             p.grep_text()
@@ -1556,16 +1556,16 @@ pub fn grep_search<'a>(
         prepare_files_to_search(files, constraints_from_query, options);
 
     // If constraints yielded 0 files and we had a FilePath constraint,
-    // retry without it (the path token was likely part of the search text).
-    // Also restore the raw query as grep text so the filename token is
-    // searched as literal text rather than silently dropped.
+    // retry without it — the filename may not exist in this repo.
+    // Keep the original grep_text (e.g. "ActorAuth") rather than restoring
+    // the raw query ("nonexistent.rs ActorAuth"), since the search term
+    // was correctly extracted by the parser.
     if files_to_search.is_empty()
         && let Some(stripped) = strip_file_path_constraints(constraints_from_query)
     {
         let (retry_files, retry_count) = prepare_files_to_search(files, &stripped, options);
         files_to_search = retry_files;
         filtered_file_count = retry_count;
-        grep_text = raw_query.trim().to_string();
     }
 
     if files_to_search.is_empty() {

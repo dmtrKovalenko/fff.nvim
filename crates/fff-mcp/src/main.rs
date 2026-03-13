@@ -209,7 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .to_string()
     });
 
-    if !Repository::discover(&base_path).is_ok() {
+    if Repository::discover(&base_path).is_err() {
         tracing::error!("MCP server must be run within a Git repository");
         return Err(format!("Not a Git repository: {}", base_path).into());
     }
