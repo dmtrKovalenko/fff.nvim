@@ -327,6 +327,7 @@ pub fn match_and_score_files<'a>(
                 match_type: match filename_match {
                     Some(filename_match) if filename_match.exact => "exact_filename",
                     Some(_) => "fuzzy_filename",
+                    None if path_match.exact => "exact_path",
                     None => "fuzzy_path",
                 },
             };
