@@ -22,8 +22,8 @@ use crate::cursor::CursorStore;
 use crate::output::{GrepFormatter, OutputMode, file_suffix};
 
 /// Strip common delimiters for fuzzy fallback queries.
-fn strip_delimiters(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+fn cleanup_fuzzy_query(s: &str) -> String {
+    let mut out = s.to_lowercase();
     for c in s.chars() {
         if !matches!(c, ':' | '-' | '_') {
             out.push(c);
@@ -305,7 +305,7 @@ impl FffServer {
             }
 
             // Fuzzy fallback for typo tolerance
-            let fuzzy_query = strip_delimiters(&query.to_lowercase());
+            let fuzzy_query = cleanup_fuzzy_query(&query);
             let (fuzzy_options, _) = make_grep_options(output_mode, GrepMode::Fuzzy, 0, Some(0));
             let fuzzy_parsed = parser.parse(&fuzzy_query);
             let fuzzy_result =
@@ -329,6 +329,37 @@ impl FffServer {
                 return Ok(CallToolResult::success(vec![Content::text(
                     lines.join("\n"),
                 )]));
+            }
+
+            // File path fallback: if query looks like a path, suggest the matching file
+            if query.contains('/') {
+                let file_parser = QueryParser::default();
+                let file_query = file_parser.parse(query);
+                let file_opts = FuzzySearchOptions {
+                    max_threads: 0,
+                    current_file: None,
+                    project_path: Some(picker.base_path()),
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 0,
+                        limit: 1,
+                    },
+                };
+                let file_result = FilePicker::fuzzy_search(files, query, file_query, file_opts);
+                if let (Some(top), Some(score)) =
+                    (file_result.items.first(), file_result.scores.first())
+                {
+                    // Only suggest when the match is strong enough.
+                    let query_len = query.len() as i32;
+                    if score.base_score > query_len * 10 {
+                        return Ok(CallToolResult::success(vec![Content::text(format!(
+                            "0 content matches. But there is a relevant file path: {}",
+                            top.relative_path
+                        ))]));
+                    }
+                }
             }
 
             let hint = match &parsed {

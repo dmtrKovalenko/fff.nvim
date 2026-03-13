@@ -73,6 +73,13 @@ pub trait ParserConfig {
         true
     }
 
+    /// Should parse location suffixes (e.g., file:12, file:12:4)
+    /// Disabled for grep modes where colon-number patterns like localhost:8080
+    /// are search text, not file locations.
+    fn enable_location(&self) -> bool {
+        true
+    }
+
     /// Determine whether a token should be treated as a glob constraint.
     ///
     /// The default implementation delegates to `zlob::has_wildcards` with
@@ -126,6 +133,10 @@ impl ParserConfig for GrepConfig {
         false
     }
 
+    fn enable_location(&self) -> bool {
+        false
+    }
+
     /// Only recognise globs that are clearly directory/path oriented.
     ///
     /// Characters like `?`, `[`, and bare `*` (without `/`) are extremely
@@ -174,6 +185,10 @@ impl ParserConfig for AiGrepConfig {
     }
 
     fn enable_git_status(&self) -> bool {
+        false
+    }
+
+    fn enable_location(&self) -> bool {
         false
     }
 
