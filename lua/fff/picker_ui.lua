@@ -2601,9 +2601,7 @@ function M.open(opts)
   local merged_config, base_path = initialize_picker(opts)
   if not merged_config then return end
 
-  if base_path then
-      M.change_indexing_directory(base_path)
-  end
+  if base_path then M.change_indexing_directory(base_path) end
 
   -- Initialize grep_mode to first configured mode when opening in grep mode
   if M.state.mode == 'grep' then
