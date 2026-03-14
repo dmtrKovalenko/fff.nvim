@@ -38,7 +38,7 @@ script:
 <
 
 
-  The installation script is here ./install-fff.sh <./install-fff.sh> if you want
+  The installation script is here ./install-mcp.sh <./install-mcp.sh> if you want
   to review it before running.
 It will print out the instructions on how to connect it to your `Claude Code`,
 `Codex`, `OpenCode`, etc. Once you have it connected just ask your agent to
