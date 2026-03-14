@@ -168,8 +168,8 @@ function M.find_files_in_dir(directory)
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
   if picker_ok then
     picker_ui.open({
-        title = 'Files in ' .. vim.fn.fnamemodify(directory, ':t'),
-        cwd = directory,
+      title = 'Files in ' .. vim.fn.fnamemodify(directory, ':t'),
+      cwd = directory,
     })
   else
     vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
@@ -181,9 +181,7 @@ end
 --- @return boolean `true` if successful, `false` otherwise
 function M.change_indexing_directory(new_path)
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
-  if picker_ok then
-      return picker_ui.change_indexing_directory(new_path)
-  end
+  if picker_ok then return picker_ui.change_indexing_directory(new_path) end
   return false
 end
 
