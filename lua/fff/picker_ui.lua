@@ -2601,6 +2601,10 @@ function M.open(opts)
   local merged_config, base_path = initialize_picker(opts)
   if not merged_config then return end
 
+  if base_path then
+      M.change_indexing_directory(base_path)
+  end
+
   -- Initialize grep_mode to first configured mode when opening in grep mode
   if M.state.mode == 'grep' then
     -- Use grep_config.modes if provided, otherwise fall back to global config
@@ -2614,6 +2618,34 @@ function M.open(opts)
   local current_file_cache = get_current_file_cache(base_path)
   local query = opts and opts.query or nil ---@type string|nil
   return open_ui_with_state(query, nil, nil, merged_config, current_file_cache)
+end
+
+--- Change the base directory for the file picker
+--- @param new_path string New directory path to use as base
+--- @return boolean `true` if successful, `false` otherwise
+function M.change_indexing_directory(new_path)
+  if not new_path or new_path == '' then
+    vim.notify('Directory path is required', vim.log.levels.ERROR)
+    return false
+  end
+
+  local expanded_path = vim.fn.expand(new_path)
+
+  if vim.fn.isdirectory(expanded_path) ~= 1 then
+    vim.notify('Directory does not exist: ' .. expanded_path, vim.log.levels.ERROR)
+    return false
+  end
+
+  local fuzzy = require('fff.core').ensure_initialized()
+  local ok, result = pcall(fuzzy.restart_index_in_path, expanded_path)
+  if not ok then
+    vim.notify('Failed to change directory: ' .. result, vim.log.levels.ERROR)
+    return false
+  end
+
+  local config = require('fff.conf').get()
+  config.base_path = expanded_path
+  return true
 end
 
 function M.monitor_scan_progress(iteration)

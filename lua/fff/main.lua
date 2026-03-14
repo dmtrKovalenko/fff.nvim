@@ -165,11 +165,12 @@ function M.find_files_in_dir(directory)
     return
   end
 
-  M.change_indexing_directory(directory)
-
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
   if picker_ok then
-    picker_ui.open({ title = 'Files in ' .. vim.fn.fnamemodify(directory, ':t') })
+    picker_ui.open({
+        title = 'Files in ' .. vim.fn.fnamemodify(directory, ':t'),
+        cwd = directory,
+    })
   else
     vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
   end
@@ -179,28 +180,11 @@ end
 --- @param new_path string New directory path to use as base
 --- @return boolean `true` if successful, `false` otherwise
 function M.change_indexing_directory(new_path)
-  if not new_path or new_path == '' then
-    vim.notify('Directory path is required', vim.log.levels.ERROR)
-    return false
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  if picker_ok then
+      return picker_ui.change_indexing_directory(new_path)
   end
-
-  local expanded_path = vim.fn.expand(new_path)
-
-  if vim.fn.isdirectory(expanded_path) ~= 1 then
-    vim.notify('Directory does not exist: ' .. expanded_path, vim.log.levels.ERROR)
-    return false
-  end
-
-  local fuzzy = require('fff.core').ensure_initialized()
-  local ok, result = pcall(fuzzy.restart_index_in_path, expanded_path)
-  if not ok then
-    vim.notify('Failed to change directory: ' .. result, vim.log.levels.ERROR)
-    return false
-  end
-
-  local config = require('fff.conf').get()
-  config.base_path = expanded_path
-  return true
+  return false
 end
 
 --- Opens the file under the cursor with an optional callback if the only file
