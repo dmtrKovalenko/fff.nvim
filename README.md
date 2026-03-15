@@ -36,7 +36,7 @@ You can install FFF as a dependency for your AI agent using a simple bash script
 curl -L https://dmtrkovalenko.dev/install-fff-mcp.sh | bash
 ```
 
-> The installation script is here [./install-fff.sh](./install-fff.sh) if you want to review it before running.
+> The installation script is here [./install-mcp.sh](./install-mcp.sh) if you want to review it before running.
 
 It will print out the instructions on how to connect it to your `Claude Code`, `Codex`, `OpenCode`, etc. Once you have it connected just ask your agent to "use fff".
 Here is an example addition to `CLAUDE.md` that works perfectly:
