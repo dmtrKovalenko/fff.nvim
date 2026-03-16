@@ -3,12 +3,14 @@
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
 
+  - Why This Fork?                                   |fff.nvim-why-this-fork?|
+  - Features                                               |fff.nvim-features|
   - MCP                                                         |fff.nvim-mcp|
   - Neovim guide                                       |fff.nvim-neovim-guide|
-  - Features                                               |fff.nvim-features|
-  - Why This Fork?                                   |fff.nvim-why-this-fork?|
+  - Installation                                       |fff.nvim-installation|
 1. Links                                                      |fff.nvim-links|
-FFFAI agents (MCP)   |   Neovim usersA fast file search for your AI and neovim, with memory built-in
+FFF.nvim + Buffers Support
+A fast file search for your AI and neovim, with memory built-in
 
 
 
@@ -25,7 +27,55 @@ results based on various factors like frecency, git status, file size,
 definition matches, and more.
 
 
-MCP                                                             *fff.nvim-mcp*
+WHY THIS FORK?                                       *fff.nvim-why-this-fork?*
+
+This fork extends dmtrKovalenko/fff.nvim
+<https://github.com/dmtrKovalenko/fff.nvim> into a **complete picker
+ecosystem**. The upstream project is an excellent, blazing-fast fuzzy file
+finder powered by Rust. This fork keeps all of that and adds the pickers you
+actually need day-to-day:
+
+  ------------------------------------------------------------------------
+  Feature               Upstream                This Fork
+  --------------------- ----------------------- --------------------------
+  :Buffers picker                               Full buffer list with
+                                                modified, current, and
+                                                alternate indicators
+
+  :GFiles picker                                Dedicated picker for
+                                                git status files with
+                                                status indicators and
+                                                preview
+
+  :Colors picker                                Browse and switch
+                                                colorschemes with live
+                                                preview
+
+  Fuzzy file search                             
+  with frecency                                 
+
+  Livegrep (plain,                              
+  regex, fuzzy)                                 
+
+  Multi-select+                                 
+  quickfix                                      
+
+  Queryconstraints                              
+  (status:, *.ext,                              
+  !exclude)                                     
+
+  Gitstatus signs +                             
+  text coloring                                 
+  ------------------------------------------------------------------------
+**In short:** upstream focused on making file finding extremely fast with Rust.
+This fork fills the "where's the rest of the picker suite?" gap, bringing it
+closer to feature parity with Telescope and fzf.vim while keeping the
+Rust-powered speed.
+
+------------------------------------------------------------------------------
+
+FEATURES                                                   *fff.nvim-features*
+
 
 - Works out of the box with no additional configuration
 - Typo resistant fuzzy search <https://github.com/saghen/frizbee>
@@ -36,6 +86,10 @@ MCP                                                             *fff.nvim-mcp*
 - Display images in previews (for now requires snacks.nvim)
 - Smart in a plenty of different ways hopefully helpful for your workflow
 - This plugin initializes itself lazily by default
+
+
+
+MCP                                                             *fff.nvim-mcp*
 
 FFF is an amazing way to reduce the time and tokens by giving your AI agent a
 bit of memory built-in to their file search tools. It makes your AI harness to
@@ -711,53 +765,6 @@ location).
 1. Links                                                      *fff.nvim-links*
 
 1. *Chart showing the superiority of fff.nvim over builtin claude code tools*: ./chart.png
-
-------------------------------------------------------------------------------
-
-WHY THIS FORK?                                       *fff.nvim-why-this-fork?*
-
-This fork extends dmtrKovalenko/fff.nvim
-<https://github.com/dmtrKovalenko/fff.nvim> into a **complete picker
-ecosystem**. The upstream project is an excellent, blazing-fast fuzzy file
-finder powered by Rust. This fork keeps all of that and adds the pickers you
-actually need day-to-day:
-
-  ------------------------------------------------------------------------
-  Feature               Upstream                This Fork
-  --------------------- ----------------------- --------------------------
-  :Buffers picker                               Full buffer list with
-                                                modified, current, and
-                                                alternate indicators
-
-  :GFiles picker                                Dedicated picker for
-                                                git status files with
-                                                status indicators and
-                                                preview
-
-  :Colors picker                                Browse and switch
-                                                colorschemes with live
-                                                preview
-
-  Fuzzy file search                             
-  with frecency                                 
-
-  Livegrep (plain,                              
-  regex, fuzzy)                                 
-
-  Multi-select+                                 
-  quickfix                                      
-
-  Queryconstraints                              
-  (status:, *.ext,                              
-  !exclude)                                     
-
-  Gitstatus signs +                             
-  text coloring                                 
-  ------------------------------------------------------------------------
-**Inshort:** upstream focused on making file finding extremely fast with Rust.
-This fork fills the "where’s the rest of the picker suite?" gap, bringing it
-closer to feature parity with Telescope and fzf.vim while keeping the
-Rust-powered speed.
 
 Generated by panvimdoc <https://github.com/kdheepak/panvimdoc>
 
