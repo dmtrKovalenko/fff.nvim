@@ -24,6 +24,10 @@ prepare-bun: build
 	cp target/release/libfff_c.so packages/fff-bun/bin/ 2>/dev/null; \
 	cp target/release/fff_c.dll packages/fff-bun/bin/ 2>/dev/null; \
 	true
+	@# Re-sign on macOS: cp can invalidate ad-hoc code signatures
+	@if [ "$$(uname)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then \
+		codesign --sign - packages/fff-bun/bin/libfff_c.dylib 2>/dev/null || true; \
+	fi
 
 test-bun: prepare-bun
 	cd packages/fff-bun && bun test src/
@@ -34,5 +38,18 @@ format-rust:
 	cargo fmt --all
 format-lua:
 	stylua .
+format-ts:
+	bun format
 
-format: format-rust format-lua
+format: format-rust format-lua format-ts
+
+lint-rust:
+	cargo clippy --workspace --features zlob -- -D warnings
+lint-lua:
+	 ~/.luarocks/bin/luacheck .
+lint-ts:
+	bun lint
+
+lint: lint-rust lint-lua lint-ts
+
+check: format lint

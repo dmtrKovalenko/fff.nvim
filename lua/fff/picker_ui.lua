@@ -90,7 +90,7 @@ local function get_preview_position()
 end
 
 local function compute_layout(config)
-  local debug_enabled_in_preview = M.enabled_preview() and config.debug and config.debug.show_file_info or false
+  local debug_enabled_in_preview = M.enabled_preview() and config.debug and config.debug.enabled or false
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
@@ -637,6 +637,16 @@ function M.setup_windows()
   vim.api.nvim_set_option_value('signcolumn', 'yes:1', { win = M.state.list_win }) -- Enable signcolumn for git status borders
   vim.api.nvim_set_option_value('foldcolumn', '0', { win = M.state.list_win })
   vim.api.nvim_set_option_value('winhighlight', win_hl, { win = M.state.list_win })
+
+  if M.state.file_info_win and vim.api.nvim_win_is_valid(M.state.file_info_win) then
+    vim.api.nvim_set_option_value('wrap', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('cursorline', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('number', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('relativenumber', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('signcolumn', 'no', { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('foldcolumn', '0', { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('winhighlight', win_hl, { win = M.state.file_info_win })
+  end
 
   if M.enabled_preview() then
     vim.api.nvim_set_option_value('wrap', false, { win = M.state.preview_win })
@@ -2591,6 +2601,8 @@ function M.open(opts)
   local merged_config, base_path = initialize_picker(opts)
   if not merged_config then return end
 
+  if base_path then M.change_indexing_directory(base_path) end
+
   -- Initialize grep_mode to first configured mode when opening in grep mode
   if M.state.mode == 'grep' then
     -- Use grep_config.modes if provided, otherwise fall back to global config
@@ -2604,6 +2616,34 @@ function M.open(opts)
   local current_file_cache = get_current_file_cache(base_path)
   local query = opts and opts.query or nil ---@type string|nil
   return open_ui_with_state(query, nil, nil, merged_config, current_file_cache)
+end
+
+--- Change the base directory for the file picker
+--- @param new_path string New directory path to use as base
+--- @return boolean `true` if successful, `false` otherwise
+function M.change_indexing_directory(new_path)
+  if not new_path or new_path == '' then
+    vim.notify('Directory path is required', vim.log.levels.ERROR)
+    return false
+  end
+
+  local expanded_path = vim.fn.expand(new_path)
+
+  if vim.fn.isdirectory(expanded_path) ~= 1 then
+    vim.notify('Directory does not exist: ' .. expanded_path, vim.log.levels.ERROR)
+    return false
+  end
+
+  local fuzzy = require('fff.core').ensure_initialized()
+  local ok, result = pcall(fuzzy.restart_index_in_path, expanded_path)
+  if not ok then
+    vim.notify('Failed to change directory: ' .. result, vim.log.levels.ERROR)
+    return false
+  end
+
+  local config = require('fff.conf').get()
+  config.base_path = expanded_path
+  return true
 end
 
 function M.monitor_scan_progress(iteration)

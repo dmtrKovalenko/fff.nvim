@@ -65,12 +65,6 @@ local function setup_global_autocmds(config)
     end,
     desc = 'Automatically sync FFF directory changes',
   })
-
-  vim.api.nvim_create_autocmd('VimLeavePre', {
-    group = group,
-    callback = function() pcall(fuzzy.cleanup_file_picker) end,
-    desc = 'Cleanup FFF background threads on Neovim exit',
-  })
 end
 
 --- @return boolean

@@ -19,6 +19,19 @@ use std::sync::{
 use std::time::SystemTime;
 use tracing::{Level, debug, error, info, warn};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FFFMode {
+    #[default]
+    Neovim,
+    Ai,
+}
+
+impl FFFMode {
+    pub fn is_ai(self) -> bool {
+        self == FFFMode::Ai
+    }
+}
+
 /// Detect if a file is binary by checking for NUL bytes in the first 512 bytes.
 /// This is the same heuristic used by git and grep — simple, fast, and sufficient.
 #[inline]
@@ -169,10 +182,14 @@ impl FileItem {
         )
     }
 
-    pub fn update_frecency_scores(&mut self, tracker: &FrecencyTracker) -> Result<(), Error> {
-        self.access_frecency_score = tracker.get_access_score(&self.path);
+    pub fn update_frecency_scores(
+        &mut self,
+        tracker: &FrecencyTracker,
+        mode: FFFMode,
+    ) -> Result<(), Error> {
+        self.access_frecency_score = tracker.get_access_score(&self.path, mode);
         self.modification_frecency_score =
-            tracker.get_modification_score(self.modified, self.git_status);
+            tracker.get_modification_score(self.modified, self.git_status, mode);
         self.total_frecency_score = self.access_frecency_score + self.modification_frecency_score;
 
         Ok(())
@@ -186,6 +203,8 @@ pub struct FilePicker {
     scanned_files_count: Arc<AtomicUsize>,
     background_watcher: Option<BackgroundWatcher>,
     warmup_mmap_cache: bool,
+    cancelled: Arc<AtomicBool>,
+    mode: FFFMode,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -211,6 +230,10 @@ impl FilePicker {
         self.warmup_mmap_cache
     }
 
+    pub fn mode(&self) -> FFFMode {
+        self.mode
+    }
+
     pub fn git_root(&self) -> Option<&Path> {
         self.sync_data.git_workdir.as_deref()
     }
@@ -232,12 +255,13 @@ impl FilePicker {
     pub fn new_with_shared_state(
         base_path: String,
         warmup_mmap_cache: bool,
+        mode: FFFMode,
         shared_picker: SharedPicker,
         shared_frecency: SharedFrecency,
     ) -> Result<(), Error> {
         info!(
-            "Initializing FilePicker with base_path: {}, warmup: {}",
-            base_path, warmup_mmap_cache
+            "Initializing FilePicker with base_path: {}, warmup: {}, mode: {:?}",
+            base_path, warmup_mmap_cache, mode
         );
         let path = PathBuf::from(&base_path);
         if !path.exists() {
@@ -250,6 +274,7 @@ impl FilePicker {
         // rather than a stale `false` (the thread hasn't started yet).
         let scan_signal = Arc::new(AtomicBool::new(true));
         let synced_files_count = Arc::new(AtomicUsize::new(0));
+        let cancelled = Arc::new(AtomicBool::new(false));
 
         let picker = FilePicker {
             base_path: path.clone(),
@@ -258,6 +283,8 @@ impl FilePicker {
             scanned_files_count: Arc::clone(&synced_files_count),
             background_watcher: None,
             warmup_mmap_cache,
+            cancelled: Arc::clone(&cancelled),
+            mode,
         };
 
         // Place the picker into the shared handle before spawning the
@@ -272,8 +299,10 @@ impl FilePicker {
             Arc::clone(&scan_signal),
             Arc::clone(&synced_files_count),
             warmup_mmap_cache,
+            mode,
             shared_picker,
             shared_frecency,
+            cancelled,
         );
 
         Ok(())
@@ -298,7 +327,13 @@ impl FilePicker {
         parsed: Option<FFFQuery<'a>>,
         options: FuzzySearchOptions<'a>,
     ) -> SearchResult<'a> {
-        let max_threads = options.max_threads.max(1);
+        let max_threads = if options.max_threads == 0 {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        } else {
+            options.max_threads
+        };
         debug!(
             ?query,
             parsed_is_some = parsed.is_some(),
@@ -381,6 +416,7 @@ impl FilePicker {
             "Updating git status",
         );
 
+        let mode = self.mode;
         let frecency = shared_frecency
             .read()
             .map_err(|_| Error::AcquireFrecencyLock)?;
@@ -390,7 +426,7 @@ impl FilePicker {
                 if let Some(file) = self.get_mut_file_by_path(&path) {
                     file.git_status = Some(status);
                     if let Some(ref f) = *frecency {
-                        file.update_frecency_scores(f)?;
+                        file.update_frecency_scores(f, mode)?;
                     }
                 } else {
                     error!(?path, "Couldn't update the git status for path");
@@ -449,7 +485,7 @@ impl FilePicker {
         if let Ok(index) = self.sync_data.find_file_index(file_path.as_ref())
             && let Some(file) = self.sync_data.get_file_mut(index)
         {
-            file.update_frecency_scores(frecency_tracker)?;
+            file.update_frecency_scores(frecency_tracker, self.mode)?;
         }
 
         Ok(())
@@ -578,6 +614,11 @@ impl FilePicker {
             .retain_files(|file| !file.path.starts_with(dir_path))
     }
 
+    /// We use this to prevent any substantial background threads from acquiring the locks
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
     pub fn stop_background_monitor(&mut self) {
         if let Some(watcher) = self.background_watcher.take() {
             watcher.stop();
@@ -593,8 +634,12 @@ impl FilePicker {
         self.is_scanning.store(true, Ordering::Relaxed);
         self.scanned_files_count.store(0, Ordering::Relaxed);
 
-        let scan_result =
-            scan_filesystem(&self.base_path, &self.scanned_files_count, shared_frecency);
+        let scan_result = scan_filesystem(
+            &self.base_path,
+            &self.scanned_files_count,
+            shared_frecency,
+            self.mode,
+        );
         match scan_result {
             Ok(sync) => {
                 info!(
@@ -637,13 +682,16 @@ pub struct ScanProgress {
     pub is_scanning: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_scan_and_watcher(
     base_path: PathBuf,
     scan_signal: Arc<AtomicBool>,
     synced_files_count: Arc<AtomicUsize>,
     warmup_mmap_cache: bool,
+    mode: FFFMode,
     shared_picker: SharedPicker,
     shared_frecency: SharedFrecency,
+    cancelled: Arc<AtomicBool>,
 ) {
     std::thread::spawn(move || {
         // scan_signal is already `true` (set by the caller before spawning)
@@ -651,8 +699,14 @@ fn spawn_scan_and_watcher(
         info!("Starting initial file scan");
 
         let mut git_workdir = None;
-        match scan_filesystem(&base_path, &synced_files_count, &shared_frecency) {
+        match scan_filesystem(&base_path, &synced_files_count, &shared_frecency, mode) {
             Ok(sync) => {
+                if cancelled.load(Ordering::Acquire) {
+                    info!("Scan completed but picker was replaced, discarding results");
+                    scan_signal.store(false, Ordering::Relaxed);
+                    return;
+                }
+
                 info!(
                     "Initial filesystem scan completed: found {} files",
                     sync.files.len()
@@ -672,13 +726,8 @@ fn spawn_scan_and_watcher(
                 }
 
                 // OPTIMIZATION: Warmup mmap cache in background to avoid blocking first grep.
-                // The aggressive parallel warmup was causing cache thrashing and delaying
-                // initial searches. Now it runs async and doesn't block.
-                //
-                // We warmup under a read lock on the picker's actual files so that
-                // the OnceLock<Mmap> instances are populated in-place — no clone needed.
-                // Read locks allow concurrent readers so this doesn't block searches.
                 if warmup_mmap_cache
+                    && !cancelled.load(Ordering::Acquire)
                     && let Ok(guard) = shared_picker.read()
                     && let Some(ref picker) = *guard
                 {
@@ -691,14 +740,30 @@ fn spawn_scan_and_watcher(
         }
         scan_signal.store(false, Ordering::Relaxed);
 
+        // Don't create a watcher if this picker instance was already replaced
+        if cancelled.load(Ordering::Acquire) {
+            info!("Picker was replaced, skipping background watcher creation");
+            return;
+        }
+
         match BackgroundWatcher::new(
             base_path,
             git_workdir,
             shared_picker.clone(),
             shared_frecency.clone(),
+            mode,
         ) {
             Ok(watcher) => {
                 info!("Background file watcher initialized successfully");
+
+                // Final cancellation check: if the picker was replaced between
+                // watcher creation and this write, drop the watcher instead of
+                // storing it in the wrong picker.
+                if cancelled.load(Ordering::Acquire) {
+                    info!("Picker was replaced, dropping orphaned watcher");
+                    drop(watcher);
+                    return;
+                }
 
                 let write_result = shared_picker.write().ok().map(|mut guard| {
                     if let Some(ref mut picker) = *guard {
@@ -748,6 +813,7 @@ fn scan_filesystem(
     base_path: &Path,
     synced_files_count: &Arc<AtomicUsize>,
     shared_frecency: &SharedFrecency,
+    mode: FFFMode,
 ) -> Result<FileSync, Error> {
     use ignore::{WalkBuilder, WalkState};
     use std::thread;
@@ -792,7 +858,7 @@ fn scan_filesystem(
             .build_parallel();
 
         let walker_start = std::time::Instant::now();
-        info!("SCAN: Starting file walker");
+        debug!("SCAN: Starting file walker");
 
         let files = Arc::new(std::sync::Mutex::new(Vec::new()));
         walker.run(|| {
@@ -837,6 +903,7 @@ fn scan_filesystem(
         let frecency = shared_frecency
             .read()
             .map_err(|_| Error::AcquireFrecencyLock)?;
+
         files
             .par_iter_mut()
             .try_for_each(|file| -> Result<(), Error> {
@@ -845,7 +912,7 @@ fn scan_filesystem(
                 }
 
                 if let Some(frecency) = frecency.as_ref() {
-                    file.update_frecency_scores(frecency)?;
+                    file.update_frecency_scores(frecency, mode)?;
                 }
 
                 Ok(())

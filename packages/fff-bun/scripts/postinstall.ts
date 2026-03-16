@@ -28,7 +28,7 @@ async function main() {
   }
 
   console.log(
-    `fff: Platform package ${packageName} not found, falling back to GitHub download...`
+    `fff: Platform package ${packageName} not found, falling back to GitHub download...`,
   );
 
   try {
@@ -40,9 +40,7 @@ async function main() {
     console.error("fff: You can build from source instead:");
     console.error("  cargo build --release -p fff-c");
     console.error("");
-    console.error(
-      "fff: Or run `bunx fff download` after fixing network issues."
-    );
+    console.error("fff: Or run `bunx fff download` after fixing network issues.");
     // Don't exit with error - allow install to complete
     // The error will surface when the user tries to use the library
   }

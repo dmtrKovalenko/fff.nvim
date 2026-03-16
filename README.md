@@ -1,9 +1,13 @@
 <p align="center">
-  <h2 align="center">FFF.nvim + Buffers Support</h2>
+  <h1 align="center">FFF</h1>
 </p>
 
 <p align="center">
-	Finally a smart fuzzy file picker for neovim.
+  <a href="#mcp"><strong>AI agents (MCP)</strong></a> &nbsp;&nbsp;|&nbsp;&nbsp; <a href="#neovim-guide"><strong>Neovim users</strong></a>
+</p>
+
+<p align="center">
+  <i>A fast file search for your AI and neovim, with memory built-in</i>
 </p>
 
 <p align="center" style="text-decoration: none; border: none;">
@@ -14,9 +18,9 @@
 	<a href="https://github.com/dmtrKovalenko/fff.nvim/contributors" style="text-decoration: none"> <img alt="Contributors" src="https://img.shields.io/github/contributors/dmtrKovalenko/fff.nvim?color=%23DDB6F2&label=CONTRIBUTORS&logo=git&style=for-the-badge&logoColor=D9E0EE&labelColor=302D41"/></a>
 </p>
 
-**FFF** stands for ~freakin fast fuzzy file finder~ (pick 3) and it is an opinionated fuzzy file picker for neovim. Just for files, but we'll try to solve file picking completely.
+---
 
-It comes with a dedicated rust backend runtime that keep tracks of the file index, your file access and modifications, git status, and provides a comprehensive typo-resistant fuzzy search experience.
+**FFF** stands for ~~freakin fast fuzzy file finder~~ (pick 3) and it is an opinionated fuzzy file picker for your AI agent and Neovim. Just for file search, but we do the file search really fff well.
 
 ## Why This Fork?
 
@@ -39,6 +43,8 @@ This fork extends [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.
 
 ## Features
 
+FFF is a tool for grepping, fuzzy file matching, globbing, and multigrepping with a strong focus on performance and useful search results. For humans - provides an unbelievable typo-resistant experience, for AI agents - implements the fastest file search with additional free memory suggesting the best search results based on various factors like frecency, git status, file size, definition matches, and more.
+
 - Works out of the box with no additional configuration
 - [Typo resistant fuzzy search](https://github.com/saghen/frizbee)
 - Git status integration allowing to take advantage of last modified times within a worktree
@@ -49,20 +55,37 @@ This fork extends [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.
 - Smart in a plenty of different ways hopefully helpful for your workflow
 - This plugin initializes itself lazily by default
 
-## Installation
+## MCP
 
-> [!NOTE]
-> Although we'll try to make sure to keep 100% backward compatibility, by using you should understand that silly bugs and breaking changes may happen.
-> And also we hope for your contributions and feedback to make this plugin ideal for everyone.
+FFF is an amazing way to reduce the time and tokens by giving your AI agent a bit of memory built-in to their file search tools. It makes your AI harness to find the code faster and spend less tokens by doing less roundtrips and reading less useless files.
 
-### Prerequisites
+![Chart showing the superiority of fff.nvim over builtin claude code tools](./chart.png)
 
-FFF.nvim requires:
+You can install FFF as a dependency for your AI agent using a simple bash script:
 
-- Neovim 0.10.0+
-- [Rustup](https://rustup.rs/) (we require nightly for building the native backend rustup will handle toolchain automatically)
+```bash
+curl -L https://dmtrkovalenko.dev/install-fff-mcp.sh | bash
+```
+
+> The installation script is here [./install-mcp.sh](./install-mcp.sh) if you want to review it before running.
+
+It will print out the instructions on how to connect it to your `Claude Code`, `Codex`, `OpenCode`, etc. Once you have it connected just ask your agent to "use fff".
+Here is an example addition to `CLAUDE.md` that works perfectly:
+
+```sh
+# CLAUDE.md
+For any file search or grep in the current git indexed directory use fff tools
+```
+
+## Neovim guide
+
+Here is some demo on the linux repository (100k files, 8GB) but you better fill it yourself and see the magic
+
+https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 
 ### Installation
+
+FFF.nvim requires neovim 0.10.0 or higher
 
 #### lazy.nvim
 
@@ -310,9 +333,8 @@ require('fff').setup({
       status_text_color = false, -- Apply git status colors to filename text (default: false, only sign column)
     },
     debug = {
-      enabled = false, -- Set to true to show scores in the UI
-      show_scores = false,
-      show_file_info = false, -- Show file info panel in preview
+      enabled = false, -- Show file info panel in preview
+      show_scores = false, -- Show scores inline in the UI
     },
     logging = {
       enabled = true,
@@ -345,10 +367,12 @@ require('fff').buffers()                            -- Open buffer picker (simil
 require('fff').colors()                             -- Open colors picker (similar to fzf.vim :Colors)
 require('fff').git_files()                          -- Open git files picker (similar to fzf.vim :GFiles?)
 require('fff').scan_files()                         -- Trigger rescan of files in the current directory
-require('fff').refresh_git_status()                 -- Refresh git status for the active file lock
+require('fff').refresh_git_status()                 -- Refresh git status for the active file list
 require('fff').find_files_in_dir(path)              -- Find files in a specific directory
 require('fff').change_indexing_directory(new_path)  -- Change the base directory for the file picker
 ```
+
+just jump to the definition and see what other APIs are exposed we have a plenty
 
 #### Commands
 
@@ -533,6 +557,32 @@ require('fff').live_grep({ query = 'search term' })
 
 When only one mode is configured, the mode indicator is hidden completely and the cycle keybind does nothing.
 
+#### Constraints
+
+There are a number of constraints you can use to refine your search in both grep and file search mode:
+
+- `git:modified` - show only modified files (one of `modified`, `staged`, `deleted`, `renamed`, `untracked`, `ignored`)
+- `test/` - any deeply nested children of any test/ dir
+- `!something` - exclude results matching something
+- `!test/`, `!git:modified` - combining with any other constraint works as negation
+- `./**/*.{rs,lua}` - any valid glob expression via [the fastest globbing library](https://github.com/dmtrKovalenko/zlob)
+
+For grep only:
+
+- `*.md`, `*.{c,h}` - extension filtering
+- `src/main.rs` - grep in a single file
+
+In addition to that, all constraints can be combined together like:
+
+```
+git:modified src/**/*.rs !src/**/mod.rs user controller
+```
+
+This will find all the files that qualify the constraints and:
+
+- match **both** user and controller (for file mode)
+- match "user controller" (for grep mode)
+
 #### Cross-Mode Suggestions
 
 When a search returns no results, FFF automatically queries the opposite search mode and displays the results as suggestions:
@@ -626,41 +676,8 @@ Run `:FFFHealth` to check the status of FFF.nvim and its dependencies. This will
 
 If you encounter issues, check the log file:
 
-```vim
+```
 :FFFOpenLog
 ```
 
 Or manually open the log file at `~/.local/state/nvim/log/fff.log` (default location).
-
-#### Common Issues
-
-**File picker not initializing:**
-
-- Ensure the Rust backend is compiled: `cargo build --release` in the plugin directory
-- Check that your Neovim version is 0.10.0 or higher
-
-**Image previews not working:**
-
-- Verify your terminal supports images (kitty, iTerm2, WezTerm, etc.)
-- For terminals without native image support, install one of: `chafa`, `viu`, or `img2txt`
-- If using snacks.nvim, ensure it's properly configured
-
-**Performance issues:**
-
-- Adjust `max_threads` in configuration based on your system
-- Reduce `preview.max_lines` and `preview.max_size` for large files
-- Clear cache if it becomes too large: `:FFFClearCache all`
-
-**Files not being indexed:**
-
-- Run `:FFFScan` to manually trigger a file scan
-- Check that the `base_path` is correctly set
-- Verify you have read permissions for the directory
-
-#### Debug Mode
-
-Enable debug mode to see scoring information and troubleshoot search results:
-
-- Press `F2` while in the picker
-- Run `:FFFDebug on` to enable permanently
-- Set `debug.show_scores = true` in configuration

@@ -71,11 +71,14 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         page_limit: 100, // Get plenty of results
         mode: GrepMode::Fuzzy,
         time_budget_ms: 0, // No time limit — search all files
+        before_context: 0,
+        after_context: 0,
+        classify_definitions: false,
     };
 
     let parsed = parse_grep_query(query);
     let start = Instant::now();
-    let result = grep_search(files, query, parsed, &options);
+    let result = grep_search(files, query, parsed.as_ref(), &options);
     let elapsed = start.elapsed();
 
     eprintln!("══════════════════════════════════════════════════════════════");

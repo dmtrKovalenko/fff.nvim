@@ -17,6 +17,7 @@ pub mod file_picker;
 pub mod frecency;
 pub mod git;
 pub mod grep;
+pub mod log;
 pub mod path_utils;
 pub mod query_tracker;
 pub mod score;
@@ -37,6 +38,9 @@ pub use error::{Error, Result};
 pub use fff_query_parser::{
     Constraint, FFFQuery, FuzzyQuery, Location, QueryParser, location::parse_location,
 };
-pub use file_picker::{FuzzySearchOptions, ScanProgress};
-pub use grep::{GrepMatch, GrepMode, GrepResult, GrepSearchOptions};
+pub use file_picker::{FFFMode, FuzzySearchOptions, ScanProgress};
+pub use grep::{
+    GrepMatch, GrepMode, GrepResult, GrepSearchOptions, has_regex_metacharacters,
+    is_definition_line, is_import_line, multi_grep_search,
+};
 pub use types::{FileItem, PaginationArgs, Score, ScoringContext, SearchResult};

@@ -1,7 +1,7 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { FileFinder } from "./index";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { findBinary, getDevBinaryPath } from "./download";
-import { getTriple, getLibExtension, getLibFilename } from "./platform";
+import { FileFinder } from "./index";
+import { getLibExtension, getLibFilename, getTriple } from "./platform";
 
 // Cross-platform path normalization helpers
 const normalizePath = (path: string | null | undefined): string | null => {
@@ -127,7 +127,7 @@ describe("FileFinder - Full Lifecycle", () => {
       if (result.value.items.length > 0) {
         // Log first few paths to see format on Windows
         // Items are strings (file paths), not objects
-        const samplePaths = result.value.items
+        const _samplePaths = result.value.items
           .slice(0, 3)
           .map((item) =>
             normalizePath(typeof item === "string" ? item : item.relativePath),
@@ -180,7 +180,7 @@ describe("FileFinder - Full Lifecycle", () => {
       if (result.value.items.length > 0) {
         // Log sample match to verify content on Windows
         const first = result.value.items[0];
-        const normalizedPath = normalizePath(first.relativePath);
+        const _normalizedPath = normalizePath(first.relativePath);
       }
 
       expect(result.value.totalMatched).toBeGreaterThan(0);
@@ -236,9 +236,7 @@ describe("FileFinder - Full Lifecycle", () => {
       expect(result.value.filePicker.initialized).toBe(true);
       expect(result.value.filePicker.basePath).toBeDefined();
       // Normalize basePath for cross-platform comparison
-      const normalizedBasePath = normalizePath(
-        result.value.filePicker.basePath || "",
-      );
+      const normalizedBasePath = normalizePath(result.value.filePicker.basePath || "");
       const normalizedTestDir = normalizePath(testDir);
       expect(normalizedBasePath).toBe(normalizedTestDir);
       expect(typeof result.value.filePicker.indexedFiles).toBe("number");

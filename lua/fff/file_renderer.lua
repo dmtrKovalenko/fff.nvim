@@ -180,7 +180,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
     local border_hl
 
     if is_cursor then
-      local base_hl = git_utils.get_border_highlight(item.git_status)
+      local base_hl = git_utils.get_border_highlight_selected(item.git_status)
       if base_hl and base_hl ~= '' then
         local border_fg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(base_hl)), 'fg')
         local cursor_bg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(ctx.config.hl.cursor)), 'bg')

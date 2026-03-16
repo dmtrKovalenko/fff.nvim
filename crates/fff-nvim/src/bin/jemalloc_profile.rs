@@ -1,4 +1,4 @@
-use fff_core::file_picker::FilePicker;
+use fff_core::file_picker::{FFFMode, FilePicker};
 use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::env;
 use std::sync::{Arc, RwLock};
@@ -188,6 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     FilePicker::new_with_shared_state(
         base_path.clone(),
         false,
+        FFFMode::Neovim,
         Arc::clone(&shared_picker),
         Arc::clone(&shared_frecency),
     )?;

@@ -125,31 +125,35 @@ pub fn is_modified_status(status: Status) -> bool {
     )
 }
 
-pub fn format_git_status(status: Option<Status>) -> &'static str {
+pub fn format_git_status_opt(status: Option<Status>) -> Option<&'static str> {
     match status {
-        None => "clean",
+        None => Some("clean"),
         Some(status) => {
             if status.contains(Status::WT_NEW) {
-                "untracked"
+                Some("untracked")
             } else if status.contains(Status::WT_MODIFIED) {
-                "modified"
+                Some("modified")
             } else if status.contains(Status::WT_DELETED) {
-                "deleted"
+                Some("deleted")
             } else if status.contains(Status::WT_RENAMED) {
-                "renamed"
+                Some("renamed")
             } else if status.contains(Status::INDEX_NEW) {
-                "staged_new"
+                Some("staged_new")
             } else if status.contains(Status::INDEX_MODIFIED) {
-                "staged_modified"
+                Some("staged_modified")
             } else if status.contains(Status::INDEX_DELETED) {
-                "staged_deleted"
+                Some("staged_deleted")
             } else if status.contains(Status::IGNORED) {
-                "ignored"
+                Some("ignored")
             } else if status.contains(Status::CURRENT) || status.is_empty() {
-                "clean"
+                Some("clean")
             } else {
-                "unknown"
+                None
             }
         }
     }
+}
+
+pub fn format_git_status(status: Option<Status>) -> &'static str {
+    format_git_status_opt(status).unwrap_or("unknown")
 }

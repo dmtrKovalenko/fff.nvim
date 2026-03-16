@@ -13,3 +13,12 @@ result
 big-repo/
 # all the perf like utility files
 *.data
+node_modules/
+
+dist/
+scripts/benchmark-results/
+
+# Native binaries (downloaded at install)
+*.dylib
+*.so
+*.dll

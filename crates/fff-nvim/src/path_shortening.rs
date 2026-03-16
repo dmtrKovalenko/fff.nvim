@@ -34,7 +34,7 @@ impl PathCache {
         }
     }
 
-    #[tracing::instrument(skip(self), fields(path = %path.display(), max_size))]
+    #[tracing::instrument(skip(self), fields(path = %path.display(), max_size), level = tracing::Level::TRACE)]
     fn get(&self, path: &Path, max_size: usize) -> Option<&str> {
         self.map.get(path).and_then(|entry| {
             // Only return cached value if max_size matches
@@ -85,7 +85,7 @@ pub fn shorten_path_with_cache(
             .read()
             .map_err(|_| "Failed to acquire path cache lock".to_string())?;
         if let Some(cached) = cache.get(path, max_size) {
-            tracing::debug!("Cache hit for path '{}'", path.display());
+            tracing::trace!("Cache hit for path '{}'", path.display());
             return Ok(cached.to_string());
         }
     }

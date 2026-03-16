@@ -30,9 +30,6 @@
  *   }
  * }
  *
- * // Track file access (for frecency)
- * finder.trackAccess("/path/to/project/src/main.ts");
- *
  * // Cleanup when done
  * finder.destroy();
  * ```
@@ -40,44 +37,40 @@
  * @packageDocumentation
  */
 
-// Main API
 export { FileFinder } from "./finder";
 
-// Types
-export type {
-  Result,
-  InitOptions,
-  SearchOptions,
-  FileItem,
-  Score,
-  Location,
-  SearchResult,
-  ScanProgress,
-  HealthCheck,
-  DbHealth,
-  GrepMode,
-  GrepOptions,
-  GrepMatch,
-  GrepResult,
-  GrepCursor,
-} from "./types";
-
-// Result helpers
-export { ok, err } from "./types";
-
-// Binary management (for CLI tools)
 export {
+  binaryExists,
   downloadBinary,
   ensureBinary,
-  binaryExists,
-  getBinaryPath,
   findBinary,
+  getBinaryPath,
 } from "./download";
 
-// Platform utilities
 export {
-  getTriple,
   getLibExtension,
   getLibFilename,
   getNpmPackageName,
+  getTriple,
 } from "./platform";
+
+export type {
+  DbHealth,
+  FileItem,
+  GrepCursor,
+  GrepMatch,
+  GrepMode,
+  GrepOptions,
+  GrepResult,
+  HealthCheck,
+  InitOptions,
+  Location,
+  MultiGrepOptions,
+  Result,
+  ScanProgress,
+  Score,
+  SearchOptions,
+  SearchResult,
+} from "./types";
+// Result helpers
+export { err, ok } from "./types";

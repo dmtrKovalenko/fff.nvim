@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::file_picker::FilePicker;
+use crate::file_picker::{FFFMode, FilePicker};
 use crate::git::GitStatusCache;
 use crate::sort_buffer::sort_with_buffer;
 use crate::{SharedFrecency, SharedPicker};
@@ -21,6 +21,9 @@ pub struct BackgroundWatcher {
 const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_PATHS_THRESHOLD: usize = 1024;
 const MAX_SELECTIVE_WATCH_DIRS: usize = 100;
+/// Minimum seconds between frecency tracks of the same file in AI mode.
+/// Prevents score inflation from rapid burst edits by AI agents.
+const AI_MODE_COOLDOWN_SECS: u64 = 5 * 60;
 
 impl BackgroundWatcher {
     pub fn new(
@@ -28,14 +31,16 @@ impl BackgroundWatcher {
         git_workdir: Option<PathBuf>,
         shared_picker: SharedPicker,
         shared_frecency: SharedFrecency,
+        mode: FFFMode,
     ) -> Result<Self, Error> {
         info!(
-            "Initializing background watcher for path: {}",
-            base_path.display()
+            "Initializing background watcher for path: {}, mode: {:?}",
+            base_path.display(),
+            mode,
         );
 
         let debouncer =
-            Self::create_debouncer(base_path, git_workdir, shared_picker, shared_frecency)?;
+            Self::create_debouncer(base_path, git_workdir, shared_picker, shared_frecency, mode)?;
         info!("Background file watcher initialized successfully");
 
         Ok(Self {
@@ -48,6 +53,7 @@ impl BackgroundWatcher {
         git_workdir: Option<PathBuf>,
         shared_picker: SharedPicker,
         shared_frecency: SharedFrecency,
+        mode: FFFMode,
     ) -> Result<Debouncer, Error> {
         // do not follow symlinks as then notifiers spawns a bunch of events for symlinked
         // files that could be git ignored, we have to property differentiate those and if
@@ -66,6 +72,7 @@ impl BackgroundWatcher {
                             &git_workdir_for_handler,
                             &shared_picker,
                             &shared_frecency,
+                            mode,
                         );
                     }
                     Err(errors) => {
@@ -151,6 +158,7 @@ fn handle_debounced_events(
     git_workdir: &Option<PathBuf>,
     shared_picker: &SharedPicker,
     shared_frecency: &SharedFrecency,
+    mode: FFFMode,
 ) {
     // this will be called very often, we have to minimiy the lock time for file picker
     let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
@@ -315,6 +323,50 @@ fn handle_debounced_events(
             debug!("No file index changes to apply");
             Vec::new()
         };
+
+    // AI mode: auto-track frecency for all modified/created files.
+    // Uses a 5-minute cooldown per file to prevent score inflation from rapid
+    // burst edits (AI agents often edit the same file many times in minutes).
+    // This runs after apply_changes so the picker write lock is released.
+    if mode.is_ai() && !paths_to_add_or_modify.is_empty() {
+        let mut tracked_count = 0usize;
+        if let Ok(frecency_guard) = shared_frecency.read()
+            && let Some(ref frecency) = *frecency_guard
+        {
+            for path in &paths_to_add_or_modify {
+                // Skip if this file was tracked less than 5 minutes ago
+                let should_track = match frecency.seconds_since_last_access(path) {
+                    Ok(Some(secs)) => secs >= AI_MODE_COOLDOWN_SECS,
+                    Ok(None) => true, // Never tracked before
+                    Err(_) => true,   // DB error, track anyway
+                };
+                if !should_track {
+                    continue;
+                }
+
+                if let Err(e) = frecency.track_access(path) {
+                    error!("Failed to track frecency for {:?}: {:?}", path, e);
+                } else {
+                    tracked_count += 1;
+                }
+            }
+            if tracked_count > 0 {
+                info!("AI mode: tracked frecency for {} files", tracked_count);
+            }
+        }
+
+        // Update in-memory frecency scores for tracked files
+        if tracked_count > 0
+            && let Ok(mut picker_guard) = shared_picker.write()
+            && let Some(ref mut picker) = *picker_guard
+            && let Ok(frecency_guard) = shared_frecency.read()
+            && let Some(ref frecency) = *frecency_guard
+        {
+            for path in &paths_to_add_or_modify {
+                let _ = picker.update_single_file_frecency(path, frecency);
+            }
+        }
+    }
 
     // Git status updates require a repository.
     let Some(repo) = repo.as_ref() else {

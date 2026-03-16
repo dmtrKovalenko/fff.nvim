@@ -10,7 +10,7 @@ use fff_core::FileItem;
 /// Usage:
 ///   cargo build --release --bin grep_profiler
 ///   ./target/release/grep_profiler [--path /path/to/repo]
-use fff_core::grep::{GrepSearchOptions, grep_search, parse_grep_query};
+use fff_core::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -119,6 +119,10 @@ struct GrepBench<'a> {
 
 impl<'a> GrepBench<'a> {
     fn new(files: &'a [FileItem]) -> Self {
+        Self::with_mode(files, GrepMode::PlainText)
+    }
+
+    fn with_mode(files: &'a [FileItem], mode: GrepMode) -> Self {
         Self {
             files,
             options: GrepSearchOptions {
@@ -127,8 +131,11 @@ impl<'a> GrepBench<'a> {
                 smart_case: true,
                 file_offset: 0,
                 page_limit: 50,
-                mode: Default::default(),
+                mode,
                 time_budget_ms: 0,
+                before_context: 0,
+                after_context: 0,
+                classify_definitions: false,
             },
         }
     }
@@ -137,7 +144,7 @@ impl<'a> GrepBench<'a> {
     fn run_once(&self, query: &str) -> (Duration, usize, usize) {
         let parsed = parse_grep_query(query);
         let start = Instant::now();
-        let result = grep_search(self.files, query, parsed, &self.options);
+        let result = grep_search(self.files, query, parsed.as_ref(), &self.options);
         let elapsed = start.elapsed();
         (elapsed, result.matches.len(), result.total_files_searched)
     }
@@ -220,7 +227,7 @@ fn main() {
     eprintln!("Repository: {:?}", canonical);
 
     // Direct file loading (no background thread)
-    eprintln!("\n[1/5] Loading files...");
+    eprintln!("\n[1/7] Loading files...");
     let load_start = Instant::now();
     let files = load_files(&canonical);
     let load_time = load_start.elapsed();
@@ -236,7 +243,7 @@ fn main() {
 
     let bench = GrepBench::new(&files);
 
-    eprintln!("[2/5] Cold cache benchmarks (first search, mmap not yet loaded)");
+    eprintln!("[2/7] Cold cache benchmarks (first search, mmap not yet loaded)");
     eprintln!("  Each query runs once with fresh FileItem mmaps.\n");
     print_header();
 
@@ -259,7 +266,7 @@ fn main() {
         print_row(name, &stats, matches, files_searched, 1);
     }
 
-    eprintln!("\n[3/5] Warm cache benchmarks (mmap cache populated)");
+    eprintln!("\n[3/7] Warm cache benchmarks (plain text, mmap cache populated)");
     eprintln!("  Running 3 warmup iterations, then measuring.\n");
     print_header();
 
@@ -293,7 +300,84 @@ fn main() {
         print_row(name, &stats, matches, files_searched, *iters);
     }
 
-    eprintln!("\n[4/5] Incremental typing simulation");
+    // ── Fuzzy grep benchmarks ─────────────────────────────────────────────
+    eprintln!("\n[4/7] Fuzzy grep warm benchmarks");
+    eprintln!("  Running 3 warmup iterations, then measuring.\n");
+    print_header();
+
+    let fuzzy_bench = GrepBench::with_mode(&files, GrepMode::Fuzzy);
+
+    let fuzzy_queries: Vec<(&str, &str, usize)> = vec![
+        ("fuzzy_exact", "mutex_lock", 15),
+        ("fuzzy_typo", "mutx_lock", 15),
+        ("fuzzy_camel", "InodeOps", 15),
+        ("fuzzy_abbrev", "sched_rt", 15),
+        ("fuzzy_short", "kfr", 15),
+        ("fuzzy_common", "return", 10),
+        ("fuzzy_define", "MODULE_LICENSE", 15),
+        ("fuzzy_struct", "file_operations", 15),
+        ("fuzzy_long", "static_int_init", 15),
+        ("fuzzy_path", "printk *.c", 15),
+    ];
+
+    // Warmup
+    for (_, query, _) in &fuzzy_queries {
+        for _ in 0..3 {
+            fuzzy_bench.run_once(query);
+        }
+    }
+
+    for (name, query, iters) in &fuzzy_queries {
+        let (stats, matches, files_searched) = fuzzy_bench.bench_query(query, *iters);
+        print_row(name, &stats, matches, files_searched, *iters);
+    }
+
+    // ── Fuzzy incremental typing ────────────────────────────────────────
+    eprintln!("\n[5/7] Fuzzy incremental typing simulation");
+    eprintln!("  Simulates user typing character by character (fuzzy mode).\n");
+
+    let fuzzy_typing_sequences: Vec<(&str, Vec<&str>)> = vec![
+        (
+            "mutex_lock",
+            vec![
+                "m",
+                "mu",
+                "mut",
+                "mute",
+                "mutex",
+                "mutex_",
+                "mutex_l",
+                "mutex_lo",
+                "mutex_loc",
+                "mutex_lock",
+            ],
+        ),
+        ("printk", vec!["p", "pr", "pri", "prin", "print", "printk"]),
+        ("kfree", vec!["k", "kf", "kfr", "kfre", "kfree"]),
+    ];
+
+    for (name, sequence) in &fuzzy_typing_sequences {
+        eprintln!("  Typing '{}' ({} keystrokes):", name, sequence.len());
+        eprintln!(
+            "    {:>16} | {:>8} | {:>6} | {:>6}",
+            "Query", "Latency", "Match", "Files"
+        );
+        eprintln!("    {:-<16}-+-{:-<8}-+-{:-<6}-+-{:-<6}", "", "", "", "");
+
+        for prefix in sequence {
+            let (elapsed, matches, files_searched) = fuzzy_bench.run_once(prefix);
+            eprintln!(
+                "    {:>16} | {:>8} | {:>6} | {:>6}",
+                format!("\"{}\"", prefix),
+                fmt_dur(elapsed),
+                matches,
+                files_searched,
+            );
+        }
+        eprintln!();
+    }
+
+    eprintln!("[6/7] Incremental typing simulation (plain text)");
     eprintln!("  Simulates user typing character by character.\n");
 
     let typing_sequences: Vec<(&str, Vec<&str>)> = vec![
@@ -338,7 +422,7 @@ fn main() {
         eprintln!();
     }
 
-    eprintln!("[5/5] Pagination benchmark");
+    eprintln!("[7/7] Pagination benchmark");
     eprintln!("  Testing page_offset performance for common query.\n");
 
     let pagination_query = "return";
@@ -363,9 +447,12 @@ fn main() {
             page_limit: 50,
             mode: Default::default(),
             time_budget_ms: 0,
+            before_context: 0,
+            after_context: 0,
+            classify_definitions: false,
         };
         let start = Instant::now();
-        let result = grep_search(&files, pagination_query, parsed, &opts);
+        let result = grep_search(&files, pagination_query, parsed.as_ref(), &opts);
         let elapsed = start.elapsed();
         eprintln!(
             "    {:>6} | {:>12} | {:>8} | {:>6} | {:>12}",

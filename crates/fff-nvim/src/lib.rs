@@ -4,8 +4,8 @@ use fff_core::file_picker::FilePicker;
 use fff_core::frecency::FrecencyTracker;
 use fff_core::query_tracker::QueryTracker;
 use fff_core::{
-    DbHealthChecker, Error, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency,
-    SharedPicker, SharedQueryTracker,
+    DbHealthChecker, Error, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser,
+    SharedFrecency, SharedPicker, SharedQueryTracker,
 };
 use mimalloc::MiMalloc;
 use mlua::prelude::*;
@@ -43,6 +43,10 @@ pub fn init_db(
     *frecency =
         Some(FrecencyTracker::new(&frecency_db_path, use_unsafe_no_lock).into_lua_result()?);
     tracing::info!("Frecency database initialized at {}", frecency_db_path);
+    drop(frecency);
+
+    // Spawn background GC to purge stale entries without blocking startup
+    FrecencyTracker::spawn_gc(Arc::clone(&FRECENCY), frecency_db_path, use_unsafe_no_lock);
 
     let mut query_tracker = QUERY_TRACKER
         .write()
@@ -91,6 +95,7 @@ pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
     FilePicker::new_with_shared_state(
         base_path,
         false,
+        FFFMode::Neovim,
         Arc::clone(&FILE_PICKER),
         Arc::clone(&FRECENCY),
     )
@@ -100,20 +105,28 @@ pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
 }
 
 fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
-    // Stop existing picker
+    // Cancel and stop the old picker under a single write lock to avoid
+    // a window where FILE_PICKER is None (which causes FilePickerMissing
+    // errors if the UI is searching concurrently).
     {
         let mut guard = FILE_PICKER
             .write()
             .with_lock_error(Error::AcquireItemLock)?;
-        if let Some(mut picker) = guard.take() {
+        if let Some(ref mut picker) = *guard {
+            // Signal cancellation BEFORE stopping — this tells any orphaned
+            // scan threads from this picker to discard their results.
+            picker.cancel();
             picker.stop_background_monitor();
         }
+        // Don't take() here — leave the old picker in place so searches
+        // still work until new_with_shared_state replaces it atomically.
     }
 
-    // Create new picker backed by the same shared state
+    // Create new picker — this atomically replaces the old one via write lock
     FilePicker::new_with_shared_state(
         path.to_string_lossy().to_string(),
         false,
+        FFFMode::Neovim,
         Arc::clone(&FILE_PICKER),
         Arc::clone(&FRECENCY),
     )?;
@@ -133,6 +146,12 @@ pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<()> {
     let canonical_path = fff_core::path_utils::canonicalize(&path).map_err(|e| {
         LuaError::RuntimeError(format!("Failed to canonicalize path '{}': {}", new_path, e))
     })?;
+
+    if let Ok(Some(picker)) = FILE_PICKER.read().as_deref()
+        && picker.base_path() == canonical_path
+    {
+        return Ok(()); // same dir
+    }
 
     // Spawn a background thread to avoid blocking Lua/UI thread
     std::thread::spawn(move || {
@@ -297,9 +316,12 @@ pub fn live_grep(
         page_limit: page_size.unwrap_or(50),
         mode,
         time_budget_ms: time_budget_ms.unwrap_or(0),
+        before_context: 0,
+        after_context: 0,
+        classify_definitions: false,
     };
 
-    let result = fff_core::grep::grep_search(picker.get_files(), &query, parsed, &options);
+    let result = fff_core::grep::grep_search(picker.get_files(), &query, parsed.as_ref(), &options);
 
     lua_types::GrepResultLua::from(result).into_lua(lua)
 }
@@ -564,21 +586,28 @@ pub fn get_historical_grep_query(_: &Lua, offset: usize) -> LuaResult<Option<Str
 }
 
 pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool> {
-    let file_picker = FILE_PICKER
-        .read()
-        .with_lock_error(Error::AcquireItemLock)
-        .into_lua_result()?;
-    let picker = file_picker
-        .as_ref()
-        .ok_or(Error::FilePickerMissing)
-        .into_lua_result()?;
+    // Extract the scan signal Arc WITHOUT holding the read lock, so the
+    // scan thread can acquire the write lock to store its results.
+    // Holding a read lock while polling would deadlock: the scan thread
+    // needs a write lock to finish, but can't acquire it while we hold the read lock.
+    let scan_signal = {
+        let file_picker = FILE_PICKER
+            .read()
+            .with_lock_error(Error::AcquireItemLock)
+            .into_lua_result()?;
+        let picker = file_picker
+            .as_ref()
+            .ok_or(Error::FilePickerMissing)
+            .into_lua_result()?;
+        picker.scan_signal()
+    }; // read lock released here
 
     let timeout_ms = timeout_ms.unwrap_or(500);
     let timeout_duration = Duration::from_millis(timeout_ms);
     let start_time = std::time::Instant::now();
     let mut sleep_duration = Duration::from_millis(1);
 
-    while picker.is_scan_active() {
+    while scan_signal.load(std::sync::atomic::Ordering::Relaxed) {
         if start_time.elapsed() >= timeout_duration {
             ::tracing::warn!("wait_for_initial_scan timed out after {}ms", timeout_ms);
             return Ok(false);

@@ -22,6 +22,10 @@ pub enum Constraint<'a> {
     /// Path constraint: /src/ -> PathSegment("src")
     PathSegment(&'a str),
 
+    /// File path constraint (AI mode): "libswscale/input.c" → FilePath("libswscale/input.c")
+    /// Matches files whose relative path ends with this suffix at a `/` boundary.
+    FilePath(&'a str),
+
     /// File type constraint: type:rust -> FileType("rust")
     FileType(&'a str),
 

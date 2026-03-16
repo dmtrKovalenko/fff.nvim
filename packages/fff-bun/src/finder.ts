@@ -9,43 +9,64 @@
  */
 
 import {
+  ensureLoaded,
   ffiCreate,
   ffiDestroy,
-  ffiSearch,
-  ffiLiveGrep,
-  ffiScanFiles,
-  ffiIsScanning,
-  ffiGetScanProgress,
-  ffiWaitForScan,
-  ffiRestartIndex,
-  ffiTrackAccess,
-  ffiRefreshGitStatus,
-  ffiTrackQuery,
   ffiGetHistoricalQuery,
+  ffiGetScanProgress,
   ffiHealthCheck,
-  ensureLoaded,
+  ffiIsScanning,
+  ffiLiveGrep,
+  ffiMultiGrep,
+  ffiRefreshGitStatus,
+  ffiRestartIndex,
+  ffiScanFiles,
+  ffiSearch,
+  ffiTrackQuery,
+  ffiWaitForScan,
   isAvailable,
   type NativeHandle,
 } from "./ffi";
 
 import type {
-  Result,
-  InitOptions,
-  SearchOptions,
-  SearchResult,
-  ScanProgress,
-  HealthCheck,
   GrepOptions,
   GrepResult,
+  HealthCheck,
+  InitOptions,
+  MultiGrepOptions,
+  Result,
+  ScanProgress,
+  SearchOptions,
+  SearchResult,
 } from "./types";
 
 import {
-  err,
-  toInternalInitOptions,
-  toInternalSearchOptions,
-  toInternalGrepOptions,
   createGrepCursor,
+  err,
+  toInternalGrepOptions,
+  toInternalInitOptions,
+  toInternalMultiGrepOptions,
+  toInternalSearchOptions,
 } from "./types";
+
+/** Transform raw FFI grep result into typed GrepResult with opaque cursor. */
+function transformGrepResult(result: Result<unknown>): Result<GrepResult> {
+  if (!result.ok) {
+    return result;
+  }
+  const raw = result.value as Record<string, unknown>;
+  const nextFileOffset = raw.nextFileOffset as number;
+  const grepResult: GrepResult = {
+    items: raw.items as GrepResult["items"],
+    totalMatched: raw.totalMatched as number,
+    totalFilesSearched: raw.totalFilesSearched as number,
+    totalFiles: raw.totalFiles as number,
+    filteredFileCount: raw.filteredFileCount as number,
+    nextCursor: nextFileOffset > 0 ? createGrepCursor(nextFileOffset) : null,
+    regexFallbackError: raw.regexFallbackError as string | undefined,
+  };
+  return { ok: true, value: grepResult };
+}
 
 /**
  * FileFinder - Fast file finder with fuzzy search
@@ -207,7 +228,7 @@ export class FileFinder {
    * @example
    * ```typescript
    * // First page
-        * const result = finder.liveGrep("TODO", { mode: "plain" });
+   * const result = finder.liveGrep("TODO", { mode: "plain" });
    * if (result.ok) {
    *   for (const match of result.value.items) {
    *     console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
@@ -226,31 +247,48 @@ export class FileFinder {
     if (!guard.ok) return guard;
 
     const internalOpts = toInternalGrepOptions(options);
-    const result = ffiLiveGrep(
-      guard.value,
-      query,
-      JSON.stringify(internalOpts)
-    );
+    const result = ffiLiveGrep(guard.value, query, JSON.stringify(internalOpts));
 
-    if (!result.ok) {
-      return result;
+    return transformGrepResult(result);
+  }
+
+  /**
+   * Multi-pattern OR search using Aho-Corasick.
+   *
+   * Searches for lines matching ANY of the provided patterns using
+   * SIMD-accelerated multi-needle matching. Faster than regex alternation
+   * for literal text searches.
+   *
+   * Supports pagination. The result includes a `nextCursor` that can be
+   * passed back to fetch the next page.
+   *
+   * @param options - Multi-grep options including patterns and optional constraints
+   * @returns Grep results with matched lines and file metadata
+   *
+   * @example
+   * ```typescript
+   * const result = finder.multiGrep({
+   *   patterns: ["VideoFrame", "video_frame", "PreloadedImage"],
+   * });
+   * if (result.ok) {
+   *   for (const match of result.value.items) {
+   *     console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
+   *   }
+   * }
+   * ```
+   */
+  multiGrep(options: MultiGrepOptions): Result<GrepResult> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+
+    if (!options.patterns || options.patterns.length === 0) {
+      return err("patterns array must have at least 1 element");
     }
 
-    // Transform the raw FFI result: replace nextFileOffset with an opaque cursor
-    const raw = result.value as Record<string, unknown>;
-    const nextFileOffset = raw.nextFileOffset as number;
+    const internalOpts = toInternalMultiGrepOptions(options);
+    const result = ffiMultiGrep(guard.value, JSON.stringify(internalOpts));
 
-    const grepResult: GrepResult = {
-      items: raw.items as GrepResult["items"],
-      totalMatched: raw.totalMatched as number,
-      totalFilesSearched: raw.totalFilesSearched as number,
-      totalFiles: raw.totalFiles as number,
-      filteredFileCount: raw.filteredFileCount as number,
-      nextCursor: nextFileOffset > 0 ? createGrepCursor(nextFileOffset) : null,
-      regexFallbackError: raw.regexFallbackError as string | undefined,
-    };
-
-    return { ok: true, value: grepResult };
+    return transformGrepResult(result);
   }
 
   /**
@@ -319,19 +357,6 @@ export class FileFinder {
   }
 
   /**
-   * Track file access for frecency scoring.
-   *
-   * Call this when a user opens a file to improve future search rankings.
-   *
-   * @param filePath - Absolute path to the accessed file
-   */
-  trackAccess(filePath: string): Result<boolean> {
-    const guard = this.ensureAlive();
-    if (!guard.ok) return guard;
-    return ffiTrackAccess(guard.value, filePath);
-  }
-
-  /**
    * Refresh the git status cache.
    *
    * @returns Number of files with updated git status
@@ -377,10 +402,7 @@ export class FileFinder {
    * @param testPath - Optional path to test git repository detection
    */
   healthCheck(testPath?: string): Result<HealthCheck> {
-    return ffiHealthCheck(
-      this.handle,
-      testPath || ""
-    ) as Result<HealthCheck>;
+    return ffiHealthCheck(this.handle, testPath || "") as Result<HealthCheck>;
   }
 
   /**

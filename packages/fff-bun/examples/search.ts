@@ -1,17 +1,17 @@
 #!/usr/bin/env bun
 /**
  * Interactive file finder demo
- * 
- * Usage: 
+ *
+ * Usage:
  *   bunx fff-demo [directory]
  *   bun examples/search.ts [directory]
- * 
+ *
  * Indexes the specified directory (or cwd) and provides an interactive
  * search prompt with detailed metadata about results.
  */
 
 import { FileFinder } from "../src/index";
-import * as readline from "readline";
+import * as readline from "node:readline";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -19,7 +19,6 @@ const DIM = "\x1b[2m";
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
 const BLUE = "\x1b[34m";
-const MAGENTA = "\x1b[35m";
 const CYAN = "\x1b[36m";
 const RED = "\x1b[31m";
 
@@ -74,7 +73,7 @@ function formatTime(unixSeconds: number): string {
 
 async function main() {
   const targetDir = process.argv[2] || process.cwd();
-  
+
   console.log(`${BOLD}${CYAN}fff - Fast File Finder Demo${RESET}\n`);
 
   // Check library availability
@@ -115,7 +114,9 @@ async function main() {
   const finalProgress = finder.getScanProgress();
   const totalFiles = finalProgress.ok ? finalProgress.value.scannedFilesCount : 0;
 
-  console.log(`\r${GREEN}✓${RESET} Indexed ${BOLD}${totalFiles}${RESET} files in ${scanTime}ms\n`);
+  console.log(
+    `\r${GREEN}✓${RESET} Indexed ${BOLD}${totalFiles}${RESET} files in ${scanTime}ms\n`,
+  );
 
   // Show index info
   const health = finder.healthCheck();
@@ -133,7 +134,9 @@ async function main() {
     output: process.stdout,
   });
 
-  console.log(`${BOLD}Enter a search query${RESET} (or 'q' to quit, empty for all files):\n`);
+  console.log(
+    `${BOLD}Enter a search query${RESET} (or 'q' to quit, empty for all files):\n`,
+  );
 
   const prompt = () => {
     rl.question(`${CYAN}search>${RESET} `, (query) => {
@@ -158,7 +161,7 @@ async function main() {
 
       console.log();
       console.log(
-        `${DIM}Found ${BOLD}${totalMatched}${RESET}${DIM} matches in ${totalFiles} files (${searchTime}ms)${RESET}`
+        `${DIM}Found ${BOLD}${totalMatched}${RESET}${DIM} matches in ${totalFiles} files (${searchTime}ms)${RESET}`,
       );
       console.log();
 
@@ -169,9 +172,7 @@ async function main() {
       }
 
       // Header
-      console.log(
-        `${DIM}  Git │ Score │  Size  │  Modified  │ Path${RESET}`
-      );
+      console.log(`${DIM}  Git │ Score │  Size  │  Modified  │ Path${RESET}`);
 
       // Results
       for (let i = 0; i < items.length; i++) {
@@ -185,7 +186,7 @@ async function main() {
         const path = item.relativePath;
 
         console.log(
-          `   ${gitStatus}  │ ${totalScore.padStart(5)} │ ${size} │ ${modified} │ ${path}`
+          `   ${gitStatus}  │ ${totalScore.padStart(5)} │ ${size} │ ${modified} │ ${path}`,
         );
 
         // Show score breakdown for top results
@@ -194,19 +195,23 @@ async function main() {
           if (score.baseScore > 0) breakdown.push(`base:${score.baseScore}`);
           if (score.filenameBonus > 0) breakdown.push(`filename:+${score.filenameBonus}`);
           if (score.frecencyBoost > 0) breakdown.push(`frecency:+${score.frecencyBoost}`);
-          if (score.comboMatchBoost > 0) breakdown.push(`combo:+${score.comboMatchBoost}`);
-          if (score.distancePenalty < 0) breakdown.push(`distance:${score.distancePenalty}`);
+          if (score.comboMatchBoost > 0)
+            breakdown.push(`combo:+${score.comboMatchBoost}`);
+          if (score.distancePenalty < 0)
+            breakdown.push(`distance:${score.distancePenalty}`);
           if (score.exactMatch) breakdown.push(`${GREEN}exact${RESET}`);
-          
+
           if (breakdown.length > 0) {
-            console.log(`${DIM}      │       │        │            │  └─ ${breakdown.join(", ")}${RESET}`);
+            console.log(
+              `${DIM}      │       │        │            │  └─ ${breakdown.join(", ")}${RESET}`,
+            );
           }
         }
       }
 
       if (totalMatched > items.length) {
         console.log(
-          `${DIM}      │       │        │            │ ... and ${totalMatched - items.length} more${RESET}`
+          `${DIM}      │       │        │            │ ... and ${totalMatched - items.length} more${RESET}`,
         );
       }
 

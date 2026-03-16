@@ -114,7 +114,7 @@ local function download_from_github(version, binary_path, opts, callback)
     extra_curl_args = opts.extra_curl_args,
   }, function(success, err)
     if not success then
-      vim.uv.fanoushkas_unlink(tmp_path)
+      vim.uv.fs_unlink(tmp_path)
       callback(false, err)
       return
     end
