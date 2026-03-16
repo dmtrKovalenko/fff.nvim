@@ -55,6 +55,11 @@ local M = {}
 --- @field time_budget_ms number
 --- @field modes string[]
 
+--- @alias FffSelectAction 'edit' | 'split' | 'vsplit' | 'tabedit'
+
+--- @class FffSelectConfig
+--- @field pre_select_hook fun(current_buf: integer, action: FffSelectAction)
+
 --- @class FffConfig
 --- @field base_path string
 --- @field prompt string
@@ -68,6 +73,7 @@ local M = {}
 --- @field hl table<string, string>
 --- @field frecency FffFrecencyConfig
 --- @field history FffHistoryConfig
+--- @field select FffSelectConfig
 --- @field git table
 --- @field debug table
 --- @field logging table
@@ -184,6 +190,42 @@ local function fallback_hl(name)
   end
 
   return resolved_hl or name[#name]
+end
+
+--- Find the first visible window with a normal file buffer
+--- @return number|nil Window ID of the first suitable window, or nil if none found
+local function find_suitable_window()
+  local current_tabpage = vim.api.nvim_get_current_tabpage()
+  local windows = vim.api.nvim_tabpage_list_wins(current_tabpage)
+
+  for _, win in ipairs(windows) do
+    if vim.api.nvim_win_is_valid(win) then
+      local buf = vim.api.nvim_win_get_buf(win)
+      if vim.api.nvim_buf_is_valid(buf) then
+        local buftype = vim.api.nvim_get_option_value('buftype', { buf = buf })
+        local modifiable = vim.api.nvim_get_option_value('modifiable', { buf = buf })
+        local filetype = vim.api.nvim_get_option_value('filetype', { buf = buf })
+
+        local is_picker_window = (
+          win == M.state.input_win
+          or win == M.state.list_win
+          or win == M.state.preview_win
+          or win == M.state.file_info_win
+        )
+
+        if
+          (buftype == '' or buftype == 'acwrite')
+          and modifiable
+          and not is_picker_window
+          and filetype ~= 'undotree'
+        then
+          return win
+        end
+      end
+    end
+  end
+
+  return nil
 end
 
 local function init()
@@ -307,6 +349,21 @@ local function init()
       db_path = vim.fn.stdpath('data') .. '/fff_queries',
       min_combo_count = 3, -- Minimum selections before combo boost applies (3 = boost starts on 3rd selection)
       combo_boost_score_multiplier = 100, -- Score multiplier for combo matches (files repeatedly opened with same query)
+    },
+    select = {
+      --- @param current_buf integer
+      --- @param action FffSelectAction
+      pre_select_hook = function(current_buf, action)
+        if action ~= 'edit' then return end
+        local current_buftype = vim.api.nvim_get_option_value('buftype', { buf = current_buf })
+        local current_buf_modifiable = vim.api.nvim_get_option_value('modifiable', { buf = current_buf })
+
+        -- If current active buffer is not a normal buffer we find a suitable window with a tab otherwise opening a new split
+        if current_buftype ~= '' or not current_buf_modifiable then
+          local suitable_win = find_suitable_window()
+          if suitable_win then vim.api.nvim_set_current_win(suitable_win) end
+        end
+      end,
     },
     -- Git integration
     git = {
