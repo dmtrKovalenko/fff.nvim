@@ -1,4 +1,4 @@
-*fff.nvim.txt*         For Neovim >= 0.10.0         Last change: 2026 March 13
+*fff.nvim.txt*         For Neovim >= 0.10.0         Last change: 2026 March 16
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -7,10 +7,8 @@ Table of Contents                                 *fff.nvim-table-of-contents*
   - Features                                               |fff.nvim-features|
   - MCP                                                         |fff.nvim-mcp|
   - Neovim guide                                       |fff.nvim-neovim-guide|
-  - Installation                                       |fff.nvim-installation|
 1. Links                                                      |fff.nvim-links|
-FFF.nvim + Buffers Support
-A fast file search for your AI and neovim, with memory built-in
+FFFAI agents (MCP)   |   Neovim usersA fast file search for your AI and neovim, with memory built-in
 
 
 
@@ -18,13 +16,6 @@ A fast file search for your AI and neovim, with memory built-in
 **FFF** stands for ~freakin fast fuzzy file finder~ (pick 3) and it is an
 opinionated fuzzy file picker for your AI agent and Neovim. Just for file
 search, but we do the file search really fff well.
-
-FFF is a tool for grepping, fuzzy file matching, globbing, and multigrepping
-with a strong focus on performance and useful search results. For humans -
-provides an unbelievable typo-resistant experience, for AI agents - implements
-the fastest file search with additional free memory suggesting the best search
-results based on various factors like frecency, git status, file size,
-definition matches, and more.
 
 
 WHY THIS FORK?                                       *fff.nvim-why-this-fork?*
@@ -67,8 +58,8 @@ actually need day-to-day:
   Gitstatus signs +                             
   text coloring                                 
   ------------------------------------------------------------------------
-**In short:** upstream focused on making file finding extremely fast with Rust.
-This fork fills the "where's the rest of the picker suite?" gap, bringing it
+**Inshort:** upstream focused on making file finding extremely fast with Rust.
+This fork fills the "where’s the rest of the picker suite?" gap, bringing it
 closer to feature parity with Telescope and fzf.vim while keeping the
 Rust-powered speed.
 
@@ -76,6 +67,12 @@ Rust-powered speed.
 
 FEATURES                                                   *fff.nvim-features*
 
+FFF is a tool for grepping, fuzzy file matching, globbing, and multigrepping
+with a strong focus on performance and useful search results. For humans -
+provides an unbelievable typo-resistant experience, for AI agents - implements
+the fastest file search with additional free memory suggesting the best search
+results based on various factors like frecency, git status, file size,
+definition matches, and more.
 
 - Works out of the box with no additional configuration
 - Typo resistant fuzzy search <https://github.com/saghen/frizbee>
@@ -86,7 +83,6 @@ FEATURES                                                   *fff.nvim-features*
 - Display images in previews (for now requires snacks.nvim)
 - Smart in a plenty of different ways hopefully helpful for your workflow
 - This plugin initializes itself lazily by default
-
 
 
 MCP                                                             *fff.nvim-mcp*
