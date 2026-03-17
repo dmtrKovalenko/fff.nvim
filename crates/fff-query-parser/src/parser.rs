@@ -14,6 +14,8 @@ pub enum FuzzyQuery<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FFFQuery<'a> {
+    /// The original raw query string before parsing
+    pub raw_query: &'a str,
     /// Parsed constraints (stack-allocated for ≤8 constraints)
     pub constraints: ConstraintVec<'a>,
     pub fuzzy_query: FuzzyQuery<'a>,
@@ -32,8 +34,8 @@ impl<C: ParserConfig> QueryParser<C> {
         Self { config }
     }
 
-    pub fn parse<'a>(&self, query: &'a str) -> Option<FFFQuery<'a>> {
-        let query: &'a str = query;
+    pub fn parse<'a>(&self, query: &'a str) -> FFFQuery<'a> {
+        let raw_query = query;
         let config: &C = &self.config;
         let mut constraints = ConstraintVec::new();
         let query = query.trim();
@@ -47,13 +49,26 @@ impl<C: ParserConfig> QueryParser<C> {
                 // Don't treat filename tokens (FilePath) as constraints in single-token
                 // queries — the user is fuzzy-searching, not filtering. FilePath constraints
                 // are only useful as filters in multi-token queries like "score.rs search".
-                if !matches!(constraint, Constraint::FilePath(_)) {
+                //
+                // Also skip PathSegment constraints when the token looks like an absolute
+                // file path with a location suffix (e.g. /Users/.../file.rs:12). Without
+                // this, the leading `/` causes the entire path to be consumed as a
+                // PathSegment, preventing location parsing from running.
+                let has_location_suffix = matches!(constraint, Constraint::PathSegment(_))
+                    && query.bytes().any(|b| b == b':')
+                    && query
+                        .bytes()
+                        .rev()
+                        .take_while(|&b| b != b':')
+                        .all(|b| b.is_ascii_digit());
+                if !matches!(constraint, Constraint::FilePath(_)) && !has_location_suffix {
                     constraints.push(constraint);
-                    return Some(FFFQuery {
+                    return FFFQuery {
+                        raw_query,
                         constraints,
                         fuzzy_query: FuzzyQuery::Empty,
                         location: None,
-                    });
+                    };
                 }
             }
 
@@ -61,16 +76,26 @@ impl<C: ParserConfig> QueryParser<C> {
             if config.enable_location() {
                 let (query_without_loc, location) = parse_location(query);
                 if location.is_some() {
-                    return Some(FFFQuery {
+                    return FFFQuery {
+                        raw_query,
                         constraints,
                         fuzzy_query: FuzzyQuery::Text(query_without_loc),
                         location,
-                    });
+                    };
                 }
             }
 
-            // Plain text single token - return None (caller handles as simple fuzzy match)
-            return None;
+            // Plain text single token
+            return FFFQuery {
+                raw_query,
+                constraints,
+                fuzzy_query: if query.is_empty() {
+                    FuzzyQuery::Empty
+                } else {
+                    FuzzyQuery::Text(query)
+                },
+                location: None,
+            };
         }
 
         let mut text_parts = TextPartsBuffer::new();
@@ -133,11 +158,12 @@ impl<C: ParserConfig> QueryParser<C> {
             }
         };
 
-        Some(FFFQuery {
+        FFFQuery {
+            raw_query,
             constraints,
             fuzzy_query,
             location,
-        })
+        }
     }
 }
 
@@ -471,9 +497,7 @@ mod tests {
     #[test]
     fn test_trailing_slash_in_query() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("www/ test")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("www/ test");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
             result.constraints[0],
@@ -510,9 +534,7 @@ mod tests {
     fn test_negation_text() {
         let parser = QueryParser::new(FilePickerConfig);
         // Need two tokens for parsing to return Some
-        let result = parser
-            .parse("!test foo")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("!test foo");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -525,9 +547,7 @@ mod tests {
     #[test]
     fn test_negation_extension() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("!*.rs foo")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("!*.rs foo");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -540,9 +560,7 @@ mod tests {
     #[test]
     fn test_negation_path_segment() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("!/src/ foo")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("!/src/ foo");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -555,9 +573,7 @@ mod tests {
     #[test]
     fn test_negation_git_status() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("!status:modified foo")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("!status:modified foo");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -573,9 +589,7 @@ mod tests {
     #[test]
     fn test_backslash_escape_extension() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("\\*.rs foo")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("\\*.rs foo");
         // \*.rs should NOT be parsed as an Extension constraint
         assert_eq!(result.constraints.len(), 0);
         // Both tokens should be text
@@ -592,9 +606,7 @@ mod tests {
     #[test]
     fn test_backslash_escape_path_segment() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("\\/src/ foo")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("\\/src/ foo");
         assert_eq!(result.constraints.len(), 0);
         match result.fuzzy_query {
             FuzzyQuery::Parts(parts) => {
@@ -608,117 +620,90 @@ mod tests {
     #[test]
     fn test_backslash_escape_negation() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("\\!test foo")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("\\!test foo");
         assert_eq!(result.constraints.len(), 0);
     }
 
     #[test]
     fn test_grep_text_plain_text() {
         // Multi-token plain text — no constraints
-        let q = QueryParser::new(GrepConfig)
-            .parse("name =")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("name =");
         assert_eq!(q.grep_text(), "name =");
     }
 
     #[test]
     fn test_grep_text_strips_constraint() {
-        let q = QueryParser::new(GrepConfig)
-            .parse("name = *.rs someth")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("name = *.rs someth");
         assert_eq!(q.grep_text(), "name = someth");
     }
 
     #[test]
     fn test_grep_text_leading_constraint() {
-        let q = QueryParser::new(GrepConfig)
-            .parse("*.rs name =")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("*.rs name =");
         assert_eq!(q.grep_text(), "name =");
     }
 
     #[test]
     fn test_grep_text_only_constraints() {
-        let q = QueryParser::new(GrepConfig)
-            .parse("*.rs /src/")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("*.rs /src/");
         assert_eq!(q.grep_text(), "");
     }
 
     #[test]
     fn test_grep_text_path_constraint() {
-        let q = QueryParser::new(GrepConfig)
-            .parse("name /src/ value")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("name /src/ value");
         assert_eq!(q.grep_text(), "name value");
     }
 
     #[test]
     fn test_grep_text_negation_constraint() {
-        let q = QueryParser::new(GrepConfig)
-            .parse("name !*.rs value")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("name !*.rs value");
         assert_eq!(q.grep_text(), "name value");
     }
 
     #[test]
     fn test_grep_text_backslash_escape_stripped() {
         // \*.rs should be text with the leading \ removed
-        let q = QueryParser::new(GrepConfig)
-            .parse("\\*.rs foo")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("\\*.rs foo");
         assert_eq!(q.grep_text(), "*.rs foo");
 
-        let q = QueryParser::new(GrepConfig)
-            .parse("\\/src/ foo")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("\\/src/ foo");
         assert_eq!(q.grep_text(), "/src/ foo");
 
-        let q = QueryParser::new(GrepConfig)
-            .parse("\\!test foo")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("\\!test foo");
         assert_eq!(q.grep_text(), "!test foo");
     }
 
     #[test]
     fn test_grep_text_question_mark_is_text() {
-        let q = QueryParser::new(GrepConfig)
-            .parse("foo? bar")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("foo? bar");
         assert_eq!(q.grep_text(), "foo? bar");
     }
 
     #[test]
     fn test_grep_text_bracket_is_text() {
-        let q = QueryParser::new(GrepConfig)
-            .parse("arr[0] more")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("arr[0] more");
         assert_eq!(q.grep_text(), "arr[0] more");
     }
 
     #[test]
     fn test_grep_text_path_glob_is_constraint() {
-        let q = QueryParser::new(GrepConfig)
-            .parse("pattern src/**/*.rs")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("pattern src/**/*.rs");
         assert_eq!(q.grep_text(), "pattern");
     }
 
     #[test]
     fn test_grep_question_mark_is_text() {
         let parser = QueryParser::new(GrepConfig);
-        // Single token "foo?" should return None (treated as plain text by caller)
         let result = parser.parse("foo?");
-        assert!(result.is_none(), "foo? should be plain text in grep mode");
+        assert!(result.constraints.is_empty());
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("foo?"));
     }
 
     #[test]
     fn test_grep_bracket_is_text() {
         let parser = QueryParser::new(GrepConfig);
         let result = parser.parse("arr[0] something");
-        let result = result.expect("Should parse multi-token query");
         // arr[0] should NOT be a glob in grep mode
         assert_eq!(result.constraints.len(), 0);
     }
@@ -726,9 +711,7 @@ mod tests {
     #[test]
     fn test_grep_path_glob_is_constraint() {
         let parser = QueryParser::new(GrepConfig);
-        let result = parser
-            .parse("pattern src/**/*.rs")
-            .expect("Should parse with path glob");
+        let result = parser.parse("pattern src/**/*.rs");
         // src/**/*.rs contains / so it should be treated as a glob
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
@@ -740,9 +723,7 @@ mod tests {
     #[test]
     fn test_grep_brace_is_constraint() {
         let parser = QueryParser::new(GrepConfig);
-        let result = parser
-            .parse("pattern {src,lib}")
-            .expect("Should parse with brace expansion");
+        let result = parser.parse("pattern {src,lib}");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
             result.constraints[0],
@@ -755,45 +736,34 @@ mod tests {
         // Regex patterns like \w+ and \bfoo\b must survive grep_text()
         // The parser sees \w+ as a text token (not a constraint escape),
         // but strip_leading_backslash was stripping the \ anyway.
-        let q = QueryParser::new(GrepConfig)
-            .parse("pub struct \\w+")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("pub struct \\w+");
         assert_eq!(
             q.grep_text(),
             "pub struct \\w+",
             "Backslash-w in regex must be preserved"
         );
 
-        let q = QueryParser::new(GrepConfig)
-            .parse("\\bword\\b more")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("\\bword\\b more");
         assert_eq!(
             q.grep_text(),
             "\\bword\\b more",
             "Backslash-b word boundaries must be preserved"
         );
 
-        // Single-token regex like "fn\\s+\\w+" returns None from parse()
-        // (single token = no parsing needed, caller uses raw_query directly).
+        // Single-token regex like "fn\\s+\\w+" returns FFFQuery with Text fuzzy query
         let result = QueryParser::new(GrepConfig).parse("fn\\s+\\w+");
-        assert!(
-            result.is_none(),
-            "Single-token regex should return None (no parsing)"
-        );
+        assert!(result.constraints.is_empty());
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("fn\\s+\\w+"));
 
         // But the escaped constraint forms SHOULD still be stripped:
-        let q = QueryParser::new(GrepConfig)
-            .parse("\\*.rs foo")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("\\*.rs foo");
         assert_eq!(
             q.grep_text(),
             "*.rs foo",
             "Escaped constraint \\*.rs should still have backslash stripped"
         );
 
-        let q = QueryParser::new(GrepConfig)
-            .parse("\\/src/ foo")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("\\/src/ foo");
         assert_eq!(
             q.grep_text(),
             "/src/ foo",
@@ -806,7 +776,6 @@ mod tests {
         let parser = QueryParser::new(GrepConfig);
         // "a*b" contains * but no / or {} — should be text in grep mode
         let result = parser.parse("a*b something");
-        let result = result.expect("Should parse");
         assert_eq!(
             result.constraints.len(),
             0,
@@ -817,9 +786,7 @@ mod tests {
     #[test]
     fn test_grep_negated_text() {
         let parser = QueryParser::new(GrepConfig);
-        let result = parser
-            .parse("pattern !test")
-            .expect("Should parse negated text in grep mode");
+        let result = parser.parse("pattern !test");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -836,9 +803,7 @@ mod tests {
     #[test]
     fn test_grep_negated_path_segment() {
         let parser = QueryParser::new(GrepConfig);
-        let result = parser
-            .parse("pattern !/src/")
-            .expect("Should parse negated path segment in grep mode");
+        let result = parser.parse("pattern !/src/");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -855,9 +820,7 @@ mod tests {
     #[test]
     fn test_grep_negated_extension() {
         let parser = QueryParser::new(GrepConfig);
-        let result = parser
-            .parse("pattern !*.rs")
-            .expect("Should parse negated extension in grep mode");
+        let result = parser.parse("pattern !*.rs");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
             Constraint::Not(inner) => {
@@ -877,9 +840,7 @@ mod tests {
     fn test_ai_grep_detects_file_path() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
-        let result = parser
-            .parse("libswscale/input.c rgba32ToY")
-            .expect("Should parse");
+        let result = parser.parse("libswscale/input.c rgba32ToY");
         assert_eq!(result.constraints.len(), 1);
         assert!(
             matches!(
@@ -896,7 +857,7 @@ mod tests {
     fn test_ai_grep_detects_nested_file_path() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
-        let result = parser.parse("src/main.rs fn main").expect("Should parse");
+        let result = parser.parse("src/main.rs fn main");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
             result.constraints[0],
@@ -909,7 +870,7 @@ mod tests {
     fn test_ai_grep_no_false_positive_trailing_slash() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
-        let result = parser.parse("src/ pattern").expect("Should parse");
+        let result = parser.parse("src/ pattern");
         // Should be PathSegment, NOT FilePath
         assert_eq!(result.constraints.len(), 1);
         assert!(
@@ -923,7 +884,7 @@ mod tests {
     fn test_ai_grep_bare_filename_is_file_path() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
-        let result = parser.parse("main.rs pattern").expect("Should parse");
+        let result = parser.parse("main.rs pattern");
         // Bare filename with valid extension → FilePath constraint
         assert_eq!(result.constraints.len(), 1);
         assert!(
@@ -938,9 +899,7 @@ mod tests {
     fn test_ai_grep_bare_filename_schema_rs() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
-        let result = parser
-            .parse("schema.rs part_revisions")
-            .expect("Should parse");
+        let result = parser.parse("schema.rs part_revisions");
         assert_eq!(result.constraints.len(), 1);
         assert!(
             matches!(result.constraints[0], Constraint::FilePath("schema.rs")),
@@ -954,7 +913,7 @@ mod tests {
     fn test_ai_grep_bare_word_no_extension_not_constraint() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
-        let result = parser.parse("schema pattern").expect("Should parse");
+        let result = parser.parse("schema pattern");
         // No extension → not a file path, just text
         assert_eq!(result.constraints.len(), 0);
         assert_eq!(result.grep_text(), "schema pattern");
@@ -964,7 +923,7 @@ mod tests {
     fn test_ai_grep_no_false_positive_no_extension() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
-        let result = parser.parse("src/utils pattern").expect("Should parse");
+        let result = parser.parse("src/utils pattern");
         // No extension in last component → not a file path, just text
         assert_eq!(result.constraints.len(), 0);
         assert_eq!(result.grep_text(), "src/utils pattern");
@@ -974,7 +933,7 @@ mod tests {
     fn test_ai_grep_wildcard_not_filepath() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
-        let result = parser.parse("src/**/*.rs pattern").expect("Should parse");
+        let result = parser.parse("src/**/*.rs pattern");
         // Contains wildcards → should be a Glob, not FilePath
         assert_eq!(result.constraints.len(), 1);
         assert!(
@@ -988,7 +947,7 @@ mod tests {
     fn test_ai_grep_star_text_star_is_glob() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
-        let result = parser.parse("*quote* TODO").expect("Should parse");
+        let result = parser.parse("*quote* TODO");
         // `*quote*` should be recognised as a glob constraint in AI mode
         assert_eq!(result.constraints.len(), 1);
         assert!(
@@ -1003,7 +962,7 @@ mod tests {
     fn test_ai_grep_bare_star_not_glob() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
-        let result = parser.parse("* pattern").expect("Should parse");
+        let result = parser.parse("* pattern");
         // Bare `*` should NOT be treated as a glob (too broad)
         assert!(
             result.constraints.is_empty(),
@@ -1015,20 +974,15 @@ mod tests {
     #[test]
     fn test_grep_no_location_parsing_single_token() {
         let parser = QueryParser::new(GrepConfig);
-        // localhost:8080 should NOT be parsed as location — it's a search pattern
+        // localhost:8080 should NOT be parsed as location -- it's a search pattern
         let result = parser.parse("localhost:8080");
-        assert!(
-            result.is_none(),
-            "Single-token grep query with colon-number should return None (plain text), got {:?}",
-            result
-        );
+        assert!(result.constraints.is_empty());
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("localhost:8080"));
     }
 
     #[test]
     fn test_grep_no_location_parsing_multi_token() {
-        let q = QueryParser::new(GrepConfig)
-            .parse("*.rs localhost:8080")
-            .expect("should parse");
+        let q = QueryParser::new(GrepConfig).parse("*.rs localhost:8080");
         assert_eq!(
             q.grep_text(),
             "localhost:8080",
@@ -1041,10 +995,38 @@ mod tests {
     }
 
     #[test]
+    fn test_grep_braces_without_comma_is_text() {
+        let parser = QueryParser::new(GrepConfig);
+        // Code patterns like format!("{}") should NOT be treated as brace expansion
+        let result = parser.parse(r#"format!("{}\\AppData", home)"#);
+        assert!(
+            result.constraints.is_empty(),
+            "Braces without comma should be text, got {:?}",
+            result.constraints
+        );
+        assert_eq!(result.grep_text(), r#"format!("{}\\AppData", home)"#);
+    }
+
+    #[test]
+    fn test_grep_format_braces_not_glob() {
+        let parser = QueryParser::new(GrepConfig);
+        // Code like format!("{}\\path", var) must not have tokens eaten as glob constraints.
+        // The trailing comma on the first token means both { } and , are present,
+        // but the comma is outside the braces so it should NOT trigger brace expansion.
+        let input = "format!(\"{}\\\\AppData\", home)";
+        let result = parser.parse(input);
+        assert!(
+            result.constraints.is_empty(),
+            "format! pattern should have no constraints, got {:?}",
+            result.constraints
+        );
+    }
+
+    #[test]
     fn test_grep_config_star_text_star_not_glob() {
         use crate::GrepConfig;
         let parser = QueryParser::new(GrepConfig);
-        let result = parser.parse("*quote* TODO").expect("Should parse");
+        let result = parser.parse("*quote* TODO");
         // Regular grep mode should NOT treat `*quote*` as a glob
         assert!(
             result.constraints.is_empty(),
@@ -1058,9 +1040,7 @@ mod tests {
     #[test]
     fn test_file_picker_bare_filename_constraint() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("score.rs file_picker")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("score.rs file_picker");
         assert_eq!(result.constraints.len(), 1);
         assert!(
             matches!(result.constraints[0], Constraint::FilePath("score.rs")),
@@ -1073,9 +1053,7 @@ mod tests {
     #[test]
     fn test_file_picker_path_prefixed_filename_constraint() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("libswscale/slice.c lum_convert")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("libswscale/slice.c lum_convert");
         assert_eq!(result.constraints.len(), 1);
         assert!(
             matches!(
@@ -1091,22 +1069,35 @@ mod tests {
     #[test]
     fn test_file_picker_single_token_filename_stays_fuzzy() {
         let parser = QueryParser::new(FilePickerConfig);
-        // Single-token filename should NOT become a constraint — it should
-        // return None so the caller uses the raw query for fuzzy matching.
+        // Single-token filename should NOT become a constraint -- it should
+        // return FFFQuery with Text fuzzy query so the caller uses it for fuzzy matching.
         let result = parser.parse("score.rs");
+        assert!(result.constraints.is_empty());
+        assert_eq!(result.fuzzy_query, FuzzyQuery::Text("score.rs"));
+    }
+
+    #[test]
+    fn test_absolute_path_with_location_not_path_segment() {
+        let parser = QueryParser::new(FilePickerConfig);
+        // Absolute file path with :line should parse as text + location,
+        // NOT as a PathSegment constraint (which would eat the whole token).
+        let result = parser.parse("/Users/neogoose/dev/fframes/src/renderer/concatenator.rs:12");
         assert!(
-            result.is_none(),
-            "Single-token filename should return None (fuzzy match), got {:?}",
-            result
+            result.constraints.is_empty(),
+            "Absolute path with location should not become a constraint, got {:?}",
+            result.constraints
         );
+        assert_eq!(
+            result.fuzzy_query,
+            FuzzyQuery::Text("/Users/neogoose/dev/fframes/src/renderer/concatenator.rs")
+        );
+        assert_eq!(result.location, Some(Location::Line(12)));
     }
 
     #[test]
     fn test_file_picker_filename_with_multiple_fuzzy_parts() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("main.rs src components")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("main.rs src components");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
             result.constraints[0],
@@ -1121,9 +1112,7 @@ mod tests {
     #[test]
     fn test_file_picker_version_number_not_filename() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("v2.0 release")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("v2.0 release");
         // v2.0 extension starts with digit → not a filename constraint
         assert!(
             result.constraints.is_empty(),
@@ -1135,9 +1124,7 @@ mod tests {
     #[test]
     fn test_file_picker_only_one_filepath_constraint() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("main.rs score.rs")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("main.rs score.rs");
         // Only first filename becomes a constraint; second is text
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
@@ -1150,9 +1137,7 @@ mod tests {
     #[test]
     fn test_file_picker_filename_with_extension_constraint() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("main.rs *.lua")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("main.rs *.lua");
         // main.rs → FilePath, *.lua → Extension
         assert_eq!(result.constraints.len(), 2);
         assert!(matches!(
@@ -1168,9 +1153,7 @@ mod tests {
     #[test]
     fn test_file_picker_dotfile_is_filename() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse(".gitignore src")
-            .expect("Should parse multi-token query");
+        let result = parser.parse(".gitignore src");
         assert_eq!(result.constraints.len(), 1);
         assert!(
             matches!(result.constraints[0], Constraint::FilePath(".gitignore")),
@@ -1183,9 +1166,7 @@ mod tests {
     #[test]
     fn test_file_picker_no_extension_not_filename() {
         let parser = QueryParser::new(FilePickerConfig);
-        let result = parser
-            .parse("Makefile src")
-            .expect("Should parse multi-token query");
+        let result = parser.parse("Makefile src");
         // No dot → not a filename constraint
         assert!(
             result.constraints.is_empty(),

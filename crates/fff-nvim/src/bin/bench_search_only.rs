@@ -87,8 +87,7 @@ fn main() {
             let parsed = parser.parse(query);
             let results = FilePicker::fuzzy_search(
                 &files,
-                query,
-                parsed,
+                &parsed,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,

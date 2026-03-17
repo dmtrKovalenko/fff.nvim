@@ -189,7 +189,7 @@ impl Constrainable for FileItem {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Score {
     pub total: i32,
     pub base_score: i32,
@@ -212,15 +212,13 @@ pub struct PaginationArgs {
 
 /// Context for scoring files during search.
 ///
-/// The `parsed_query` field contains the pre-parsed query with constraints,
+/// The `query` field contains the pre-parsed query with constraints,
 /// fuzzy parts, and location information. Parsing is done once at the API
 /// boundary and passed through.
 #[derive(Debug, Clone)]
 pub struct ScoringContext<'a> {
-    /// The original raw query string (for compatibility and debugging)
-    pub raw_query: &'a str,
-    /// Pre-parsed query containing constraints, fuzzy parts, and location
-    pub parsed_query: Option<FFFQuery<'a>>,
+    /// Parsed query containing raw text, constraints, fuzzy parts, and location
+    pub query: &'a FFFQuery<'a>,
     pub project_path: Option<&'a Path>,
     pub current_file: Option<&'a str>,
     pub max_typos: u16,
@@ -231,17 +229,14 @@ pub struct ScoringContext<'a> {
     pub pagination: PaginationArgs,
 }
 
-impl<'a> ScoringContext<'a> {
+impl ScoringContext<'_> {
     /// Get the effective fuzzy query string for matching.
     /// Returns the first fuzzy part, or the raw query if no parsing was done.
-    pub fn effective_query(&self) -> &'a str {
-        match &self.parsed_query {
-            Some(p) => match &p.fuzzy_query {
-                FuzzyQuery::Text(t) => t,
-                FuzzyQuery::Parts(parts) if !parts.is_empty() => parts[0],
-                _ => self.raw_query.trim(),
-            },
-            None => self.raw_query.trim(),
+    pub fn effective_query(&self) -> &str {
+        match &self.query.fuzzy_query {
+            FuzzyQuery::Text(t) => t,
+            FuzzyQuery::Parts(parts) if !parts.is_empty() => parts[0],
+            _ => self.query.raw_query.trim(),
         }
     }
 }

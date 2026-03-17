@@ -321,11 +321,10 @@ impl FilePicker {
     ///
     /// # Returns
     /// SearchResult containing matched files, scores, and location information
-    pub fn fuzzy_search<'a>(
+    pub fn fuzzy_search<'a, 'q>(
         files: &'a [FileItem],
-        query: &'a str,
-        parsed: Option<FFFQuery<'a>>,
-        options: FuzzySearchOptions<'a>,
+        query: &'q FFFQuery<'q>,
+        options: FuzzySearchOptions<'q>,
     ) -> SearchResult<'a> {
         let max_threads = if options.max_threads == 0 {
             std::thread::available_parallelism()
@@ -335,8 +334,7 @@ impl FilePicker {
             options.max_threads
         };
         debug!(
-            ?query,
-            parsed_is_some = parsed.is_some(),
+            raw_query = ?query.raw_query,
             pagination = ?options.pagination,
             ?max_threads,
             current_file = ?options.current_file,
@@ -345,25 +343,20 @@ impl FilePicker {
 
         let total_files = files.len();
 
-        // Extract location from parsed query
-        let location = parsed.as_ref().and_then(|p| p.location);
+        let location = query.location;
 
         // Get effective query for max_typos calculation (without location suffix)
-        let effective_query = match &parsed {
-            Some(p) => match &p.fuzzy_query {
-                fff_query_parser::FuzzyQuery::Text(t) => *t,
-                fff_query_parser::FuzzyQuery::Parts(parts) if !parts.is_empty() => parts[0],
-                _ => query.trim(),
-            },
-            None => query.trim(),
+        let effective_query = match &query.fuzzy_query {
+            fff_query_parser::FuzzyQuery::Text(t) => *t,
+            fff_query_parser::FuzzyQuery::Parts(parts) if !parts.is_empty() => parts[0],
+            _ => query.raw_query.trim(),
         };
 
         // small queries with a large number of results can match absolutely everything
         let max_typos = (effective_query.len() as u16 / 4).clamp(2, 6);
 
         let context = ScoringContext {
-            raw_query: query,
-            parsed_query: parsed,
+            query,
             project_path: options.project_path,
             max_typos,
             max_threads,
@@ -620,7 +613,7 @@ impl FilePicker {
     }
 
     pub fn stop_background_monitor(&mut self) {
-        if let Some(watcher) = self.background_watcher.take() {
+        if let Some(mut watcher) = self.background_watcher.take() {
             watcher.stop();
         }
     }

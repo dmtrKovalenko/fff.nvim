@@ -155,8 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let parsed = parser.parse("rs");
             let search_results = FilePicker::fuzzy_search(
                 files,
-                "rs",
-                parsed,
+                &parsed,
                 FuzzySearchOptions {
                     max_threads: 2,
                     current_file: None,
