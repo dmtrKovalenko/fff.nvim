@@ -1018,8 +1018,8 @@ where
                 return None;
             }
 
-            let mmap = file.get_mmap()?;
-            let file_matches = search_file(&mmap[..], options.max_matches_per_file);
+            let content = file.get_mmap()?;
+            let file_matches = search_file(content, options.max_matches_per_file);
 
             if file_matches.is_empty() {
                 return None;
@@ -1303,8 +1303,7 @@ fn fuzzy_grep_search<'a>(
                     return None;
                 }
 
-                let mmap = file.get_mmap()?;
-                let file_bytes = &mmap[..];
+                let file_bytes = file.get_mmap()?;
 
                 // File-level prefilter: check if enough distinct needle chars
                 // exist anywhere in the file bytes.  Uses memchr for speed.

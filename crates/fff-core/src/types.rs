@@ -1,18 +1,41 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use memmap2::Mmap;
-
 use crate::constraints::Constrainable;
 use crate::query_tracker::QueryMatchEntry;
 use fff_query_parser::{FFFQuery, FuzzyQuery, Location};
 
-/// A single indexed file with metadata, frecency scores, and lazy mmap.
+/// Cached file contents — mmap on Unix, heap buffer on Windows.
 ///
-/// The `mmap` field holds the memory-mapped file contents, initialized lazily
-/// on the first grep access and cached for subsequent searches. The mmap is
-/// backed by the kernel page cache and automatically reflects file modifications
-/// — no manual invalidation is needed.
+/// On Windows, memory-mapped files hold the file handle open and prevent
+/// editors from saving (writing/replacing) those files. Reading into a
+/// `Vec<u8>` releases the handle immediately after the read completes.
+#[derive(Debug)]
+#[allow(dead_code)] // variants are conditionally used per platform
+enum FileContent {
+    #[cfg(not(target_os = "windows"))]
+    Mmap(memmap2::Mmap),
+    #[cfg(target_os = "windows")]
+    Buffer(Vec<u8>),
+}
+
+impl std::ops::Deref for FileContent {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            #[cfg(not(target_os = "windows"))]
+            FileContent::Mmap(m) => m,
+            #[cfg(target_os = "windows")]
+            FileContent::Buffer(b) => b,
+        }
+    }
+}
+
+/// A single indexed file with metadata, frecency scores, and lazy content cache.
+///
+/// File contents are initialized lazily on the first grep access and cached for
+/// subsequent searches. On Unix, uses mmap backed by the kernel page cache. On
+/// Windows, reads into a heap buffer to avoid holding file handles open.
 ///
 /// Thread-safety: `OnceLock` provides lock-free reads after initialization.
 /// Each file is only searched by one rayon worker at a time via `par_iter`.
@@ -30,10 +53,9 @@ pub struct FileItem {
     pub total_frecency_score: i64,
     pub git_status: Option<git2::Status>,
     pub is_binary: bool,
-    /// Lazily-initialized memory-mapped file contents for grep.
+    /// Lazily-initialized file contents for grep.
     /// Initialized on first grep access via `OnceLock`; lock-free on subsequent reads.
-    /// Automatically reflects file changes via the kernel page cache.
-    mmap: OnceLock<Mmap>,
+    content: OnceLock<FileContent>,
 }
 
 impl Clone for FileItem {
@@ -51,8 +73,8 @@ impl Clone for FileItem {
             total_frecency_score: self.total_frecency_score,
             git_status: self.git_status,
             is_binary: self.is_binary,
-            // Don't clone the mmap — the clone lazily re-creates it on demand
-            mmap: OnceLock::new(),
+            // Don't clone the content — the clone lazily re-creates it on demand
+            content: OnceLock::new(),
         }
     }
 }
@@ -83,46 +105,65 @@ impl FileItem {
             total_frecency_score: 0,
             git_status,
             is_binary,
-            mmap: OnceLock::new(),
+            content: OnceLock::new(),
         }
     }
 
-    /// Invalidate the cached mmap so the next `get_mmap()` call creates a fresh one.
+    /// Invalidate the cached content so the next `get_content()` call creates a fresh one.
     ///
     /// Call this when the background watcher detects that the file has been modified.
-    /// While the kernel page cache reflects content changes automatically, a file
-    /// that is truncated (made smaller) while mapped can cause SIGBUS if the search
-    /// accesses pages beyond the new file size. Invalidating the mmap ensures a
-    /// fresh mapping with the correct size is created on the next access.
+    /// On Unix, a file that is truncated while mapped can cause SIGBUS. On Windows,
+    /// the stale buffer simply won't reflect the new contents. In both cases,
+    /// invalidating ensures a fresh read on the next access.
     pub fn invalidate_mmap(&mut self) {
-        self.mmap = OnceLock::new();
+        self.content = OnceLock::new();
     }
 
-    /// Get the cached mmap or lazily create it. Returns `None` if the file
-    /// is too large, empty, or can't be opened/mapped.
+    /// Get the cached file contents or lazily load them. Returns `None` if the
+    /// file is too large, empty, or can't be opened.
     ///
     /// After the first call, this is lock-free (just an atomic load + pointer deref).
-    /// The mmap is backed by the kernel page cache and automatically reflects
-    /// file modifications — no manual invalidation is needed.
+    /// On Unix, uses mmap backed by the kernel page cache. On Windows, reads into
+    /// a heap buffer so the file handle is released immediately.
     #[inline]
-    pub fn get_mmap(&self) -> Option<&Mmap> {
-        if let Some(mmap) = self.mmap.get() {
-            return Some(mmap);
+    pub fn get_content(&self) -> Option<&[u8]> {
+        if let Some(content) = self.content.get() {
+            return Some(content);
         }
 
         if self.size == 0 || self.size > MAX_MMAP_FILE_SIZE {
             return None;
         }
 
-        let file = std::fs::File::open(&self.path).ok()?;
+        let content = load_file_content(&self.path)?;
+
+        // If another thread raced us, OnceLock discards ours and returns theirs.
+        Some(self.content.get_or_init(|| content))
+    }
+
+    /// Backward-compatible alias for `get_content`.
+    #[inline]
+    pub fn get_mmap(&self) -> Option<&[u8]> {
+        self.get_content()
+    }
+}
+
+/// Load file contents: mmap on Unix, heap buffer on Windows.
+fn load_file_content(path: &Path) -> Option<FileContent> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let file = std::fs::File::open(path).ok()?;
         // SAFETY: The mmap is backed by the kernel page cache and automatically
         // reflects file modifications. The only risk is SIGBUS if the file is
-        // truncated while mapped
-        let mmap = unsafe { Mmap::map(&file) }.ok()?;
+        // truncated while mapped.
+        let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+        Some(FileContent::Mmap(mmap))
+    }
 
-        // If another thread raced us, OnceLock discards our mmap and returns theirs.
-        // This is fine — the duplicate mmap is just dropped.
-        Some(self.mmap.get_or_init(|| mmap))
+    #[cfg(target_os = "windows")]
+    {
+        let data = std::fs::read(path).ok()?;
+        Some(FileContent::Buffer(data))
     }
 }
 
