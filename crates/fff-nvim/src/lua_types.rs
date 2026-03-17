@@ -1,12 +1,7 @@
-//! Lua type conversions for fff-core types
-//!
-//! This module provides IntoLua implementations for core types.
-
 use fff_core::git::format_git_status;
 use fff_core::{FileItem, GrepResult, Location, Score, SearchResult};
 use mlua::prelude::*;
 
-/// Wrapper for SearchResult that implements IntoLua
 pub struct SearchResultLua<'a> {
     inner: SearchResult<'a>,
 }
@@ -17,7 +12,6 @@ impl<'a> From<SearchResult<'a>> for SearchResultLua<'a> {
     }
 }
 
-/// Wrapper for GrepResult that implements IntoLua
 pub struct GrepResultLua<'a> {
     inner: GrepResult<'a>,
 }

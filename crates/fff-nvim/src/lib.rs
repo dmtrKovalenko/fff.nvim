@@ -2,10 +2,11 @@ use crate::path_shortening::shorten_path_with_cache;
 use error::{IntoCoreError, IntoLuaResult};
 use fff_core::file_picker::FilePicker;
 use fff_core::frecency::FrecencyTracker;
+use fff_core::path_utils::expand_tilde;
 use fff_core::query_tracker::QueryTracker;
 use fff_core::{
-    DbHealthChecker, Error, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser,
-    SharedFrecency, SharedPicker, SharedQueryTracker,
+    DbHealthChecker, Error, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, Score,
+    SearchResult, SharedFrecency, SharedPicker, SharedQueryTracker,
 };
 use mimalloc::MiMalloc;
 use mlua::prelude::*;
@@ -16,6 +17,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 mod error;
+mod hex_dump;
 mod log;
 mod lua_types;
 mod path_shortening;
@@ -248,10 +250,10 @@ pub fn fuzzy_search_files(
     let parser = QueryParser::default();
     let parsed = parser.parse(&query);
 
+    let files = picker.get_files();
     let results = FilePicker::fuzzy_search(
-        picker.get_files(),
-        &query,
-        parsed,
+        files,
+        &parsed,
         FuzzySearchOptions {
             max_threads,
             current_file: current_file.as_deref(),
@@ -265,6 +267,34 @@ pub fn fuzzy_search_files(
             },
         },
     );
+
+    if results.items.is_empty() && query.contains(std::path::MAIN_SEPARATOR) {
+        let pure_query = match &parsed.fuzzy_query {
+            fff_query_parser::FuzzyQuery::Text(t) => t.trim(),
+            _ => query.trim(),
+        };
+
+        let path = expand_tilde(pure_query);
+        if path.is_absolute() && path.is_file() {
+            if let Ok(idx) = files.binary_search_by(|f| f.path.as_path().cmp(&path)) {
+                let found = SearchResult {
+                    items: vec![&files[idx]],
+                    scores: vec![Score {
+                        exact_match: true,
+                        match_type: "path",
+                        ..Default::default()
+                    }],
+                    total_matched: 1,
+                    total_files: results.total_files,
+                    location: parsed.location,
+                };
+
+                return lua_types::SearchResultLua::from(found).into_lua(lua);
+            }
+
+            return build_file_path_fallback(lua, &path, results.total_files);
+        }
+    }
 
     lua_types::SearchResultLua::from(results).into_lua(lua)
 }
@@ -321,9 +351,59 @@ pub fn live_grep(
         classify_definitions: false,
     };
 
-    let result = fff_core::grep::grep_search(picker.get_files(), &query, parsed.as_ref(), &options);
+    let result = fff_core::grep::grep_search(picker.get_files(), &parsed, &options);
 
     lua_types::GrepResultLua::from(result).into_lua(lua)
+}
+
+/// Build a file-picker result for an absolute path that exists on disk but
+/// isn't in the picker index (e.g. file from a different project).
+fn build_file_path_fallback(lua: &Lua, path: &Path, total_files: usize) -> LuaResult<LuaValue> {
+    let table = lua.create_table()?;
+
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let path_str = path.to_string_lossy().to_string();
+
+    let item = lua.create_table()?;
+    item.set("path", path_str.as_str())?;
+    item.set("relative_path", path_str.as_str())?;
+    item.set("name", name.as_str())?;
+    item.set("size", path.metadata().map(|m| m.len()).unwrap_or(0))?;
+    item.set("modified", 0u64)?;
+    item.set("access_frecency_score", 0i64)?;
+    item.set("modification_frecency_score", 0i64)?;
+    item.set("total_frecency_score", 0i64)?;
+    item.set("git_status", "")?;
+    item.set("is_binary", false)?;
+
+    let items_table = lua.create_table()?;
+    items_table.set(1, item)?;
+    table.set("items", items_table)?;
+
+    let score = lua.create_table()?;
+    score.set("total", 0)?;
+    score.set("base_score", 0)?;
+    score.set("filename_bonus", 0)?;
+    score.set("special_filename_bonus", 0)?;
+    score.set("frecency_boost", 0)?;
+    score.set("git_status_boost", 0)?;
+    score.set("distance_penalty", 0)?;
+    score.set("current_file_penalty", 0)?;
+    score.set("combo_match_boost", 0)?;
+    score.set("exact_match", true)?;
+    score.set("match_type", "path")?;
+
+    let scores_table = lua.create_table()?;
+    scores_table.set(1, score)?;
+    table.set("scores", scores_table)?;
+
+    table.set("total_matched", 1)?;
+    table.set("total_files", total_files)?;
+
+    Ok(LuaValue::Table(table))
 }
 
 pub fn track_access(_: &Lua, file_path: String) -> LuaResult<bool> {
@@ -827,6 +907,7 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
     exports.set("health_check", lua.create_function(health_check)?)?;
     exports.set("shorten_path", lua.create_function(shorten_path)?)?;
+    exports.set("hex_dump", lua.create_function(hex_dump::hex_dump)?)?;
 
     Ok(exports)
 }

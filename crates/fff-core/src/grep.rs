@@ -165,6 +165,67 @@ pub fn has_regex_metacharacters(text: &str) -> bool {
     regex::escape(text) != text
 }
 
+/// Check if `text` contains `\n` that is NOT preceded by another `\`.
+///
+/// `\n` → true (user wants multiline search)
+/// `\\n` → false (escaped backslash followed by literal `n`, e.g. `\\nvim-data`)
+#[inline]
+fn has_unescaped_newline_escape(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len().saturating_sub(1) {
+        if bytes[i] == b'\\' {
+            if bytes[i + 1] == b'n' {
+                // Count consecutive backslashes ending at position i
+                let mut backslash_count = 1;
+                while backslash_count <= i && bytes[i - backslash_count] == b'\\' {
+                    backslash_count += 1;
+                }
+                // Odd number of backslashes before 'n' → real \n escape
+                if backslash_count % 2 == 1 {
+                    return true;
+                }
+            }
+            // Skip past the escaped character
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Replace only unescaped `\n` sequences with real newlines.
+///
+/// `\n` → newline character
+/// `\\n` → preserved as-is (literal backslash + `n`)
+fn replace_unescaped_newline_escapes(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            if bytes[i + 1] == b'n' {
+                let mut backslash_count = 1;
+                while backslash_count <= i && bytes[i - backslash_count] == b'\\' {
+                    backslash_count += 1;
+                }
+                if backslash_count % 2 == 1 {
+                    result.push(b'\n');
+                    i += 2;
+                    continue;
+                }
+            }
+            result.push(bytes[i]);
+            i += 1;
+        } else {
+            result.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(result).unwrap_or_else(|_| text.to_string())
+}
+
 /// Controls how the grep pattern is interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GrepMode {
@@ -1496,8 +1557,7 @@ fn fuzzy_grep_search<'a>(
 /// frecency for the "welcome state" UI.
 pub fn grep_search<'a>(
     files: &'a [FileItem],
-    raw_query: &str,
-    query: Option<&FFFQuery<'_>>,
+    query: &FFFQuery<'_>,
     options: &GrepSearchOptions,
 ) -> GrepResult<'a> {
     let total_files = files.len();
@@ -1507,36 +1567,23 @@ pub fn grep_search<'a>(
     // removed. All non-constraint text tokens are collected and joined with
     // spaces to form the grep pattern:
     //   "name = *.rs someth" -> grep "name = someth" with constraint Extension("rs")
-    let constraints_from_query: &[fff_query_parser::Constraint<'_>];
+    let constraints_from_query = &query.constraints[..];
 
-    let grep_text = match query {
-        Some(p) => {
-            constraints_from_query = &p.constraints[..];
-            p.grep_text()
-        }
-        None => {
-            constraints_from_query = &[];
-            // Single-token query (parser returned None). If the token is a
-            // backslash-escaped constraint (e.g. `\*.rs`, `\/src/`, `\!test`),
-            // strip the leading `\` so the literal text is searched. Other
-            // backslash sequences (e.g. `\bfoo\b` in regex mode) are left alone.
-            let t = raw_query.trim();
-            if t.starts_with('\\') && t.len() > 1 {
-                // Re-parse the unescaped suffix: if it would be a constraint,
-                // the user intended an escape; strip the backslash.
-                let suffix = &t[1..];
-                let parser = QueryParser::new(GrepConfig);
-                if parser
-                    .parse(suffix)
-                    .is_some_and(|q| !q.constraints.is_empty())
-                {
-                    suffix.to_string()
-                } else {
-                    t.to_string()
-                }
+    let grep_text = if !matches!(query.fuzzy_query, fff_query_parser::FuzzyQuery::Empty) {
+        query.grep_text()
+    } else {
+        // Constraint-only or empty query — use raw_query for backslash-escape handling.
+        let t = query.raw_query.trim();
+        if t.starts_with('\\') && t.len() > 1 {
+            let suffix = &t[1..];
+            let parser = QueryParser::new(GrepConfig);
+            if !parser.parse(suffix).constraints.is_empty() {
+                suffix.to_string()
             } else {
                 t.to_string()
             }
+        } else {
+            t.to_string()
         }
     };
 
@@ -1605,10 +1652,10 @@ pub fn grep_search<'a>(
             .ok(),
     };
 
-    let is_multiline = grep_text.contains("\\n");
+    let is_multiline = has_unescaped_newline_escape(&grep_text);
 
     let effective_pattern = if is_multiline {
-        grep_text.replace("\\n", "\n")
+        replace_unescaped_newline_escapes(&grep_text)
     } else {
         grep_text.to_string()
     };
@@ -1685,7 +1732,7 @@ pub fn grep_search<'a>(
 }
 
 /// Parse a grep query using the GrepConfig parser.
-pub fn parse_grep_query(query: &str) -> Option<FFFQuery<'_>> {
+pub fn parse_grep_query(query: &str) -> FFFQuery<'_> {
     let parser = QueryParser::new(GrepConfig);
     parser.parse(query)
 }
@@ -1711,6 +1758,38 @@ fn strip_file_path_constraints<'a>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unescaped_newline_detection() {
+        // Single \n → multiline
+        assert!(has_unescaped_newline_escape("foo\\nbar"));
+        // \\n → escaped backslash + literal n, NOT multiline
+        // (this is what the user types when grepping Rust source with `\\nvim`)
+        assert!(!has_unescaped_newline_escape("foo\\\\nvim-data"));
+        // Real-world: source file has literal \\AppData\\Local\\nvim-data
+        // (double backslash in the file, so user types double backslash)
+        assert!(!has_unescaped_newline_escape(
+            r#"format!("{}\\AppData\\Local\\nvim-data","#
+        ));
+        // No \n at all
+        assert!(!has_unescaped_newline_escape("hello world"));
+        // \\\\n → even number of backslashes before n → NOT multiline
+        assert!(!has_unescaped_newline_escape("foo\\\\\\\\nbar"));
+        // \\\n → 3 backslashes: first two pair up, third + n = \n → multiline
+        assert!(has_unescaped_newline_escape("foo\\\\\\nbar"));
+    }
+
+    #[test]
+    fn test_replace_unescaped_newline() {
+        // \n → real newline
+        assert_eq!(replace_unescaped_newline_escapes("foo\\nbar"), "foo\nbar");
+        // \\n → preserved as-is
+        assert_eq!(
+            replace_unescaped_newline_escapes("foo\\\\nvim"),
+            "foo\\\\nvim"
+        );
+    }
 
     #[test]
     fn test_fuzzy_typo_scoring() {

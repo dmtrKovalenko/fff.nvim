@@ -253,7 +253,7 @@ impl FffServer {
 
         let parser = QueryParser::new(AiGrepConfig);
         let parsed = parser.parse(query);
-        let result = grep::grep_search(files, query, parsed.as_ref(), &options);
+        let result = grep::grep_search(files, &parsed, &options);
 
         if result.matches.is_empty() && file_offset == 0 {
             // Auto-retry: try broadening multi-word queries by dropping first non-constraint word
@@ -268,10 +268,7 @@ impl FffServer {
                     let rest_query = parts[1..].join(" ");
                     let rest_parsed = parser.parse(&rest_query);
 
-                    let rest_text: Cow<str> = rest_parsed
-                        .as_ref()
-                        .map(|p| Cow::Owned(p.grep_text()))
-                        .unwrap_or(Cow::Borrowed(&rest_query));
+                    let rest_text = rest_parsed.grep_text();
                     let retry_mode = if has_regex_metacharacters(&rest_text) {
                         GrepMode::Regex
                     } else {
@@ -279,8 +276,7 @@ impl FffServer {
                     };
 
                     let (retry_options, _) = make_grep_options(output_mode, retry_mode, 0, context);
-                    let retry_result =
-                        grep::grep_search(files, &rest_query, rest_parsed.as_ref(), &retry_options);
+                    let retry_result = grep::grep_search(files, &rest_parsed, &retry_options);
 
                     if !retry_result.matches.is_empty() && retry_result.matches.len() <= 10 {
                         let mut cs = self.lock_cursors()?;
@@ -308,8 +304,7 @@ impl FffServer {
             let fuzzy_query = cleanup_fuzzy_query(query);
             let (fuzzy_options, _) = make_grep_options(output_mode, GrepMode::Fuzzy, 0, Some(0));
             let fuzzy_parsed = parser.parse(&fuzzy_query);
-            let fuzzy_result =
-                grep::grep_search(files, &fuzzy_query, fuzzy_parsed.as_ref(), &fuzzy_options);
+            let fuzzy_result = grep::grep_search(files, &fuzzy_parsed, &fuzzy_options);
 
             if !fuzzy_result.matches.is_empty() {
                 let mut lines: Vec<String> = Vec::new();
@@ -347,7 +342,7 @@ impl FffServer {
                         limit: 1,
                     },
                 };
-                let file_result = FilePicker::fuzzy_search(files, query, file_query, file_opts);
+                let file_result = FilePicker::fuzzy_search(files, &file_query, file_opts);
                 if let (Some(top), Some(score)) =
                     (file_result.items.first(), file_result.scores.first())
                 {
@@ -439,7 +434,7 @@ impl FffServer {
 
         let parser = QueryParser::default();
         let fff_query = parser.parse(query);
-        let result = FilePicker::fuzzy_search(files, query, fff_query, make_opts(page_offset));
+        let result = FilePicker::fuzzy_search(files, &fff_query, make_opts(page_offset));
         let total_files = result.total_files;
 
         // Auto-retry with fewer terms if 3+ words return 0 results
@@ -450,8 +445,7 @@ impl FffServer {
             if result.items.is_empty() && words.len() >= 3 && page_offset == 0 {
                 if let Some(shorter) = &shorter {
                     let shorter_query = parser.parse(shorter);
-                    let retry =
-                        FilePicker::fuzzy_search(files, shorter, shorter_query, make_opts(0));
+                    let retry = FilePicker::fuzzy_search(files, &shorter_query, make_opts(0));
 
                     (retry.items, retry.scores, retry.total_matched)
                 } else {
@@ -523,10 +517,7 @@ impl FffServer {
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
         let parsed = QueryParser::new(AiGrepConfig).parse(&params.query);
-        let grep_text: Cow<str> = parsed
-            .as_ref()
-            .map(|p| Cow::Owned(p.grep_text()))
-            .unwrap_or(Cow::Borrowed(&params.query));
+        let grep_text = parsed.grep_text();
 
         let mode = if has_regex_metacharacters(&grep_text) {
             GrepMode::Regex
@@ -592,15 +583,8 @@ impl FffServer {
         let patterns_refs: Vec<&str> = params.patterns.iter().map(|s| s.as_str()).collect();
 
         let parser = fff_query_parser::QueryParser::new(fff_query_parser::AiGrepConfig);
-        let parsed_constraints = if !constraint_query.is_empty() {
-            parser.parse(constraint_query)
-        } else {
-            None
-        };
-        let constraints = parsed_constraints
-            .as_ref()
-            .map(|p| p.constraints.as_slice())
-            .unwrap_or(&[]);
+        let parsed_constraints = parser.parse(constraint_query);
+        let constraints = parsed_constraints.constraints.as_slice();
 
         let files = picker.get_files();
         let result = grep::multi_grep_search(files, &patterns_refs, constraints, &options);
@@ -625,8 +609,7 @@ impl FffServer {
                 };
 
                 let parsed = parser.parse(&full_query);
-                let fb_result =
-                    grep::grep_search(files, &full_query, parsed.as_ref(), &fallback_options);
+                let fb_result = grep::grep_search(files, &parsed, &fallback_options);
 
                 if !fb_result.matches.is_empty() {
                     let fb_file_refs: Vec<&FileItem> = fb_result.files.to_vec();

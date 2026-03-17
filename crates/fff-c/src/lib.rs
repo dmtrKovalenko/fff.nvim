@@ -261,8 +261,7 @@ pub unsafe extern "C" fn fff_search(
 
     let results = FilePicker::fuzzy_search(
         picker.get_files(),
-        query_str,
-        parsed,
+        &parsed,
         FuzzySearchOptions {
             max_threads: opts.max_threads.unwrap_or(0),
             current_file: opts.current_file.as_deref(),
@@ -349,8 +348,7 @@ pub unsafe extern "C" fn fff_live_grep(
         classify_definitions: opts.classify_definitions.unwrap_or(false),
     };
 
-    let result =
-        fff_core::grep::grep_search(picker.get_files(), query_str, parsed.as_ref(), &options);
+    let result = fff_core::grep::grep_search(picker.get_files(), &parsed, &options);
 
     let json_result = ffi_types::GrepResultJson::from_grep_result(&result);
     match serde_json::to_string(&json_result) {
@@ -406,7 +404,7 @@ pub unsafe extern "C" fn fff_multi_grep(
     let is_ai = picker.mode().is_ai();
 
     // Parse constraints from the optional string (e.g. "*.rs /src/")
-    let parsed_constraints = opts.constraints.as_deref().and_then(|c| {
+    let parsed_constraints = opts.constraints.as_deref().map(|c| {
         if is_ai {
             fff_core::QueryParser::new(fff_query_parser::AiGrepConfig).parse(c)
         } else {

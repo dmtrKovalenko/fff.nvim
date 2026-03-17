@@ -144,7 +144,7 @@ impl<'a> GrepBench<'a> {
     fn run_once(&self, query: &str) -> (Duration, usize, usize) {
         let parsed = parse_grep_query(query);
         let start = Instant::now();
-        let result = grep_search(self.files, query, parsed.as_ref(), &self.options);
+        let result = grep_search(self.files, &parsed, &self.options);
         let elapsed = start.elapsed();
         (elapsed, result.matches.len(), result.total_files_searched)
     }
@@ -452,7 +452,7 @@ fn main() {
             classify_definitions: false,
         };
         let start = Instant::now();
-        let result = grep_search(&files, pagination_query, parsed.as_ref(), &opts);
+        let result = grep_search(&files, &parsed, &opts);
         let elapsed = start.elapsed();
         eprintln!(
             "    {:>6} | {:>12} | {:>8} | {:>6} | {:>12}",
