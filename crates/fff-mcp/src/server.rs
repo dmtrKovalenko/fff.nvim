@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use fff_core::file_picker::FilePicker;
 use fff_core::grep::{self, GrepMode, GrepSearchOptions, has_regex_metacharacters};
 use fff_core::types::{FileItem, PaginationArgs};
-use fff_core::{Constraint, FuzzySearchOptions, QueryParser, SharedFrecency, SharedPicker};
+use fff_core::{FuzzySearchOptions, QueryParser, SharedFrecency, SharedPicker};
 use fff_query_parser::AiGrepConfig;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -21,12 +21,12 @@ use rmcp::{ServerHandler, schemars, tool, tool_handler, tool_router};
 use crate::cursor::CursorStore;
 use crate::output::{GrepFormatter, OutputMode, file_suffix};
 
-/// Strip common delimiters for fuzzy fallback queries.
-fn strip_delimiters(s: &str) -> String {
+/// Strip common delimiters and lowercase for fuzzy fallback queries.
+fn cleanup_fuzzy_query(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if !matches!(c, ':' | '-' | '_') {
-            out.push(c);
+            out.extend(c.to_lowercase());
         }
     }
     out
@@ -305,7 +305,7 @@ impl FffServer {
             }
 
             // Fuzzy fallback for typo tolerance
-            let fuzzy_query = strip_delimiters(&query.to_lowercase());
+            let fuzzy_query = cleanup_fuzzy_query(query);
             let (fuzzy_options, _) = make_grep_options(output_mode, GrepMode::Fuzzy, 0, Some(0));
             let fuzzy_parsed = parser.parse(&fuzzy_query);
             let fuzzy_result =
@@ -331,35 +331,40 @@ impl FffServer {
                 )]));
             }
 
-            let hint = match &parsed {
-                Some(q)
-                    if q.constraints
-                        .iter()
-                        .any(|c| matches!(c, Constraint::FilePath(_))) =>
+            // File path fallback: if query looks like a path, suggest the matching file
+            if query.contains('/') {
+                let file_parser = QueryParser::default();
+                let file_query = file_parser.parse(query);
+                let file_opts = FuzzySearchOptions {
+                    max_threads: 0,
+                    current_file: None,
+                    project_path: Some(picker.base_path()),
+                    last_same_query_match: None,
+                    combo_boost_score_multiplier: 100,
+                    min_combo_count: 3,
+                    pagination: PaginationArgs {
+                        offset: 0,
+                        limit: 1,
+                    },
+                };
+                let file_result = FilePicker::fuzzy_search(files, query, file_query, file_opts);
+                if let (Some(top), Some(score)) =
+                    (file_result.items.first(), file_result.scores.first())
                 {
-                    let path = q
-                        .constraints
-                        .iter()
-                        .find_map(|c| match c {
-                            Constraint::FilePath(p) => Some(*p),
-                            _ => None,
-                        })
-                        .unwrap();
-                    let ext = path.rsplit('.').next().unwrap_or("");
-                    format!(
-                        " Constraint '{path}' looks like a file path — use Read to search in a specific file, or '*.{ext}' for extension filter."
-                    )
+                    // Only suggest when the match is strong enough.
+                    let query_len = query.len() as i32;
+                    if score.base_score > query_len * 10 {
+                        return Ok(CallToolResult::success(vec![Content::text(format!(
+                            "0 content matches. But there is a relevant file path: {}",
+                            top.relative_path
+                        ))]));
+                    }
                 }
-                Some(q) if !q.constraints.is_empty() && !q.grep_text().is_empty() => {
-                    " Try to omit constraint".to_string()
-                }
-                _ => String::new(),
-            };
+            }
 
-            return Ok(CallToolResult::success(vec![Content::text(format!(
-                "0 matches {}",
-                hint
-            ))]));
+            return Ok(CallToolResult::success(vec![Content::text(
+                "0 matches.".to_string(),
+            )]));
         }
 
         if result.matches.is_empty() {

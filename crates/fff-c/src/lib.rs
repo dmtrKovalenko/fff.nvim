@@ -31,10 +31,6 @@ use ffi_types::{
     FffResult, GrepSearchOptionsJson, InitOptions, MultiGrepOptionsJson, ScanProgress,
     SearchOptions,
 };
-use mimalloc::MiMalloc;
-
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
 
 /// Opaque fff_handle holding all per-instance state.
 ///

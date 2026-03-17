@@ -58,13 +58,15 @@ impl<C: ParserConfig> QueryParser<C> {
             }
 
             // Try to extract location from single token (e.g., "file:12")
-            let (query_without_loc, location) = parse_location(query);
-            if location.is_some() {
-                return Some(FFFQuery {
-                    constraints,
-                    fuzzy_query: FuzzyQuery::Text(query_without_loc),
-                    location,
-                });
+            if config.enable_location() {
+                let (query_without_loc, location) = parse_location(query);
+                if location.is_some() {
+                    return Some(FFFQuery {
+                        constraints,
+                        fuzzy_query: FuzzyQuery::Text(query_without_loc),
+                        location,
+                    });
+                }
             }
 
             // Plain text single token - return None (caller handles as simple fuzzy match)
@@ -99,7 +101,7 @@ impl<C: ParserConfig> QueryParser<C> {
 
         // Try to extract location from the last fuzzy token
         // e.g., "search file:12" -> fuzzy="search file", location=Line(12)
-        let location = if !text_parts.is_empty() {
+        let location = if config.enable_location() && !text_parts.is_empty() {
             let last_idx = text_parts.len() - 1;
             let (without_loc, loc) = parse_location(text_parts[last_idx]);
             if loc.is_some() {
@@ -918,13 +920,44 @@ mod tests {
     }
 
     #[test]
-    fn test_ai_grep_no_false_positive_no_slash() {
+    fn test_ai_grep_bare_filename_is_file_path() {
         use crate::AiGrepConfig;
         let parser = QueryParser::new(AiGrepConfig);
         let result = parser.parse("main.rs pattern").expect("Should parse");
-        // No slash → not a file path, just text
+        // Bare filename with valid extension → FilePath constraint
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::FilePath("main.rs")),
+            "Expected FilePath, got {:?}",
+            result.constraints[0]
+        );
+        assert_eq!(result.grep_text(), "pattern");
+    }
+
+    #[test]
+    fn test_ai_grep_bare_filename_schema_rs() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser
+            .parse("schema.rs part_revisions")
+            .expect("Should parse");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(
+            matches!(result.constraints[0], Constraint::FilePath("schema.rs")),
+            "Expected FilePath(schema.rs), got {:?}",
+            result.constraints[0]
+        );
+        assert_eq!(result.grep_text(), "part_revisions");
+    }
+
+    #[test]
+    fn test_ai_grep_bare_word_no_extension_not_constraint() {
+        use crate::AiGrepConfig;
+        let parser = QueryParser::new(AiGrepConfig);
+        let result = parser.parse("schema pattern").expect("Should parse");
+        // No extension → not a file path, just text
         assert_eq!(result.constraints.len(), 0);
-        assert_eq!(result.grep_text(), "main.rs pattern");
+        assert_eq!(result.grep_text(), "schema pattern");
     }
 
     #[test]
@@ -976,6 +1009,34 @@ mod tests {
             result.constraints.is_empty(),
             "Expected no constraints, got {:?}",
             result.constraints
+        );
+    }
+
+    #[test]
+    fn test_grep_no_location_parsing_single_token() {
+        let parser = QueryParser::new(GrepConfig);
+        // localhost:8080 should NOT be parsed as location — it's a search pattern
+        let result = parser.parse("localhost:8080");
+        assert!(
+            result.is_none(),
+            "Single-token grep query with colon-number should return None (plain text), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_grep_no_location_parsing_multi_token() {
+        let q = QueryParser::new(GrepConfig)
+            .parse("*.rs localhost:8080")
+            .expect("should parse");
+        assert_eq!(
+            q.grep_text(),
+            "localhost:8080",
+            "Colon-number suffix should be preserved in grep text"
+        );
+        assert!(
+            q.location.is_none(),
+            "Grep should not parse location from colon-number"
         );
     }
 

@@ -126,7 +126,9 @@ download_binary() {
     mv "${tmp_dir}/${filename}" "${INSTALL_DIR}/${BINARY_NAME}${ext}"
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}${ext}"
 
-    success "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}${ext}"
+    if [ "$IS_UPDATE" != true ]; then
+        success "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}${ext}"
+    fi
 }
 
 check_path() {
@@ -236,19 +238,35 @@ print_setup_instructions() {
 }
 
 main() {
-    info "Installing FFF MCP Server..."
-    echo ""
-
     local target
     target="$(detect_platform)"
+
+    local existing_binary="${INSTALL_DIR}/${BINARY_NAME}"
+    IS_UPDATE=false
+
+    if [ -x "$existing_binary" ]; then
+        IS_UPDATE=true
+        info "Updating FFF MCP Server..."
+    else
+        info "Installing FFF MCP Server..."
+    fi
+    echo ""
+
     info "Detected platform: ${target}"
 
     local tag
     tag="$(get_latest_release_tag "$target")"
 
     download_binary "$target" "$tag"
-    check_path
-    print_setup_instructions
+
+    if [ "$IS_UPDATE" = true ]; then
+        echo ""
+        success "FFF MCP Server updated to ${tag}!"
+        echo ""
+    else
+        check_path
+        print_setup_instructions
+    fi
 }
 
 main

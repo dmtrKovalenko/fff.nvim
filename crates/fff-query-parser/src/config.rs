@@ -73,6 +73,13 @@ pub trait ParserConfig {
         true
     }
 
+    /// Should parse location suffixes (e.g., file:12, file:12:4)
+    /// Disabled for grep modes where colon-number patterns like localhost:8080
+    /// are search text, not file locations.
+    fn enable_location(&self) -> bool {
+        true
+    }
+
     /// Determine whether a token should be treated as a glob constraint.
     ///
     /// The default implementation delegates to `zlob::has_wildcards` with
@@ -126,6 +133,10 @@ impl ParserConfig for GrepConfig {
         false
     }
 
+    fn enable_location(&self) -> bool {
+        false
+    }
+
     /// Only recognise globs that are clearly directory/path oriented.
     ///
     /// Characters like `?`, `[`, and bare `*` (without `/`) are extremely
@@ -161,10 +172,10 @@ impl ParserConfig for GrepConfig {
 /// Configuration for AI-mode grep — extends `GrepConfig` behavior with
 /// automatic file-path constraint detection.
 ///
-/// When an AI agent sends `"libswscale/input.c rgba32ToY"`, the token
-/// `libswscale/input.c` is detected as a `FilePath` constraint so the
-/// search is scoped to that file. The caller validates the constraint
-/// against the index and drops it if no files match (fallback).
+/// Bare filenames with valid extensions (`schema.rs`) and path-prefixed
+/// filenames (`libswscale/input.c`) are detected as `FilePath` constraints
+/// so the search is scoped to matching files. The caller validates the
+/// constraint against the index and drops it if no files match (fallback).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AiGrepConfig;
 
@@ -174,6 +185,10 @@ impl ParserConfig for AiGrepConfig {
     }
 
     fn enable_git_status(&self) -> bool {
+        false
+    }
+
+    fn enable_location(&self) -> bool {
         false
     }
 
@@ -202,36 +217,10 @@ impl ParserConfig for AiGrepConfig {
     }
 
     fn parse_custom<'a>(&self, token: &'a str) -> Option<Constraint<'a>> {
-        if is_file_path_token(token) {
+        if is_filename_constraint_token(token) {
             Some(Constraint::FilePath(token))
         } else {
             None
         }
-    }
-}
-
-#[inline]
-fn is_file_path_token(token: &str) -> bool {
-    let bytes = token.as_bytes();
-
-    // Must contain at least one /
-    if !bytes.contains(&b'/') {
-        return false;
-    }
-
-    // Must NOT end with / (that's a PathSegment)
-    if bytes.last() == Some(&b'/') {
-        return false;
-    }
-
-    // Must NOT contain wildcards (those are globs)
-    if has_wildcards(token) {
-        return false;
-    }
-
-    // Last component must contain . (file extension)
-    match token.rsplit('/').next() {
-        Some(last) => last.contains('.'),
-        None => false,
     }
 }

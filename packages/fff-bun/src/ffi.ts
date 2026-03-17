@@ -148,9 +148,7 @@ function snakeToCamel(obj: unknown): unknown {
 
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-    const camelKey = key.replace(/_([a-z])/g, (_, letter) =>
-      letter.toUpperCase(),
-    );
+    const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
     result[camelKey] = snakeToCamel(value);
   }
   return result;
@@ -298,15 +296,9 @@ export function ffiGetScanProgress(handle: NativeHandle): Result<unknown> {
 /**
  * Wait for scan to complete.
  */
-export function ffiWaitForScan(
-  handle: NativeHandle,
-  timeoutMs: number,
-): Result<boolean> {
+export function ffiWaitForScan(handle: NativeHandle, timeoutMs: number): Result<boolean> {
   const library = loadLibrary();
-  const resultPtr = library.symbols.fff_wait_for_scan(
-    handle,
-    BigInt(timeoutMs),
-  );
+  const resultPtr = library.symbols.fff_wait_for_scan(handle, BigInt(timeoutMs));
   const result = parseResult<boolean | string>(resultPtr);
   if (!result.ok) return result;
   // JSON.parse("true") returns boolean true, but we also handle
@@ -317,15 +309,9 @@ export function ffiWaitForScan(
 /**
  * Restart index in new path.
  */
-export function ffiRestartIndex(
-  handle: NativeHandle,
-  newPath: string,
-): Result<void> {
+export function ffiRestartIndex(handle: NativeHandle, newPath: string): Result<void> {
   const library = loadLibrary();
-  const resultPtr = library.symbols.fff_restart_index(
-    handle,
-    ptr(encodeString(newPath)),
-  );
+  const resultPtr = library.symbols.fff_restart_index(handle, ptr(encodeString(newPath)));
   return parseResult<void>(resultPtr);
 }
 
@@ -340,10 +326,7 @@ export function ffiRefreshGitStatus(handle: NativeHandle): Result<number> {
   // JSON.parse("3") returns 3 (number), parseInt handles both
   return {
     ok: true,
-    value:
-      typeof result.value === "number"
-        ? result.value
-        : parseInt(result.value, 10),
+    value: typeof result.value === "number" ? result.value : parseInt(result.value, 10),
   };
 }
 
@@ -374,14 +357,10 @@ export function ffiGetHistoricalQuery(
   offset: number,
 ): Result<string | null> {
   const library = loadLibrary();
-  const resultPtr = library.symbols.fff_get_historical_query(
-    handle,
-    BigInt(offset),
-  );
+  const resultPtr = library.symbols.fff_get_historical_query(handle, BigInt(offset));
   const result = parseResult<string | null>(resultPtr);
   if (!result.ok) return result;
-  if (result.value === null || result.value === "null")
-    return { ok: true, value: null };
+  if (result.value === null || result.value === "null") return { ok: true, value: null };
   return result as Result<string>;
 }
 
@@ -431,15 +410,9 @@ export function ffiLiveGrep(
 /**
  * Multi-pattern grep - Aho-Corasick multi-needle search.
  */
-export function ffiMultiGrep(
-  handle: NativeHandle,
-  optsJson: string,
-): Result<unknown> {
+export function ffiMultiGrep(handle: NativeHandle, optsJson: string): Result<unknown> {
   const library = loadLibrary();
-  const resultPtr = library.symbols.fff_multi_grep(
-    handle,
-    ptr(encodeString(optsJson)),
-  );
+  const resultPtr = library.symbols.fff_multi_grep(handle, ptr(encodeString(optsJson)));
   return parseResult<unknown>(resultPtr);
 }
 

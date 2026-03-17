@@ -1555,7 +1555,10 @@ pub fn grep_search<'a>(
         prepare_files_to_search(files, constraints_from_query, options);
 
     // If constraints yielded 0 files and we had a FilePath constraint,
-    // retry without it (the path token was likely part of the search text).
+    // retry without it — the filename may not exist in this repo.
+    // Keep the original grep_text (e.g. "ActorAuth") rather than restoring
+    // the raw query ("nonexistent.rs ActorAuth"), since the search term
+    // was correctly extracted by the parser.
     if files_to_search.is_empty()
         && let Some(stripped) = strip_file_path_constraints(constraints_from_query)
     {

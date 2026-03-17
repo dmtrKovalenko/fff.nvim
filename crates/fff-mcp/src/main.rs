@@ -17,6 +17,7 @@ use clap::Parser;
 use fff_core::file_picker::FilePicker;
 use fff_core::frecency::FrecencyTracker;
 use fff_core::{FFFMode, SharedFrecency, SharedPicker};
+use git2::Repository;
 use mimalloc::MiMalloc;
 use rmcp::{ServiceExt, transport::stdio};
 use server::FffServer;
@@ -70,13 +71,15 @@ pub const MCP_INSTRUCTIONS: &str = concat!(
     "For multi_grep: constraints go in the separate 'constraints' parameter.\n",
     "\n",
     "Constraints MUST match one of these formats:\n",
-    "  Extension: '*.rs', '*.{ts,tsx}'  (starts with *.)\n",
-    "  Directory: 'src/', 'quotes/'     (ends with /)\n",
-    "  Exclude:   '!test/', '!*.spec.ts' (starts with !)\n",
+    "  Extension: '*.rs', '*.{ts,tsx}'\n",
+    "  Directory: 'src/', 'quotes/'\n",
+    "  Filename: 'schema.rs', 'src/main.rs'\n",
+    "  Exclude: '!test/', '!*.spec.ts'\n",
     "\n",
-    "! Bare words are NOT constraints. 'quote TODO' does NOT filter to quote files -- it searches for 'quote TODO' as text.\n",
-    "  + 'quotes/ TODO'   -> searches for 'TODO' in the quotes/ directory\n",
-    "  x 'quote TODO'     -> searches for literal text 'quote TODO', finds nothing\n",
+    "! Bare words without extensions are NOT constraints. 'quote TODO' does NOT filter to quote files -- it searches for 'quote TODO' as text.\n",
+    "  + 'schema.rs TODO'   -> searches for 'TODO' in files schema.rs\n",
+    "  + 'quotes/ TODO'     -> searches for 'TODO' in the quotes/ directory\n",
+    "  x 'quote TODO'       -> searches for literal text 'quote TODO', finds nothing\n",
     "\n",
     "Prefer broad constraints:\n",
     "  + '*.rs query'           -> file type\n",
@@ -100,7 +103,7 @@ pub const MCP_INSTRUCTIONS: &str = concat!(
 
 /// FFF MCP Server — high-performance file finder for AI code assistants.
 #[derive(Parser)]
-#[command(name = "fff-mcp", version = env!("CARGO_PKG_VERSION"))]
+#[command(name = "fff-mcp", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("FFF_GIT_HASH"), ")"))]
 struct Args {
     /// Base directory to index. Defaults to the current working directory.
     #[arg(value_name = "PATH")]
@@ -205,6 +208,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .to_string_lossy()
             .to_string()
     });
+
+    if Repository::discover(&base_path).is_err() {
+        tracing::error!("MCP server must be run within a Git repository");
+        return Err(format!("Not a Git repository: {}", base_path).into());
+    }
+
     let frecency_db_path = args.frecency_db_path.unwrap_or_default();
 
     let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
