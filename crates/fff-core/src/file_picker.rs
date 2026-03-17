@@ -798,11 +798,10 @@ fn warmup_mmaps(files: &[FileItem]) {
             return;
         }
 
-        if let Some(mmap) = file.get_mmap() {
-            // Read the first byte to trigger the initial page fault, which
-            // causes the kernel to start readahead for subsequent pages.
-            // This is cheaper than madvise and portable across all platforms.
-            let _ = std::hint::black_box(mmap.first());
+        if let Some(content) = file.get_mmap() {
+            // Read the first byte to trigger the initial page fault (mmap)
+            // or ensure the content is cached (Windows buffer).
+            let _ = std::hint::black_box(content.first());
 
             warmed.fetch_add(1, Ordering::Relaxed);
         }
