@@ -27,7 +27,7 @@ cargo set-version "$VERSION" 2>/dev/null || {
   echo "cargo-edit not found, installing..."
   cargo install cargo-edit
   cargo set-version "$VERSION"
-k
+}
 
 # Commit version bump
 git add -A
