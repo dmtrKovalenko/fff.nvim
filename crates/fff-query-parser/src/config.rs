@@ -99,9 +99,9 @@ pub trait ParserConfig {
 
 /// Default configuration for file picker - all features enabled
 #[derive(Debug, Clone, Copy, Default)]
-pub struct FilePickerConfig;
+pub struct FileSearchConfig;
 
-impl ParserConfig for FilePickerConfig {
+impl ParserConfig for FileSearchConfig {
     /// Detect bare filenames (`score.rs`) and path-prefixed filenames (`src/main.rs`)
     /// as `FilePath` constraints so that multi-token queries like `score.rs file_picker`
     /// filter by filename first, then fuzzy-match the remaining text against the path.

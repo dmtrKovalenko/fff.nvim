@@ -1,4 +1,4 @@
-use fff_core::FileItem;
+use fff::FileItem;
 /// Fuzzy grep quality test against ~/dev/lightsource
 ///
 /// Runs queries through the fuzzy grep pipeline and prints results
@@ -7,7 +7,7 @@ use fff_core::FileItem;
 /// Usage:
 ///   cargo run --release --bin fuzzy_grep_test              # runs default test queries
 ///   cargo run --release --bin fuzzy_grep_test -- "query"   # runs a single user query
-use fff_core::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
+use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
 use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
@@ -166,8 +166,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let canonical =
-        fff_core::path_utils::canonicalize(&repo_path).expect("Failed to canonicalize path");
+    let canonical = fff::path_utils::canonicalize(&repo_path).expect("Failed to canonicalize path");
     eprintln!("=== Fuzzy Grep Quality Test ===");
     eprintln!("Repository: {:?}\n", canonical);
 

@@ -5,11 +5,14 @@ members = [
   "crates/fff-mcp",
   "crates/fff-nvim",
   "crates/fff-query-parser",
-  "crates/fff-searcher",
+  "crates/fff-grep",
 ]
 resolver = "2"
 
 [workspace.dependencies]
+fff-grep = { version = "0.2.3", path = "crates/fff-grep" }
+fff-query-parser = { version = "0.2.3", path = "crates/fff-query-parser", default-features = false }
+
 # Shared dependencies
 ahash = "0.8"
 bindet = "0.3"
@@ -25,7 +28,6 @@ git2 = { version = "0.20.2", default-features = false, features = [
 glidesort = "0.1"
 globset = "0.4"
 grep-matcher = "0.1.8"
-grep-searcher = { path = "crates/fff-searcher" }
 heed = "0.22.0"
 ignore = "0.4.22"
 memmap2 = "0.9"

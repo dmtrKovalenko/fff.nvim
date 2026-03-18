@@ -46,7 +46,7 @@ pub mod glob_detect;
 pub mod location;
 mod parser;
 
-pub use config::{AiGrepConfig, FilePickerConfig, GrepConfig, ParserConfig};
+pub use config::{AiGrepConfig, FileSearchConfig, GrepConfig, ParserConfig};
 pub use constraints::{Constraint, GitStatusFilter};
 pub use location::Location;
 pub use parser::{FFFQuery, FuzzyQuery, QueryParser};
@@ -54,7 +54,6 @@ pub use parser::{FFFQuery, FuzzyQuery, QueryParser};
 // Re-export SmallVec for convenience
 pub use smallvec::SmallVec;
 
-/// Type alias for constraint vector - stack-allocated for ≤8 constraints
 pub type ConstraintVec<'a> = SmallVec<[Constraint<'a>; 8]>;
 
 #[cfg(test)]

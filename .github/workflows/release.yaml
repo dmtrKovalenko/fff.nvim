@@ -2,7 +2,9 @@ name: Prebuild
 
 on:
   push:
-    branches: [main, feat/mcp-ai]
+    branches: [main]
+    tags:
+      - "v*"
   pull_request:
 
 env:
@@ -137,26 +139,26 @@ jobs:
             target: x86_64-unknown-linux-gnu
             zigbuild_target: x86_64-unknown-linux-gnu.2.17
             artifact_name: target/x86_64-unknown-linux-gnu/release/libfff_c.so
-            npm_package: fff-bun-linux-x64-gnu
+            npm_package: fff-bin-linux-x64-gnu
             lib_filename: libfff_c.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             zigbuild_target: aarch64-unknown-linux-gnu.2.17
             artifact_name: target/aarch64-unknown-linux-gnu/release/libfff_c.so
-            npm_package: fff-bun-linux-arm64-gnu
+            npm_package: fff-bin-linux-arm64-gnu
             lib_filename: libfff_c.so
             ext: so
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact_name: target/x86_64-unknown-linux-musl/release/libfff_c.so
-            npm_package: fff-bun-linux-x64-musl
+            npm_package: fff-bin-linux-x64-musl
             lib_filename: libfff_c.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             artifact_name: target/aarch64-unknown-linux-musl/release/libfff_c.so
-            npm_package: fff-bun-linux-arm64-musl
+            npm_package: fff-bin-linux-arm64-musl
             lib_filename: libfff_c.so
             ext: so
 
@@ -171,13 +173,13 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: target/x86_64-apple-darwin/release/libfff_c.dylib
-            npm_package: fff-bun-darwin-x64
+            npm_package: fff-bin-darwin-x64
             lib_filename: libfff_c.dylib
             ext: dylib
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: target/aarch64-apple-darwin/release/libfff_c.dylib
-            npm_package: fff-bun-darwin-arm64
+            npm_package: fff-bin-darwin-arm64
             lib_filename: libfff_c.dylib
             ext: dylib
 
@@ -185,13 +187,13 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: target/x86_64-pc-windows-msvc/release/fff_c.dll
-            npm_package: fff-bun-win32-x64
+            npm_package: fff-bin-win32-x64
             lib_filename: fff_c.dll
             ext: dll
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             artifact_name: target/aarch64-pc-windows-msvc/release/fff_c.dll
-            npm_package: fff-bun-win32-arm64
+            npm_package: fff-bin-win32-arm64
             lib_filename: fff_c.dll
             ext: dll
 
@@ -428,25 +430,22 @@ jobs:
             fi
           done
 
-      - name: Prepare tag
-        id: vars
-        shell: bash
-        run: |
-          sha="$(git rev-parse --short HEAD)"
-          echo "tag=$sha" >> $GITHUB_OUTPUT
+      - name: Determine version
+        id: version
+        run: ./scripts/determine-version.sh
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
-          name: "${{ steps.vars.outputs.tag }}"
-          tag_name: "${{ steps.vars.outputs.tag }}"
+          name: "${{ steps.version.outputs.version }}"
+          tag_name: "${{ steps.version.outputs.is_release == 'true' && format('v{0}', steps.version.outputs.version) || steps.version.outputs.version }}"
           token: ${{ github.token }}
           files: ./binaries/*
           draft: false
-          prerelease: true
-          generate_release_notes: false
+          prerelease: ${{ steps.version.outputs.is_release != 'true' }}
+          generate_release_notes: ${{ steps.version.outputs.is_release == 'true' }}
           body: |
-            Nightly release from commit: ${{ github.sha }}
+            ${{ steps.version.outputs.is_release == 'true' && format('Release {0}', steps.version.outputs.version) || format('Nightly release from commit: {0}', github.sha) }}
 
             ## Neovim Plugin
             - `{target}.so` / `.dylib` / `.dll` - Lua module for Neovim
@@ -462,13 +461,38 @@ jobs:
             curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
             ```
 
+  crates-publish:
+    name: Publish Rust crates
+    needs: [build-nvim, build-c, build-mcp]
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/node' || startsWith(github.ref, 'refs/tags/v')))
+      || (github.event_name == 'pull_request' && (github.head_ref == 'main' || github.head_ref == 'node'))
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-edit
+        run: cargo install cargo-edit
+
+      - name: Determine version
+        id: version
+        run: ./scripts/determine-version.sh
+
+      - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: make publish-crates V="${{ steps.version.outputs.version }}"
+
   npm-publish:
     name: Publish npm packages
     needs: [build-c]
     runs-on: ubuntu-latest
     if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/interchangable-ffi'))
-      || (github.event_name == 'pull_request' && (github.head_ref == 'main' || github.head_ref == 'feat/interchangable-ffi'))
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/node' || startsWith(github.ref, 'refs/tags/v')))
+      || (github.event_name == 'pull_request' && (github.head_ref == 'main' || github.head_ref == 'node'))
     permissions:
       contents: read
     steps:
@@ -477,24 +501,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "25"
           registry-url: "https://registry.npmjs.org"
 
       - name: Determine version
         id: version
-        run: |
-          # Read the base version from fff-core Cargo.toml (single source of truth)
-          base_version=$(grep '^version' crates/fff-core/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          short_sha=$(git rev-parse --short HEAD)
-          
-          # Always publish as nightly prerelease: X.Y.Z-nightly.<short-sha>
-          echo "version=${base_version}-nightly.${short_sha}" >> $GITHUB_OUTPUT
-          
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            echo "tag=nightly" >> $GITHUB_OUTPUT
-          else
-            echo "tag=dev" >> $GITHUB_OUTPUT
-          fi
+        run: ./scripts/determine-version.sh
 
       - name: Download npm package artifacts
         uses: actions/download-artifact@v4
@@ -507,94 +519,45 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
-          
+          TAG="${{ steps.version.outputs.npm_tag }}"
+
           for pkg_dir in ./npm-packages/npm-*/; do
             if [ -d "$pkg_dir" ]; then
               pkg_name=$(node -p "require('${pkg_dir}package.json').name")
               echo "Publishing ${pkg_name}@${VERSION} with tag ${TAG}..."
-              
-              # Update version in package.json
-              node -e "
-                const fs = require('fs');
-                const pkg = JSON.parse(fs.readFileSync('${pkg_dir}package.json', 'utf8'));
-                pkg.version = '${VERSION}';
-                fs.writeFileSync('${pkg_dir}package.json', JSON.stringify(pkg, null, 2) + '\n');
-              "
-              
+
+              make set-npm-version PKG="$pkg_dir" VERSION="$VERSION"
+
               cd "$pkg_dir"
               npm publish --tag "$TAG" --access public || echo "Failed to publish ${pkg_name} (may already exist)"
               cd -
             fi
           done
 
-      - name: Publish main package
+      - name: Publish bun package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
-          
+          TAG="${{ steps.version.outputs.npm_tag }}"
+
           echo "Publishing @ff-labs/fff-bun@${VERSION} with tag ${TAG}..."
-          
-          # Update version and optionalDependencies versions in the main package
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('./packages/fff-bun/package.json', 'utf8'));
-            pkg.version = '${VERSION}';
-            if (pkg.optionalDependencies) {
-              for (const dep of Object.keys(pkg.optionalDependencies)) {
-                pkg.optionalDependencies[dep] = '${VERSION}';
-              }
-            }
-            fs.writeFileSync('./packages/fff-bun/package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-          
+          make set-npm-version PKG=packages/fff-bun VERSION="$VERSION"
+
           cd packages/fff-bun
           npm publish --tag "$TAG" --access public || echo "Failed to publish @ff-labs/fff-bun (may already exist)"
 
-  comment-on-pr:
-    name: Comment on PR
-    needs: [build-nvim, build-c, build-mcp]
-    runs-on: ubuntu-latest
-    # comments doesn't work on forks
-    if: github.event_name == 'pull_request' && github.repository == 'dmtrKovalenko/fff.nvim' && github.event.pull_request.user.login == 'dmtrKovalenko'
-    permissions:
-      pull-requests: write
-    steps:
-      - name: Get short SHA
-        id: vars
-        run: echo "short_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+      - name: Publish Node.js package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.npm_tag }}"
 
-      - name: Find existing comment
-        uses: peter-evans/find-comment@v3
-        id: find-comment
-        with:
-          issue-number: ${{ github.event.pull_request.number }}
-          comment-author: "github-actions[bot]"
-          body-includes: "<!-- fff-nvim-build-comment -->"
+          echo "Publishing @ff-labs/fff-node@${VERSION} with tag ${TAG}..."
+          make set-npm-version PKG=packages/fff-node VERSION="$VERSION"
 
-      - name: Create or update PR comment
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          comment-id: ${{ steps.find-comment.outputs.comment-id }}
-          issue-number: ${{ github.event.pull_request.number }}
-          edit-mode: replace
-          body: |
-            <!-- fff-nvim-build-comment -->
-            ## Build Artifacts for your PR
-
-            ### Neovim Plugin
-            Test with lazy.nvim:
-            ```lua
-            {
-              "dmtrKovalenko/fff.nvim",
-              tag = "${{ steps.vars.outputs.short_sha }}",
-            }
-            ```
-
-            ### Bun/TypeScript Package
-            The `fff` npm package will download binaries from this release automatically.
-
-            ---
-            *Built from ${{ github.sha }}*
+          cd packages/fff-node
+          npm install
+          npx tsc
+          npm publish --tag "$TAG" --access public || echo "Failed to publish @ff-labs/fff-node (may already exist)"

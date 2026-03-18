@@ -14,9 +14,9 @@ mod update_check;
 use std::sync::{Arc, RwLock};
 
 use clap::Parser;
-use fff_core::file_picker::FilePicker;
-use fff_core::frecency::FrecencyTracker;
-use fff_core::{FFFMode, SharedFrecency, SharedPicker};
+use fff::file_picker::FilePicker;
+use fff::frecency::FrecencyTracker;
+use fff::{FFFMode, SharedFrecency, SharedPicker};
 use git2::Repository;
 use mimalloc::MiMalloc;
 use rmcp::{ServiceExt, transport::stdio};
@@ -198,7 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     resolve_defaults(&mut args);
 
     let log_file = args.log_file.as_deref().unwrap_or("");
-    if let Err(e) = fff_core::log::init_tracing(log_file, args.log_level.as_deref()) {
+    if let Err(e) = fff::log::init_tracing(log_file, args.log_level.as_deref()) {
         eprintln!("Warning: Failed to init tracing: {}", e);
     }
 
@@ -223,7 +223,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(mut guard) = shared_frecency.write() {
                 *guard = Some(tracker);
             }
-            FrecencyTracker::spawn_gc(Arc::clone(&shared_frecency), frecency_db_path, false);
+
+            let _ =
+                FrecencyTracker::spawn_gc(Arc::clone(&shared_frecency), frecency_db_path, false);
         }
         Err(e) => {
             eprintln!("Warning: Failed to init frecency db: {}", e);

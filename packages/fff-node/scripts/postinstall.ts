@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 /**
  * Postinstall script - ensures the native binary is available
  *
@@ -8,8 +7,8 @@
  * 3. Fallback: download from GitHub releases
  */
 
-import { findBinary, downloadBinary } from "../src/download";
-import { getNpmPackageName } from "../src/platform";
+import { downloadBinary, findBinary } from "../src/binary.js";
+import { getNpmPackageName } from "../src/platform.js";
 
 async function main() {
   // Check if binary is already available (npm package or dev build)
@@ -40,7 +39,9 @@ async function main() {
     console.error("fff: You can build from source instead:");
     console.error("  cargo build --release -p fff-c");
     console.error("");
-    console.error("fff: Or run `bunx fff download` after fixing network issues.");
+    console.error(
+      "fff: Or run `npx @ff-labs/fff-node download` after fixing network issues.",
+    );
     // Don't exit with error - allow install to complete
     // The error will surface when the user tries to use the library
   }
