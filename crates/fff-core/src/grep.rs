@@ -9,10 +9,10 @@ use crate::constraints::apply_constraints;
 use crate::sort_buffer::sort_with_buffer;
 use crate::types::FileItem;
 use aho_corasick::AhoCorasick;
+use fff_grep::lines::{self, LineStep};
+use fff_grep::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use fff_query_parser::{Constraint, FFFQuery, GrepConfig, QueryParser};
 use grep_matcher::{Match, Matcher, NoCaptures, NoError};
-use grep_searcher::lines::{self, LineStep};
-use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -721,7 +721,7 @@ impl Sink for PlainTextSink<'_> {
         Ok(true)
     }
 
-    fn finish(&mut self, _: &Searcher, _: &grep_searcher::SinkFinish) -> Result<(), Self::Error> {
+    fn finish(&mut self, _: &Searcher, _: &fff_grep::SinkFinish) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -779,7 +779,7 @@ impl Sink for RegexSink<'_> {
         Ok(true)
     }
 
-    fn finish(&mut self, _: &Searcher, _: &grep_searcher::SinkFinish) -> Result<(), Self::Error> {
+    fn finish(&mut self, _: &Searcher, _: &fff_grep::SinkFinish) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -862,7 +862,7 @@ impl Sink for AhoCorasickSink<'_> {
         Ok(true)
     }
 
-    fn finish(&mut self, _: &Searcher, _: &grep_searcher::SinkFinish) -> Result<(), Self::Error> {
+    fn finish(&mut self, _: &Searcher, _: &fff_grep::SinkFinish) -> Result<(), Self::Error> {
         Ok(())
     }
 }

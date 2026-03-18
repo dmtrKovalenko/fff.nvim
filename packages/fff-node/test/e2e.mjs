@@ -25,12 +25,12 @@ const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 let finder = null;
 
 describe("fff-node", { concurrency: 1 }, () => {
-  before(() => {
+  before(async () => {
     const result = FileFinder.create({ basePath: REPO_ROOT });
     assert.ok(result.ok, `create failed: ${!result.ok ? result.error : ""}`);
     finder = result.value;
 
-    const wait = finder.waitForScan(5_000);
+    const wait = await finder.waitForScan(5_000);
     if (!wait.ok) {
       assert.ok(wait.ok, `waitForScan failed: ${wait.error}`);
     }
@@ -40,13 +40,9 @@ describe("fff-node", { concurrency: 1 }, () => {
 
   after(() => {
     if (finder && !finder.isDestroyed) finder.destroy();
-    try {
-      closeLibrary();
-    } catch(e) {
-      console.log(e);
-      // ffi-rs close() can throw on some platforms (e.g. Windows DLL unload);
-      // safe to ignore during test teardown.
-    }
+    // Skip closeLibrary() — the OS handles cleanup on process exit.
+    // Calling ffi-rs close() during test teardown can cause native crashes
+    // on some platforms (e.g. Windows DLL unload, Linux dlclose).
   });
 
   it("isAvailable returns true when the native library is loadable", () => {
@@ -133,16 +129,16 @@ describe("fff-node", { concurrency: 1 }, () => {
     });
   });
 
-  describe("liveGrep", { concurrency: 1 }, () => {
+  describe("grep", { concurrency: 1 }, () => {
     it("finds FffResult in Rust sources", () => {
-      const r = finder.liveGrep("FffResult", { mode: "plain" });
-      assert.ok(r.ok, `liveGrep failed: ${!r.ok ? r.error : ""}`);
+      const r = finder.grep("FffResult", { mode: "plain" });
+      assert.ok(r.ok, `grep failed: ${!r.ok ? r.error : ""}`);
       assert.ok(r.value.items.length > 0);
       assert.ok(r.value.items.some((m) => m.relativePath.endsWith(".rs")));
     });
 
     it("match items contain all required fields", () => {
-      const r = finder.liveGrep("FffResult", { mode: "plain" });
+      const r = finder.grep("FffResult", { mode: "plain" });
       assert.ok(r.ok);
       const m = r.value.items[0];
       assert.equal(typeof m.relativePath, "string");
@@ -153,20 +149,21 @@ describe("fff-node", { concurrency: 1 }, () => {
       assert.equal(typeof m.col, "number");
       assert.equal(typeof m.byteOffset, "number");
       assert.ok(Array.isArray(m.matchRanges));
+      console.log(m.matchRanges);
     });
 
     it("pagination returns a second page", () => {
-      const r = finder.liveGrep("fn", { mode: "plain" });
+      const r = finder.grep("fn", { mode: "plain" });
       assert.ok(r.ok);
       if (r.value.nextCursor) {
-        const r2 = finder.liveGrep("fn", { cursor: r.value.nextCursor });
+        const r2 = finder.grep("fn", { cursor: r.value.nextCursor });
         assert.ok(r2.ok, `page 2 failed: ${!r2.ok ? r2.error : ""}`);
         assert.equal(typeof r2.value.totalMatched, "number");
       }
     });
 
     it("regex mode matches pub fn declarations", () => {
-      const r = finder.liveGrep("pub fn \\w+", { mode: "regex" });
+      const r = finder.grep("pub fn \\w+", { mode: "regex" });
       assert.ok(r.ok, `regex grep failed: ${!r.ok ? r.error : ""}`);
       assert.ok(r.value.items.length > 0);
     });
@@ -175,7 +172,7 @@ describe("fff-node", { concurrency: 1 }, () => {
   describe("multiGrep", { concurrency: 1 }, () => {
     it("finds lines matching any of the C FFI function names", () => {
       const r = finder.multiGrep({
-        patterns: ["fff_create", "fff_destroy", "fff_search"],
+        patterns: ["fff_create_instance", "fff_destroy", "fff_search"],
       });
       assert.ok(r.ok, `multiGrep failed: ${!r.ok ? r.error : ""}`);
       assert.ok(r.value.items.length > 0);
@@ -249,8 +246,8 @@ describe("fff-node", { concurrency: 1 }, () => {
       assert.ok(r.error.includes("destroyed"));
     });
 
-    it("liveGrep returns an error", () => {
-      const r = finder.liveGrep("test");
+    it("grep returns an error", () => {
+      const r = finder.grep("test");
       assert.ok(!r.ok);
       assert.ok(r.error.includes("destroyed"));
     });

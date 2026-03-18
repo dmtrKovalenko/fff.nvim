@@ -23,7 +23,6 @@ import {
   ffiScanFiles,
   ffiSearch,
   ffiTrackQuery,
-  ffiWaitForScan,
   isAvailable,
   type NativeHandle,
 } from "./ffi.js";
@@ -40,14 +39,7 @@ import type {
   SearchResult,
 } from "./types.js";
 
-import {
-  createGrepCursor,
-  err,
-  toInternalGrepOptions,
-  toInternalInitOptions,
-  toInternalMultiGrepOptions,
-  toInternalSearchOptions,
-} from "./types.js";
+import { err } from "./types.js";
 
 /**
  * FileFinder - Fast file finder with fuzzy search
@@ -56,7 +48,8 @@ import {
  * as you need and destroy them when done.
  *
  * @example
- * ```typescript
+ *
+ * ```ts
  * import { FileFinder } from "@ff-labs/fff-node";
  *
  * // Create an instance
@@ -108,8 +101,14 @@ export class FileFinder {
    * ```
    */
   static create(options: InitOptions): Result<FileFinder> {
-    const internalOpts = toInternalInitOptions(options);
-    const result = ffiCreate(JSON.stringify(internalOpts));
+    const result = ffiCreate(
+      options.basePath,
+      options.frecencyDbPath ?? "",
+      options.historyDbPath ?? "",
+      options.useUnsafeNoLock ?? false,
+      options.warmupMmapCache ?? false,
+      options.aiMode ?? false,
+    );
 
     if (!result.ok) {
       return result;
@@ -177,14 +176,16 @@ export class FileFinder {
     const guard = this.ensureAlive();
     if (!guard.ok) return guard;
 
-    const internalOpts = toInternalSearchOptions(options);
-    const result = ffiSearch(guard.value, query, JSON.stringify(internalOpts));
-
-    if (!result.ok) {
-      return result;
-    }
-
-    return result as Result<SearchResult>;
+    return ffiSearch(
+      guard.value,
+      query,
+      options?.currentFile ?? "",
+      options?.maxThreads ?? 0,
+      options?.pageIndex ?? 0,
+      options?.pageSize ?? 0,
+      options?.comboBoostMultiplier ?? 0,
+      options?.minComboCount ?? 0,
+    );
   }
 
   /**
@@ -209,28 +210,38 @@ export class FileFinder {
    * @example
    * ```typescript
    * // First page
-   * const result = finder.liveGrep("TODO", { mode: "plain" });
+   * const result = finder.grep("TODO", { mode: "plain" });
    * if (result.ok) {
    *   for (const match of result.value.items) {
    *     console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
    *   }
    *   // Fetch next page
    *   if (result.value.nextCursor) {
-   *     const page2 = finder.liveGrep("TODO", {
+   *     const page2 = finder.grep("TODO", {
    *       cursor: result.value.nextCursor,
    *     });
    *   }
    * }
    * ```
    */
-  liveGrep(query: string, options?: GrepOptions): Result<GrepResult> {
+  grep(query: string, options?: GrepOptions): Result<GrepResult> {
     const guard = this.ensureAlive();
     if (!guard.ok) return guard;
 
-    const internalOpts = toInternalGrepOptions(options);
-    const result = ffiLiveGrep(guard.value, query, JSON.stringify(internalOpts));
-
-    return transformGrepResult(result);
+    return ffiLiveGrep(
+      guard.value,
+      query,
+      options?.mode ?? "plain",
+      options?.maxFileSize ?? 0,
+      options?.maxMatchesPerFile ?? 0,
+      options?.smartCase ?? true,
+      options?.cursor?._offset ?? 0,
+      0, // page_limit (0 = default 50)
+      options?.timeBudgetMs ?? 0,
+      options?.beforeContext ?? 0,
+      options?.afterContext ?? 0,
+      false,
+    );
   }
 
   /**
@@ -266,10 +277,20 @@ export class FileFinder {
       return err("patterns array must have at least 1 element");
     }
 
-    const internalOpts = toInternalMultiGrepOptions(options);
-    const result = ffiMultiGrep(guard.value, JSON.stringify(internalOpts));
-
-    return transformGrepResult(result);
+    return ffiMultiGrep(
+      guard.value,
+      options.patterns.join("\n"),
+      options.constraints ?? "",
+      options.maxFileSize ?? 0,
+      options.maxMatchesPerFile ?? 0,
+      options.smartCase ?? true,
+      options.cursor?._offset ?? 0,
+      0, // page_limit (0 = default 50)
+      options.timeBudgetMs ?? 0,
+      options.beforeContext ?? 0,
+      options.afterContext ?? 0,
+      false,
+    );
   }
 
   /**
@@ -304,6 +325,8 @@ export class FileFinder {
   /**
    * Wait for the initial file scan to complete.
    *
+   * Non-blocking — polls `isScanning` and yields to the event loop between checks.
+   *
    * @param timeoutMs - Maximum time to wait in milliseconds (default: 5000)
    * @returns true if scan completed, false if timed out
    *
@@ -311,17 +334,25 @@ export class FileFinder {
    * ```typescript
    * const finder = FileFinder.create({ basePath: "/path/to/project" });
    * if (finder.ok) {
-   *   const completed = finder.value.waitForScan(10000);
+   *   const completed = await finder.value.waitForScan(10000);
    *   if (!completed.ok || !completed.value) {
    *     console.warn("Scan did not complete in time");
    *   }
    * }
    * ```
    */
-  waitForScan(timeoutMs: number = 5000): Result<boolean> {
+  async waitForScan(timeoutMs: number = 5000): Promise<Result<boolean>> {
     const guard = this.ensureAlive();
     if (!guard.ok) return guard;
-    return ffiWaitForScan(guard.value, timeoutMs);
+
+    const deadline = Date.now() + timeoutMs;
+    while (this.isScanning()) {
+      if (Date.now() >= deadline) {
+        return { ok: true, value: false };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return { ok: true, value: true };
   }
 
   /**
@@ -415,23 +446,3 @@ export class FileFinder {
   }
 }
 
-/** Transform raw FFI grep result into typed GrepResult with opaque cursor. */
-function transformGrepResult(result: Result<unknown>): Result<GrepResult> {
-  if (!result.ok) {
-    return result;
-  }
-
-  const raw = result.value as Record<string, unknown>;
-  const nextFileOffset = raw.nextFileOffset as number;
-  const grepResult: GrepResult = {
-    items: raw.items as GrepResult["items"],
-    totalMatched: raw.totalMatched as number,
-    totalFilesSearched: raw.totalFilesSearched as number,
-    totalFiles: raw.totalFiles as number,
-    filteredFileCount: raw.filteredFileCount as number,
-    nextCursor: nextFileOffset > 0 ? createGrepCursor(nextFileOffset) : null,
-    regexFallbackError: raw.regexFallbackError as string | undefined,
-  };
-
-  return { ok: true, value: grepResult };
-}

@@ -166,8 +166,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let canonical =
-        fff::path_utils::canonicalize(&repo_path).expect("Failed to canonicalize path");
+    let canonical = fff::path_utils::canonicalize(&repo_path).expect("Failed to canonicalize path");
     eprintln!("=== Fuzzy Grep Quality Test ===");
     eprintln!("Repository: {:?}\n", canonical);
 

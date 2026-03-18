@@ -223,7 +223,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(mut guard) = shared_frecency.write() {
                 *guard = Some(tracker);
             }
-            FrecencyTracker::spawn_gc(Arc::clone(&shared_frecency), frecency_db_path, false);
+
+            let _ =
+                FrecencyTracker::spawn_gc(Arc::clone(&shared_frecency), frecency_db_path, false);
         }
         Err(e) => {
             eprintln!("Warning: Failed to init frecency db: {}", e);

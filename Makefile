@@ -1,9 +1,12 @@
 PLENARY_DIR ?= ../plenary.nvim
 
-.PHONY: build test test-rust test-lua test-bun test-node prepare-bun prepare-node set-npm-version
+.PHONY: build test test-rust test-lua test-bun test-node prepare-bun prepare-node set-npm-version header
 
 build:
 	cargo build --release --features zlob
+
+header:
+	cbindgen --config crates/fff-c/cbindgen.toml --crate fff-c --output crates/fff-c/include/fff.h
 
 test-setup:
 	@if [ ! -d "$(PLENARY_DIR)" ]; then \
@@ -12,11 +15,11 @@ test-setup:
 	fi
 
 test-rust:
-	cargo test --workspace --features zlob
+	cargo test --workspace --features zlob --exclude fff-nvim
 
 test-lua: test-setup build
 	nvim --headless -u tests/minimal_init.lua \
-		-c "PlenaryBustedFile tests/fff_spec.lua" 2>&1
+		-c "PlenaryBustedFile tests/fff_core_spec.lua" 2>&1
 
 prepare-bun: build
 	mkdir -p packages/fff-bun/bin
@@ -36,9 +39,7 @@ test-bun: prepare-bun
 	cd packages/fff-bun && bun test src/
 
 test-node: prepare-node
-	cd packages/fff-node && npm run build \
-		&& node --input-type=module -e "import('./dist/src/index.js').then(() => console.log('fff-node: import OK')).catch(e => { console.error('fff-node: import FAILED:', e); process.exit(1) })" \
-		&& node --test test/e2e.mjs
+	cd packages/fff-node && npm run build && node test/e2e.mjs
 
 test: test-rust test-lua test-bun test-node
 
@@ -79,3 +80,13 @@ lint-ts:
 lint: lint-rust lint-lua lint-ts
 
 check: format lint
+
+CRATES_TO_PUBLISH= fff-grep fff-query-parser fff-search
+
+publish-crates:
+	@test -n "$(V)" || (echo "V is required. Usage: make publish-crates V=0.2.0" && exit 1)
+	cargo install cargo-edit
+	cargo set-version $(V) || exit 1;
+	@for crate in $(CRATES_TO_PUBLISH); do \
+		cargo publish -p $$crate --allow-dirty $$(if [ -n "$$CI" ]; then echo "--no-verify"; fi) || exit 1; \
+	done

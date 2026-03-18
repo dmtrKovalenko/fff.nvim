@@ -590,55 +590,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
-name = "fff"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "aho-corasick",
- "bindet",
- "blake3",
- "chrono",
- "criterion",
- "dirs",
- "dunce",
- "fff-query-parser",
- "git2",
- "glidesort",
- "globset",
- "grep-matcher",
- "grep-searcher",
- "heed",
- "ignore",
- "memchr",
- "memmap2",
- "neo_frizbee",
- "notify",
- "notify-debouncer-full 0.7.0",
- "once_cell",
- "parking_lot",
- "pathdiff",
- "rand",
- "rayon",
- "regex",
- "serde",
- "serde_json",
- "smallvec",
- "smartstring",
- "tempfile",
- "thiserror 2.0.12",
- "toml",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "zlob",
-]
-
-[[package]]
 name = "fff-c"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
- "fff",
  "fff-query-parser",
+ "fff-search",
  "git2",
  "mimalloc",
  "serde",
@@ -647,12 +603,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fff-grep"
+version = "0.2.4"
+dependencies = [
+ "bstr",
+ "grep-matcher",
+ "memchr",
+]
+
+[[package]]
 name = "fff-mcp"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "clap",
- "fff",
  "fff-query-parser",
+ "fff-search",
  "git2",
  "mimalloc",
  "rmcp",
@@ -665,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "fff-nvim"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "ahash",
  "blake3",
@@ -673,8 +638,8 @@ dependencies = [
  "criterion",
  "ctrlc",
  "dirs",
- "fff",
  "fff-query-parser",
+ "fff-search",
  "git2",
  "glidesort",
  "heed",
@@ -698,10 +663,54 @@ dependencies = [
 
 [[package]]
 name = "fff-query-parser"
-version = "0.1.0"
+version = "0.2.4"
 dependencies = [
  "criterion",
  "smallvec",
+ "zlob",
+]
+
+[[package]]
+name = "fff-search"
+version = "0.2.4"
+dependencies = [
+ "ahash",
+ "aho-corasick",
+ "bindet",
+ "blake3",
+ "chrono",
+ "criterion",
+ "dirs",
+ "dunce",
+ "fff-grep",
+ "fff-query-parser",
+ "git2",
+ "glidesort",
+ "globset",
+ "grep-matcher",
+ "heed",
+ "ignore",
+ "memchr",
+ "memmap2",
+ "neo_frizbee",
+ "notify",
+ "notify-debouncer-full 0.7.0",
+ "once_cell",
+ "parking_lot",
+ "pathdiff",
+ "rand",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "smartstring",
+ "tempfile",
+ "thiserror 2.0.12",
+ "toml",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "zlob",
 ]
 
@@ -887,15 +896,6 @@ version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36d7b71093325ab22d780b40d7df3066ae4aebb518ba719d38c697a8228a8023"
 dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "grep-searcher"
-version = "0.1.16"
-dependencies = [
- "bstr",
- "grep-matcher",
  "memchr",
 ]
 

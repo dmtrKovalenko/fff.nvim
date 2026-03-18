@@ -334,7 +334,6 @@ impl FffServer {
                     max_threads: 0,
                     current_file: None,
                     project_path: Some(picker.base_path()),
-                    last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
                     pagination: PaginationArgs {
@@ -342,7 +341,7 @@ impl FffServer {
                         limit: 1,
                     },
                 };
-                let file_result = FilePicker::fuzzy_search(files, &file_query, file_opts);
+                let file_result = FilePicker::fuzzy_search(files, &file_query, None, file_opts);
                 if let (Some(top), Some(score)) =
                     (file_result.items.first(), file_result.scores.first())
                 {
@@ -423,7 +422,6 @@ impl FffServer {
             max_threads: 0,
             current_file: None,
             project_path: Some(base_path),
-            last_same_query_match: None,
             combo_boost_score_multiplier: 100,
             min_combo_count: 3,
             pagination: PaginationArgs {
@@ -434,7 +432,7 @@ impl FffServer {
 
         let parser = QueryParser::default();
         let fff_query = parser.parse(query);
-        let result = FilePicker::fuzzy_search(files, &fff_query, make_opts(page_offset));
+        let result = FilePicker::fuzzy_search(files, &fff_query, None, make_opts(page_offset));
         let total_files = result.total_files;
 
         // Auto-retry with fewer terms if 3+ words return 0 results
@@ -445,7 +443,12 @@ impl FffServer {
             if result.items.is_empty() && words.len() >= 3 && page_offset == 0 {
                 if let Some(shorter) = &shorter {
                     let shorter_query = parser.parse(shorter);
-                    let retry = FilePicker::fuzzy_search(files, &shorter_query, make_opts(0));
+                    let retry = FilePicker::fuzzy_search(
+                        files,
+                        &shorter_query,
+                        /*query_tracker=*/ None,
+                        make_opts(0),
+                    );
 
                     (retry.items, retry.scores, retry.total_matched)
                 } else {

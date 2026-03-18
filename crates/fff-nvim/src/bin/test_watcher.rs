@@ -4,9 +4,7 @@
 
 use fff::file_picker::FilePicker;
 use fff::git::format_git_status;
-use fff::{
-    FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker,
-};
+use fff::{FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::env;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -156,11 +154,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let search_results = FilePicker::fuzzy_search(
                 files,
                 &parsed,
+                None,
                 FuzzySearchOptions {
                     max_threads: 2,
                     current_file: None,
                     project_path: None,
-                    last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
                     pagination: PaginationArgs {

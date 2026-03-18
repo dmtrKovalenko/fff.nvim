@@ -1,152 +1,122 @@
 //! FFI-compatible type definitions
 //!
-//! These types use #[repr(C)] for C ABI compatibility and implement
-//! serde traits for JSON serialization.
+//! All result types use `#[repr(C)]` structs for direct memory access from any
+//! language with C FFI support. No JSON serialization is used for search or grep
+//! results — callers read struct fields directly.
 
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
 use fff::git::format_git_status;
 use fff::{FileItem, GrepMatch, GrepResult, Location, Score, SearchResult};
-use serde::{Deserialize, Serialize};
 
-/// Result type returned by all FFI functions
-/// Returned as a heap-allocated pointer that must be freed with fff_free_result
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Allocate a heap CString from a `&str`, returning a raw pointer.
+fn cstring_new(s: &str) -> *mut c_char {
+    CString::new(s).unwrap_or_default().into_raw()
+}
+
+/// Convert a `Vec<T>` into a raw pointer + count, leaking the memory.
+fn vec_to_raw<T>(v: Vec<T>) -> (*mut T, u32) {
+    if v.is_empty() {
+        return (ptr::null_mut(), 0);
+    }
+    let count = v.len() as u32;
+    let mut boxed = v.into_boxed_slice();
+    let p = boxed.as_mut_ptr();
+    std::mem::forget(boxed);
+    (p, count)
+}
+
+/// Convert a `&[String]` into a heap-allocated array of C strings.
+fn strings_to_raw(v: &[String]) -> (*mut *mut c_char, u32) {
+    if v.is_empty() {
+        return (ptr::null_mut(), 0);
+    }
+    let ptrs: Vec<*mut c_char> = v.iter().map(|s| cstring_new(s)).collect();
+    vec_to_raw(ptrs)
+}
+
+/// Free a heap-allocated array of C strings.
+///
+/// ## Safety
+/// `arr` must have been produced by `strings_to_raw`.
+unsafe fn free_cstring_array(arr: *mut *mut c_char, count: u32) {
+    if arr.is_null() {
+        return;
+    }
+    unsafe {
+        let ptrs = Vec::from_raw_parts(arr, count as usize, count as usize);
+        for p in ptrs {
+            if !p.is_null() {
+                drop(CString::from_raw(p));
+            }
+        }
+    }
+}
+
+/// A file item returned by `fff_search`.
+///
+/// All string fields are heap-allocated and owned by the parent `FffSearchResult`.
+/// Free the entire result with `fff_free_search_result`.
 #[repr(C)]
-pub struct FffResult {
-    /// Whether the operation succeeded
-    pub success: bool,
-    /// JSON data on success (null-terminated string, caller must free)
-    pub data: *mut c_char,
-    /// Error message on failure (null-terminated string, caller must free)
-    pub error: *mut c_char,
-    /// Opaque handle pointer (used by fff_create to return the instance)
-    pub handle: *mut c_void,
-}
-
-impl FffResult {
-    /// Create a successful result with no data, returned as heap pointer
-    pub fn ok_empty() -> *mut Self {
-        Box::into_raw(Box::new(FffResult {
-            success: true,
-            data: ptr::null_mut(),
-            error: ptr::null_mut(),
-            handle: ptr::null_mut(),
-        }))
-    }
-
-    /// Create a successful result with data, returned as heap pointer
-    pub fn ok_data(data: &str) -> *mut Self {
-        Box::into_raw(Box::new(FffResult {
-            success: true,
-            data: CString::new(data).unwrap_or_default().into_raw(),
-            error: ptr::null_mut(),
-            handle: ptr::null_mut(),
-        }))
-    }
-
-    /// Create a successful result carrying an opaque instance handle.
-    pub fn ok_handle(handle: *mut c_void) -> *mut Self {
-        Box::into_raw(Box::new(FffResult {
-            success: true,
-            data: ptr::null_mut(),
-            error: ptr::null_mut(),
-            handle,
-        }))
-    }
-
-    /// Create an error result, returned as heap pointer
-    pub fn err(error: &str) -> *mut Self {
-        Box::into_raw(Box::new(FffResult {
-            success: false,
-            data: ptr::null_mut(),
-            error: CString::new(error).unwrap_or_default().into_raw(),
-            handle: ptr::null_mut(),
-        }))
-    }
-}
-
-/// Initialization options (JSON-deserializable)
-#[derive(Debug, Deserialize)]
-pub struct InitOptions {
-    /// Base directory to index (required)
-    pub base_path: String,
-    /// Path to frecency database (optional, omit to skip frecency initialization)
-    pub frecency_db_path: Option<String>,
-    /// Path to query history database (optional, omit to skip query tracker initialization)
-    pub history_db_path: Option<String>,
-    /// Use unsafe no-lock mode for databases (optional, defaults to false)
-    #[serde(default)]
-    pub use_unsafe_no_lock: bool,
-    /// Pre-populate mmap caches for all files after initial scan so the first
-    /// grep search is as fast as subsequent ones (optional, defaults to false)
-    #[serde(default)]
-    pub warmup_mmap_cache: bool,
-    /// AI mode: automatically track frecency for all file modifications detected
-    /// by the background watcher (optional, defaults to false)
-    #[serde(default)]
-    pub ai_mode: bool,
-}
-
-/// Search options (JSON-deserializable)
-#[derive(Debug, Default, Deserialize)]
-pub struct SearchOptions {
-    /// Maximum threads for parallel search (0 = auto)
-    pub max_threads: Option<usize>,
-    /// Current file path (for deprioritization)
-    pub current_file: Option<String>,
-    /// Combo boost score multiplier
-    pub combo_boost_multiplier: Option<i32>,
-    /// Minimum combo count for boost
-    pub min_combo_count: Option<u32>,
-    /// Page index for pagination
-    pub page_index: Option<usize>,
-    /// Page size for pagination
-    pub page_size: Option<usize>,
-}
-
-/// Scan progress (JSON-serializable)
-#[derive(Debug, Serialize)]
-pub struct ScanProgress {
-    pub scanned_files_count: usize,
-    pub is_scanning: bool,
-}
-
-/// File item for JSON serialization
-#[derive(Debug, Serialize)]
-pub struct FileItemJson {
-    pub path: String,
-    pub relative_path: String,
-    pub file_name: String,
+pub struct FffFileItem {
+    pub path: *mut c_char,
+    pub relative_path: *mut c_char,
+    pub file_name: *mut c_char,
+    pub git_status: *mut c_char,
     pub size: u64,
     pub modified: u64,
     pub access_frecency_score: i64,
     pub modification_frecency_score: i64,
     pub total_frecency_score: i64,
-    pub git_status: String,
     pub is_binary: bool,
 }
 
-impl FileItemJson {
-    pub fn from_file_item(item: &FileItem) -> Self {
-        FileItemJson {
-            path: item.path.to_string_lossy().to_string(),
-            relative_path: item.relative_path.clone(),
-            file_name: item.file_name.clone(),
+impl From<&FileItem> for FffFileItem {
+    fn from(item: &FileItem) -> Self {
+        FffFileItem {
+            path: cstring_new(&item.path.to_string_lossy()),
+            relative_path: cstring_new(&item.relative_path),
+            file_name: cstring_new(&item.file_name),
+            git_status: cstring_new(format_git_status(item.git_status)),
             size: item.size,
             modified: item.modified,
             access_frecency_score: item.access_frecency_score,
             modification_frecency_score: item.modification_frecency_score,
             total_frecency_score: item.total_frecency_score,
-            git_status: format_git_status(item.git_status).to_string(),
             is_binary: item.is_binary,
         }
     }
 }
 
-/// Score for JSON serialization
-#[derive(Debug, Serialize)]
-pub struct ScoreJson {
+impl FffFileItem {
+    /// ## Safety
+    /// All string pointers must have been allocated by `CString::into_raw`.
+    pub unsafe fn free_strings(&mut self) {
+        unsafe {
+            if !self.path.is_null() {
+                drop(CString::from_raw(self.path));
+            }
+            if !self.relative_path.is_null() {
+                drop(CString::from_raw(self.relative_path));
+            }
+            if !self.file_name.is_null() {
+                drop(CString::from_raw(self.file_name));
+            }
+            if !self.git_status.is_null() {
+                drop(CString::from_raw(self.git_status));
+            }
+        }
+    }
+}
+
+/// Score breakdown for a search result.
+#[repr(C)]
+pub struct FffScore {
     pub total: i32,
     pub base_score: i32,
     pub filename_bonus: i32,
@@ -156,12 +126,12 @@ pub struct ScoreJson {
     pub current_file_penalty: i32,
     pub combo_match_boost: i32,
     pub exact_match: bool,
-    pub match_type: String,
+    pub match_type: *mut c_char,
 }
 
-impl ScoreJson {
-    pub fn from_score(score: &Score) -> Self {
-        ScoreJson {
+impl From<&Score> for FffScore {
+    fn from(score: &Score) -> Self {
+        FffScore {
             total: score.total,
             base_score: score.base_score,
             filename_bonus: score.filename_bonus,
@@ -171,234 +141,389 @@ impl ScoreJson {
             current_file_penalty: score.current_file_penalty,
             combo_match_boost: score.combo_match_boost,
             exact_match: score.exact_match,
-            match_type: score.match_type.to_string(),
+            match_type: cstring_new(score.match_type),
         }
     }
 }
 
-/// Location for JSON serialization
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum LocationJson {
-    #[serde(rename = "line")]
-    Line { line: i32 },
-    #[serde(rename = "position")]
-    Position { line: i32, col: i32 },
-    #[serde(rename = "range")]
-    Range {
-        start: PositionJson,
-        end: PositionJson,
-    },
+impl FffScore {
+    /// ## Safety
+    /// `match_type` must have been allocated by `CString::into_raw`.
+    pub unsafe fn free_strings(&mut self) {
+        unsafe {
+            if !self.match_type.is_null() {
+                drop(CString::from_raw(self.match_type));
+            }
+        }
+    }
 }
 
-#[derive(Debug, Serialize)]
-pub struct PositionJson {
+/// Location parsed from a query string (e.g. `"file.ts:42:10"`).
+///
+/// `tag` encodes the variant:
+///   0 = no location,
+///   1 = line only (`line` is set),
+///   2 = position (`line` + `col`),
+///   3 = range (`line`/`col` = start, `end_line`/`end_col` = end).
+#[repr(C)]
+pub struct FffLocation {
+    pub tag: u8,
     pub line: i32,
     pub col: i32,
+    pub end_line: i32,
+    pub end_col: i32,
 }
 
-impl LocationJson {
-    pub fn from_location(loc: &Location) -> Self {
+impl From<Option<&Location>> for FffLocation {
+    fn from(loc: Option<&Location>) -> Self {
         match loc {
-            Location::Line(line) => LocationJson::Line { line: *line },
-            Location::Position { line, col } => LocationJson::Position {
+            None => FffLocation {
+                tag: 0,
+                line: 0,
+                col: 0,
+                end_line: 0,
+                end_col: 0,
+            },
+            Some(Location::Line(line)) => FffLocation {
+                tag: 1,
+                line: *line,
+                col: 0,
+                end_line: 0,
+                end_col: 0,
+            },
+            Some(Location::Position { line, col }) => FffLocation {
+                tag: 2,
                 line: *line,
                 col: *col,
+                end_line: 0,
+                end_col: 0,
             },
-            Location::Range { start, end } => LocationJson::Range {
-                start: PositionJson {
-                    line: start.0,
-                    col: start.1,
-                },
-                end: PositionJson {
-                    line: end.0,
-                    col: end.1,
-                },
+            Some(Location::Range { start, end }) => FffLocation {
+                tag: 3,
+                line: start.0,
+                col: start.1,
+                end_line: end.0,
+                end_col: end.1,
             },
         }
     }
 }
 
-/// Search result for JSON serialization
-#[derive(Debug, Serialize)]
-pub struct SearchResultJson {
-    pub items: Vec<FileItemJson>,
-    pub scores: Vec<ScoreJson>,
-    pub total_matched: usize,
-    pub total_files: usize,
-    pub location: Option<LocationJson>,
+/// Search result returned by `fff_search`.
+///
+/// The caller must free this with `fff_free_search_result`.
+#[repr(C)]
+pub struct FffSearchResult {
+    /// Pointer to a heap-allocated array of `FffFileItem` (length = `count`).
+    pub items: *mut FffFileItem,
+    /// Pointer to a heap-allocated array of `FffScore` (length = `count`).
+    pub scores: *mut FffScore,
+    /// Number of items/scores in the arrays.
+    pub count: u32,
+    /// Total number of files that matched the query.
+    pub total_matched: u32,
+    /// Total number of indexed files.
+    pub total_files: u32,
+    /// Location parsed from the query string.
+    pub location: FffLocation,
 }
 
-impl SearchResultJson {
-    pub fn from_search_result(result: &SearchResult) -> Self {
-        SearchResultJson {
-            items: result
-                .items
-                .iter()
-                .map(|item| FileItemJson::from_file_item(item))
-                .collect(),
-            scores: result.scores.iter().map(ScoreJson::from_score).collect(),
-            total_matched: result.total_matched,
-            total_files: result.total_files,
-            location: result.location.as_ref().map(LocationJson::from_location),
-        }
+impl FffSearchResult {
+    /// Convert a core `SearchResult` into a heap-allocated `FffSearchResult`.
+    pub fn from_core(result: &SearchResult) -> *mut Self {
+        let items: Vec<FffFileItem> = result.items.iter().map(|i| FffFileItem::from(*i)).collect();
+        let scores: Vec<FffScore> = result.scores.iter().map(FffScore::from).collect();
+        let count = items.len() as u32;
+
+        let (items_ptr, _) = vec_to_raw(items);
+        let (scores_ptr, _) = vec_to_raw(scores);
+
+        Box::into_raw(Box::new(FffSearchResult {
+            items: items_ptr,
+            scores: scores_ptr,
+            count,
+            total_matched: result.total_matched as u32,
+            total_files: result.total_files as u32,
+            location: FffLocation::from(result.location.as_ref()),
+        }))
     }
 }
 
-// ============================================================================
-// Multi-grep (Aho-Corasick multi-pattern) types
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Grep result types
+// ---------------------------------------------------------------------------
 
-/// Multi-grep search options (JSON-deserializable)
-#[derive(Debug, Default, Deserialize)]
-pub struct MultiGrepOptionsJson {
-    /// Patterns to search (OR logic — matches lines containing any pattern)
-    pub patterns: Vec<String>,
-    /// Optional constraint query like "*.rs" or "/src/"
-    pub constraints: Option<String>,
-    /// Maximum file size to search (bytes, default: 10MB)
-    pub max_file_size: Option<u64>,
-    /// Maximum matches per file (default: 0 = unlimited)
-    pub max_matches_per_file: Option<usize>,
-    /// Smart case: case-insensitive if all patterns are lowercase (default: true)
-    pub smart_case: Option<bool>,
-    /// File-based pagination offset (default: 0)
-    pub file_offset: Option<usize>,
-    /// Maximum matches to return per page (default: 50)
-    pub page_limit: Option<usize>,
-    /// Time budget in milliseconds, 0 = unlimited (default: 0)
-    pub time_budget_ms: Option<u64>,
-    /// Number of context lines before each match (default: 0)
-    pub before_context: Option<usize>,
-    /// Number of context lines after each match (default: 0)
-    pub after_context: Option<usize>,
-    /// Whether to classify matches as definition lines (default: false)
-    pub classify_definitions: Option<bool>,
+/// A byte range within a matched line, used for highlighting.
+#[repr(C)]
+pub struct FffMatchRange {
+    pub start: u32,
+    pub end: u32,
 }
 
-// ============================================================================
-// Grep (live search) types
-// ============================================================================
-
-/// Grep search options (JSON-deserializable)
-#[derive(Debug, Default, Deserialize)]
-pub struct GrepSearchOptionsJson {
-    /// Maximum file size to search (bytes, default: 10MB)
-    pub max_file_size: Option<u64>,
-    /// Maximum matches per file (default: 200)
-    pub max_matches_per_file: Option<usize>,
-    /// Smart case: case-insensitive if query is lowercase (default: true)
-    pub smart_case: Option<bool>,
-    /// File-based pagination offset (default: 0)
-    pub file_offset: Option<usize>,
-    /// Maximum matches to return (default: 50)
-    pub page_limit: Option<usize>,
-    /// Search mode: "plain", "regex", or "fuzzy" (default: "plain")
-    pub mode: Option<String>,
-    /// Time budget in milliseconds, 0 = unlimited (default: 0)
-    pub time_budget_ms: Option<u64>,
-    /// Number of context lines before each match (default: 0)
-    pub before_context: Option<usize>,
-    /// Number of context lines after each match (default: 0)
-    pub after_context: Option<usize>,
-    /// Whether to classify matches as definition lines (default: false)
-    pub classify_definitions: Option<bool>,
-}
-
-/// A single grep match for JSON serialization
-#[derive(Debug, Serialize)]
-pub struct GrepMatchJson {
-    /// File metadata
-    pub path: String,
-    pub relative_path: String,
-    pub file_name: String,
-    pub git_status: String,
+/// A single grep match with file and line information.
+///
+/// All string fields and arrays are heap-allocated. Free the parent
+/// `FffGrepResult` with `fff_free_grep_result` to release everything.
+#[repr(C)]
+pub struct FffGrepMatch {
+    // -- pointers (8 bytes each) --
+    pub path: *mut c_char,
+    pub relative_path: *mut c_char,
+    pub file_name: *mut c_char,
+    pub git_status: *mut c_char,
+    pub line_content: *mut c_char,
+    pub match_ranges: *mut FffMatchRange,
+    pub context_before: *mut *mut c_char,
+    pub context_after: *mut *mut c_char,
+    // -- 8-byte numeric fields --
     pub size: u64,
     pub modified: u64,
-    pub is_binary: bool,
     pub total_frecency_score: i64,
     pub access_frecency_score: i64,
     pub modification_frecency_score: i64,
-    /// Match metadata
     pub line_number: u64,
-    pub col: usize,
     pub byte_offset: u64,
-    pub line_content: String,
-    /// Byte offset pairs (start, end) within line_content for highlighting
-    pub match_ranges: Vec<[u32; 2]>,
-    /// Fuzzy match score (only in fuzzy mode)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fuzzy_score: Option<u16>,
-    /// Whether the matched line is a code definition (struct, fn, class, etc.)
+    // -- 4-byte fields --
+    pub col: u32,
+    pub match_ranges_count: u32,
+    pub context_before_count: u32,
+    pub context_after_count: u32,
+    // -- 2-byte fields --
+    pub fuzzy_score: u16,
+    // -- 1-byte fields --
+    pub has_fuzzy_score: bool,
+    pub is_binary: bool,
     pub is_definition: bool,
-    /// Lines before the match (context)
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub context_before: Vec<String>,
-    /// Lines after the match (context)
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub context_after: Vec<String>,
 }
 
-impl GrepMatchJson {
-    pub fn from_grep_match(m: &GrepMatch, file: &FileItem) -> Self {
-        GrepMatchJson {
-            path: file.path.to_string_lossy().to_string(),
-            relative_path: file.relative_path.clone(),
-            file_name: file.file_name.clone(),
-            git_status: format_git_status(file.git_status).to_string(),
+impl FffGrepMatch {
+    fn from_core_with_file(m: &GrepMatch, file: &FileItem) -> Self {
+        let ranges: Vec<FffMatchRange> = m
+            .match_byte_offsets
+            .iter()
+            .map(|&(start, end)| FffMatchRange { start, end })
+            .collect();
+        let (match_ranges, match_ranges_count) = vec_to_raw(ranges);
+        let (context_before, context_before_count) = strings_to_raw(&m.context_before);
+        let (context_after, context_after_count) = strings_to_raw(&m.context_after);
+        let (has_fuzzy_score, fuzzy_score) = match m.fuzzy_score {
+            Some(s) => (true, s),
+            None => (false, 0),
+        };
+
+        FffGrepMatch {
+            path: cstring_new(&file.path.to_string_lossy()),
+            relative_path: cstring_new(&file.relative_path),
+            file_name: cstring_new(&file.file_name),
+            git_status: cstring_new(format_git_status(file.git_status)),
+            line_content: cstring_new(&m.line_content),
+            match_ranges,
+            context_before,
+            context_after,
             size: file.size,
             modified: file.modified,
-            is_binary: file.is_binary,
             total_frecency_score: file.total_frecency_score,
             access_frecency_score: file.access_frecency_score,
             modification_frecency_score: file.modification_frecency_score,
             line_number: m.line_number,
-            col: m.col,
             byte_offset: m.byte_offset,
-            line_content: m.line_content.clone(),
-            match_ranges: m
-                .match_byte_offsets
-                .iter()
-                .map(|&(start, end)| [start, end])
-                .collect(),
-            fuzzy_score: m.fuzzy_score,
+            col: m.col as u32,
+            match_ranges_count,
+            context_before_count,
+            context_after_count,
+            fuzzy_score,
+            has_fuzzy_score,
+            is_binary: file.is_binary,
             is_definition: m.is_definition,
-            context_before: m.context_before.clone(),
-            context_after: m.context_after.clone(),
+        }
+    }
+
+    /// ## Safety
+    /// All pointers must have been allocated by the corresponding `from_core`.
+    pub unsafe fn free_fields(&mut self) {
+        unsafe {
+            if !self.path.is_null() {
+                drop(CString::from_raw(self.path));
+            }
+            if !self.relative_path.is_null() {
+                drop(CString::from_raw(self.relative_path));
+            }
+            if !self.file_name.is_null() {
+                drop(CString::from_raw(self.file_name));
+            }
+            if !self.git_status.is_null() {
+                drop(CString::from_raw(self.git_status));
+            }
+            if !self.line_content.is_null() {
+                drop(CString::from_raw(self.line_content));
+            }
+            if !self.match_ranges.is_null() {
+                drop(Vec::from_raw_parts(
+                    self.match_ranges,
+                    self.match_ranges_count as usize,
+                    self.match_ranges_count as usize,
+                ));
+            }
+            free_cstring_array(self.context_before, self.context_before_count);
+            free_cstring_array(self.context_after, self.context_after_count);
         }
     }
 }
 
-/// Grep result for JSON serialization
-#[derive(Debug, Serialize)]
-pub struct GrepResultJson {
-    pub items: Vec<GrepMatchJson>,
-    pub total_matched: usize,
-    pub total_files_searched: usize,
-    pub total_files: usize,
-    pub filtered_file_count: usize,
-    pub next_file_offset: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub regex_fallback_error: Option<String>,
+/// Grep result returned by `fff_live_grep` and `fff_multi_grep`.
+///
+/// The caller must free this with `fff_free_grep_result`.
+#[repr(C)]
+pub struct FffGrepResult {
+    /// Pointer to a heap-allocated array of `FffGrepMatch` (length = `count`).
+    pub items: *mut FffGrepMatch,
+    /// Number of matches in the `items` array.
+    pub count: u32,
+    /// Total number of matches (always equal to `count`).
+    pub total_matched: u32,
+    /// Number of files actually opened and searched in this call.
+    pub total_files_searched: u32,
+    /// Total number of indexed files (before any filtering).
+    pub total_files: u32,
+    /// Number of files eligible for search after filtering.
+    pub filtered_file_count: u32,
+    /// File offset for the next page. 0 if all files have been searched.
+    pub next_file_offset: u32,
+    /// Regex compilation error when falling back to literal matching. Null if none.
+    pub regex_fallback_error: *mut c_char,
 }
 
-impl GrepResultJson {
-    pub fn from_grep_result(result: &GrepResult) -> Self {
-        GrepResultJson {
-            items: result
-                .matches
-                .iter()
-                .map(|m| {
-                    let file = result.files[m.file_index];
-                    GrepMatchJson::from_grep_match(m, file)
-                })
-                .collect(),
-            total_matched: result.matches.len(),
-            total_files_searched: result.total_files_searched,
-            total_files: result.total_files,
-            filtered_file_count: result.filtered_file_count,
-            next_file_offset: result.next_file_offset,
-            regex_fallback_error: result.regex_fallback_error.clone(),
-        }
+impl FffGrepResult {
+    /// Convert a core `GrepResult` into a heap-allocated `FffGrepResult`.
+    pub fn from_core(result: &GrepResult) -> *mut Self {
+        let items: Vec<FffGrepMatch> = result
+            .matches
+            .iter()
+            .map(|m| {
+                let file = result.files[m.file_index];
+                FffGrepMatch::from_core_with_file(m, file)
+            })
+            .collect();
+        let (items_ptr, count) = vec_to_raw(items);
+
+        Box::into_raw(Box::new(FffGrepResult {
+            items: items_ptr,
+            count,
+            total_matched: result.matches.len() as u32,
+            total_files_searched: result.total_files_searched as u32,
+            total_files: result.total_files as u32,
+            filtered_file_count: result.filtered_file_count as u32,
+            next_file_offset: result.next_file_offset as u32,
+            regex_fallback_error: match &result.regex_fallback_error {
+                Some(e) => cstring_new(e),
+                None => ptr::null_mut(),
+            },
+        }))
     }
+}
+
+/// Result envelope returned by all `fff_*` functions.
+///
+/// Heap-allocated — the caller must free it with `fff_free_result`.
+///
+/// Depending on the function, the payload is delivered through different fields:
+///
+/// | Function                   | Payload field | Type                          |
+/// |----------------------------|---------------|-------------------------------|
+/// | `fff_create_instance`      | `handle`      | opaque instance pointer       |
+/// | `fff_search`               | `handle`      | `*mut FffSearchResult`        |
+/// | `fff_live_grep`            | `handle`      | `*mut FffGrepResult`          |
+/// | `fff_multi_grep`           | `handle`      | `*mut FffGrepResult`          |
+/// | `fff_get_scan_progress`    | `handle`      | `*mut FffScanProgress`        |
+/// | `fff_health_check`         | `handle`      | `*mut c_char` (JSON string)   |
+/// | `fff_get_historical_query` | `handle`      | `*mut c_char` (string or null)|
+/// | `fff_wait_for_scan`        | `int_value`   | 1 = completed, 0 = timed out  |
+/// | `fff_track_query`          | `int_value`   | 1 = success, 0 = failure      |
+/// | `fff_refresh_git_status`   | `int_value`   | number of files updated       |
+/// | `fff_scan_files`           | (none)        | success flag only             |
+/// | `fff_restart_index`        | (none)        | success flag only             |
+///
+/// On failure, `success` is false and `error` contains the message.
+///
+/// **Important:** `fff_free_result` frees `error` but does **not** free `handle`.
+/// The caller must free the handle with the appropriate function
+/// (`fff_destroy`, `fff_free_search_result`, `fff_free_grep_result`,
+///  `fff_free_string`, etc.).
+#[repr(C)]
+pub struct FffResult {
+    /// Whether the operation succeeded.
+    pub success: bool,
+    /// Error message on failure. Null on success.
+    pub error: *mut c_char,
+    /// Opaque pointer payload (instance handle, typed result struct, or string). May be null.
+    pub handle: *mut c_void,
+    /// Integer payload for simple return values (bool as 0/1, counts, etc.).
+    pub int_value: i64,
+}
+
+impl FffResult {
+    /// Create a successful result with no payload, returned as heap pointer.
+    pub fn ok_empty() -> *mut Self {
+        Box::into_raw(Box::new(FffResult {
+            success: true,
+            error: ptr::null_mut(),
+            handle: ptr::null_mut(),
+            int_value: 0,
+        }))
+    }
+
+    /// Create a successful result with an integer value.
+    pub fn ok_int(value: i64) -> *mut Self {
+        Box::into_raw(Box::new(FffResult {
+            success: true,
+            error: ptr::null_mut(),
+            handle: ptr::null_mut(),
+            int_value: value,
+        }))
+    }
+
+    /// Create a successful result carrying an opaque pointer (handle, typed struct, or string).
+    pub fn ok_handle(handle: *mut c_void) -> *mut Self {
+        Box::into_raw(Box::new(FffResult {
+            success: true,
+            error: ptr::null_mut(),
+            handle,
+            int_value: 0,
+        }))
+    }
+
+    /// Create a successful result carrying a C string in the `handle` field.
+    /// The caller must free it with `fff_free_string`.
+    pub fn ok_string(s: &str) -> *mut Self {
+        let cstr = CString::new(s).unwrap_or_default().into_raw();
+        Box::into_raw(Box::new(FffResult {
+            success: true,
+            error: ptr::null_mut(),
+            handle: cstr as *mut c_void,
+            int_value: 0,
+        }))
+    }
+
+    /// Create an error result, returned as heap pointer.
+    pub fn err(error: &str) -> *mut Self {
+        Box::into_raw(Box::new(FffResult {
+            success: false,
+            error: CString::new(error).unwrap_or_default().into_raw(),
+            handle: ptr::null_mut(),
+            int_value: 0,
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scan progress
+// ---------------------------------------------------------------------------
+
+/// Scan progress returned by `fff_get_scan_progress`.
+///
+/// The caller must free this with `fff_free_scan_progress`.
+#[repr(C)]
+pub struct FffScanProgress {
+    pub scanned_files_count: u64,
+    pub is_scanning: bool,
 }

@@ -88,11 +88,11 @@ fn main() {
             let results = FilePicker::fuzzy_search(
                 &files,
                 &parsed,
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
                     project_path: None,
-                    last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
                     pagination: PaginationArgs {

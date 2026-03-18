@@ -1,7 +1,10 @@
 [package]
 name = "fff-query-parser"
-version = "0.1.0"
+version = "0.2.4"
 edition = "2024"
+description = "Query parser for fff file finder - includes specific syntax for various constraints like globs, extensions, regex etc"
+license = "MIT"
+authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlok.com>"]
 
 [lib]
 path = "src/lib.rs"

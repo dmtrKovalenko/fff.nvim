@@ -210,6 +210,15 @@ pub struct PaginationArgs {
     pub limit: usize,
 }
 
+impl Default for PaginationArgs {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            limit: 100,
+        }
+    }
+}
+
 /// Context for scoring files during search.
 ///
 /// The `query` field contains the pre-parsed query with constraints,
@@ -223,7 +232,7 @@ pub struct ScoringContext<'a> {
     pub current_file: Option<&'a str>,
     pub max_typos: u16,
     pub max_threads: usize,
-    pub last_same_query_match: Option<&'a QueryMatchEntry>,
+    pub last_same_query_match: Option<QueryMatchEntry>,
     pub combo_boost_score_multiplier: i32,
     pub min_combo_count: u32,
     pub pagination: PaginationArgs,

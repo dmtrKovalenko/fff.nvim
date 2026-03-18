@@ -3,6 +3,8 @@ name: Prebuild
 on:
   push:
     branches: [main]
+    tags:
+      - "v*"
   pull_request:
 
 env:
@@ -428,25 +430,22 @@ jobs:
             fi
           done
 
-      - name: Prepare tag
-        id: vars
-        shell: bash
-        run: |
-          sha="$(git rev-parse --short HEAD)"
-          echo "tag=$sha" >> $GITHUB_OUTPUT
+      - name: Determine version
+        id: version
+        run: ./scripts/determine-version.sh
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
-          name: "${{ steps.vars.outputs.tag }}"
-          tag_name: "${{ steps.vars.outputs.tag }}"
+          name: "${{ steps.version.outputs.version }}"
+          tag_name: "${{ steps.version.outputs.is_release == 'true' && format('v{0}', steps.version.outputs.version) || steps.version.outputs.version }}"
           token: ${{ github.token }}
           files: ./binaries/*
           draft: false
-          prerelease: true
-          generate_release_notes: false
+          prerelease: ${{ steps.version.outputs.is_release != 'true' }}
+          generate_release_notes: ${{ steps.version.outputs.is_release == 'true' }}
           body: |
-            Nightly release from commit: ${{ github.sha }}
+            ${{ steps.version.outputs.is_release == 'true' && format('Release {0}', steps.version.outputs.version) || format('Nightly release from commit: {0}', github.sha) }}
 
             ## Neovim Plugin
             - `{target}.so` / `.dylib` / `.dll` - Lua module for Neovim
@@ -462,12 +461,37 @@ jobs:
             curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
             ```
 
+  crates-publish:
+    name: Publish Rust crates
+    needs: [build-nvim, build-c, build-mcp]
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/node' || startsWith(github.ref, 'refs/tags/v')))
+      || (github.event_name == 'pull_request' && (github.head_ref == 'main' || github.head_ref == 'node'))
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-edit
+        run: cargo install cargo-edit
+
+      - name: Determine version
+        id: version
+        run: ./scripts/determine-version.sh
+
+      - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: make publish-crates V="${{ steps.version.outputs.version }}"
+
   npm-publish:
     name: Publish npm packages
     needs: [build-c]
     runs-on: ubuntu-latest
     if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/node'))
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/node' || startsWith(github.ref, 'refs/tags/v')))
       || (github.event_name == 'pull_request' && (github.head_ref == 'main' || github.head_ref == 'node'))
     permissions:
       contents: read
@@ -482,19 +506,7 @@ jobs:
 
       - name: Determine version
         id: version
-        run: |
-          # Read the base version from fff-core Cargo.toml (single source of truth)
-          base_version=$(grep '^version' crates/fff-core/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          short_sha=$(git rev-parse --short HEAD)
-
-          # Always publish as nightly prerelease: X.Y.Z-nightly.<short-sha>
-          echo "version=${base_version}-nightly.${short_sha}" >> $GITHUB_OUTPUT
-
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            echo "tag=nightly" >> $GITHUB_OUTPUT
-          else
-            echo "tag=dev" >> $GITHUB_OUTPUT
-          fi
+        run: ./scripts/determine-version.sh
 
       - name: Download npm package artifacts
         uses: actions/download-artifact@v4
@@ -507,15 +519,15 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
+          TAG="${{ steps.version.outputs.npm_tag }}"
 
           for pkg_dir in ./npm-packages/npm-*/; do
             if [ -d "$pkg_dir" ]; then
               pkg_name=$(node -p "require('${pkg_dir}package.json').name")
               echo "Publishing ${pkg_name}@${VERSION} with tag ${TAG}..."
-              
+
               make set-npm-version PKG="$pkg_dir" VERSION="$VERSION"
-              
+
               cd "$pkg_dir"
               npm publish --tag "$TAG" --access public || echo "Failed to publish ${pkg_name} (may already exist)"
               cd -
@@ -527,7 +539,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
+          TAG="${{ steps.version.outputs.npm_tag }}"
 
           echo "Publishing @ff-labs/fff-bun@${VERSION} with tag ${TAG}..."
           make set-npm-version PKG=packages/fff-bun VERSION="$VERSION"
@@ -540,7 +552,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
+          TAG="${{ steps.version.outputs.npm_tag }}"
 
           echo "Publishing @ff-labs/fff-node@${VERSION} with tag ${TAG}..."
           make set-npm-version PKG=packages/fff-node VERSION="$VERSION"

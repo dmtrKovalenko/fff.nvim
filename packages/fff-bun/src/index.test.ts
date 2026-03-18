@@ -162,8 +162,8 @@ describe("FileFinder - Full Lifecycle", () => {
     }
   });
 
-  test("liveGrep plain text returns matching lines", () => {
-    const result = finder.liveGrep("fff-core", {
+  test("grep plain text returns matching lines", () => {
+    const result = finder.grep("fff-core", {
       mode: "plain",
     });
     expect(result.ok).toBe(true);
@@ -197,9 +197,9 @@ describe("FileFinder - Full Lifecycle", () => {
     }
   });
 
-  test("liveGrep fuzzy mode returns results with scores", () => {
+  test("grep fuzzy mode returns results with scores", () => {
     // Intentional typo: "depdnency" instead of "dependency" to exercise fuzzy matching
-    const result = finder.liveGrep("depdnency", {
+    const result = finder.grep("depdnency", {
       mode: "fuzzy",
     });
     expect(result.ok).toBe(true);

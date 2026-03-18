@@ -107,7 +107,7 @@ async function waitForFileCount(finder: FileFinder, count: number): Promise<numb
   return result.ok ? result.value.totalFiles : -1;
 }
 
-/** Poll liveGrep until predicate on totalMatched is satisfied, or the timeout is exceeded. */
+/** Poll grep until predicate on totalMatched is satisfied, or the timeout is exceeded. */
 async function waitForGrep(
   finder: FileFinder,
   pattern: string,
@@ -116,11 +116,11 @@ async function waitForGrep(
 ) {
   const start = Date.now();
   while (Date.now() - start < WATCHER_TIMEOUT_MS) {
-    const result = finder.liveGrep(pattern, options);
+    const result = finder.grep(pattern, options);
     if (result.ok && predicate(result.value.totalMatched)) return result;
     await sleep(POLL_INTERVAL_MS);
   }
-  return finder.liveGrep(pattern, options);
+  return finder.grep(pattern, options);
 }
 
 describe.skipIf(process.platform === "win32")("Git lifecycle integration", () => {

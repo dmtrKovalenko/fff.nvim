@@ -5,8 +5,8 @@ use fff::frecency::FrecencyTracker;
 use fff::path_utils::expand_tilde;
 use fff::query_tracker::QueryTracker;
 use fff::{
-    DbHealthChecker, Error, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, Score,
-    SearchResult, SharedFrecency, SharedPicker, SharedQueryTracker,
+    DbHealthChecker, Error, FFFMode, FileSearchConfig, FuzzySearchOptions, PaginationArgs,
+    QueryParser, Score, SearchResult, SharedFrecency, SharedPicker, SharedQueryTracker,
 };
 use mimalloc::MiMalloc;
 use mlua::prelude::*;
@@ -48,7 +48,7 @@ pub fn init_db(
     drop(frecency);
 
     // Spawn background GC to purge stale entries without blocking startup
-    FrecencyTracker::spawn_gc(Arc::clone(&FRECENCY), frecency_db_path, use_unsafe_no_lock);
+    let _ = FrecencyTracker::spawn_gc(Arc::clone(&FRECENCY), frecency_db_path, use_unsafe_no_lock);
 
     let mut query_tracker = QUERY_TRACKER
         .write()
@@ -58,10 +58,10 @@ pub fn init_db(
         *query_tracker = None;
     }
 
-    let tracker = QueryTracker::new(&history_db_path, use_unsafe_no_lock).into_lua_result()?;
-    *query_tracker = Some(tracker);
-    tracing::info!("Query tracker database initialized at {}", history_db_path);
+    *query_tracker =
+        Some(QueryTracker::new(&history_db_path, use_unsafe_no_lock).into_lua_result()?);
 
+    tracing::info!("Query tracker database initialized at {}", history_db_path);
     Ok(true)
 }
 
@@ -218,26 +218,16 @@ pub fn fuzzy_search_files(
     let base_path = picker.base_path();
     let min_combo_count = min_combo_count.unwrap_or(3);
 
-    let last_same_query_entry = {
-        let query_tracker = QUERY_TRACKER
-            .read()
-            .with_lock_error(Error::AcquireFrecencyLock)
-            .into_lua_result()?;
+    let query_tracker_guard = QUERY_TRACKER
+        .read()
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
 
-        if query_tracker.as_ref().is_none() {
-            tracing::warn!("Query tracker not initialized");
-        }
-
-        query_tracker
-            .as_ref()
-            .map(|tracker| tracker.get_last_query_entry(&query, base_path, min_combo_count))
-            .transpose()
-            .into_lua_result()?
-            .flatten()
-    };
+    if query_tracker_guard.as_ref().is_none() {
+        tracing::warn!("Query tracker not initialized");
+    }
 
     tracing::debug!(
-        ?last_same_query_entry,
         ?base_path,
         ?query,
         ?min_combo_count,
@@ -246,19 +236,18 @@ pub fn fuzzy_search_files(
         "Fuzzy search parameters"
     );
 
-    // Parse the query once at the API boundary
-    let parser = QueryParser::default();
+    let parser = QueryParser::new(FileSearchConfig);
     let parsed = parser.parse(&query);
 
     let files = picker.get_files();
     let results = FilePicker::fuzzy_search(
         files,
         &parsed,
+        query_tracker_guard.as_ref(),
         FuzzySearchOptions {
             max_threads,
             current_file: current_file.as_deref(),
             project_path: Some(picker.base_path()),
-            last_same_query_match: last_same_query_entry.as_ref(),
             combo_boost_score_multiplier,
             min_combo_count,
             pagination: PaginationArgs {

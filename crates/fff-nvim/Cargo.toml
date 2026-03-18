@@ -1,6 +1,6 @@
 [package]
 name = "fff-nvim"
-version = "0.1.0"
+version = "0.2.4"
 edition = "2024"
 
 [lib]
@@ -44,8 +44,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff = { path = "../fff-core" }
-fff-query-parser = { path = "../fff-query-parser" }
+fff = { package = "fff-search", path = "../fff-core" , version = "0.2.2" }
+fff-query-parser = { path = "../fff-query-parser" , version = "0.2.4" }
 
 # External dependencies
 blake3 = "1.8.2"

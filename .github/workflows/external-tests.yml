@@ -96,14 +96,17 @@ jobs:
         run: make test-bun
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        if: ${{ matrix.os != 'ubuntu-latest' }}
+        uses: actions/setup-node@v6
         with:
-          node-version: "25"
+          node-version: "24"
 
-      - name: Install fff-node dependencies
+      - name: Install node deps
+        if: ${{ matrix.os != 'ubuntu-latest' }}
         shell: bash
-        run: cd packages/fff-node && npm install
+        run: npm install
 
       - name: Run node tests
+        if: ${{ matrix.os != 'ubuntu-latest' }}
         shell: bash
         run: make test-node

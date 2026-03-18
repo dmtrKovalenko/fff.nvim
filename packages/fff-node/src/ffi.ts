@@ -45,10 +45,27 @@ import {
   wrapPointer,
 } from "ffi-rs";
 import { findBinary } from "./binary.js";
-import type { Result } from "./types.js";
-import { err } from "./types.js";
+import type { FileItem, GrepMatch, GrepResult, Location, Result, Score, SearchResult } from "./types.js";
+import { createGrepCursor, err } from "./types.js";
 
 const LIBRARY_KEY = "fff_c";
+
+/** Grep mode constants matching the C API (u8). */
+const GREP_MODE_PLAIN = 0;
+const GREP_MODE_REGEX = 1;
+const GREP_MODE_FUZZY = 2;
+
+/** Map string mode to u8 */
+function grepModeToU8(mode?: string): number {
+  switch (mode) {
+    case "regex":
+      return GREP_MODE_REGEX;
+    case "fuzzy":
+      return GREP_MODE_FUZZY;
+    default:
+      return GREP_MODE_PLAIN;
+  }
+}
 
 // Track whether the library is loaded
 let isLoaded = false;
@@ -62,16 +79,16 @@ let isLoaded = false;
  */
 const FFF_RESULT_STRUCT = {
   success: DataType.U8,
-  data: DataType.External,
   error: DataType.External,
   handle: DataType.External,
+  int_value: DataType.I64,
 };
 
 interface FffResultRaw {
   success: number;
-  data: JsExternal;
   error: JsExternal;
   handle: JsExternal;
+  int_value: number;
 }
 
 /**
@@ -178,49 +195,93 @@ function freeResult(resultPtr: JsExternal): void {
 }
 
 /**
- * Call a fff C function that returns *mut FffResult, parse the result,
- * free the native memory, and return a typed Result<T>.
- *
- * Strategy:
- * 1. Call the C function with External retType to get the raw pointer
- * 2. Read struct fields via restorePointer
- * 3. Based on success flag, read the data or error string
- * 4. Call fff_free_result with the original raw pointer to free Rust memory
- * 5. Parse JSON data and convert snake_case to camelCase
+ * Read the FffResult envelope from a raw call. Returns the parsed struct + raw pointer.
+ * On error, frees the result and returns a Result error.
  */
-function callFfiResult<T>(
+function readResultEnvelope(
   funcName: string,
   paramsType: DataType[],
   paramsValue: unknown[],
-): Result<T> {
+): { rawPtr: JsExternal; struct: FffResultRaw } | Result<never> {
   loadLibrary();
-
   const { rawPtr, struct: structData } = callRaw(funcName, paramsType, paramsValue);
 
-  const success = structData.success !== 0;
-
-  try {
-    if (success) {
-      const dataStr = readCString(structData.data);
-
-      if (dataStr === null || dataStr === "") {
-        return { ok: true, value: undefined as T };
-      }
-
-      try {
-        const parsed = JSON.parse(dataStr);
-        const transformed = snakeToCamel(parsed) as T;
-        return { ok: true, value: transformed };
-      } catch {
-        // For simple values like "true" or numbers
-        return { ok: true, value: dataStr as T };
-      }
-    } else {
-      const errorStr = readCString(structData.error);
-      return err(errorStr || "Unknown error");
-    }
-  } finally {
+  if (structData.success === 0) {
+    const errorStr = readCString(structData.error);
     freeResult(rawPtr);
+    return err(errorStr || "Unknown error");
+  }
+
+  return { rawPtr, struct: structData };
+}
+
+/** Call a function returning FffResult with void payload. */
+function callVoidResult(funcName: string, paramsType: DataType[], paramsValue: unknown[]): Result<void> {
+  const res = readResultEnvelope(funcName, paramsType, paramsValue);
+  if ("ok" in res) return res;
+  freeResult(res.rawPtr);
+  return { ok: true, value: undefined };
+}
+
+/** Call a function returning FffResult with int_value payload. */
+function callIntResult(funcName: string, paramsType: DataType[], paramsValue: unknown[]): Result<number> {
+  const res = readResultEnvelope(funcName, paramsType, paramsValue);
+  if ("ok" in res) return res;
+  const value = Number(res.struct.int_value);
+  freeResult(res.rawPtr);
+  return { ok: true, value };
+}
+
+/** Call a function returning FffResult with bool in int_value. */
+function callBoolResult(funcName: string, paramsType: DataType[], paramsValue: unknown[]): Result<boolean> {
+  const res = readResultEnvelope(funcName, paramsType, paramsValue);
+  if ("ok" in res) return res;
+  const value = Number(res.struct.int_value) !== 0;
+  freeResult(res.rawPtr);
+  return { ok: true, value };
+}
+
+/** Call a function returning FffResult with a C string in handle. */
+function callStringResult(funcName: string, paramsType: DataType[], paramsValue: unknown[]): Result<string | null> {
+  const res = readResultEnvelope(funcName, paramsType, paramsValue);
+  if ("ok" in res) return res;
+  const handlePtr = res.struct.handle;
+  freeResult(res.rawPtr);
+  if (isNullPointer(handlePtr)) return { ok: true, value: null };
+  const str = readCString(handlePtr);
+  freeString(handlePtr);
+  return { ok: true, value: str };
+}
+
+/** Call a function returning FffResult with a JSON string in handle. */
+function callJsonResult<T>(funcName: string, paramsType: DataType[], paramsValue: unknown[]): Result<T> {
+  const res = readResultEnvelope(funcName, paramsType, paramsValue);
+  if ("ok" in res) return res;
+  const handlePtr = res.struct.handle;
+  freeResult(res.rawPtr);
+  if (isNullPointer(handlePtr)) return { ok: true, value: undefined as T };
+  const jsonStr = readCString(handlePtr);
+  freeString(handlePtr);
+  if (jsonStr === null || jsonStr === "") return { ok: true, value: undefined as T };
+  try {
+    return { ok: true, value: snakeToCamel(JSON.parse(jsonStr)) as T };
+  } catch {
+    return { ok: true, value: jsonStr as T };
+  }
+}
+
+/** Free a C string via fff_free_string. */
+function freeString(ptr: JsExternal): void {
+  try {
+    load({
+      library: LIBRARY_KEY,
+      funcName: "fff_free_string",
+      retType: DataType.Void,
+      paramsType: [DataType.External],
+      paramsValue: [ptr],
+    });
+  } catch {
+    // Ignore
   }
 }
 
@@ -231,17 +292,28 @@ export type NativeHandle = JsExternal;
 
 /**
  * Create a new file finder instance.
- *
- * Returns the opaque native handle on success. The handle must be passed to
- * all subsequent FFI calls and freed with `ffiDestroy`.
  */
-export function ffiCreate(optsJson: string): Result<NativeHandle> {
+export function ffiCreate(
+  basePath: string,
+  frecencyDbPath: string,
+  historyDbPath: string,
+  useUnsafeNoLock: boolean,
+  warmupMmapCache: boolean,
+  aiMode: boolean,
+): Result<NativeHandle> {
   loadLibrary();
 
   const { rawPtr, struct: structData } = callRaw(
-    "fff_create",
-    [DataType.String],
-    [optsJson],
+    "fff_create_instance",
+    [
+      DataType.String,  // base_path
+      DataType.String,  // frecency_db_path
+      DataType.String,  // history_db_path
+      DataType.Boolean, // use_unsafe_no_lock
+      DataType.Boolean, // warmup_mmap_cache
+      DataType.Boolean, // ai_mode
+    ],
+    [basePath, frecencyDbPath, historyDbPath, useUnsafeNoLock, warmupMmapCache, aiMode],
   );
 
   const success = structData.success !== 0;
@@ -250,7 +322,7 @@ export function ffiCreate(optsJson: string): Result<NativeHandle> {
     if (success) {
       const handle = structData.handle;
       if (isNullPointer(handle)) {
-        return err("fff_create returned null handle");
+        return err("fff_create_instance returned null handle");
       }
       return { ok: true, value: handle };
     } else {
@@ -276,26 +348,593 @@ export function ffiDestroy(handle: NativeHandle): void {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Struct type definitions for restorePointer (must match #[repr(C)] layout)
+// ---------------------------------------------------------------------------
+
+const FFF_FILE_ITEM_STRUCT = {
+  path: DataType.External,
+  relative_path: DataType.External,
+  file_name: DataType.External,
+  git_status: DataType.External,
+  size: DataType.U64,
+  modified: DataType.U64,
+  access_frecency_score: DataType.I64,
+  modification_frecency_score: DataType.I64,
+  total_frecency_score: DataType.I64,
+  is_binary: DataType.U8,
+};
+
+interface FffFileItemRaw {
+  path: JsExternal;
+  relative_path: JsExternal;
+  file_name: JsExternal;
+  git_status: JsExternal;
+  size: number;
+  modified: number;
+  access_frecency_score: number;
+  modification_frecency_score: number;
+  total_frecency_score: number;
+  is_binary: number;
+}
+
+const FFF_SCORE_STRUCT = {
+  total: DataType.I32,
+  base_score: DataType.I32,
+  filename_bonus: DataType.I32,
+  special_filename_bonus: DataType.I32,
+  frecency_boost: DataType.I32,
+  distance_penalty: DataType.I32,
+  current_file_penalty: DataType.I32,
+  combo_match_boost: DataType.I32,
+  exact_match: DataType.U8,
+  match_type: DataType.External,
+};
+
+interface FffScoreRaw {
+  total: number;
+  base_score: number;
+  filename_bonus: number;
+  special_filename_bonus: number;
+  frecency_boost: number;
+  distance_penalty: number;
+  current_file_penalty: number;
+  combo_match_boost: number;
+  exact_match: number;
+  match_type: JsExternal;
+}
+
+const FFF_SEARCH_RESULT_STRUCT = {
+  items: DataType.External,
+  scores: DataType.External,
+  count: DataType.U32,
+  total_matched: DataType.U32,
+  total_files: DataType.U32,
+  // FffLocation inlined (flattened)
+  location_tag: DataType.U8,
+  location_line: DataType.I32,
+  location_col: DataType.I32,
+  location_end_line: DataType.I32,
+  location_end_col: DataType.I32,
+};
+
+interface FffSearchResultRaw {
+  items: JsExternal;
+  scores: JsExternal;
+  count: number;
+  total_matched: number;
+  total_files: number;
+  location_tag: number;
+  location_line: number;
+  location_col: number;
+  location_end_line: number;
+  location_end_col: number;
+}
+
+// FffGrepMatch (144 bytes) — ordered by alignment: ptrs, u64s, u32s, u16, bools
+const FFF_GREP_MATCH_STRUCT = {
+  path: DataType.External,
+  relative_path: DataType.External,
+  file_name: DataType.External,
+  git_status: DataType.External,
+  line_content: DataType.External,
+  match_ranges: DataType.External,
+  context_before: DataType.External,
+  context_after: DataType.External,
+  size: DataType.U64,
+  modified: DataType.U64,
+  total_frecency_score: DataType.I64,
+  access_frecency_score: DataType.I64,
+  modification_frecency_score: DataType.I64,
+  line_number: DataType.U64,
+  byte_offset: DataType.U64,
+  col: DataType.U32,
+  match_ranges_count: DataType.U32,
+  context_before_count: DataType.U32,
+  context_after_count: DataType.U32,
+  fuzzy_score: DataType.U32, // actually u16 in C, but ffi-rs doesn't have U16 — reads as u32 with padding
+  has_fuzzy_score: DataType.U8,
+  is_binary: DataType.U8,
+  is_definition: DataType.U8,
+};
+
+interface FffGrepMatchRaw {
+  path: JsExternal;
+  relative_path: JsExternal;
+  file_name: JsExternal;
+  git_status: JsExternal;
+  line_content: JsExternal;
+  match_ranges: JsExternal;
+  context_before: JsExternal;
+  context_after: JsExternal;
+  size: number;
+  modified: number;
+  total_frecency_score: number;
+  access_frecency_score: number;
+  modification_frecency_score: number;
+  line_number: number;
+  byte_offset: number;
+  col: number;
+  match_ranges_count: number;
+  context_before_count: number;
+  context_after_count: number;
+  fuzzy_score: number;
+  has_fuzzy_score: number;
+  is_binary: number;
+  is_definition: number;
+}
+
+const FFF_GREP_RESULT_STRUCT = {
+  items: DataType.External,
+  count: DataType.U32,
+  total_matched: DataType.U32,
+  total_files_searched: DataType.U32,
+  total_files: DataType.U32,
+  filtered_file_count: DataType.U32,
+  next_file_offset: DataType.U32,
+  regex_fallback_error: DataType.External,
+};
+
+interface FffGrepResultRaw {
+  items: JsExternal;
+  count: number;
+  total_matched: number;
+  total_files_searched: number;
+  total_files: number;
+  filtered_file_count: number;
+  next_file_offset: number;
+  regex_fallback_error: JsExternal;
+}
+
+const FFF_MATCH_RANGE_STRUCT = {
+  start: DataType.U32,
+  end: DataType.U32,
+};
+
+interface FffMatchRangeRaw {
+  start: number;
+  end: number;
+}
+
+// ---------------------------------------------------------------------------
+// Struct reading helpers
+// ---------------------------------------------------------------------------
+
+function readFileItemFromRaw(raw: FffFileItemRaw): FileItem {
+  return {
+    path:                      readCString(raw.path) ?? "",
+    relativePath:              readCString(raw.relative_path) ?? "",
+    fileName:                  readCString(raw.file_name) ?? "",
+    gitStatus:                 readCString(raw.git_status) ?? "",
+    size:                      Number(raw.size),
+    modified:                  Number(raw.modified),
+    accessFrecencyScore:       Number(raw.access_frecency_score),
+    modificationFrecencyScore: Number(raw.modification_frecency_score),
+    totalFrecencyScore:        Number(raw.total_frecency_score),
+  };
+}
+
+function readScoreFromRaw(raw: FffScoreRaw): Score {
+  return {
+    total:               raw.total,
+    baseScore:           raw.base_score,
+    filenameBonus:       raw.filename_bonus,
+    specialFilenameBonus:raw.special_filename_bonus,
+    frecencyBoost:       raw.frecency_boost,
+    distancePenalty:     raw.distance_penalty,
+    currentFilePenalty:  raw.current_file_penalty,
+    comboMatchBoost:     raw.combo_match_boost,
+    exactMatch:          raw.exact_match !== 0,
+    matchType:           readCString(raw.match_type) ?? "",
+  };
+}
+
+/**
+ * Call an accessor function that returns a pointer to a struct element,
+ * then read the struct from that pointer.
+ */
+function callAccessor<T>(
+  funcName: string,
+  resultPtr: JsExternal,
+  index: number,
+  structDef: Record<string, DataType>,
+): T {
+  loadLibrary();
+  const elemPtr = load({
+    library: LIBRARY_KEY,
+    funcName,
+    retType: DataType.External,
+    paramsType: [DataType.External, DataType.U32],
+    paramsValue: [resultPtr, index],
+  }) as JsExternal;
+
+  const [raw] = restorePointer({
+    retType: [structDef],
+    paramsValue: wrapPointer([elemPtr]),
+  }) as unknown as [T];
+
+  return raw;
+}
+
+/**
+ * Offset a pointer by `bytes` using the C API helper.
+ */
+function ptrOffset(base: JsExternal, bytes: number): JsExternal {
+  return load({
+    library: LIBRARY_KEY,
+    funcName: "fff_ptr_offset",
+    retType: DataType.External,
+    paramsType: [DataType.External, DataType.U64],
+    paramsValue: [base, bytes],
+  }) as JsExternal;
+}
+
+/**
+ * Read a C string array (char**) of `count` elements.
+ */
+function readCStringArray(ptrArray: JsExternal, count: number): string[] {
+  if (count === 0 || isNullPointer(ptrArray)) return [];
+  const result: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const elemPtr = ptrOffset(ptrArray, i * 8);
+    const [charPtr] = restorePointer({
+      retType: [DataType.External],
+      paramsValue: wrapPointer([elemPtr]),
+    }) as unknown as [JsExternal];
+    result.push(readCString(charPtr) ?? "");
+  }
+  return result;
+}
+
+function readGrepMatchFromRaw(raw: FffGrepMatchRaw): GrepMatch {
+  // Read match_ranges array via pointer offsets
+  const matchRanges: [number, number][] = [];
+  for (let i = 0; i < raw.match_ranges_count; i++) {
+    const rangePtr = ptrOffset(raw.match_ranges, i * 8); // FffMatchRange is 8 bytes
+    const [rangeRaw] = restorePointer({
+      retType: [FFF_MATCH_RANGE_STRUCT],
+      paramsValue: wrapPointer([rangePtr]),
+    }) as unknown as [FffMatchRangeRaw];
+    matchRanges.push([rangeRaw.start, rangeRaw.end]);
+  }
+
+  const match: GrepMatch = {
+    path:                      readCString(raw.path) ?? "",
+    relativePath:              readCString(raw.relative_path) ?? "",
+    fileName:                  readCString(raw.file_name) ?? "",
+    gitStatus:                 readCString(raw.git_status) ?? "",
+    lineContent:               readCString(raw.line_content) ?? "",
+    size:                      Number(raw.size),
+    modified:                  Number(raw.modified),
+    totalFrecencyScore:        Number(raw.total_frecency_score),
+    accessFrecencyScore:       Number(raw.access_frecency_score),
+    modificationFrecencyScore: Number(raw.modification_frecency_score),
+    isBinary:                  raw.is_binary !== 0,
+    lineNumber:                Number(raw.line_number),
+    col:                       raw.col,
+    byteOffset:                Number(raw.byte_offset),
+    matchRanges,
+  };
+
+  if (raw.has_fuzzy_score !== 0) {
+    match.fuzzyScore = raw.fuzzy_score;
+  }
+  if (raw.context_before_count > 0) {
+    match.contextBefore = readCStringArray(raw.context_before, raw.context_before_count);
+  }
+  if (raw.context_after_count > 0) {
+    match.contextAfter = readCStringArray(raw.context_after, raw.context_after_count);
+  }
+
+  return match;
+}
+
+/**
+ * Parse an FffGrepResult from `FffResult.handle`, then free native memory.
+ */
+function parseGrepResult(rawPtr: JsExternal): Result<GrepResult> {
+  loadLibrary();
+
+  const [envelope] = restorePointer({
+    retType: [FFF_RESULT_STRUCT],
+    paramsValue: wrapPointer([rawPtr]),
+  }) as unknown as [FffResultRaw];
+
+  const success = envelope.success !== 0;
+
+  if (!success) {
+    const errorMsg = readCString(envelope.error) || "Unknown error";
+    freeResult(rawPtr);
+    return err(errorMsg);
+  }
+
+  const handlePtr = envelope.handle;
+  freeResult(rawPtr);
+
+  if (isNullPointer(handlePtr)) {
+    return err("grep returned null result");
+  }
+
+  const [gr] = restorePointer({
+    retType: [FFF_GREP_RESULT_STRUCT],
+    paramsValue: wrapPointer([handlePtr]),
+  }) as unknown as [FffGrepResultRaw];
+
+  const count = gr.count;
+  const regexFallbackError = readCString(gr.regex_fallback_error) ?? undefined;
+
+  const items: GrepMatch[] = [];
+  for (let i = 0; i < count; i++) {
+    const rawMatch = callAccessor<FffGrepMatchRaw>(
+      "fff_grep_result_get_match", handlePtr, i, FFF_GREP_MATCH_STRUCT,
+    );
+    items.push(readGrepMatchFromRaw(rawMatch));
+  }
+
+  // Free native grep result
+  load({
+    library: LIBRARY_KEY,
+    funcName: "fff_free_grep_result",
+    retType: DataType.Void,
+    paramsType: [DataType.External],
+    paramsValue: [handlePtr],
+  });
+
+  const grepResult: GrepResult = {
+    items,
+    totalMatched: gr.total_matched,
+    totalFilesSearched: gr.total_files_searched,
+    totalFiles: gr.total_files,
+    filteredFileCount: gr.filtered_file_count,
+    nextCursor: gr.next_file_offset > 0 ? createGrepCursor(gr.next_file_offset) : null,
+  };
+  if (regexFallbackError) {
+    grepResult.regexFallbackError = regexFallbackError;
+  }
+  return { ok: true, value: grepResult };
+}
+
+/**
+ * Parse an FffSearchResult from `FffResult.handle`, then free native memory.
+ */
+function parseSearchResult(rawPtr: JsExternal): Result<SearchResult> {
+  loadLibrary();
+
+  // Read FffResult envelope
+  const [envelope] = restorePointer({
+    retType: [FFF_RESULT_STRUCT],
+    paramsValue: wrapPointer([rawPtr]),
+  }) as unknown as [FffResultRaw];
+
+  const success = envelope.success !== 0;
+
+  if (!success) {
+    const errorMsg = readCString(envelope.error) || "Unknown error";
+    freeResult(rawPtr);
+    return err(errorMsg);
+  }
+
+  const handlePtr = envelope.handle;
+  // Free the FffResult envelope (does NOT free handle)
+  freeResult(rawPtr);
+
+  if (isNullPointer(handlePtr)) {
+    return err("fff_search returned null search result");
+  }
+
+  // Read FffSearchResult struct
+  const [sr] = restorePointer({
+    retType: [FFF_SEARCH_RESULT_STRUCT],
+    paramsValue: wrapPointer([handlePtr]),
+  }) as unknown as [FffSearchResultRaw];
+
+  const count = sr.count;
+
+  // Read location
+  let location: Location | undefined;
+  if (sr.location_tag === 1) {
+    location = { type: "line", line: sr.location_line };
+  } else if (sr.location_tag === 2) {
+    location = { type: "position", line: sr.location_line, col: sr.location_col };
+  } else if (sr.location_tag === 3) {
+    location = {
+      type: "range",
+      start: { line: sr.location_line, col: sr.location_col },
+      end: { line: sr.location_end_line, col: sr.location_end_col },
+    };
+  }
+
+  // Read items and scores via accessor functions
+  const items: FileItem[] = [];
+  const scores: Score[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const rawItem = callAccessor<FffFileItemRaw>(
+      "fff_search_result_get_item", handlePtr, i, FFF_FILE_ITEM_STRUCT,
+    );
+    items.push(readFileItemFromRaw(rawItem));
+
+    const rawScore = callAccessor<FffScoreRaw>(
+      "fff_search_result_get_score", handlePtr, i, FFF_SCORE_STRUCT,
+    );
+    scores.push(readScoreFromRaw(rawScore));
+  }
+
+  // Free native search result
+  load({
+    library: LIBRARY_KEY,
+    funcName: "fff_free_search_result",
+    retType: DataType.Void,
+    paramsType: [DataType.External],
+    paramsValue: [handlePtr],
+  });
+
+  const result: SearchResult = { items, scores, totalMatched: sr.total_matched, totalFiles: sr.total_files };
+  if (location) {
+    result.location = location;
+  }
+  return { ok: true, value: result };
+}
+
 /**
  * Perform fuzzy search.
  */
 export function ffiSearch(
   handle: NativeHandle,
   query: string,
-  optsJson: string,
-): Result<unknown> {
-  return callFfiResult<unknown>(
-    "fff_search",
-    [DataType.External, DataType.String, DataType.String],
-    [handle, query, optsJson],
-  );
+  currentFile: string,
+  maxThreads: number,
+  pageIndex: number,
+  pageSize: number,
+  comboBoostMultiplier: number,
+  minComboCount: number,
+): Result<SearchResult> {
+  loadLibrary();
+
+  const rawPtr = load({
+    library: LIBRARY_KEY,
+    funcName: "fff_search",
+    retType: DataType.External,
+    paramsType: [
+      DataType.External, // handle
+      DataType.String,   // query
+      DataType.String,   // current_file
+      DataType.U32,      // max_threads
+      DataType.U32,      // page_index
+      DataType.U32,      // page_size
+      DataType.I32,      // combo_boost_multiplier
+      DataType.U32,      // min_combo_count
+    ],
+    paramsValue: [handle, query, currentFile, maxThreads, pageIndex, pageSize, comboBoostMultiplier, minComboCount],
+    freeResultMemory: false,
+  }) as JsExternal;
+
+  return parseSearchResult(rawPtr);
+}
+
+/**
+ * Live grep - search file contents.
+ */
+export function ffiLiveGrep(
+  handle: NativeHandle,
+  query: string,
+  mode: string,
+  maxFileSize: number,
+  maxMatchesPerFile: number,
+  smartCase: boolean,
+  fileOffset: number,
+  pageLimit: number,
+  timeBudgetMs: number,
+  beforeContext: number,
+  afterContext: number,
+  classifyDefinitions: boolean,
+): Result<GrepResult> {
+  loadLibrary();
+
+  const rawPtr = load({
+    library: LIBRARY_KEY,
+    funcName: "fff_live_grep",
+    retType: DataType.External,
+    paramsType: [
+      DataType.External, // handle
+      DataType.String,   // query
+      DataType.U8,       // mode
+      DataType.U64,      // max_file_size
+      DataType.U32,      // max_matches_per_file
+      DataType.Boolean,  // smart_case
+      DataType.U32,      // file_offset
+      DataType.U32,      // page_limit
+      DataType.U64,      // time_budget_ms
+      DataType.U32,      // before_context
+      DataType.U32,      // after_context
+      DataType.Boolean,  // classify_definitions
+    ],
+    paramsValue: [
+      handle, query, grepModeToU8(mode),
+      maxFileSize, maxMatchesPerFile, smartCase,
+      fileOffset, pageLimit, timeBudgetMs,
+      beforeContext, afterContext, classifyDefinitions,
+    ],
+    freeResultMemory: false,
+  }) as JsExternal;
+
+  return parseGrepResult(rawPtr);
+}
+
+/**
+ * Multi-pattern grep - Aho-Corasick multi-needle search.
+ */
+export function ffiMultiGrep(
+  handle: NativeHandle,
+  patternsJoined: string,
+  constraints: string,
+  maxFileSize: number,
+  maxMatchesPerFile: number,
+  smartCase: boolean,
+  fileOffset: number,
+  pageLimit: number,
+  timeBudgetMs: number,
+  beforeContext: number,
+  afterContext: number,
+  classifyDefinitions: boolean,
+): Result<GrepResult> {
+  loadLibrary();
+
+  const rawPtr = load({
+    library: LIBRARY_KEY,
+    funcName: "fff_multi_grep",
+    retType: DataType.External,
+    paramsType: [
+      DataType.External, // handle
+      DataType.String,   // patterns_joined
+      DataType.String,   // constraints
+      DataType.U64,      // max_file_size
+      DataType.U32,      // max_matches_per_file
+      DataType.Boolean,  // smart_case
+      DataType.U32,      // file_offset
+      DataType.U32,      // page_limit
+      DataType.U64,      // time_budget_ms
+      DataType.U32,      // before_context
+      DataType.U32,      // after_context
+      DataType.Boolean,  // classify_definitions
+    ],
+    paramsValue: [
+      handle, patternsJoined, constraints,
+      maxFileSize, maxMatchesPerFile, smartCase,
+      fileOffset, pageLimit, timeBudgetMs,
+      beforeContext, afterContext, classifyDefinitions,
+    ],
+    freeResultMemory: false,
+  }) as JsExternal;
+
+  return parseGrepResult(rawPtr);
 }
 
 /**
  * Trigger file scan.
  */
 export function ffiScanFiles(handle: NativeHandle): Result<void> {
-  return callFfiResult<void>("fff_scan_files", [DataType.External], [handle]);
+  return callVoidResult("fff_scan_files", [DataType.External], [handle]);
 }
 
 /**
@@ -312,54 +951,71 @@ export function ffiIsScanning(handle: NativeHandle): boolean {
   }) as boolean;
 }
 
+// FffScanProgress struct definition
+const FFF_SCAN_PROGRESS_STRUCT = {
+  scanned_files_count: DataType.U64,
+  is_scanning: DataType.U8,
+};
+
+interface FffScanProgressRaw {
+  scanned_files_count: number;
+  is_scanning: number;
+}
+
 /**
  * Get scan progress.
  */
-export function ffiGetScanProgress(handle: NativeHandle): Result<unknown> {
-  return callFfiResult<unknown>("fff_get_scan_progress", [DataType.External], [handle]);
+export function ffiGetScanProgress(handle: NativeHandle): Result<{ scannedFilesCount: number; isScanning: boolean }> {
+  loadLibrary();
+  const res = readResultEnvelope("fff_get_scan_progress", [DataType.External], [handle]);
+  if ("ok" in res) return res;
+
+  const handlePtr = res.struct.handle;
+  freeResult(res.rawPtr);
+
+  if (isNullPointer(handlePtr)) return err("scan progress returned null");
+
+  const [sp] = restorePointer({
+    retType: [FFF_SCAN_PROGRESS_STRUCT],
+    paramsValue: wrapPointer([handlePtr]),
+  }) as unknown as [FffScanProgressRaw];
+
+  const result = {
+    scannedFilesCount: Number(sp.scanned_files_count),
+    isScanning: sp.is_scanning !== 0,
+  };
+
+  // Free native scan progress
+  load({
+    library: LIBRARY_KEY,
+    funcName: "fff_free_scan_progress",
+    retType: DataType.Void,
+    paramsType: [DataType.External],
+    paramsValue: [handlePtr],
+  });
+
+  return { ok: true, value: result };
 }
 
 /**
  * Wait for a tree scan to complete.
  */
 export function ffiWaitForScan(handle: NativeHandle, timeoutMs: number): Result<boolean> {
-  const result = callFfiResult<boolean | string>(
-    "fff_wait_for_scan",
-    [DataType.External, DataType.U64],
-    [handle, timeoutMs],
-  );
-  if (!result.ok) return result;
-  return { ok: true, value: result.value === true || result.value === "true" };
+  return callBoolResult("fff_wait_for_scan", [DataType.External, DataType.U64], [handle, timeoutMs]);
 }
 
 /**
  * Restart index in new path.
  */
 export function ffiRestartIndex(handle: NativeHandle, newPath: string): Result<void> {
-  return callFfiResult<void>(
-    "fff_restart_index",
-    [DataType.External, DataType.String],
-    [handle, newPath],
-  );
+  return callVoidResult("fff_restart_index", [DataType.External, DataType.String], [handle, newPath]);
 }
 
 /**
  * Refresh git status.
  */
 export function ffiRefreshGitStatus(handle: NativeHandle): Result<number> {
-  const result = callFfiResult<number | string>(
-    "fff_refresh_git_status",
-    [DataType.External],
-    [handle],
-  );
-  if (!result.ok) return result;
-  return {
-    ok: true,
-    value:
-      typeof result.value === "number"
-        ? result.value
-        : parseInt(result.value as string, 10),
-  };
+  return callIntResult("fff_refresh_git_status", [DataType.External], [handle]);
 }
 
 /**
@@ -370,13 +1026,11 @@ export function ffiTrackQuery(
   query: string,
   filePath: string,
 ): Result<boolean> {
-  const result = callFfiResult<boolean | string>(
+  return callBoolResult(
     "fff_track_query",
     [DataType.External, DataType.String, DataType.String],
     [handle, query, filePath],
   );
-  if (!result.ok) return result;
-  return { ok: true, value: result.value === true || result.value === "true" };
 }
 
 /**
@@ -386,14 +1040,7 @@ export function ffiGetHistoricalQuery(
   handle: NativeHandle,
   offset: number,
 ): Result<string | null> {
-  const result = callFfiResult<string | null>(
-    "fff_get_historical_query",
-    [DataType.External, DataType.U64],
-    [handle, offset],
-  );
-  if (!result.ok) return result;
-  if (result.value === null || result.value === "null") return { ok: true, value: null };
-  return result as Result<string>;
+  return callStringResult("fff_get_historical_query", [DataType.External, DataType.U64], [handle, offset]);
 }
 
 /**
@@ -407,76 +1054,19 @@ export function ffiHealthCheck(
   handle: NativeHandle | null,
   testPath: string,
 ): Result<unknown> {
-  loadLibrary();
-
   if (handle === null) {
     // Use U64(0) as a null pointer since ffi-rs rejects null for External params
-    const rawPtr = load({
-      library: LIBRARY_KEY,
-      funcName: "fff_health_check",
-      retType: DataType.External,
-      paramsType: [DataType.U64, DataType.String],
-      paramsValue: [0, testPath],
-      freeResultMemory: false,
-    }) as JsExternal;
-
-    const [structData] = restorePointer({
-      retType: [FFF_RESULT_STRUCT],
-      paramsValue: wrapPointer([rawPtr]),
-    }) as unknown as [FffResultRaw];
-
-    const success = structData.success !== 0;
-
-    try {
-      if (success) {
-        const dataStr = readCString(structData.data);
-        if (dataStr === null || dataStr === "") {
-          return { ok: true, value: undefined as unknown };
-        }
-        try {
-          return { ok: true, value: snakeToCamel(JSON.parse(dataStr)) };
-        } catch {
-          return { ok: true, value: dataStr };
-        }
-      } else {
-        const errorStr = readCString(structData.error);
-        return err(errorStr || "Unknown error");
-      }
-    } finally {
-      freeResult(rawPtr);
-    }
+    return callJsonResult<unknown>(
+      "fff_health_check",
+      [DataType.U64, DataType.String],
+      [0, testPath],
+    );
   }
 
-  return callFfiResult<unknown>(
+  return callJsonResult<unknown>(
     "fff_health_check",
     [DataType.External, DataType.String],
     [handle, testPath],
-  );
-}
-
-/**
- * Live grep - search file contents.
- */
-export function ffiLiveGrep(
-  handle: NativeHandle,
-  query: string,
-  optsJson: string,
-): Result<unknown> {
-  return callFfiResult<unknown>(
-    "fff_live_grep",
-    [DataType.External, DataType.String, DataType.String],
-    [handle, query, optsJson],
-  );
-}
-
-/**
- * Multi-pattern grep - Aho-Corasick multi-needle search.
- */
-export function ffiMultiGrep(handle: NativeHandle, optsJson: string): Result<unknown> {
-  return callFfiResult<unknown>(
-    "fff_multi_grep",
-    [DataType.External, DataType.String],
-    [handle, optsJson],
   );
 }
 
