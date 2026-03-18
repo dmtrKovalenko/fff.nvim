@@ -29,17 +29,14 @@ cargo set-version "$VERSION" 2>/dev/null || {
   cargo set-version "$VERSION"
 }
 
-# Commit version bump
 git add -A
 git commit -m "chore: release $VERSION"
 
-# Create annotated tag
 echo "→ Creating tag $TAG"
 git tag -a "$TAG" -m "Release $VERSION"
 
-# Push commit and tag
 echo "→ Pushing to origin"
-git push origin "$BRANCH"
+git push origin
 git push origin "$TAG"
 
 echo ""
