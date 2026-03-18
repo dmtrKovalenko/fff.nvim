@@ -74,7 +74,7 @@ async function main() {
 
   // Search test
   console.log("Searching for 'lib.rs'...");
-  const searchResult = finder.search("lib.rs", { pageSize: 5 });
+  const searchResult = finder.fileSearch("lib.rs", { pageSize: 5 });
 
   if (searchResult.ok) {
     console.log(`Found ${searchResult.value.totalMatched} matches (showing first 5):\n`);
@@ -94,7 +94,7 @@ async function main() {
 
   // Search with different query
   console.log("Searching for 'package.json'...");
-  const searchResult2 = finder.search("package.json", { pageSize: 3 });
+  const searchResult2 = finder.fileSearch("package.json", { pageSize: 3 });
 
   if (searchResult2.ok) {
     console.log(`Found ${searchResult2.value.totalMatched} matches:\n`);
@@ -127,7 +127,7 @@ async function main() {
     console.log("  Second instance created successfully");
 
     finder2.waitForScan(5000);
-    const search2 = finder2.search("Cargo.toml");
+    const search2 = finder2.fileSearch("Cargo.toml");
     if (search2.ok) {
       console.log(
         `  Second instance found ${search2.value.totalMatched} matches for 'Cargo.toml'`,
@@ -138,7 +138,7 @@ async function main() {
     console.log("  Second instance destroyed");
 
     // First instance should still work
-    const search3 = finder.search("Cargo.toml");
+    const search3 = finder.fileSearch("Cargo.toml");
     if (search3.ok) {
       console.log(`  First instance still works: ${search3.value.totalMatched} matches`);
     }

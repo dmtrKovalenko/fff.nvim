@@ -92,4 +92,18 @@ jobs:
 
       - name: Run bun tests
         shell: bash
+        if: ${{ matrix.os == 'macos-latest' }}
         run: make test-bun
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "25"
+
+      - name: Install fff-node dependencies
+        shell: bash
+        run: cd packages/fff-node && npm install
+
+      - name: Run node tests
+        shell: bash
+        run: make test-node

@@ -92,7 +92,9 @@ export function getLibFilename(): string {
 }
 
 /**
- * Map from Rust target triple to npm platform package name
+ * Map from Rust target triple to npm platform package name.
+ * The @ff-labs/fff-bin-* packages contain the pre-built libfff_c
+ * shared library and are runtime-agnostic (used by both Bun and Node).
  */
 const TRIPLE_TO_NPM_PACKAGE: Record<string, string> = {
   "aarch64-apple-darwin": "@ff-labs/fff-bin-darwin-arm64",

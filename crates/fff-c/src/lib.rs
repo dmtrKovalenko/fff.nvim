@@ -22,11 +22,11 @@ use std::time::Duration;
 
 mod ffi_types;
 
-use fff_core::file_picker::FilePicker;
-use fff_core::frecency::FrecencyTracker;
-use fff_core::query_tracker::QueryTracker;
-use fff_core::{DbHealthChecker, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser};
-use fff_core::{SharedFrecency, SharedPicker};
+use fff::file_picker::FilePicker;
+use fff::frecency::FrecencyTracker;
+use fff::query_tracker::QueryTracker;
+use fff::{DbHealthChecker, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser};
+use fff::{SharedFrecency, SharedPicker};
 use ffi_types::{
     FffResult, GrepSearchOptionsJson, InitOptions, MultiGrepOptionsJson, ScanProgress,
     SearchOptions,
@@ -323,19 +323,19 @@ pub unsafe extern "C" fn fff_live_grep(
     };
 
     let mode = match opts.mode.as_deref() {
-        Some("regex") => fff_core::GrepMode::Regex,
-        Some("fuzzy") => fff_core::GrepMode::Fuzzy,
-        _ => fff_core::GrepMode::PlainText,
+        Some("regex") => fff::GrepMode::Regex,
+        Some("fuzzy") => fff::GrepMode::Fuzzy,
+        _ => fff::GrepMode::PlainText,
     };
 
     let is_ai = picker.mode().is_ai();
     let parsed = if is_ai {
-        fff_core::QueryParser::new(fff_query_parser::AiGrepConfig).parse(query_str)
+        fff::QueryParser::new(fff_query_parser::AiGrepConfig).parse(query_str)
     } else {
-        fff_core::grep::parse_grep_query(query_str)
+        fff::grep::parse_grep_query(query_str)
     };
 
-    let options = fff_core::GrepSearchOptions {
+    let options = fff::GrepSearchOptions {
         max_file_size: opts.max_file_size.unwrap_or(10 * 1024 * 1024),
         max_matches_per_file: opts.max_matches_per_file.unwrap_or(0),
         smart_case: opts.smart_case.unwrap_or(true),
@@ -348,7 +348,7 @@ pub unsafe extern "C" fn fff_live_grep(
         classify_definitions: opts.classify_definitions.unwrap_or(false),
     };
 
-    let result = fff_core::grep::grep_search(picker.get_files(), &parsed, &options);
+    let result = fff::grep::grep_search(picker.get_files(), &parsed, &options);
 
     let json_result = ffi_types::GrepResultJson::from_grep_result(&result);
     match serde_json::to_string(&json_result) {
@@ -406,26 +406,26 @@ pub unsafe extern "C" fn fff_multi_grep(
     // Parse constraints from the optional string (e.g. "*.rs /src/")
     let parsed_constraints = opts.constraints.as_deref().map(|c| {
         if is_ai {
-            fff_core::QueryParser::new(fff_query_parser::AiGrepConfig).parse(c)
+            fff::QueryParser::new(fff_query_parser::AiGrepConfig).parse(c)
         } else {
-            fff_core::grep::parse_grep_query(c)
+            fff::grep::parse_grep_query(c)
         }
     });
 
-    let constraint_refs: &[fff_core::Constraint<'_>] = match &parsed_constraints {
+    let constraint_refs: &[fff::Constraint<'_>] = match &parsed_constraints {
         Some(q) => &q.constraints,
         None => &[],
     };
 
     let pattern_refs: Vec<&str> = opts.patterns.iter().map(|s| s.as_str()).collect();
 
-    let options = fff_core::GrepSearchOptions {
+    let options = fff::GrepSearchOptions {
         max_file_size: opts.max_file_size.unwrap_or(10 * 1024 * 1024),
         max_matches_per_file: opts.max_matches_per_file.unwrap_or(0),
         smart_case: opts.smart_case.unwrap_or(true),
         file_offset: opts.file_offset.unwrap_or(0),
         page_limit: opts.page_limit.unwrap_or(50),
-        mode: fff_core::GrepMode::PlainText, // ignored by multi_grep_search
+        mode: fff::GrepMode::PlainText, // ignored by multi_grep_search
         time_budget_ms: opts.time_budget_ms.unwrap_or(0),
         before_context: opts.before_context.unwrap_or(0),
         after_context: opts.after_context.unwrap_or(0),
@@ -433,7 +433,7 @@ pub unsafe extern "C" fn fff_multi_grep(
     };
 
     let result =
-        fff_core::multi_grep_search(picker.get_files(), &pattern_refs, constraint_refs, &options);
+        fff::multi_grep_search(picker.get_files(), &pattern_refs, constraint_refs, &options);
 
     let json_result = ffi_types::GrepResultJson::from_grep_result(&result);
     match serde_json::to_string(&json_result) {
@@ -591,7 +591,7 @@ pub unsafe extern "C" fn fff_restart_index(
         return FffResult::err(&format!("Path does not exist: {}", path_str));
     }
 
-    let canonical_path = match fff_core::path_utils::canonicalize(&path) {
+    let canonical_path = match fff::path_utils::canonicalize(&path) {
         Ok(p) => p,
         Err(e) => return FffResult::err(&format!("Failed to canonicalize path: {}", e)),
     };
@@ -673,7 +673,7 @@ pub unsafe extern "C" fn fff_track_query(
         None => return FffResult::err("File path is null or invalid UTF-8"),
     };
 
-    let file_path = match fff_core::path_utils::canonicalize(path_str) {
+    let file_path = match fff::path_utils::canonicalize(path_str) {
         Ok(p) => p,
         Err(e) => return FffResult::err(&format!("Failed to canonicalize path: {}", e)),
     };

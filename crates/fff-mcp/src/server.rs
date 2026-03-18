@@ -8,10 +8,10 @@ use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use fff_core::file_picker::FilePicker;
-use fff_core::grep::{self, GrepMode, GrepSearchOptions, has_regex_metacharacters};
-use fff_core::types::{FileItem, PaginationArgs};
-use fff_core::{FuzzySearchOptions, QueryParser, SharedFrecency, SharedPicker};
+use fff::file_picker::FilePicker;
+use fff::grep::{self, GrepMode, GrepSearchOptions, has_regex_metacharacters};
+use fff::types::{FileItem, PaginationArgs};
+use fff::{FuzzySearchOptions, QueryParser, SharedFrecency, SharedPicker};
 use fff_query_parser::AiGrepConfig;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;

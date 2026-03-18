@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use fff_core::file_picker::{FFFMode, FilePicker};
-use fff_core::types::{FileItem, PaginationArgs};
-use fff_core::{FuzzySearchOptions, QueryParser, SharedFrecency, SharedPicker};
+use fff::file_picker::{FFFMode, FilePicker};
+use fff::types::{FileItem, PaginationArgs};
+use fff::{FuzzySearchOptions, QueryParser, SharedFrecency, SharedPicker};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -129,7 +129,7 @@ fn setup_once() -> Result<(Vec<FileItem>, SharedPicker, SharedFrecency), String>
         return Err("./big-repo directory does not exist. Run git clone https://github.com/torvalds/linux.git big-repo".to_string());
     }
 
-    let canonical_path = fff_core::path_utils::canonicalize(&big_repo_path)
+    let canonical_path = fff::path_utils::canonicalize(&big_repo_path)
         .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
     eprintln!("  Path: {:?}", canonical_path);
 
@@ -165,7 +165,7 @@ fn bench_indexing(c: &mut Criterion) {
         return;
     }
 
-    let canonical_path = match fff_core::path_utils::canonicalize(&big_repo_path) {
+    let canonical_path = match fff::path_utils::canonicalize(&big_repo_path) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("⚠ Failed to canonicalize path: {}", e);

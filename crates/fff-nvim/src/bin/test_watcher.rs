@@ -2,9 +2,9 @@
 #![allow(dead_code)]
 #![allow(clippy::enum_variant_names)]
 
-use fff_core::file_picker::FilePicker;
-use fff_core::git::format_git_status;
-use fff_core::{
+use fff::file_picker::FilePicker;
+use fff::git::format_git_status;
+use fff::{
     FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker,
 };
 use std::env;

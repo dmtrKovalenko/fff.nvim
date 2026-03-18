@@ -1,10 +1,10 @@
 use crate::path_shortening::shorten_path_with_cache;
 use error::{IntoCoreError, IntoLuaResult};
-use fff_core::file_picker::FilePicker;
-use fff_core::frecency::FrecencyTracker;
-use fff_core::path_utils::expand_tilde;
-use fff_core::query_tracker::QueryTracker;
-use fff_core::{
+use fff::file_picker::FilePicker;
+use fff::frecency::FrecencyTracker;
+use fff::path_utils::expand_tilde;
+use fff::query_tracker::QueryTracker;
+use fff::{
     DbHealthChecker, Error, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, Score,
     SearchResult, SharedFrecency, SharedPicker, SharedQueryTracker,
 };
@@ -145,7 +145,7 @@ pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<()> {
         )));
     }
 
-    let canonical_path = fff_core::path_utils::canonicalize(&path).map_err(|e| {
+    let canonical_path = fff::path_utils::canonicalize(&path).map_err(|e| {
         LuaError::RuntimeError(format!("Failed to canonicalize path '{}': {}", new_path, e))
     })?;
 
@@ -330,15 +330,15 @@ pub fn live_grep(
         return Err(error::to_lua_error(Error::FilePickerMissing));
     };
 
-    let parsed = fff_core::grep::parse_grep_query(&query);
+    let parsed = fff::grep::parse_grep_query(&query);
 
     let mode = match grep_mode.as_deref() {
-        Some("regex") => fff_core::GrepMode::Regex,
-        Some("fuzzy") => fff_core::GrepMode::Fuzzy,
-        _ => fff_core::GrepMode::PlainText, // "plain" or nil or unknown
+        Some("regex") => fff::GrepMode::Regex,
+        Some("fuzzy") => fff::GrepMode::Fuzzy,
+        _ => fff::GrepMode::PlainText, // "plain" or nil or unknown
     };
 
-    let options = fff_core::GrepSearchOptions {
+    let options = fff::GrepSearchOptions {
         max_file_size: max_file_size.unwrap_or(10 * 1024 * 1024),
         max_matches_per_file: max_matches_per_file.unwrap_or(200),
         smart_case: smart_case.unwrap_or(true),
@@ -351,7 +351,7 @@ pub fn live_grep(
         classify_definitions: false,
     };
 
-    let result = fff_core::grep::grep_search(picker.get_files(), &parsed, &options);
+    let result = fff::grep::grep_search(picker.get_files(), &parsed, &options);
 
     lua_types::GrepResultLua::from(result).into_lua(lua)
 }
@@ -561,7 +561,7 @@ pub fn track_query_completion(_: &Lua, (query, file_path): (String, String)) -> 
     };
 
     // Canonicalize the file path before spawning thread
-    let file_path = match fff_core::path_utils::canonicalize(&file_path) {
+    let file_path = match fff::path_utils::canonicalize(&file_path) {
         Ok(path) => path,
         Err(e) => {
             tracing::warn!(?file_path, error = ?e, "Failed to canonicalize file path for tracking");

@@ -10,6 +10,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
+fff-query-parser = { path = "crates/fff-query-parser", default-features = false }
 # Shared dependencies
 ahash = "0.8"
 bindet = "0.3"

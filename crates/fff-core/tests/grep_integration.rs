@@ -2,8 +2,8 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use fff_core::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
-use fff_core::types::FileItem;
+use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
+use fff::types::FileItem;
 
 /// Create a file inside a temp dir and return its `FileItem`.
 fn create_file(base: &Path, relative: &str, contents: &str) -> FileItem {

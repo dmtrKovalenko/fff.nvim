@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { findBinary, getDevBinaryPath } from "./download";
+import { findBinary } from "./download";
 import { FileFinder } from "./index";
 import { getLibExtension, getLibFilename, getTriple } from "./platform";
 
@@ -46,14 +46,6 @@ describe("Platform Detection", () => {
 });
 
 describe("Binary Detection", () => {
-  test("getDevBinaryPath finds local build", () => {
-    const devPath = getDevBinaryPath();
-    expect(devPath).not.toBeNull();
-    // Normalize path for cross-platform comparison (Windows uses backslashes)
-    const normalizedPath = normalizePath(devPath);
-    expect(normalizedPath).toContain("target/release");
-  });
-
   test("findBinary returns a path", () => {
     const path = findBinary();
     expect(path).not.toBeNull();
@@ -120,7 +112,7 @@ describe("FileFinder - Full Lifecycle", () => {
     if (progress.ok) {
     }
 
-    const result = finder.search("");
+    const result = finder.fileSearch("");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -140,7 +132,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search returns a valid result structure", () => {
-    const result = finder.search("Cargo.toml");
+    const result = finder.fileSearch("Cargo.toml");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -152,7 +144,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search returns empty for non-matching query", () => {
-    const result = finder.search("xyznonexistentfilenamexyz123456");
+    const result = finder.fileSearch("xyznonexistentfilenamexyz123456");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -162,7 +154,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search respects pageSize option", () => {
-    const result = finder.search("ts", { pageSize: 3 });
+    const result = finder.fileSearch("ts", { pageSize: 3 });
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -273,8 +265,8 @@ describe("FileFinder - Full Lifecycle", () => {
       const finder2 = result2.value;
 
       // Both should work independently
-      const search1 = finder.search("Cargo");
-      const search2 = finder2.search("Cargo");
+      const search1 = finder.fileSearch("Cargo");
+      const search2 = finder2.fileSearch("Cargo");
 
       expect(search1.ok).toBe(true);
       expect(search2.ok).toBe(true);
@@ -282,7 +274,7 @@ describe("FileFinder - Full Lifecycle", () => {
       // Destroying one should not affect the other
       finder2.destroy();
 
-      const search3 = finder.search("Cargo");
+      const search3 = finder.fileSearch("Cargo");
       expect(search3.ok).toBe(true);
     }
   });
@@ -297,7 +289,7 @@ describe("FileFinder - Error Handling", () => {
     const f = createResult.value;
     f.destroy();
 
-    const result = f.search("test");
+    const result = f.fileSearch("test");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("destroyed");

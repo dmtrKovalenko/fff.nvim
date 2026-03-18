@@ -1,5 +1,5 @@
-use fff_core::git::format_git_status;
-use fff_core::{FileItem, GrepResult, Location, Score, SearchResult};
+use fff::git::format_git_status;
+use fff::{FileItem, GrepResult, Location, Score, SearchResult};
 use mlua::prelude::*;
 
 pub struct SearchResultLua<'a> {

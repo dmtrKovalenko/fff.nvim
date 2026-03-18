@@ -26,7 +26,7 @@ import {
   ffiWaitForScan,
   isAvailable,
   type NativeHandle,
-} from "./ffi";
+} from "./ffi.js";
 
 import type {
   GrepOptions,
@@ -38,7 +38,7 @@ import type {
   ScanProgress,
   SearchOptions,
   SearchResult,
-} from "./types";
+} from "./types.js";
 
 import {
   createGrepCursor,
@@ -47,7 +47,7 @@ import {
   toInternalInitOptions,
   toInternalMultiGrepOptions,
   toInternalSearchOptions,
-} from "./types";
+} from "./types.js";
 
 /**
  * FileFinder - Fast file finder with fuzzy search
@@ -57,7 +57,7 @@ import {
  *
  * @example
  * ```typescript
- * import { FileFinder } from "fff";
+ * import { FileFinder } from "@ff-labs/fff-node";
  *
  * // Create an instance
  * const finder = FileFinder.create({ basePath: "/path/to/project" });
@@ -393,7 +393,12 @@ export class FileFinder {
     return isAvailable();
   }
 
-  /** Ensure the native library is loaded. */
+  /**
+   * Ensure the native library is loaded.
+   *
+   * Loads the native library from the platform-specific npm package
+   * or a local dev build. Throws if the binary is not found.
+   */
   static ensureLoaded(): void {
     ensureLoaded();
   }
@@ -410,10 +415,12 @@ export class FileFinder {
   }
 }
 
+/** Transform raw FFI grep result into typed GrepResult with opaque cursor. */
 function transformGrepResult(result: Result<unknown>): Result<GrepResult> {
   if (!result.ok) {
     return result;
   }
+
   const raw = result.value as Record<string, unknown>;
   const nextFileOffset = raw.nextFileOffset as number;
   const grepResult: GrepResult = {
@@ -425,5 +432,6 @@ function transformGrepResult(result: Result<unknown>): Result<GrepResult> {
     nextCursor: nextFileOffset > 0 ? createGrepCursor(nextFileOffset) : null,
     regexFallbackError: raw.regexFallbackError as string | undefined,
   };
+
   return { ok: true, value: grepResult };
 }

@@ -1,0 +1,263 @@
+/**
+ * End-to-end tests for the fff-node package.
+ *
+ * Indexes the fff.nvim repository itself so the test suite is fully
+ * self-contained — no external projects required.
+ *
+ * Requires:
+ *   - A built Rust library (cargo build --release -p fff-c)
+ *   - A compiled TS dist  (cd packages/fff-node && npx tsc)
+ *
+ * Run:
+ *   node --test test/e2e.mjs
+ */
+
+import { after, before, describe, it } from "node:test";
+import { strict as assert } from "node:assert";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { FileFinder, closeLibrary } from "../dist/src/index.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(__dirname, "..", "..", "..");
+
+/** @type {import("../dist/src/finder.js").FileFinder | null} */
+let finder = null;
+
+describe("fff-node", { concurrency: 1 }, () => {
+  before(() => {
+    const result = FileFinder.create({ basePath: REPO_ROOT });
+    assert.ok(result.ok, `create failed: ${!result.ok ? result.error : ""}`);
+    finder = result.value;
+
+    const wait = finder.waitForScan(5_000);
+    if (!wait.ok) {
+      assert.ok(wait.ok, `waitForScan failed: ${wait.error}`);
+    }
+
+    assert.equal(wait.value, true, "scan should finish within 5s");
+  });
+
+  after(() => {
+    if (finder && !finder.isDestroyed) finder.destroy();
+    try {
+      closeLibrary();
+    } catch(e) {
+      console.log(e);
+      // ffi-rs close() can throw on some platforms (e.g. Windows DLL unload);
+      // safe to ignore during test teardown.
+    }
+  });
+
+  it("isAvailable returns true when the native library is loadable", () => {
+    assert.equal(FileFinder.isAvailable(), true);
+  });
+
+  it("getScanProgress reports >100 indexed files", () => {
+    const r = finder.getScanProgress();
+    assert.ok(r.ok, "getScanProgress failed");
+    assert.equal(typeof r.value.scannedFilesCount, "number");
+    assert.ok(
+      r.value.scannedFilesCount > 100,
+      `expected >100, got ${r.value.scannedFilesCount}`,
+    );
+
+    assert.equal(r.value.isScanning, false);
+  });
+
+  describe("search", { concurrency: 1 }, () => {
+    it("finds the root Cargo.toml", () => {
+      const r = finder.fileSearch("Cargo.toml", { pageSize: 10 });
+      assert.ok(r.ok, `search failed: ${!r.ok ? r.error : ""}`);
+      const paths = r.value.items.map((i) => i.relativePath);
+      assert.ok(
+        paths.includes("Cargo.toml"),
+        `expected Cargo.toml in results, got: ${paths}`,
+      );
+    });
+
+    it("finds crates/fff-c/src/lib.rs", () => {
+      const r = finder.fileSearch("lib.rs", { pageSize: 20 });
+      assert.ok(r.ok);
+      const paths = r.value.items.map((i) => i.relativePath);
+      assert.ok(
+        paths.some((p) => p.includes("fff-c") && p.endsWith("lib.rs")),
+        `expected fff-c/src/lib.rs, got: ${paths}`,
+      );
+    });
+
+    it("respects pageSize", () => {
+      const r = finder.fileSearch("lua", { pageSize: 3 });
+      assert.ok(r.ok);
+      assert.ok(
+        r.value.items.length <= 3,
+        `expected <=3, got ${r.value.items.length}`,
+      );
+    });
+
+    it("items contain all required fields", () => {
+      const r = finder.fileSearch("Cargo.toml", { pageSize: 1 });
+      assert.ok(r.ok);
+      const item = r.value.items[0];
+      for (const f of ["relativePath", "path", "fileName", "gitStatus"]) {
+        assert.equal(typeof item[f], "string", `${f} should be a string`);
+      }
+      for (const f of ["size", "modified"]) {
+        assert.equal(typeof item[f], "number", `${f} should be a number`);
+      }
+    });
+
+    it("scores contain all required fields", () => {
+      const r = finder.fileSearch("Cargo.toml", { pageSize: 1 });
+      assert.ok(r.ok);
+      assert.ok(r.value.scores.length > 0);
+      const s = r.value.scores[0];
+      for (const f of ["total", "baseScore"]) {
+        assert.equal(typeof s[f], "number", `${f} should be a number`);
+      }
+      assert.equal(typeof s.matchType, "string");
+    });
+
+    it("totalMatched <= totalFiles", () => {
+      const r = finder.fileSearch("rs", { pageSize: 1 });
+      assert.ok(r.ok);
+      assert.ok(r.value.totalMatched > 0);
+      assert.ok(r.value.totalFiles > 100);
+      assert.ok(r.value.totalFiles >= r.value.totalMatched);
+    });
+
+    it("empty query returns files", () => {
+      const r = finder.fileSearch("", { pageSize: 5 });
+      assert.ok(r.ok, `empty query failed: ${!r.ok ? r.error : ""}`);
+      assert.equal(typeof r.value.totalFiles, "number");
+    });
+  });
+
+  describe("liveGrep", { concurrency: 1 }, () => {
+    it("finds FffResult in Rust sources", () => {
+      const r = finder.liveGrep("FffResult", { mode: "plain" });
+      assert.ok(r.ok, `liveGrep failed: ${!r.ok ? r.error : ""}`);
+      assert.ok(r.value.items.length > 0);
+      assert.ok(r.value.items.some((m) => m.relativePath.endsWith(".rs")));
+    });
+
+    it("match items contain all required fields", () => {
+      const r = finder.liveGrep("FffResult", { mode: "plain" });
+      assert.ok(r.ok);
+      const m = r.value.items[0];
+      assert.equal(typeof m.relativePath, "string");
+      assert.equal(typeof m.lineNumber, "number");
+      assert.ok(m.lineNumber > 0, "lineNumber is 1-based");
+      assert.equal(typeof m.lineContent, "string");
+      assert.ok(m.lineContent.includes("FffResult"));
+      assert.equal(typeof m.col, "number");
+      assert.equal(typeof m.byteOffset, "number");
+      assert.ok(Array.isArray(m.matchRanges));
+    });
+
+    it("pagination returns a second page", () => {
+      const r = finder.liveGrep("fn", { mode: "plain" });
+      assert.ok(r.ok);
+      if (r.value.nextCursor) {
+        const r2 = finder.liveGrep("fn", { cursor: r.value.nextCursor });
+        assert.ok(r2.ok, `page 2 failed: ${!r2.ok ? r2.error : ""}`);
+        assert.equal(typeof r2.value.totalMatched, "number");
+      }
+    });
+
+    it("regex mode matches pub fn declarations", () => {
+      const r = finder.liveGrep("pub fn \\w+", { mode: "regex" });
+      assert.ok(r.ok, `regex grep failed: ${!r.ok ? r.error : ""}`);
+      assert.ok(r.value.items.length > 0);
+    });
+  });
+
+  describe("multiGrep", { concurrency: 1 }, () => {
+    it("finds lines matching any of the C FFI function names", () => {
+      const r = finder.multiGrep({
+        patterns: ["fff_create", "fff_destroy", "fff_search"],
+      });
+      assert.ok(r.ok, `multiGrep failed: ${!r.ok ? r.error : ""}`);
+      assert.ok(r.value.items.length > 0);
+    });
+
+    it("rejects empty patterns array", () => {
+      const r = finder.multiGrep({ patterns: [] });
+      assert.ok(!r.ok);
+    });
+  });
+
+  it("refreshGitStatus returns a positive count", () => {
+    const r = finder.refreshGitStatus();
+    assert.ok(r.ok, `refreshGitStatus failed: ${!r.ok ? r.error : ""}`);
+    assert.equal(typeof r.value, "number");
+    assert.ok(r.value > 0);
+  });
+
+  // ── Scan ────────────────────────────────────────────────────────────
+
+  it("isScanning returns a boolean", () => {
+    assert.equal(typeof finder.isScanning(), "boolean");
+  });
+
+  // ── Health check ────────────────────────────────────────────────────
+
+  describe("healthCheck", { concurrency: 1 }, () => {
+    it("reports initialized state with instance", () => {
+      const r = finder.healthCheck(REPO_ROOT);
+      assert.ok(r.ok, `healthCheck failed: ${!r.ok ? r.error : ""}`);
+      assert.equal(typeof r.value.version, "string");
+      assert.ok(r.value.version.length > 0);
+      assert.equal(r.value.git.available, true);
+      assert.equal(r.value.git.repositoryFound, true);
+      assert.equal(r.value.filePicker.initialized, true);
+      assert.ok(r.value.filePicker.indexedFiles > 100);
+    });
+
+    it("static check works without instance", () => {
+      const r = FileFinder.healthCheckStatic(REPO_ROOT);
+      assert.ok(r.ok, `static healthCheck failed: ${!r.ok ? r.error : ""}`);
+      assert.equal(typeof r.value.version, "string");
+      assert.equal(r.value.filePicker.initialized, false);
+      assert.equal(r.value.git.repositoryFound, true);
+    });
+  });
+
+  it("create rejects a non-existent path", () => {
+    const r = FileFinder.create({ basePath: "/nonexistent/fff-test-path" });
+    assert.ok(!r.ok);
+    assert.ok(
+      r.error.toLowerCase().includes("invalid path") ||
+        r.error.toLowerCase().includes("not exist"),
+      `unexpected error: ${r.error}`,
+    );
+  });
+
+  // This must be the last describe block since it destroys the shared instance.
+  describe("after destroy", { concurrency: 1 }, () => {
+    before(() => {
+      finder.destroy();
+    });
+
+    it("isDestroyed is true", () => {
+      assert.equal(finder.isDestroyed, true);
+    });
+
+    it("search returns an error", () => {
+      const r = finder.fileSearch("test");
+      assert.ok(!r.ok);
+      assert.ok(r.error.includes("destroyed"));
+    });
+
+    it("liveGrep returns an error", () => {
+      const r = finder.liveGrep("test");
+      assert.ok(!r.ok);
+      assert.ok(r.error.includes("destroyed"));
+    });
+
+    it("double destroy is a safe no-op", () => {
+      finder.destroy();
+      assert.equal(finder.isDestroyed, true);
+    });
+  });
+});

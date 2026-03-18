@@ -1,5 +1,5 @@
-use fff_core::FFFQuery;
-use fff_core::FileItem;
+use fff::FFFQuery;
+use fff::FileItem;
 /// FFF vs ripgrep comparison benchmark
 ///
 /// Demonstrates why a persistent in-process search engine (fff) is fundamentally
@@ -21,7 +21,7 @@ use fff_core::FileItem;
 /// Usage:
 ///   cargo build --release --bin grep_vs_rg
 ///   ./target/release/grep_vs_rg [--path /path/to/repo] [--iters 5]
-use fff_core::grep::{GrepSearchOptions, grep_search, parse_grep_query};
+use fff::grep::{GrepSearchOptions, grep_search, parse_grep_query};
 use std::io::Read;
 use std::path::Path;
 use std::process::Command;
@@ -319,7 +319,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let canonical = fff_core::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
+    let canonical = fff::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
 
     let rg_version = Command::new("rg")
         .arg("--version")

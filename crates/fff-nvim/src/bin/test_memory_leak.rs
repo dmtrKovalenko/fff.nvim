@@ -1,5 +1,5 @@
-use fff_core::file_picker::{FFFMode, FilePicker};
-use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
+use fff::file_picker::{FFFMode, FilePicker};
+use fff::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::env;
 use std::io::{self, Write};
 use std::sync::{Arc, RwLock};

@@ -1,15 +1,17 @@
 /**
  * fff - Fast File Finder
  *
- * High-performance fuzzy file finder for Bun, powered by Rust.
+ * High-performance fuzzy file finder for Node.js, powered by Rust.
  * Perfect for LLM agent tools that need to search through codebases.
  *
  * Each `FileFinder` instance is backed by an independent native file picker.
  * Create as many as you need and destroy them when done.
  *
+ * Uses ffi-rs to load the same native libfff_c binary used by @ff-labs/fff-bun.
+ *
  * @example
  * ```typescript
- * import { FileFinder } from "fff";
+ * import { FileFinder } from "@ff-labs/fff-node";
  *
  * // Create a file finder instance
  * const result = FileFinder.create({ basePath: "/path/to/project" });
@@ -40,15 +42,15 @@
 export {
   binaryExists,
   findBinary,
-} from "./download";
-export { FileFinder } from "./finder";
-
+} from "./binary.js";
+export { closeLibrary } from "./ffi.js";
+export { FileFinder } from "./finder.js";
 export {
   getLibExtension,
   getLibFilename,
   getNpmPackageName,
   getTriple,
-} from "./platform";
+} from "./platform.js";
 
 export type {
   DbHealth,
@@ -67,6 +69,6 @@ export type {
   Score,
   SearchOptions,
   SearchResult,
-} from "./types";
+} from "./types.js";
 // Result helpers
-export { err, ok } from "./types";
+export { err, ok } from "./types.js";

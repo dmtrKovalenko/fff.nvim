@@ -1,6 +1,6 @@
 PLENARY_DIR ?= ../plenary.nvim
 
-.PHONY: build test test-rust test-lua test-bun test-setup prepare-bun
+.PHONY: build test test-rust test-lua test-bun test-node prepare-bun prepare-node set-npm-version
 
 build:
 	cargo build --release --features zlob
@@ -16,7 +16,7 @@ test-rust:
 
 test-lua: test-setup build
 	nvim --headless -u tests/minimal_init.lua \
-		-c "PlenaryBustedFile tests/fff_core_spec.lua" 2>&1
+		-c "PlenaryBustedFile tests/fff_spec.lua" 2>&1
 
 prepare-bun: build
 	mkdir -p packages/fff-bun/bin
@@ -24,15 +24,41 @@ prepare-bun: build
 	cp target/release/libfff_c.so packages/fff-bun/bin/ 2>/dev/null; \
 	cp target/release/fff_c.dll packages/fff-bun/bin/ 2>/dev/null; \
 	true
-	@# Re-sign on macOS: cp can invalidate ad-hoc code signatures
-	@if [ "$$(uname)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then \
-		codesign --sign - packages/fff-bun/bin/libfff_c.dylib 2>/dev/null || true; \
-	fi
+
+prepare-node: build
+	mkdir -p packages/fff-node/bin
+	cp target/release/libfff_c.dylib packages/fff-node/bin/ 2>/dev/null; \
+	cp target/release/libfff_c.so packages/fff-node/bin/ 2>/dev/null; \
+	cp target/release/fff_c.dll packages/fff-node/bin/ 2>/dev/null; \
+	true
 
 test-bun: prepare-bun
 	cd packages/fff-bun && bun test src/
 
-test: test-rust test-lua test-bun
+test-node: prepare-node
+	cd packages/fff-node && npm run build \
+		&& node --input-type=module -e "import('./dist/src/index.js').then(() => console.log('fff-node: import OK')).catch(e => { console.error('fff-node: import FAILED:', e); process.exit(1) })" \
+		&& node --test test/e2e.mjs
+
+test: test-rust test-lua test-bun test-node
+
+# Update version in a package.json, including optionalDependencies.
+# Usage: make set-npm-version PKG=packages/fff-bun VERSION=1.0.0-nightly.abc1234
+set-npm-version:
+	@test -n "$(PKG)" || (echo "PKG is required" && exit 1)
+	@test -n "$(VERSION)" || (echo "VERSION is required" && exit 1)
+	node -e " \
+		const fs = require('fs'); \
+		const pkg = JSON.parse(fs.readFileSync('$(PKG)/package.json', 'utf8')); \
+		pkg.version = '$(VERSION)'; \
+		if (pkg.optionalDependencies) { \
+			for (const dep of Object.keys(pkg.optionalDependencies)) { \
+				pkg.optionalDependencies[dep] = '$(VERSION)'; \
+			} \
+		} \
+		fs.writeFileSync('$(PKG)/package.json', JSON.stringify(pkg, null, 2) + '\n'); \
+	"
+	@echo "Set $(PKG) to $(VERSION)"
 
 format-rust:
 	cargo fmt --all

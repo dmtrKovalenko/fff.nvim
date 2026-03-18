@@ -1,5 +1,5 @@
 [package]
-name = "fff-core"
+name = "fff"
 version = "0.1.0"
 edition = "2024"
 description = "High-performance file finder core library"
@@ -18,15 +18,12 @@ ffi = []
 zlob = ["dep:zlob", "fff-query-parser/zlob"]
 
 [dependencies]
-# Workspace dependencies
 ahash = { workspace = true }
 rayon = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-
-# Local crates
-fff-query-parser = { path = "../fff-query-parser", default-features = false }
+fff-query-parser = { workspace = true }
 
 # External dependencies
 bindet = { workspace = true }

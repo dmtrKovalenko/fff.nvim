@@ -1,5 +1,5 @@
-use fff_core::file_picker::{FFFMode, FilePicker};
-use fff_core::{
+use fff::file_picker::{FFFMode, FilePicker};
+use fff::{
     FileItem, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker,
 };
 use std::sync::{Arc, RwLock};
@@ -71,7 +71,7 @@ fn main() {
     }
 
     let canonical_path =
-        fff_core::path_utils::canonicalize(&big_repo_path).expect("Failed to canonicalize path");
+        fff::path_utils::canonicalize(&big_repo_path).expect("Failed to canonicalize path");
 
     // Create shared state
     let shared_picker: SharedPicker = Arc::new(RwLock::new(None));

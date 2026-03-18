@@ -1,4 +1,4 @@
-use fff_core::FileItem;
+use fff::FileItem;
 /// Live grep benchmark profiler for fff.nvim
 ///
 /// Benchmarks the full grep pipeline against a large repository (Linux kernel).
@@ -10,7 +10,7 @@ use fff_core::FileItem;
 /// Usage:
 ///   cargo build --release --bin grep_profiler
 ///   ./target/release/grep_profiler [--path /path/to/repo]
-use fff_core::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
+use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -222,7 +222,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let canonical = fff_core::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
+    let canonical = fff::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
     eprintln!("=== FFF Live Grep Profiler ===");
     eprintln!("Repository: {:?}", canonical);
 

@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-zlob = ["fff-core/zlob"]
+zlob = ["fff/zlob"]
 
 [[bin]]
 name = "test_watcher"
@@ -44,7 +44,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff-core = { path = "../fff-core" }
+fff = { path = "../fff-core" }
 fff-query-parser = { path = "../fff-query-parser" }
 
 # External dependencies

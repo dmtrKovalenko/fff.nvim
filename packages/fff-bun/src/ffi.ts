@@ -9,7 +9,7 @@
  */
 
 import { CString, dlopen, FFIType, type Pointer, ptr, read } from "bun:ffi";
-import { ensureBinary, findBinary } from "./download";
+import { findBinary } from "./download";
 import type { Result } from "./types";
 import { err } from "./types";
 
@@ -112,7 +112,7 @@ function loadLibrary(): FFFLibrary {
   const binaryPath = findBinary();
   if (!binaryPath) {
     throw new Error(
-      "fff native library not found. Run `bunx fff download` or build from source with `cargo build --release -p fff-c`",
+      "fff native library not found. Build from source with `cargo build --release -p fff-c` or install the platform package.",
     );
   }
 
@@ -417,10 +417,12 @@ export function ffiMultiGrep(handle: NativeHandle, optsJson: string): Result<unk
 }
 
 /**
- * Ensure the library is loaded (for preloading).
+ * Ensure the library is loaded.
+ *
+ * Loads the native library from the platform-specific npm package
+ * or a local dev build. Throws if the binary is not found.
  */
-export async function ensureLoaded(): Promise<void> {
-  await ensureBinary();
+export function ensureLoaded(): void {
   loadLibrary();
 }
 

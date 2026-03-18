@@ -6,8 +6,8 @@
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
-use fff_core::git::format_git_status;
-use fff_core::{FileItem, GrepMatch, GrepResult, Location, Score, SearchResult};
+use fff::git::format_git_status;
+use fff::{FileItem, GrepMatch, GrepResult, Location, Score, SearchResult};
 use serde::{Deserialize, Serialize};
 
 /// Result type returned by all FFI functions

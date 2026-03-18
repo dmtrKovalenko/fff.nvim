@@ -11,10 +11,10 @@ path = "src/main.rs"
 
 [features]
 default = ["zlob"]
-zlob = ["fff-core/zlob"]
+zlob = ["fff/zlob"]
 
 [dependencies]
-fff-core = { path = "../fff-core", default-features = false }
+fff = { path = "../fff-core", default-features = false }
 fff-query-parser = { path = "../fff-query-parser", default-features = false }
 mimalloc = { workspace = true }
 rmcp = { version = "1.1.0", features = ["server", "transport-io"] }

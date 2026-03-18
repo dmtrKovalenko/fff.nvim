@@ -1,28 +1,22 @@
 /**
- * Binary resolution utilities for fff
+ * Binary resolution utilities for fff-node
  *
  * Resolves the native library from:
  * 1. Platform-specific npm package (e.g. @ff-labs/fff-bin-darwin-arm64)
  * 2. Local dev build (target/release or target/debug)
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getLibFilename, getNpmPackageName } from "./platform";
+import { getLibFilename, getNpmPackageName } from "./platform.js";
 
 /**
  * Get the current file's directory
  */
 function getCurrentDir(): string {
   const url = import.meta.url;
-
-  // When running in a compiled Bun binary, import.meta.url points to the virtual
-  // $bunfs filesystem. Use process.execPath to get the real filesystem location.
-  if (url.includes("$bunfs")) {
-    return dirname(process.execPath);
-  }
 
   if (url.startsWith("file://")) {
     return dirname(fileURLToPath(url));
@@ -35,6 +29,24 @@ function getCurrentDir(): string {
  */
 function getPackageDir(): string {
   const currentDir = getCurrentDir();
+  // In dev: src/ -> package root
+  // In dist: dist/src/ -> package root
+  // We look for package.json to find the actual root
+  let dir = currentDir;
+  for (let i = 0; i < 5; i++) {
+    if (existsSync(join(dir, "package.json"))) {
+      try {
+        const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf-8"));
+        if (pkg.name === "@ff-labs/fff-node") {
+          return dir;
+        }
+      } catch {
+        // Not our package.json, keep going up
+      }
+    }
+    dir = dirname(dir);
+  }
+  // Fallback: assume we're one level deep in src/
   return dirname(currentDir);
 }
 
@@ -48,7 +60,7 @@ export function binaryExists(): boolean {
 /**
  * Try to resolve the binary from the platform-specific npm package.
  *
- * When users install @ff-labs/fff-bun, npm/bun automatically installs the matching
+ * When users install @ff-labs/fff-node, npm automatically installs the matching
  * optionalDependency (e.g. @ff-labs/fff-bin-darwin-arm64). We resolve the binary
  * path by requiring that package's package.json and looking for the binary
  * in the same directory.
@@ -112,7 +124,7 @@ function isDevWorkspace(): boolean {
  */
 export function findBinary(): string | null {
   if (isDevWorkspace()) {
-    // 1. Local bin/ directory (populated by `make prepare-bun`)
+    // 1. Local bin/ directory (populated by `make prepare-node`)
     const binPath = join(getPackageDir(), "bin", getLibFilename());
     if (existsSync(binPath)) return binPath;
 
