@@ -1,8 +1,7 @@
-//! Fast, zero-allocation query parser for file search
+//! Fast query parser for file search
 //!
 //! This parser takes a search query and extracts structured constraints
 //! while preserving text for fuzzy matching. Designed for maximum performance:
-//! - Zero allocations for queries with ≤8 constraints (SmallVec)
 //! - Single-pass parsing with minimal branching
 //! - Stack-allocated string buffers
 //!
@@ -51,10 +50,7 @@ pub use constraints::{Constraint, GitStatusFilter};
 pub use location::Location;
 pub use parser::{FFFQuery, FuzzyQuery, QueryParser};
 
-// Re-export SmallVec for convenience
-pub use smallvec::SmallVec;
-
-pub type ConstraintVec<'a> = SmallVec<[Constraint<'a>; 8]>;
+pub type ConstraintVec<'a> = Vec<Constraint<'a>>;
 
 #[cfg(test)]
 mod tests {
@@ -212,11 +208,10 @@ mod tests {
     }
 
     #[test]
-    fn test_no_heap_allocation_for_small_queries() {
+    fn test_small_constraint_count() {
         let parser = QueryParser::default();
         let result = parser.parse("*.rs *.toml !test");
-        // SmallVec should not have spilled to heap
-        assert!(!result.constraints.spilled());
+        assert_eq!(result.constraints.len(), 3);
     }
 
     #[test]

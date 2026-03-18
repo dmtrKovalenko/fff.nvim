@@ -666,7 +666,6 @@ name = "fff-query-parser"
 version = "0.2.4"
 dependencies = [
  "criterion",
- "smallvec",
  "zlob",
 ]
 

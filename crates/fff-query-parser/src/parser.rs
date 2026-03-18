@@ -1105,7 +1105,7 @@ mod tests {
         ));
         assert_eq!(
             result.fuzzy_query,
-            FuzzyQuery::Parts(smallvec::smallvec!["src", "components"])
+            FuzzyQuery::Parts(vec!["src", "components"])
         );
     }
 
