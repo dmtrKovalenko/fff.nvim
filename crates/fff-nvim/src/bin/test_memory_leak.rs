@@ -200,8 +200,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let parsed = parser.parse(query);
                 let search_result = FilePicker::fuzzy_search(
                     picker.get_files(),
-                    query,
-                    parsed,
+                    &parsed,
                     FuzzySearchOptions {
                         max_threads,
                         current_file: None,

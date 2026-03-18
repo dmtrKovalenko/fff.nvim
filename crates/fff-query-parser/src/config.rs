@@ -159,9 +159,17 @@ impl ParserConfig for GrepConfig {
             return true;
         }
 
-        // Brace expansion → useful for directory alternatives
-        if bytes.contains(&b'{') && bytes.contains(&b'}') {
-            return true;
+        // Brace expansion → useful for directory alternatives.
+        // Require a comma between `{` and `}` AND at least one letter to
+        // distinguish real glob expansions like `{src,lib}` or `*.{ts,tsx}`
+        // from code patterns like `format!("{}")` and regex quantifiers `{2,3}`.
+        if let Some(open) = bytes.iter().position(|&b| b == b'{')
+            && let Some(close) = bytes.iter().rposition(|&b| b == b'}')
+        {
+            let inner = &bytes[open + 1..close];
+            if inner.contains(&b',') && inner.iter().any(|b| b.is_ascii_alphabetic()) {
+                return true;
+            }
         }
 
         // Everything else (?, [, bare * without /) → treat as literal text

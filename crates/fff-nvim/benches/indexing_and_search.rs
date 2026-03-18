@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use fff_core::file_picker::{FFFMode, FilePicker};
 use fff_core::types::{FileItem, PaginationArgs};
-use fff_core::{FuzzySearchOptions, SharedFrecency, SharedPicker};
+use fff_core::{FuzzySearchOptions, QueryParser, SharedFrecency, SharedPicker};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -226,17 +226,18 @@ fn bench_search_queries(c: &mut Criterion) {
         ("partial", "src/lib"),
     ];
 
+    let parser = QueryParser::default();
+
     for (name, query) in test_queries {
-        group.bench_with_input(BenchmarkId::new("query", name), &query, |b, &query| {
+        let parsed = parser.parse(query);
+        group.bench_with_input(BenchmarkId::new("query", name), &query, |b, &_query| {
             b.iter(|| {
                 let results = FilePicker::fuzzy_search(
                     black_box(&files),
-                    black_box(query),
-                    None,
+                    black_box(&parsed),
                     FuzzySearchOptions {
                         max_threads: 4,
                         current_file: None,
-
                         project_path: None,
                         last_same_query_match: None,
                         combo_boost_score_multiplier: 100,
@@ -269,6 +270,8 @@ fn bench_search_thread_scaling(c: &mut Criterion) {
     group.sample_size(100);
 
     let query = "controller";
+    let parser = QueryParser::default();
+    let parsed = parser.parse(query);
     let thread_counts = vec![1, 2, 4, 8];
 
     for threads in thread_counts {
@@ -279,12 +282,10 @@ fn bench_search_thread_scaling(c: &mut Criterion) {
                 b.iter(|| {
                     let results = FilePicker::fuzzy_search(
                         black_box(&files),
-                        black_box(query),
-                        None,
+                        black_box(&parsed),
                         FuzzySearchOptions {
                             max_threads: threads,
                             current_file: None,
-
                             project_path: None,
                             last_same_query_match: None,
                             combo_boost_score_multiplier: 100,
@@ -318,6 +319,8 @@ fn bench_search_result_limits(c: &mut Criterion) {
     group.sample_size(100);
 
     let query = "mod";
+    let parser = QueryParser::default();
+    let parsed = parser.parse(query);
     let result_limits = vec![10, 50, 100, 500];
 
     for limit in result_limits {
@@ -325,12 +328,10 @@ fn bench_search_result_limits(c: &mut Criterion) {
             b.iter(|| {
                 let results = FilePicker::fuzzy_search(
                     black_box(&files),
-                    black_box(query),
-                    None,
+                    black_box(&parsed),
                     FuzzySearchOptions {
                         max_threads: 4,
                         current_file: None,
-
                         project_path: None,
                         last_same_query_match: None,
                         combo_boost_score_multiplier: 100,
@@ -371,6 +372,8 @@ fn bench_search_scalability(c: &mut Criterion) {
     group.sample_size(50);
 
     let query = "controller";
+    let parser = QueryParser::default();
+    let parsed = parser.parse(query);
     let file_counts = vec![100, 1000, 5000, 10000, all_files.len().min(50000)];
 
     for count in file_counts {
@@ -383,12 +386,10 @@ fn bench_search_scalability(c: &mut Criterion) {
             b.iter(|| {
                 let results = FilePicker::fuzzy_search(
                     black_box(subset),
-                    black_box(query),
-                    None,
+                    black_box(&parsed),
                     FuzzySearchOptions {
                         max_threads: 4,
                         current_file: None,
-
                         project_path: None,
                         last_same_query_match: None,
                         combo_boost_score_multiplier: 100,
@@ -420,19 +421,19 @@ fn bench_search_ordering(c: &mut Criterion) {
     let mut group = c.benchmark_group("ordering");
     group.sample_size(100);
 
-    let query = "controller";
+    let parser = QueryParser::default();
+    let parsed_controller = parser.parse("controller");
+    let parsed_mod = parser.parse("mod");
 
     // Benchmark normal order (descending)
     group.bench_function("normal_order", |b| {
         b.iter(|| {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
-                black_box(query),
-                None,
+                black_box(&parsed_controller),
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
-
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
@@ -452,12 +453,10 @@ fn bench_search_ordering(c: &mut Criterion) {
         b.iter(|| {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
-                black_box(query),
-                None,
+                black_box(&parsed_controller),
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
-
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
@@ -477,12 +476,10 @@ fn bench_search_ordering(c: &mut Criterion) {
         b.iter(|| {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
-                black_box("mod"),
-                None,
+                black_box(&parsed_mod),
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
-
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
@@ -501,12 +498,10 @@ fn bench_search_ordering(c: &mut Criterion) {
         b.iter(|| {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
-                black_box("mod"),
-                None,
+                black_box(&parsed_mod),
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
-
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
@@ -526,12 +521,10 @@ fn bench_search_ordering(c: &mut Criterion) {
         b.iter(|| {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
-                black_box("controller"),
-                None,
+                black_box(&parsed_controller),
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
-
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
@@ -550,12 +543,10 @@ fn bench_search_ordering(c: &mut Criterion) {
         b.iter(|| {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
-                black_box("controller"),
-                None,
+                black_box(&parsed_controller),
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
-
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
@@ -587,6 +578,8 @@ fn bench_pagination_performance(c: &mut Criterion) {
     group.sample_size(100);
 
     let query = "mod";
+    let parser = QueryParser::default();
+    let parsed = parser.parse(query);
     let page_size = 40;
 
     // Benchmark first page (uses partial sort optimization)
@@ -594,12 +587,10 @@ fn bench_pagination_performance(c: &mut Criterion) {
         b.iter(|| {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
-                black_box(query),
-                None,
+                black_box(&parsed),
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
-
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
@@ -619,12 +610,10 @@ fn bench_pagination_performance(c: &mut Criterion) {
         b.iter(|| {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
-                black_box(query),
-                None,
+                black_box(&parsed),
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
-
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
@@ -644,12 +633,10 @@ fn bench_pagination_performance(c: &mut Criterion) {
         b.iter(|| {
             let results = FilePicker::fuzzy_search(
                 black_box(&files),
-                black_box(query),
-                None,
+                black_box(&parsed),
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
-
                     project_path: None,
                     last_same_query_match: None,
                     combo_boost_score_multiplier: 100,

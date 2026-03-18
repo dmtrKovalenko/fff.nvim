@@ -131,39 +131,34 @@ pub fn match_and_score_files<'a>(
         return (vec![], vec![], 0);
     }
 
-    let parsed = &context.parsed_query;
-    let working_files: FileItems<'a> = match parsed.as_ref().and_then(|p| {
-        if p.constraints.is_empty() {
-            None
-        } else {
-            apply_constraints(files, &p.constraints)
+    let parsed = context.query;
+    let working_files: FileItems<'a> = if parsed.constraints.is_empty() {
+        FileItems::All(files)
+    } else {
+        match apply_constraints(files, &parsed.constraints) {
+            Some(filtered) if !filtered.is_empty() => FileItems::Filtered(filtered),
+            Some(_) => {
+                return (vec![], vec![], 0);
+            }
+            None => FileItems::All(files),
         }
-    }) {
-        Some(filtered) if !filtered.is_empty() => FileItems::Filtered(filtered),
-        Some(_) => {
-            return (vec![], vec![], 0);
-        }
-        None => FileItems::All(files),
     };
 
-    let query_trimmed: &str = context.raw_query.trim();
+    let query_trimmed: &str = parsed.raw_query.trim();
     let single_part_storage: [&str; 1] = [query_trimmed];
 
-    let fuzzy_parts: &[&str] = match parsed {
-        None => {
-            tracing::debug!("STEP 3: Query too short (<2 chars), returning frecency-sorted");
+    let fuzzy_parts: &[&str] = match &parsed.fuzzy_query {
+        FuzzyQuery::Text(t) if t.len() >= 2 => std::slice::from_ref(t),
+        FuzzyQuery::Parts(parts) if !parts.is_empty() => parts.as_slice(),
+        FuzzyQuery::Text(_) | FuzzyQuery::Parts(_) => {
+            return score_filtered_by_frecency(&working_files, context);
+        }
+        FuzzyQuery::Empty => {
             if query_trimmed.len() < 2 {
                 return score_filtered_by_frecency(&working_files, context);
             }
             &single_part_storage
         }
-        Some(p) => match &p.fuzzy_query {
-            FuzzyQuery::Text(t) if t.len() >= 2 => std::slice::from_ref(t),
-            FuzzyQuery::Parts(parts) if !parts.is_empty() => parts.as_slice(),
-            _ => {
-                return score_filtered_by_frecency(&working_files, context);
-            }
-        },
     };
 
     let has_uppercase = fuzzy_parts
@@ -502,6 +497,7 @@ fn sort_and_paginate<'a>(
 mod tests {
     use super::*;
     use crate::types::PaginationArgs;
+    use fff_query_parser::QueryParser;
     use std::path::PathBuf;
 
     fn create_test_file(path: &str, score: i32, modified: u64) -> (FileItem, Score) {
@@ -553,9 +549,11 @@ mod tests {
             .map(|(file, score)| (file, score.clone()))
             .collect();
 
+        let query_str = "test";
+        let parser = QueryParser::default();
+        let query = parser.parse(query_str);
         let context = ScoringContext {
-            raw_query: "test",
-            parsed_query: None,
+            query: &query,
             max_threads: 1,
             max_typos: 2,
             current_file: None,
@@ -602,9 +600,11 @@ mod tests {
             .map(|(file, score)| (file, score.clone()))
             .collect();
 
+        let query_str = "test";
+        let parser = QueryParser::default();
+        let query = parser.parse(query_str);
         let context = ScoringContext {
-            raw_query: "test",
-            parsed_query: None,
+            query: &query,
             max_threads: 1,
             max_typos: 2,
             current_file: None,
@@ -649,9 +649,11 @@ mod tests {
             .map(|(file, score)| (file, score.clone()))
             .collect();
 
+        let query_str = "test";
+        let parser = QueryParser::default();
+        let query = parser.parse(query_str);
         let context = ScoringContext {
-            raw_query: "test",
-            parsed_query: None,
+            query: &query,
             max_threads: 1,
             max_typos: 2,
             current_file: None,

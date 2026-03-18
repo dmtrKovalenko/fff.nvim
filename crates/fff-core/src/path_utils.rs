@@ -17,6 +17,22 @@ pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     std::fs::canonicalize(path)
 }
 
+#[cfg(windows)]
+pub fn expand_tilde(path: &str) -> PathBuf {
+    return PathBuf::from(path);
+}
+
+#[cfg(not(windows))]
+pub fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(stripped) = path.strip_prefix("~/")
+        && let Some(home_dir) = dirs::home_dir()
+    {
+        return home_dir.join(stripped);
+    }
+
+    PathBuf::from(path)
+}
+
 /// Calculate distance penalty based on directory proximity
 /// Returns a negative penalty score based on how far the candidate is from the current file
 pub fn calculate_distance_penalty(current_file: Option<&str>, candidate_path: &str) -> i32 {

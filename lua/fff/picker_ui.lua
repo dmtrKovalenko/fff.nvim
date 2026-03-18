@@ -1700,6 +1700,23 @@ function M.update_preview()
 
   -- Check if we need to update the preview (file changed OR location changed)
   local effective_location = M.state.location
+
+  -- Fallback: if location is nil but query has a :line suffix, parse it directly
+  if not effective_location and M.state.query and M.state.query ~= '' then
+    local line_str = M.state.query:match(':(%d+)$')
+    if line_str then
+      local line_num = tonumber(line_str)
+      if line_num and line_num > 0 then
+        local l, c = M.state.query:match(':(%d+):(%d+)$')
+        if l then
+          effective_location = { line = tonumber(l), col = tonumber(c) }
+        else
+          effective_location = { line = line_num }
+        end
+      end
+    end
+  end
+
   -- In grep mode (or when previewing grep suggestions), location comes from the match item
   local is_grep_item = M.state.mode == 'grep' or M.state.suggestion_source == 'grep'
   if is_grep_item and item.line_number and item.line_number > 0 then
@@ -2290,6 +2307,23 @@ function M.select(action)
     location = { line = item.line_number }
     if item.col and item.col > 0 then
       location.col = item.col + 1 -- Convert 0-based byte col to 1-based
+    end
+  end
+
+  -- Fallback: if location is nil but query has a :line suffix, parse it directly
+  if not location and query and query ~= '' then
+    local line_str = query:match(':(%d+)$')
+    if line_str then
+      local line_num = tonumber(line_str)
+      if line_num and line_num > 0 then
+        local col_and_line = query:match(':(%d+):(%d+)$')
+        if col_and_line then
+          local l, c = query:match(':(%d+):(%d+)$')
+          location = { line = tonumber(l), col = tonumber(c) }
+        else
+          location = { line = line_num }
+        end
+      end
     end
   end
 

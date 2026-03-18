@@ -8,14 +8,30 @@ use notify::event::{AccessKind, AccessMode};
 use notify::{Config, EventKind, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, DebouncedEvent, NoCache, new_debouncer_opt};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing::{Level, debug, error, info, warn};
 
 type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, NoCache>;
 
+/// Owns the file-system watcher and guarantees that all background threads
+/// are fully joined before `stop()` / `Drop` returns.
+///
+/// Architecture:
+///   - The debouncer (and its internal watcher) live inside an **owner thread**
+///     that we spawn and hold the `JoinHandle` for.
+///   - `stop()` sets a flag, unparks the owner thread, and **joins** it.
+///   - Inside the owner thread, `Debouncer::stop()` is called which joins the
+///     debouncer's event-processing thread.
+///   - On Windows an additional short sleep is added after `Debouncer::stop()`
+///     because `notify`'s `ReadDirectoryChangesWatcher` discards its thread
+///     `JoinHandle`, so we cannot join it directly. The watcher's `Drop` does
+///     signal the thread via semaphore so it exits almost immediately, but we
+///     need to give the OS a moment to reclaim it.
 pub struct BackgroundWatcher {
-    debouncer: Arc<Mutex<Option<Debouncer>>>,
+    stop_signal: Arc<AtomicBool>,
+    owner_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
@@ -43,8 +59,33 @@ impl BackgroundWatcher {
             Self::create_debouncer(base_path, git_workdir, shared_picker, shared_frecency, mode)?;
         info!("Background file watcher initialized successfully");
 
+        let stop_signal = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop_signal);
+
+        // The owner thread keeps the debouncer alive and ensures proper
+        // cleanup: `Debouncer::stop()` joins its internal thread, then the
+        // watcher `Drop` signals its I/O thread to exit.
+        let owner_thread = std::thread::Builder::new()
+            .name("fff-watcher-owner".into())
+            .spawn(move || {
+                while !stop_clone.load(Ordering::Acquire) {
+                    std::thread::park_timeout(Duration::from_secs(1));
+                }
+                // Debouncer::stop() joins the debouncer's event thread, then
+                // drops the watcher (whose Drop signals the I/O thread).
+                debouncer.stop();
+                // On Windows the notify crate discards the ReadDirectoryChangesW
+                // thread's JoinHandle — we cannot join it. Its Drop signals the
+                // thread via semaphore so it exits almost immediately; give the
+                // OS a moment to fully reclaim it.
+                #[cfg(windows)]
+                std::thread::sleep(Duration::from_millis(250));
+            })
+            .expect("failed to spawn fff-watcher-owner thread");
+
         Ok(Self {
-            debouncer: Arc::new(Mutex::new(Some(debouncer))),
+            stop_signal,
+            owner_thread: Some(owner_thread),
         })
     }
 
@@ -130,25 +171,23 @@ impl BackgroundWatcher {
         Ok(debouncer)
     }
 
-    pub fn stop(&self) {
-        if let Ok(Some(debouncer)) = self.debouncer.lock().map(|mut debouncer| debouncer.take()) {
-            drop(debouncer);
-            info!("Background file watcher stopped successfully");
-        } else {
-            error!("Failed to stop background watcher");
+    pub fn stop(&mut self) {
+        self.stop_signal.store(true, Ordering::Release);
+        if let Some(handle) = self.owner_thread.take() {
+            handle.thread().unpark();
+
+            if let Err(e) = handle.join() {
+                error!("Watcher owner thread panicked: {:?}", e);
+            }
         }
+
+        info!("Background file watcher stopped successfully");
     }
 }
 
 impl Drop for BackgroundWatcher {
     fn drop(&mut self) {
-        if let Ok(mut debouncer_guard) = self.debouncer.lock() {
-            if let Some(debouncer) = debouncer_guard.take() {
-                drop(debouncer);
-            }
-        } else {
-            error!("Failed to acquire debouncer lock to drop");
-        }
+        self.stop();
     }
 }
 

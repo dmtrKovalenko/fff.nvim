@@ -210,17 +210,13 @@ fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
         classify_definitions: false,
     };
     let start = Instant::now();
-    let result = grep_search(files, query, parsed.as_ref(), &options);
+    let result = grep_search(files, &parsed, &options);
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
 
 #[allow(dead_code)]
-fn benchmark_fff_smart_case(
-    files: &[FileItem],
-    query: &str,
-    parsed: Option<FFFQuery<'_>>,
-) -> (usize, Duration) {
+fn benchmark_fff_smart_case(files: &[FileItem], parsed: &FFFQuery<'_>) -> (usize, Duration) {
     let options = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: usize::MAX,
@@ -234,7 +230,7 @@ fn benchmark_fff_smart_case(
         classify_definitions: false,
     };
     let start = Instant::now();
-    let result = grep_search(files, query, parsed.as_ref(), &options);
+    let result = grep_search(files, parsed, &options);
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
@@ -255,7 +251,7 @@ fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
         classify_definitions: false,
     };
     let start = Instant::now();
-    let result = grep_search(files, query, parsed.as_ref(), &options);
+    let result = grep_search(files, &parsed, &options);
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }

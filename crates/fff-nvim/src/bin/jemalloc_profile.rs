@@ -90,8 +90,7 @@ fn test_search_memory_pattern(
                 let parsed = parser.parse(&query);
                 let search_result = FilePicker::fuzzy_search(
                     picker.get_files(),
-                    &query,
-                    parsed,
+                    &parsed,
                     FuzzySearchOptions {
                         max_threads: 1 + (i % 4),
                         current_file: None,
