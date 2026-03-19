@@ -8,6 +8,8 @@ VERSION="${VERSION#v}"
 
 TAG="v${VERSION}"
 
+git pull
+
 # Check for clean working tree
 if ! git diff --quiet || ! git diff --cached --quiet; then
   echo "Error: Working tree is not clean. Commit or stash changes first."
