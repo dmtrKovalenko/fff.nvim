@@ -37,7 +37,7 @@ use crate::git::GitStatusCache;
 use crate::grep::{GrepResult, GrepSearchOptions, grep_search};
 use crate::query_tracker::QueryTracker;
 use crate::score::match_and_score_files;
-use crate::types::{FileItem, PaginationArgs, ScoringContext, SearchResult};
+use crate::types::{ContentCacheBudget, FileItem, PaginationArgs, ScoringContext, SearchResult};
 use crate::{SharedFrecency, SharedPicker};
 use fff_query_parser::FFFQuery;
 use git2::{Repository, Status, StatusOptions};
@@ -47,7 +47,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::SystemTime;
 use tracing::{Level, debug, error, info, warn};
@@ -226,6 +226,7 @@ pub struct FilePicker {
     warmup_mmap_cache: bool,
     cancelled: Arc<AtomicBool>,
     mode: FFFMode,
+    pub cache_budget: Arc<ContentCacheBudget>,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -247,12 +248,16 @@ impl FilePicker {
         &self.base_path
     }
 
-    pub fn warmup_mmap_cache(&self) -> bool {
+    pub fn need_warmup_mmap_cache(&self) -> bool {
         self.warmup_mmap_cache
     }
 
     pub fn mode(&self) -> FFFMode {
         self.mode
+    }
+
+    pub fn cache_budget(&self) -> &ContentCacheBudget {
+        &self.cache_budget
     }
 
     pub fn git_root(&self) -> Option<&Path> {
@@ -306,6 +311,7 @@ impl FilePicker {
             warmup_mmap_cache,
             cancelled: Arc::clone(&cancelled),
             mode,
+            cache_budget: Arc::new(ContentCacheBudget::default()),
         };
 
         // Place the picker into the shared handle before spawning the
@@ -423,8 +429,9 @@ impl FilePicker {
         files: &'a [FileItem],
         query: &FFFQuery<'_>,
         options: &GrepSearchOptions,
+        budget: &ContentCacheBudget,
     ) -> GrepResult<'a> {
-        grep_search(files, query, options)
+        grep_search(files, query, options, budget)
     }
 
     // Returns an ongoing or finisshed scan progress
@@ -594,7 +601,7 @@ impl FilePicker {
                         // mapping here because on linux and macos with the shared map opening it
                         // should be automatically available everywhere automatically which saves
                         // some time from doing extra remapping on every search
-                        file.invalidate_mmap();
+                        file.invalidate_mmap(&self.cache_budget);
                     }
                 }
 
@@ -680,12 +687,15 @@ impl FilePicker {
                 );
 
                 self.sync_data = sync;
+                // Old FileItems (and their mmaps) were dropped — reset the budget.
+                self.cache_budget.reset();
 
                 if self.warmup_mmap_cache {
                     // Warmup in background to avoid blocking
                     let files = self.sync_data.files().to_vec(); // Clone all files
+                    let budget = Arc::clone(&self.cache_budget);
                     std::thread::spawn(move || {
-                        warmup_mmaps(&files);
+                        warmup_mmaps(&files, &budget);
                     });
                 }
             }
@@ -778,6 +788,8 @@ fn spawn_scan_and_watcher(
                 let write_result = shared_picker.write().ok().map(|mut guard| {
                     if let Some(ref mut picker) = *guard {
                         picker.sync_data = sync;
+                        // Old FileItems (and their mmaps) were dropped — reset the budget.
+                        picker.cache_budget.reset();
                     }
                 });
 
@@ -791,7 +803,7 @@ fn spawn_scan_and_watcher(
                     && let Ok(guard) = shared_picker.read()
                     && let Some(ref picker) = *guard
                 {
-                    warmup_mmaps(picker.sync_data.files());
+                    warmup_mmaps(picker.sync_data.files(), &picker.cache_budget);
                 }
             }
             Err(e) => {
@@ -844,26 +856,64 @@ fn spawn_scan_and_watcher(
     });
 }
 
-/// Pre-populate mmap caches for all eligible files so the first grep search
-/// doesn't pay the mmap creation + page fault cost.
+/// Pre-populate mmap caches for the most valuable files so the first grep
+/// search doesn't pay the mmap creation + page fault cost.
 ///
-/// Each file is mmap'd and a single byte is read to trigger the page fault.
-/// This runs in parallel using rayon.
+/// All files are collected once, then an O(n) `select_nth_unstable_by`
+/// partitions the top [`MAX_CACHED_CONTENT_FILES`] highest-frecency eligible
+/// files to the front (binary / empty files are pushed to the end by the
+/// comparator). The selected prefix is warmed in parallel via rayon.
+///
+/// Files beyond the budget are still available via temporary mmaps on first
+/// grep access, so correctness is unaffected.
 #[tracing::instrument(skip(files), name = "warmup_mmaps", level = Level::DEBUG)]
-fn warmup_mmaps(files: &[FileItem]) {
-    let warmed = std::sync::atomic::AtomicUsize::new(0);
+fn warmup_mmaps(files: &[FileItem], budget: &ContentCacheBudget) {
+    let max_files = budget.max_files;
+    let max_bytes: u64 = 512 * 1024 * 1024;
 
-    files.par_iter().for_each(|file| {
-        if file.is_binary || file.size == 0 {
+    // Single collect — no pre-filter. The comparator in select_nth pushes
+    // ineligible files (binary, empty) to the tail automatically.
+    let mut all: Vec<&FileItem> = files.iter().collect();
+
+    // O(n) partial sort: top max_files eligible-by-frecency files land in
+    // all[..max_files]. Ineligible files compare as "lowest priority" so
+    // they naturally sink past the partition boundary.
+    if all.len() > max_files {
+        all.select_nth_unstable_by(max_files, |a, b| {
+            let a_ok = !a.is_binary && a.size > 0;
+            let b_ok = !b.is_binary && b.size > 0;
+            match (a_ok, b_ok) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                (false, false) => std::cmp::Ordering::Equal,
+                (true, true) => b.total_frecency_score.cmp(&a.total_frecency_score),
+            }
+        });
+    }
+
+    let to_warm = &all[..all.len().min(max_files)];
+
+    let warmed_bytes = AtomicU64::new(0);
+    let budget_exhausted = AtomicBool::new(false);
+
+    to_warm.par_iter().for_each(|file| {
+        if budget_exhausted.load(Ordering::Relaxed) {
             return;
         }
 
-        if let Some(content) = file.get_mmap() {
-            // Read the first byte to trigger the initial page fault (mmap)
-            // or ensure the content is cached (Windows buffer).
-            let _ = std::hint::black_box(content.first());
+        if file.is_binary || file.size == 0 || file.size > 5 * 1024 * 1024 {
+            return;
+        }
 
-            warmed.fetch_add(1, Ordering::Relaxed);
+        // Byte budget.
+        let prev_bytes = warmed_bytes.fetch_add(file.size, Ordering::Relaxed);
+        if prev_bytes + file.size > max_bytes {
+            budget_exhausted.store(true, Ordering::Relaxed);
+            return;
+        }
+
+        if let Some(content) = file.get_mmap(budget) {
+            let _ = std::hint::black_box(content.first());
         }
     });
 }

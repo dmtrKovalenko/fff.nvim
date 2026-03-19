@@ -340,7 +340,8 @@ pub fn live_grep(
         classify_definitions: false,
     };
 
-    let result = fff::grep::grep_search(picker.get_files(), &parsed, &options);
+    let result =
+        fff::grep::grep_search(picker.get_files(), &parsed, &options, picker.cache_budget());
 
     lua_types::GrepResultLua::from(result).into_lua(lua)
 }
