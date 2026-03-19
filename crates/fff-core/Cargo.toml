@@ -24,7 +24,7 @@ rayon = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-fff-query-parser = { workspace = true , version = "0.4.2" }
+fff-query-parser = { workspace = true  }
 
 # External dependencies
 bindet = { workspace = true }
@@ -35,7 +35,7 @@ git2 = { workspace = true }
 glidesort = { workspace = true }
 globset = { workspace = true }
 grep-matcher = { workspace = true }
-fff-grep = { workspace = true , version = "0.4.2" }
+fff-grep = { workspace = true  }
 aho-corasick = "1"
 memchr = "2"
 heed = { workspace = true }
