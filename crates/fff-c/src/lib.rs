@@ -403,7 +403,8 @@ pub unsafe extern "C" fn fff_live_grep(
         classify_definitions,
     };
 
-    let result = fff::grep::grep_search(picker.get_files(), &parsed, &options);
+    let result =
+        fff::grep::grep_search(picker.get_files(), &parsed, &options, picker.cache_budget());
     let grep_result = FffGrepResult::from_core(&result);
     FffResult::ok_handle(grep_result as *mut c_void)
 }
@@ -504,7 +505,13 @@ pub unsafe extern "C" fn fff_multi_grep(
         classify_definitions,
     };
 
-    let result = fff::multi_grep_search(picker.get_files(), &patterns, constraint_refs, &options);
+    let result = fff::multi_grep_search(
+        picker.get_files(),
+        &patterns,
+        constraint_refs,
+        &options,
+        picker.cache_budget(),
+    );
     let grep_result = FffGrepResult::from_core(&result);
     FffResult::ok_handle(grep_result as *mut c_void)
 }
@@ -661,8 +668,8 @@ pub unsafe extern "C" fn fff_restart_index(
         Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
     };
 
-    let (warmup, mode) = if let Some(mut picker) = guard.take() {
-        let warmup = picker.warmup_mmap_cache();
+    let (warmup_caches, mode) = if let Some(mut picker) = guard.take() {
+        let warmup = picker.need_warmup_mmap_cache();
         let mode = picker.mode();
         picker.stop_background_monitor();
         (warmup, mode)
@@ -674,7 +681,7 @@ pub unsafe extern "C" fn fff_restart_index(
 
     match FilePicker::new_with_shared_state(
         canonical_path.to_string_lossy().to_string(),
-        warmup,
+        warmup_caches,
         mode,
         Arc::clone(&inst.picker),
         Arc::clone(&inst.frecency),

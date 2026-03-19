@@ -78,7 +78,7 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
 
     let parsed = parse_grep_query(query);
     let start = Instant::now();
-    let result = grep_search(files, &parsed, &options);
+    let result = grep_search(files, &parsed, &options, &fff::ContentCacheBudget::zero());
     let elapsed = start.elapsed();
 
     eprintln!("══════════════════════════════════════════════════════════════");
