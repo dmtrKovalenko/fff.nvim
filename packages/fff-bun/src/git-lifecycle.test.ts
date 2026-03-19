@@ -51,7 +51,7 @@ function sleep(ms: number) {
 }
 
 function findFile(finder: FileFinder, name: string): FileItem | undefined {
-  const result = finder.search(name, { pageSize: 200 });
+  const result = finder.fileSearch(name, { pageSize: 200 });
   if (!result.ok) throw new Error(`search failed: ${result.error}`);
   return result.value.items.find((item) => item.fileName === name);
 }
@@ -99,15 +99,15 @@ async function waitForFileGone(finder: FileFinder, name: string): Promise<boolea
 async function waitForFileCount(finder: FileFinder, count: number): Promise<number> {
   const start = Date.now();
   while (Date.now() - start < WATCHER_TIMEOUT_MS) {
-    const result = finder.search("", { pageSize: 200 });
+    const result = finder.fileSearch("", { pageSize: 200 });
     if (result.ok && result.value.totalFiles === count) return count;
     await sleep(POLL_INTERVAL_MS);
   }
-  const result = finder.search("", { pageSize: 200 });
+  const result = finder.fileSearch("", { pageSize: 200 });
   return result.ok ? result.value.totalFiles : -1;
 }
 
-/** Poll liveGrep until predicate on totalMatched is satisfied, or the timeout is exceeded. */
+/** Poll grep until predicate on totalMatched is satisfied, or the timeout is exceeded. */
 async function waitForGrep(
   finder: FileFinder,
   pattern: string,
@@ -116,11 +116,11 @@ async function waitForGrep(
 ) {
   const start = Date.now();
   while (Date.now() - start < WATCHER_TIMEOUT_MS) {
-    const result = finder.liveGrep(pattern, options);
+    const result = finder.grep(pattern, options);
     if (result.ok && predicate(result.value.totalMatched)) return result;
     await sleep(POLL_INTERVAL_MS);
   }
-  return finder.liveGrep(pattern, options);
+  return finder.grep(pattern, options);
 }
 
 describe.skipIf(process.platform === "win32")("Git lifecycle integration", () => {
@@ -161,7 +161,7 @@ describe.skipIf(process.platform === "win32")("Git lifecycle integration", () =>
   });
 
   test("initial scan indexes all committed files", () => {
-    const result = finder.search("", { pageSize: 200 });
+    const result = finder.fileSearch("", { pageSize: 200 });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 

@@ -8,10 +8,10 @@ use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use fff_core::file_picker::FilePicker;
-use fff_core::grep::{self, GrepMode, GrepSearchOptions, has_regex_metacharacters};
-use fff_core::types::{FileItem, PaginationArgs};
-use fff_core::{FuzzySearchOptions, QueryParser, SharedFrecency, SharedPicker};
+use fff::file_picker::FilePicker;
+use fff::grep::{self, GrepMode, GrepSearchOptions, has_regex_metacharacters};
+use fff::types::{FileItem, PaginationArgs};
+use fff::{FuzzySearchOptions, QueryParser, SharedFrecency, SharedPicker};
 use fff_query_parser::AiGrepConfig;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -250,10 +250,11 @@ impl FffServer {
             .ok_or_else(|| ErrorData::internal_error("File picker not initialized", None))?;
 
         let files = picker.get_files();
+        let budget = picker.cache_budget();
 
         let parser = QueryParser::new(AiGrepConfig);
         let parsed = parser.parse(query);
-        let result = grep::grep_search(files, &parsed, &options);
+        let result = grep::grep_search(files, &parsed, &options, budget);
 
         if result.matches.is_empty() && file_offset == 0 {
             // Auto-retry: try broadening multi-word queries by dropping first non-constraint word
@@ -276,7 +277,8 @@ impl FffServer {
                     };
 
                     let (retry_options, _) = make_grep_options(output_mode, retry_mode, 0, context);
-                    let retry_result = grep::grep_search(files, &rest_parsed, &retry_options);
+                    let retry_result =
+                        grep::grep_search(files, &rest_parsed, &retry_options, budget);
 
                     if !retry_result.matches.is_empty() && retry_result.matches.len() <= 10 {
                         let mut cs = self.lock_cursors()?;
@@ -304,7 +306,7 @@ impl FffServer {
             let fuzzy_query = cleanup_fuzzy_query(query);
             let (fuzzy_options, _) = make_grep_options(output_mode, GrepMode::Fuzzy, 0, Some(0));
             let fuzzy_parsed = parser.parse(&fuzzy_query);
-            let fuzzy_result = grep::grep_search(files, &fuzzy_parsed, &fuzzy_options);
+            let fuzzy_result = grep::grep_search(files, &fuzzy_parsed, &fuzzy_options, budget);
 
             if !fuzzy_result.matches.is_empty() {
                 let mut lines: Vec<String> = Vec::new();
@@ -334,7 +336,6 @@ impl FffServer {
                     max_threads: 0,
                     current_file: None,
                     project_path: Some(picker.base_path()),
-                    last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
                     pagination: PaginationArgs {
@@ -342,7 +343,7 @@ impl FffServer {
                         limit: 1,
                     },
                 };
-                let file_result = FilePicker::fuzzy_search(files, &file_query, file_opts);
+                let file_result = FilePicker::fuzzy_search(files, &file_query, None, file_opts);
                 if let (Some(top), Some(score)) =
                     (file_result.items.first(), file_result.scores.first())
                 {
@@ -423,7 +424,6 @@ impl FffServer {
             max_threads: 0,
             current_file: None,
             project_path: Some(base_path),
-            last_same_query_match: None,
             combo_boost_score_multiplier: 100,
             min_combo_count: 3,
             pagination: PaginationArgs {
@@ -434,7 +434,7 @@ impl FffServer {
 
         let parser = QueryParser::default();
         let fff_query = parser.parse(query);
-        let result = FilePicker::fuzzy_search(files, &fff_query, make_opts(page_offset));
+        let result = FilePicker::fuzzy_search(files, &fff_query, None, make_opts(page_offset));
         let total_files = result.total_files;
 
         // Auto-retry with fewer terms if 3+ words return 0 results
@@ -445,7 +445,12 @@ impl FffServer {
             if result.items.is_empty() && words.len() >= 3 && page_offset == 0 {
                 if let Some(shorter) = &shorter {
                     let shorter_query = parser.parse(shorter);
-                    let retry = FilePicker::fuzzy_search(files, &shorter_query, make_opts(0));
+                    let retry = FilePicker::fuzzy_search(
+                        files,
+                        &shorter_query,
+                        /*query_tracker=*/ None,
+                        make_opts(0),
+                    );
 
                     (retry.items, retry.scores, retry.total_matched)
                 } else {
@@ -587,7 +592,8 @@ impl FffServer {
         let constraints = parsed_constraints.constraints.as_slice();
 
         let files = picker.get_files();
-        let result = grep::multi_grep_search(files, &patterns_refs, constraints, &options);
+        let budget = picker.cache_budget();
+        let result = grep::multi_grep_search(files, &patterns_refs, constraints, &options, budget);
         let file_refs: Vec<&FileItem> = result.files.to_vec();
 
         if result.matches.is_empty() && file_offset == 0 {
@@ -609,7 +615,7 @@ impl FffServer {
                 };
 
                 let parsed = parser.parse(&full_query);
-                let fb_result = grep::grep_search(files, &parsed, &fallback_options);
+                let fb_result = grep::grep_search(files, &parsed, &fallback_options, budget);
 
                 if !fb_result.matches.is_empty() {
                     let fb_file_refs: Vec<&FileItem> = fb_result.files.to_vec();

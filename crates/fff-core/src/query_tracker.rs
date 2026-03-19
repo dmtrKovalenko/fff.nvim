@@ -61,8 +61,10 @@ impl DbHealthChecker for QueryTracker {
 }
 
 impl QueryTracker {
-    pub fn new(db_path: &str, use_unsafe_no_lock: bool) -> Result<Self, Error> {
+    pub fn new(db_path: impl AsRef<Path>, use_unsafe_no_lock: bool) -> Result<Self, Error> {
+        let db_path = db_path.as_ref();
         fs::create_dir_all(db_path).map_err(Error::CreateDir)?;
+
         let env = unsafe {
             let mut opts = EnvOpenOptions::new();
             opts.map_size(10 * 1024 * 1024); // 100 MiB

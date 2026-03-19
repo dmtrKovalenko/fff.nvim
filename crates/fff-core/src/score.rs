@@ -281,6 +281,7 @@ pub fn match_and_score_files<'a>(
             let combo_match_boost = {
                 let last_same_query_match = context
                     .last_same_query_match
+                    .as_ref()
                     .filter(|m| m.file_path.as_os_str() == file.path.as_os_str());
 
                 match last_same_query_match {

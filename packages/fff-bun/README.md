@@ -16,20 +16,20 @@ High-performance fuzzy file finder for Bun, powered by Rust. Perfect for LLM age
 bun add @ff-labs/bun
 ```
 
-The correct native binary for your platform is installed automatically via platform-specific packages (e.g. `@ff-labs/fff-bun-darwin-arm64`, `@ff-labs/fff-bun-linux-x64-gnu`). No GitHub downloads are needed.
+The correct native binary for your platform is installed automatically via platform-specific packages (e.g. `@ff-labs/fff-bin-darwin-arm64`, `@ff-labs/fff-bin-linux-x64-gnu`). No GitHub downloads are needed.
 
 ### Supported Platforms
 
 | Platform | Architecture | Package |
 |----------|-------------|---------|
-| macOS | ARM64 (Apple Silicon) | `@ff-labs/fff-bun-darwin-arm64` |
-| macOS | x64 (Intel) | `@ff-labs/fff-bun-darwin-x64` |
-| Linux | x64 (glibc) | `@ff-labs/fff-bun-linux-x64-gnu` |
-| Linux | ARM64 (glibc) | `@ff-labs/fff-bun-linux-arm64-gnu` |
-| Linux | x64 (musl) | `@ff-labs/fff-bun-linux-x64-musl` |
-| Linux | ARM64 (musl) | `@ff-labs/fff-bun-linux-arm64-musl` |
-| Windows | x64 | `@ff-labs/fff-bun-win32-x64` |
-| Windows | ARM64 | `@ff-labs/fff-bun-win32-arm64` |
+| macOS | ARM64 (Apple Silicon) | `@ff-labs/fff-bin-darwin-arm64` |
+| macOS | x64 (Intel) | `@ff-labs/fff-bin-darwin-x64` |
+| Linux | x64 (glibc) | `@ff-labs/fff-bin-linux-x64-gnu` |
+| Linux | ARM64 (glibc) | `@ff-labs/fff-bin-linux-arm64-gnu` |
+| Linux | x64 (musl) | `@ff-labs/fff-bin-linux-x64-musl` |
+| Linux | ARM64 (musl) | `@ff-labs/fff-bin-linux-arm64-musl` |
+| Windows | x64 | `@ff-labs/fff-bin-win32-x64` |
+| Windows | ARM64 | `@ff-labs/fff-bin-win32-arm64` |
 
 If the platform package isn't available, the postinstall script will attempt to download from GitHub releases as a fallback.
 
@@ -113,7 +113,7 @@ Track file access for frecency scoring.
 FileFinder.trackAccess("/path/to/file.ts");
 ```
 
-### `FileFinder.liveGrep(query, options?)`
+### `FileFinder.grep(query, options?)`
 
 Search file contents with SIMD-accelerated matching.
 
@@ -129,7 +129,7 @@ interface GrepOptions {
 }
 
 // Plain text search
-const result = FileFinder.liveGrep("TODO", { pageLimit: 20 });
+const result = FileFinder.grep("TODO", { pageLimit: 20 });
 if (result.ok) {
   for (const match of result.value.items) {
     console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
@@ -137,22 +137,22 @@ if (result.ok) {
 }
 
 // Regex search
-const regexResult = FileFinder.liveGrep("fn\\s+\\w+", { mode: "regex" });
+const regexResult = FileFinder.grep("fn\\s+\\w+", { mode: "regex" });
 
 // Fuzzy search
-const fuzzyResult = FileFinder.liveGrep("imprt recat", { mode: "fuzzy" });
+const fuzzyResult = FileFinder.grep("imprt recat", { mode: "fuzzy" });
 
 // Pagination
-const page1 = FileFinder.liveGrep("error");
+const page1 = FileFinder.grep("error");
 if (page1.ok && page1.value.nextCursor) {
-  const page2 = FileFinder.liveGrep("error", {
+  const page2 = FileFinder.grep("error", {
     cursor: page1.value.nextCursor,
   });
 }
 
 // With file constraints
-const tsOnly = FileFinder.liveGrep("*.ts useState");
-const srcOnly = FileFinder.liveGrep("src/ handleClick");
+const tsOnly = FileFinder.grep("*.ts useState");
+const srcOnly = FileFinder.grep("src/ handleClick");
 ```
 
 ### `FileFinder.trackQuery(query, selectedFile)`
@@ -178,7 +178,7 @@ if (health.ok) {
 
 ### Other Methods
 
-- `FileFinder.liveGrep(query, options?)` - Search file contents
+- `FileFinder.grep(query, options?)` - Search file contents
 - `FileFinder.scanFiles()` - Trigger rescan
 - `FileFinder.isScanning()` - Check scan status
 - `FileFinder.getScanProgress()` - Get scan progress

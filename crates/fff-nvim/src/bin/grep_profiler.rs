@@ -1,4 +1,4 @@
-use fff_core::FileItem;
+use fff::FileItem;
 /// Live grep benchmark profiler for fff.nvim
 ///
 /// Benchmarks the full grep pipeline against a large repository (Linux kernel).
@@ -10,7 +10,7 @@ use fff_core::FileItem;
 /// Usage:
 ///   cargo build --release --bin grep_profiler
 ///   ./target/release/grep_profiler [--path /path/to/repo]
-use fff_core::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
+use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -144,7 +144,12 @@ impl<'a> GrepBench<'a> {
     fn run_once(&self, query: &str) -> (Duration, usize, usize) {
         let parsed = parse_grep_query(query);
         let start = Instant::now();
-        let result = grep_search(self.files, &parsed, &self.options);
+        let result = grep_search(
+            self.files,
+            &parsed,
+            &self.options,
+            &fff::ContentCacheBudget::default(),
+        );
         let elapsed = start.elapsed();
         (elapsed, result.matches.len(), result.total_files_searched)
     }
@@ -222,7 +227,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let canonical = fff_core::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
+    let canonical = fff::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
     eprintln!("=== FFF Live Grep Profiler ===");
     eprintln!("Repository: {:?}", canonical);
 
@@ -452,7 +457,12 @@ fn main() {
             classify_definitions: false,
         };
         let start = Instant::now();
-        let result = grep_search(&files, &parsed, &opts);
+        let result = grep_search(
+            &files,
+            &parsed,
+            &opts,
+            &fff::ContentCacheBudget::unlimited(),
+        );
         let elapsed = start.elapsed();
         eprintln!(
             "    {:>6} | {:>12} | {:>8} | {:>6} | {:>12}",
@@ -471,7 +481,10 @@ fn main() {
     }
 
     eprintln!("\n=== Summary ===");
-    let mmap_count = files.iter().filter(|f| f.get_mmap().is_some()).count();
+    let mmap_count = files
+        .iter()
+        .filter(|f| f.get_mmap(&fff::ContentCacheBudget::unlimited()).is_some())
+        .count();
     eprintln!("  Files with cached mmap: {}", mmap_count);
     eprintln!("  Total indexed files: {}", files.len());
     eprintln!("  Non-binary files: {}", non_binary);

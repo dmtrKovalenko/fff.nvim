@@ -1,6 +1,7 @@
 use crate::db_healthcheck::DbHealthChecker;
+use crate::error::{Error, Result};
 use crate::file_picker::FFFMode;
-use crate::{SharedFrecency, error::Error, git::is_modified_status};
+use crate::{SharedFrecency, git::is_modified_status};
 use heed::{Database, Env, EnvOpenOptions};
 use heed::{
     EnvFlags,
@@ -47,7 +48,7 @@ impl DbHealthChecker for FrecencyTracker {
         &self.env
     }
 
-    fn count_entries(&self) -> Result<Vec<(&'static str, u64)>, Error> {
+    fn count_entries(&self) -> Result<Vec<(&'static str, u64)>> {
         let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
         let count = self.db.len(&rtxn).map_err(Error::DbRead)?;
 
@@ -56,8 +57,10 @@ impl DbHealthChecker for FrecencyTracker {
 }
 
 impl FrecencyTracker {
-    pub fn new(db_path: &str, use_unsafe_no_lock: bool) -> Result<Self, Error> {
+    pub fn new(db_path: impl AsRef<Path>, use_unsafe_no_lock: bool) -> Result<Self> {
+        let db_path = db_path.as_ref();
         fs::create_dir_all(db_path).map_err(Error::CreateDir)?;
+
         let env = unsafe {
             let mut opts = EnvOpenOptions::new();
             opts.map_size(24 * 1024 * 1024); // 24 MiB
@@ -82,16 +85,24 @@ impl FrecencyTracker {
     }
 
     /// Spawns a background thread to purge stale frecency entries and compact the database.
+    /// Run it once in a while to purge old pages and keep DB file size reasonable.
     ///
-    /// Phase 1 (read lock): purge stale entries — deletes expired entries and prunes old timestamps.
-    /// Phase 2 (write lock): compact the database by re-writing entries into a fresh LMDB env.
-    ///   We can't use LMDB's copy_to_path with NO_LOCK envs (MDB_INCOMPATIBLE),
-    ///   so instead we: read all entries → drop env → delete files → reopen → write back.
-    pub fn spawn_gc(shared: SharedFrecency, db_path: String, use_unsafe_no_lock: bool) {
-        std::thread::Builder::new()
+    /// It's okay to not join this thread since it acquires locks for the db access
+    ///
+    /// ```
+    /// use fff_search::frecency::FrecencyTracker;
+    /// use fff_search::SharedFrecency;
+    /// let shared_frecency: SharedFrecency = Default::default();
+    /// let _ = FrecencyTracker::spawn_gc(shared_frecency, "/path/to/frecency_db".into(), true).ok();
+    /// ```
+    pub fn spawn_gc(
+        shared: SharedFrecency,
+        db_path: String,
+        use_unsafe_no_lock: bool,
+    ) -> Result<std::thread::JoinHandle<()>> {
+        Ok(std::thread::Builder::new()
             .name("fff-frecency-gc".into())
-            .spawn(move || Self::run_frecency_gc(shared, db_path, use_unsafe_no_lock))
-            .ok();
+            .spawn(move || Self::run_frecency_gc(shared, db_path, use_unsafe_no_lock))?)
     }
 
     #[tracing::instrument(skip(shared), fields(db_path = %db_path))]
@@ -223,7 +234,7 @@ impl FrecencyTracker {
     /// Removes entries where all timestamps are older than MAX_HISTORY_DAYS,
     /// and prunes stale timestamps from entries that still have recent ones.
     /// Returns (deleted_count, pruned_count).
-    fn purge_stale_entries(&self) -> Result<(usize, usize), Error> {
+    fn purge_stale_entries(&self) -> Result<(usize, usize)> {
         let now = self.get_now();
         let cutoff_time = now.saturating_sub((MAX_HISTORY_DAYS * SECONDS_PER_DAY) as u64);
 
@@ -275,7 +286,7 @@ impl FrecencyTracker {
         Ok((to_delete.len(), to_update.len()))
     }
 
-    fn get_accesses(&self, path: &Path) -> Result<Option<VecDeque<u64>>, Error> {
+    fn get_accesses(&self, path: &Path) -> Result<Option<VecDeque<u64>>> {
         let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
 
         let key_hash = Self::path_to_hash_bytes(path)?;
@@ -289,7 +300,7 @@ impl FrecencyTracker {
             .as_secs()
     }
 
-    fn path_to_hash_bytes(path: &Path) -> Result<[u8; 32], Error> {
+    fn path_to_hash_bytes(path: &Path) -> Result<[u8; 32]> {
         let Some(key) = path.to_str() else {
             return Err(Error::InvalidPath(path.to_path_buf()));
         };
@@ -299,13 +310,13 @@ impl FrecencyTracker {
 
     /// Returns seconds since the most recent tracked access, or `None` if the
     /// file has never been tracked.
-    pub fn seconds_since_last_access(&self, path: &Path) -> Result<Option<u64>, Error> {
+    pub fn seconds_since_last_access(&self, path: &Path) -> Result<Option<u64>> {
         let accesses = self.get_accesses(path)?;
         let last = accesses.and_then(|a| a.back().copied());
         Ok(last.map(|ts| self.get_now().saturating_sub(ts)))
     }
 
-    pub fn track_access(&self, path: &Path) -> Result<(), Error> {
+    pub fn track_access(&self, path: &Path) -> Result<()> {
         let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
 
         let key_hash = Self::path_to_hash_bytes(path)?;

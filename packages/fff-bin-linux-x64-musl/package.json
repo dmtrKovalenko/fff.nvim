@@ -1,5 +1,5 @@
 {
-  "name": "@ff-labs/fff-bun-linux-x64-musl",
+  "name": "@ff-labs/fff-bin-linux-x64-musl",
   "version": "0.0.0",
   "description": "fff native binary for Linux x64 (musl)",
   "os": ["linux"],
@@ -13,7 +13,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
-    "directory": "packages/fff-bun-linux-x64-musl"
+    "directory": "packages/fff-bin-linux-x64-musl"
   },
   "libc": ["musl"]
 }

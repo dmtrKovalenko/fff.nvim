@@ -190,7 +190,7 @@ async function main() {
       }
 
       const searchStart = Date.now();
-      const result = finder.liveGrep(query, {
+      const result = finder.grep(query, {
         mode: currentMode,
         pageLimit: 30,
         timeBudgetMs: 5000,

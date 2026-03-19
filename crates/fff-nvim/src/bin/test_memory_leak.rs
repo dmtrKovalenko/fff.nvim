@@ -1,5 +1,5 @@
-use fff_core::file_picker::{FFFMode, FilePicker};
-use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
+use fff::file_picker::{FFFMode, FilePicker};
+use fff::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::env;
 use std::io::{self, Write};
 use std::sync::{Arc, RwLock};
@@ -201,11 +201,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let search_result = FilePicker::fuzzy_search(
                     picker.get_files(),
                     &parsed,
+                    None,
                     FuzzySearchOptions {
                         max_threads,
                         current_file: None,
                         project_path: None,
-                        last_same_query_match: None,
                         combo_boost_score_multiplier: 100,
                         min_combo_count: 3,
                         pagination: PaginationArgs {

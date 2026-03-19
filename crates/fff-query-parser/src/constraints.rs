@@ -1,5 +1,3 @@
-use smallvec::SmallVec;
-
 /// Constraint types that can be extracted from a query
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint<'a> {
@@ -45,5 +43,5 @@ pub enum GitStatusFilter {
     Unmodified,
 }
 
-/// Stack-allocated buffer for text parts (up to 16 parts without heap allocation)
-pub(crate) type TextPartsBuffer<'a> = SmallVec<[&'a str; 16]>;
+/// Buffer for text parts during query parsing.
+pub(crate) type TextPartsBuffer<'a> = Vec<&'a str>;

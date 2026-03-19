@@ -98,7 +98,7 @@ fn bench_parse_various_lengths(c: &mut Criterion) {
 }
 
 fn bench_config_comparison(c: &mut Criterion) {
-    let file_picker = QueryParser::new(FilePickerConfig);
+    let file_picker = QueryParser::new(FileSearchConfig);
     let grep = QueryParser::new(GrepConfig);
 
     let query = "src name *.rs !test";

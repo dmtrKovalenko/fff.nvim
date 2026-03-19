@@ -1,5 +1,5 @@
-use fff_core::FFFQuery;
-use fff_core::FileItem;
+use fff::FFFQuery;
+use fff::FileItem;
 /// FFF vs ripgrep comparison benchmark
 ///
 /// Demonstrates why a persistent in-process search engine (fff) is fundamentally
@@ -21,7 +21,7 @@ use fff_core::FileItem;
 /// Usage:
 ///   cargo build --release --bin grep_vs_rg
 ///   ./target/release/grep_vs_rg [--path /path/to/repo] [--iters 5]
-use fff_core::grep::{GrepSearchOptions, grep_search, parse_grep_query};
+use fff::grep::{GrepSearchOptions, grep_search, parse_grep_query};
 use std::io::Read;
 use std::path::Path;
 use std::process::Command;
@@ -210,7 +210,7 @@ fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
         classify_definitions: false,
     };
     let start = Instant::now();
-    let result = grep_search(files, &parsed, &options);
+    let result = grep_search(files, &parsed, &options, &fff::ContentCacheBudget::zero());
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
@@ -230,7 +230,12 @@ fn benchmark_fff_smart_case(files: &[FileItem], parsed: &FFFQuery<'_>) -> (usize
         classify_definitions: false,
     };
     let start = Instant::now();
-    let result = grep_search(files, parsed, &options);
+    let result = grep_search(
+        files,
+        parsed,
+        &options,
+        &fff::ContentCacheBudget::unlimited(),
+    );
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
@@ -251,7 +256,12 @@ fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
         classify_definitions: false,
     };
     let start = Instant::now();
-    let result = grep_search(files, &parsed, &options);
+    let result = grep_search(
+        files,
+        &parsed,
+        &options,
+        &fff::ContentCacheBudget::unlimited(),
+    );
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
@@ -319,7 +329,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let canonical = fff_core::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
+    let canonical = fff::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
 
     let rg_version = Command::new("rg")
         .arg("--version")

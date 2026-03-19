@@ -1,10 +1,43 @@
+//! Core file picker: filesystem indexing, background watching, and fuzzy search.
+//!
+//! [`FilePicker`] is the central component of fff-search. It:
+//!
+//! 1. **Indexes** a directory tree in a background thread, collecting every
+//!    non-ignored file into a path-sorted `Vec<FileItem>`.
+//! 2. **Watches** the filesystem via the `notify` crate, applying
+//!    create/modify/delete events to the index in real time.
+//! 3. **Owns files**: Provides a values for search and provides a good entry point for
+//!    fuzzy search and live grep
+//!
+//! # Lifecycle
+//!
+//! ```text
+//!   new_with_shared_state()
+//!     │
+//!     ├─> background scan thread ──> populates SharedPicker
+//!     └─> file-system watcher    ──> live updates SharedPicker
+//!
+//!   fuzzy_search()   <── static, borrows &[FileItem]
+//!   grep()           <── static, borrows &[FileItem] (live content search)
+//!   trigger_rescan() <── synchronous re-index
+//!   cancel()         <── shuts down background work
+//! ```
+//!
+//! # Thread Safety
+//!
+//! `FilePicker` itself is **not** `Sync`!
+//! all concurrent access goes through [`SharedPicker`](crate::SharedPicker) .
+//! The background scanner and watcher acquire write locks only when mutating
+//! the file index, so read-heavy search workloads rarely contend.
+
 use crate::background_watcher::BackgroundWatcher;
 use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
-use crate::query_tracker::QueryMatchEntry;
+use crate::grep::{GrepResult, GrepSearchOptions, grep_search};
+use crate::query_tracker::QueryTracker;
 use crate::score::match_and_score_files;
-use crate::types::{FileItem, PaginationArgs, ScoringContext, SearchResult};
+use crate::types::{ContentCacheBudget, FileItem, PaginationArgs, ScoringContext, SearchResult};
 use crate::{SharedFrecency, SharedPicker};
 use fff_query_parser::FFFQuery;
 use git2::{Repository, Status, StatusOptions};
@@ -14,7 +47,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::SystemTime;
 use tracing::{Level, debug, error, info, warn};
@@ -32,31 +65,15 @@ impl FFFMode {
     }
 }
 
-/// Detect if a file is binary by checking for NUL bytes in the first 512 bytes.
-/// This is the same heuristic used by git and grep — simple, fast, and sufficient.
-#[inline]
-fn detect_binary(path: &Path, size: u64) -> bool {
-    // Empty files are not binary
-    if size == 0 {
-        return false;
-    }
-
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut reader = std::io::BufReader::with_capacity(1024, file);
-
-    let mut buf = [0u8; 512];
-    let n = reader.read(&mut buf).unwrap_or(0);
-    buf[..n].contains(&0)
-}
-
-#[derive(Debug, Clone, Copy)]
+/// Configuration for a single fuzzy search invocation.
+///
+/// Passed to [`FilePicker::fuzzy_search`] to control threading, pagination,
+/// and scoring behavior.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct FuzzySearchOptions<'a> {
     pub max_threads: usize,
     pub current_file: Option<&'a str>,
     pub project_path: Option<&'a Path>,
-    pub last_same_query_match: Option<&'a QueryMatchEntry>,
     pub combo_boost_score_multiplier: i32,
     pub min_combo_count: u32,
     pub pagination: PaginationArgs,
@@ -196,6 +213,10 @@ impl FileItem {
     }
 }
 
+/// The main file picker engine storage
+///
+/// It maintains an in memory index of all the files that are resent in the file system
+/// and borrows them to perform the search
 pub struct FilePicker {
     base_path: PathBuf,
     sync_data: FileSync,
@@ -205,6 +226,7 @@ pub struct FilePicker {
     warmup_mmap_cache: bool,
     cancelled: Arc<AtomicBool>,
     mode: FFFMode,
+    pub cache_budget: Arc<ContentCacheBudget>,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -226,12 +248,16 @@ impl FilePicker {
         &self.base_path
     }
 
-    pub fn warmup_mmap_cache(&self) -> bool {
+    pub fn need_warmup_mmap_cache(&self) -> bool {
         self.warmup_mmap_cache
     }
 
     pub fn mode(&self) -> FFFMode {
         self.mode
+    }
+
+    pub fn cache_budget(&self) -> &ContentCacheBudget {
+        &self.cache_budget
     }
 
     pub fn git_root(&self) -> Option<&Path> {
@@ -285,6 +311,7 @@ impl FilePicker {
             warmup_mmap_cache,
             cancelled: Arc::clone(&cancelled),
             mode,
+            cache_budget: Arc::new(ContentCacheBudget::default()),
         };
 
         // Place the picker into the shared handle before spawning the
@@ -310,20 +337,15 @@ impl FilePicker {
 
     /// Perform fuzzy search on files with a pre-parsed query.
     ///
-    /// The query should be parsed using `QueryParser::parse()` before calling this function.
-    /// This allows the caller to handle location parsing and other preprocessing.
+    /// The query should be parsed using [`FFFQuery`]::parse() before calling
+    /// this function. If a [`QueryTracker`] is provided, the search will
+    /// automatically look up the last selected file for this query and apply
+    /// combo-boost scoring.
     ///
-    /// # Arguments
-    /// * `files` - Slice of files to search
-    /// * `query` - The raw query string (used for max_typos calculation and debugging)
-    /// * `parsed` - Pre-parsed query result (can be None for simple single-token queries)
-    /// * `options` - Search options including pagination, threading, and scoring parameters
-    ///
-    /// # Returns
-    /// SearchResult containing matched files, scores, and location information
     pub fn fuzzy_search<'a, 'q>(
         files: &'a [FileItem],
         query: &'q FFFQuery<'q>,
+        query_tracker: Option<&QueryTracker>,
         options: FuzzySearchOptions<'q>,
     ) -> SearchResult<'a> {
         let max_threads = if options.max_threads == 0 {
@@ -333,6 +355,7 @@ impl FilePicker {
         } else {
             options.max_threads
         };
+
         debug!(
             raw_query = ?query.raw_query,
             pagination = ?options.pagination,
@@ -342,7 +365,6 @@ impl FilePicker {
         );
 
         let total_files = files.len();
-
         let location = query.location;
 
         // Get effective query for max_typos calculation (without location suffix)
@@ -354,24 +376,37 @@ impl FilePicker {
 
         // small queries with a large number of results can match absolutely everything
         let max_typos = (effective_query.len() as u16 / 4).clamp(2, 6);
+        // Look up the last file selected for this query (combo-boost scoring)
+        let last_same_query_entry =
+            query_tracker
+                .zip(options.project_path)
+                .and_then(|(tracker, project_path)| {
+                    tracker
+                        .get_last_query_entry(
+                            query.raw_query,
+                            project_path,
+                            options.min_combo_count,
+                        )
+                        .ok()
+                        .flatten()
+                });
 
         let context = ScoringContext {
             query,
-            project_path: options.project_path,
             max_typos,
             max_threads,
+            project_path: options.project_path,
             current_file: options.current_file,
-            last_same_query_match: options.last_same_query_match,
+            last_same_query_match: last_same_query_entry,
             combo_boost_score_multiplier: options.combo_boost_score_multiplier,
             min_combo_count: options.min_combo_count,
             pagination: options.pagination,
         };
 
         let time = std::time::Instant::now();
-
         let (items, scores, total_matched) = match_and_score_files(files, &context);
 
-        debug!(
+        info!(
             ?query,
             completed_in = ?time.elapsed(),
             total_matched,
@@ -389,6 +424,17 @@ impl FilePicker {
         }
     }
 
+    /// Perform a live grep search across indexed files with a pre-parsed query.
+    pub fn grep<'a>(
+        files: &'a [FileItem],
+        query: &FFFQuery<'_>,
+        options: &GrepSearchOptions,
+        budget: &ContentCacheBudget,
+    ) -> GrepResult<'a> {
+        grep_search(files, query, options, budget)
+    }
+
+    // Returns an ongoing or finisshed scan progress
     pub fn get_scan_progress(&self) -> ScanProgress {
         let scanned_count = self.scanned_files_count.load(Ordering::Relaxed);
         let is_scanning = self.is_scanning.load(Ordering::Relaxed);
@@ -555,7 +601,7 @@ impl FilePicker {
                         // mapping here because on linux and macos with the shared map opening it
                         // should be automatically available everywhere automatically which saves
                         // some time from doing extra remapping on every search
-                        file.invalidate_mmap();
+                        file.invalidate_mmap(&self.cache_budget);
                     }
                 }
 
@@ -607,7 +653,7 @@ impl FilePicker {
             .retain_files(|file| !file.path.starts_with(dir_path))
     }
 
-    /// We use this to prevent any substantial background threads from acquiring the locks
+    /// Use this to prevent any substantial background threads from acquiring the locks
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
@@ -641,12 +687,15 @@ impl FilePicker {
                 );
 
                 self.sync_data = sync;
+                // Old FileItems (and their mmaps) were dropped — reset the budget.
+                self.cache_budget.reset();
 
                 if self.warmup_mmap_cache {
                     // Warmup in background to avoid blocking
                     let files = self.sync_data.files().to_vec(); // Clone all files
+                    let budget = Arc::clone(&self.cache_budget);
                     std::thread::spawn(move || {
-                        warmup_mmaps(&files);
+                        warmup_mmaps(&files, &budget);
                     });
                 }
             }
@@ -657,6 +706,7 @@ impl FilePicker {
         Ok(())
     }
 
+    /// Quick way to check if scan is going without acquiring a lock for [Self::get_scan_progress]
     pub fn is_scan_active(&self) -> bool {
         self.is_scanning.load(Ordering::Relaxed)
     }
@@ -666,12 +716,39 @@ impl FilePicker {
     pub fn scan_signal(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.is_scanning)
     }
+
+    /// Block the current thread until the background filesystem scan finishes.
+    ///
+    /// Briefly acquires a read lock on the shared picker to obtain the scan
+    /// signal, then drops the lock and polls without holding it — so the
+    /// background thread can still write to the index.
+    ///
+    /// Returns immediately if no picker has been initialised yet.
+    pub fn wait_for_scan(shared_picker: &SharedPicker) {
+        let signal = {
+            let guard = shared_picker.read().expect("shared picker lock poisoned");
+            match guard.as_ref() {
+                Some(picker) => picker.scan_signal(),
+                None => return,
+            }
+        };
+
+        while signal.load(Ordering::Acquire) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 }
 
+/// A point-in-time snapshot of the file-scanning progress.
+///
+/// Returned by [`FilePicker::get_scan_progress`]. Useful for displaying
+/// a progress indicator while the initial scan is running.
 #[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct ScanProgress {
+    /// Number of files indexed so far.
     pub scanned_files_count: usize,
+    /// `true` while the background scan thread is still running.
     pub is_scanning: bool,
 }
 
@@ -711,6 +788,8 @@ fn spawn_scan_and_watcher(
                 let write_result = shared_picker.write().ok().map(|mut guard| {
                     if let Some(ref mut picker) = *guard {
                         picker.sync_data = sync;
+                        // Old FileItems (and their mmaps) were dropped — reset the budget.
+                        picker.cache_budget.reset();
                     }
                 });
 
@@ -724,7 +803,7 @@ fn spawn_scan_and_watcher(
                     && let Ok(guard) = shared_picker.read()
                     && let Some(ref picker) = *guard
                 {
-                    warmup_mmaps(picker.sync_data.files());
+                    warmup_mmaps(picker.sync_data.files(), &picker.cache_budget);
                 }
             }
             Err(e) => {
@@ -777,26 +856,64 @@ fn spawn_scan_and_watcher(
     });
 }
 
-/// Pre-populate mmap caches for all eligible files so the first grep search
-/// doesn't pay the mmap creation + page fault cost.
+/// Pre-populate mmap caches for the most valuable files so the first grep
+/// search doesn't pay the mmap creation + page fault cost.
 ///
-/// Each file is mmap'd and a single byte is read to trigger the page fault.
-/// This runs in parallel using rayon.
+/// All files are collected once, then an O(n) `select_nth_unstable_by`
+/// partitions the top [`MAX_CACHED_CONTENT_FILES`] highest-frecency eligible
+/// files to the front (binary / empty files are pushed to the end by the
+/// comparator). The selected prefix is warmed in parallel via rayon.
+///
+/// Files beyond the budget are still available via temporary mmaps on first
+/// grep access, so correctness is unaffected.
 #[tracing::instrument(skip(files), name = "warmup_mmaps", level = Level::DEBUG)]
-fn warmup_mmaps(files: &[FileItem]) {
-    let warmed = std::sync::atomic::AtomicUsize::new(0);
+fn warmup_mmaps(files: &[FileItem], budget: &ContentCacheBudget) {
+    let max_files = budget.max_files;
+    let max_bytes: u64 = 512 * 1024 * 1024;
 
-    files.par_iter().for_each(|file| {
-        if file.is_binary || file.size == 0 {
+    // Single collect — no pre-filter. The comparator in select_nth pushes
+    // ineligible files (binary, empty) to the tail automatically.
+    let mut all: Vec<&FileItem> = files.iter().collect();
+
+    // O(n) partial sort: top max_files eligible-by-frecency files land in
+    // all[..max_files]. Ineligible files compare as "lowest priority" so
+    // they naturally sink past the partition boundary.
+    if all.len() > max_files {
+        all.select_nth_unstable_by(max_files, |a, b| {
+            let a_ok = !a.is_binary && a.size > 0;
+            let b_ok = !b.is_binary && b.size > 0;
+            match (a_ok, b_ok) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                (false, false) => std::cmp::Ordering::Equal,
+                (true, true) => b.total_frecency_score.cmp(&a.total_frecency_score),
+            }
+        });
+    }
+
+    let to_warm = &all[..all.len().min(max_files)];
+
+    let warmed_bytes = AtomicU64::new(0);
+    let budget_exhausted = AtomicBool::new(false);
+
+    to_warm.par_iter().for_each(|file| {
+        if budget_exhausted.load(Ordering::Relaxed) {
             return;
         }
 
-        if let Some(content) = file.get_mmap() {
-            // Read the first byte to trigger the initial page fault (mmap)
-            // or ensure the content is cached (Windows buffer).
-            let _ = std::hint::black_box(content.first());
+        if file.is_binary || file.size == 0 || file.size > 5 * 1024 * 1024 {
+            return;
+        }
 
-            warmed.fetch_add(1, Ordering::Relaxed);
+        // Byte budget.
+        let prev_bytes = warmed_bytes.fetch_add(file.size, Ordering::Relaxed);
+        if prev_bytes + file.size > max_bytes {
+            budget_exhausted.store(true, Ordering::Relaxed);
+            return;
+        }
+
+        if let Some(content) = file.get_mmap(budget) {
+            let _ = std::hint::black_box(content.first());
         }
     });
 }
@@ -931,4 +1048,23 @@ fn is_git_file(path: &Path) -> bool {
             path.contains("/.git/")
         }
     })
+}
+
+/// Detect if a file is binary by checking for NUL bytes in the first 512 bytes.
+/// This is the same heuristic used by git and grep — simple, fast, and sufficient.
+#[inline]
+fn detect_binary(path: &Path, size: u64) -> bool {
+    // Empty files are not binary
+    if size == 0 {
+        return false;
+    }
+
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut reader = std::io::BufReader::with_capacity(1024, file);
+
+    let mut buf = [0u8; 512];
+    let n = reader.read(&mut buf).unwrap_or(0);
+    buf[..n].contains(&0)
 }

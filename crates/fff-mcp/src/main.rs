@@ -7,6 +7,7 @@
 //! Uses `fff-core` directly (zero FFI overhead) for all search operations.
 
 mod cursor;
+mod healthcheck;
 mod output;
 mod server;
 mod update_check;
@@ -14,9 +15,9 @@ mod update_check;
 use std::sync::{Arc, RwLock};
 
 use clap::Parser;
-use fff_core::file_picker::FilePicker;
-use fff_core::frecency::FrecencyTracker;
-use fff_core::{FFFMode, SharedFrecency, SharedPicker};
+use fff::file_picker::FilePicker;
+use fff::frecency::FrecencyTracker;
+use fff::{FFFMode, SharedFrecency, SharedPicker};
 use git2::Repository;
 use mimalloc::MiMalloc;
 use rmcp::{ServiceExt, transport::stdio};
@@ -104,7 +105,7 @@ pub const MCP_INSTRUCTIONS: &str = concat!(
 /// FFF MCP Server — high-performance file finder for AI code assistants.
 #[derive(Parser)]
 #[command(name = "fff-mcp", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("FFF_GIT_HASH"), ")"))]
-struct Args {
+pub(crate) struct Args {
     /// Base directory to index. Defaults to the current working directory.
     #[arg(value_name = "PATH")]
     base_path: Option<String>,
@@ -129,6 +130,24 @@ struct Args {
     /// Disable automatic update checks on startup.
     #[arg(long = "no-update-check")]
     no_update_check: bool,
+
+    /// Disable eager mmap warmup after the initial scan. Grep results will
+    /// still work (files are mmap'd lazily on first access), but the first
+    /// search may be slightly slower. Useful on very large repos where the
+    /// warmup would consume too many kernel resources.
+    #[arg(long = "no-warmup")]
+    no_warmup: bool,
+
+    /// Maximum number of files whose content is kept persistently in memory.
+    /// Files beyond this limit are still searchable via temporary mmaps that
+    /// are released after each grep. Defaults to 30 000.
+    /// Also settable via the FFF_MAX_CACHED_FILES environment variable.
+    #[arg(long = "max-cached-files", env = "FFF_MAX_CACHED_FILES")]
+    max_cached_files: Option<usize>,
+
+    /// Run a health check and print diagnostic information, then exit.
+    #[arg(long = "healthcheck")]
+    pub(crate) healthcheck: bool,
 }
 
 /// Resolve default paths for frecency db, history db, and log file.
@@ -197,8 +216,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
     resolve_defaults(&mut args);
 
+    if args.healthcheck {
+        return healthcheck::run_healthcheck(&args);
+    }
+
     let log_file = args.log_file.as_deref().unwrap_or("");
-    if let Err(e) = fff_core::log::init_tracing(log_file, args.log_level.as_deref()) {
+    if let Err(e) = fff::log::init_tracing(log_file, args.log_level.as_deref()) {
         eprintln!("Warning: Failed to init tracing: {}", e);
     }
 
@@ -209,10 +232,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .to_string()
     });
 
-    if Repository::discover(&base_path).is_err() {
-        tracing::error!("MCP server must be run within a Git repository");
-        return Err(format!("Not a Git repository: {}", base_path).into());
-    }
+    let base_path = match Repository::discover(&base_path) {
+        Ok(repo) => {
+            if let Some(workdir) = repo.workdir() {
+                let git_root = workdir.to_string_lossy().to_string();
+                tracing::info!("Discovered git root: {}", git_root);
+                git_root
+            } else {
+                tracing::info!("Git repository is bare, using base path: {}", base_path);
+                base_path
+            }
+        }
+        Err(_) => {
+            tracing::info!(
+                "No git repository found, indexing from base path: {}",
+                base_path
+            );
+            base_path
+        }
+    };
 
     let frecency_db_path = args.frecency_db_path.unwrap_or_default();
 
@@ -223,7 +261,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(mut guard) = shared_frecency.write() {
                 *guard = Some(tracker);
             }
-            FrecencyTracker::spawn_gc(Arc::clone(&shared_frecency), frecency_db_path, false);
+
+            let _ =
+                FrecencyTracker::spawn_gc(Arc::clone(&shared_frecency), frecency_db_path, false);
         }
         Err(e) => {
             eprintln!("Warning: Failed to init frecency db: {}", e);
@@ -233,12 +273,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize file picker (spawns background scan + watcher)
     FilePicker::new_with_shared_state(
         base_path,
-        true, // warmup_mmap_cache
+        !args.no_warmup, // warmup_mmap_cache
         FFFMode::Ai,
         Arc::clone(&shared_picker),
         Arc::clone(&shared_frecency),
     )
     .map_err(|e| format!("Failed to init file picker: {}", e))?;
+
+    // Apply user-configured cache limit after picker creation.
+    if let Some(limit) = args.max_cached_files
+        && let Ok(mut guard) = shared_picker.write()
+        && let Some(ref mut picker) = *guard
+    {
+        picker.cache_budget = std::sync::Arc::new(fff::ContentCacheBudget::new(limit));
+    }
 
     if !args.no_update_check {
         update_check::spawn_update_check();

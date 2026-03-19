@@ -1,10 +1,10 @@
 //! Error handling for fff-nvim
 //!
-//! This module provides utilities for converting fff_core errors to mlua errors.
+//! This module provides utilities for converting fff errors to mlua errors.
 
-use fff_core::Error as CoreError;
+use fff::Error as CoreError;
 
-/// Convert a fff_core::Error to mlua::Error
+/// Convert a fff::Error to mlua::Error
 ///
 /// This function is used because we can't implement From<CoreError> for mlua::Error
 /// due to Rust's orphan rules (both types are foreign to this crate).
@@ -14,7 +14,7 @@ pub fn to_lua_error(err: CoreError) -> mlua::Error {
     mlua::Error::RuntimeError(string_value)
 }
 
-/// Extension trait for Result<T, fff_core::Error> to convert to LuaResult<T>
+/// Extension trait for Result<T, fff::Error> to convert to LuaResult<T>
 pub trait IntoLuaResult<T> {
     fn into_lua_result(self) -> mlua::Result<T>;
 }

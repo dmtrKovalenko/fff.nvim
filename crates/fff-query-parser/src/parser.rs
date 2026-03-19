@@ -208,9 +208,9 @@ fn strip_leading_backslash(token: &str) -> &str {
     token
 }
 
-impl Default for QueryParser<crate::FilePickerConfig> {
+impl Default for QueryParser<crate::FileSearchConfig> {
     fn default() -> Self {
-        Self::new(crate::FilePickerConfig)
+        Self::new(crate::FileSearchConfig)
     }
 }
 
@@ -437,7 +437,7 @@ fn parse_git_status(value: &str) -> Option<Constraint<'_>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FilePickerConfig, GrepConfig};
+    use crate::{FileSearchConfig, GrepConfig};
 
     #[test]
     fn test_parse_extension() {
@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_incomplete_patterns_ignored() {
-        let config = FilePickerConfig;
+        let config = FileSearchConfig;
         // Incomplete patterns should return None and be treated as noise
         assert_eq!(parse_token("*", &config), None);
         assert_eq!(parse_token("*.", &config), None);
@@ -496,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_trailing_slash_in_query() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("www/ test");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn test_negation_text() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         // Need two tokens for parsing to return Some
         let result = parser.parse("!test foo");
         assert_eq!(result.constraints.len(), 1);
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_negation_extension() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("!*.rs foo");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_negation_path_segment() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("!/src/ foo");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn test_negation_git_status() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("!status:modified foo");
         assert_eq!(result.constraints.len(), 1);
         match &result.constraints[0] {
@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn test_backslash_escape_extension() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("\\*.rs foo");
         // \*.rs should NOT be parsed as an Extension constraint
         assert_eq!(result.constraints.len(), 0);
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn test_backslash_escape_path_segment() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("\\/src/ foo");
         assert_eq!(result.constraints.len(), 0);
         match result.fuzzy_query {
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_backslash_escape_negation() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("\\!test foo");
         assert_eq!(result.constraints.len(), 0);
     }
@@ -1039,7 +1039,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_bare_filename_constraint() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("score.rs file_picker");
         assert_eq!(result.constraints.len(), 1);
         assert!(
@@ -1052,7 +1052,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_path_prefixed_filename_constraint() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("libswscale/slice.c lum_convert");
         assert_eq!(result.constraints.len(), 1);
         assert!(
@@ -1068,7 +1068,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_single_token_filename_stays_fuzzy() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         // Single-token filename should NOT become a constraint -- it should
         // return FFFQuery with Text fuzzy query so the caller uses it for fuzzy matching.
         let result = parser.parse("score.rs");
@@ -1078,7 +1078,7 @@ mod tests {
 
     #[test]
     fn test_absolute_path_with_location_not_path_segment() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         // Absolute file path with :line should parse as text + location,
         // NOT as a PathSegment constraint (which would eat the whole token).
         let result = parser.parse("/Users/neogoose/dev/fframes/src/renderer/concatenator.rs:12");
@@ -1096,7 +1096,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_filename_with_multiple_fuzzy_parts() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("main.rs src components");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
@@ -1105,13 +1105,13 @@ mod tests {
         ));
         assert_eq!(
             result.fuzzy_query,
-            FuzzyQuery::Parts(smallvec::smallvec!["src", "components"])
+            FuzzyQuery::Parts(vec!["src", "components"])
         );
     }
 
     #[test]
     fn test_file_picker_version_number_not_filename() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("v2.0 release");
         // v2.0 extension starts with digit → not a filename constraint
         assert!(
@@ -1123,7 +1123,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_only_one_filepath_constraint() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("main.rs score.rs");
         // Only first filename becomes a constraint; second is text
         assert_eq!(result.constraints.len(), 1);
@@ -1136,7 +1136,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_filename_with_extension_constraint() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("main.rs *.lua");
         // main.rs → FilePath, *.lua → Extension
         assert_eq!(result.constraints.len(), 2);
@@ -1152,7 +1152,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_dotfile_is_filename() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse(".gitignore src");
         assert_eq!(result.constraints.len(), 1);
         assert!(
@@ -1165,7 +1165,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_no_extension_not_filename() {
-        let parser = QueryParser::new(FilePickerConfig);
+        let parser = QueryParser::new(FileSearchConfig);
         let result = parser.parse("Makefile src");
         // No dot → not a filename constraint
         assert!(

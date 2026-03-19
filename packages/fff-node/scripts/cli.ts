@@ -1,21 +1,21 @@
-#!/usr/bin/env bun
 /**
- * CLI tool for fff package management
+ * CLI tool for fff-node package management
  *
  * Usage:
- *   bunx fff download [tag]     - Download native binary from GitHub
- *   bunx fff info               - Show platform and binary info
+ *   npx @ff-labs/fff-node download [tag]  - Download native binary from GitHub
+ *   npx @ff-labs/fff-node info            - Show platform and binary info
  */
 
-import { downloadBinary, getBinaryPath, findBinary } from "../src/download";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { downloadBinary, findBinary, getBinaryPath } from "../src/binary.js";
 import {
-  getTriple,
   getLibExtension,
   getLibFilename,
   getNpmPackageName,
-} from "../src/platform";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+  getTriple,
+} from "../src/platform.js";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -24,12 +24,12 @@ interface PackageJson {
   version: string;
 }
 
-async function getPackageInfo(): Promise<PackageJson> {
+function getPackageInfo(): PackageJson {
   const currentDir = dirname(fileURLToPath(import.meta.url));
   const packageJsonPath = join(currentDir, "..", "package.json");
 
   try {
-    return await Bun.file(packageJsonPath).json();
+    return JSON.parse(readFileSync(packageJsonPath, "utf-8"));
   } catch {
     return { version: "unknown" };
   }
@@ -51,7 +51,7 @@ async function main() {
     }
 
     case "info": {
-      const pkg = await getPackageInfo();
+      const pkg = getPackageInfo();
       let npmPackage: string;
       try {
         npmPackage = getNpmPackageName();
@@ -59,7 +59,7 @@ async function main() {
         npmPackage = "unsupported";
       }
 
-      console.log("fff - Fast File Finder");
+      console.log("fff - Fast File Finder (Node.js)");
       console.log(`Package version: ${pkg.version}`);
       console.log("");
       console.log("Platform Information:");
@@ -73,9 +73,9 @@ async function main() {
       if (existing) {
         console.log(`  Found: ${existing}`);
       } else {
-        console.log(`  Not found`);
+        console.log("  Not found");
         console.log(`  Expected path: ${getBinaryPath()}`);
-        console.log(`  Try: bun add ${npmPackage}`);
+        console.log(`  Try: npm add ${npmPackage}`);
       }
       break;
     }
@@ -83,26 +83,32 @@ async function main() {
     case "version":
     case "--version":
     case "-v": {
-      const pkg = await getPackageInfo();
+      const pkg = getPackageInfo();
       console.log(pkg.version);
       break;
     }
 
     default: {
-      const pkg = await getPackageInfo();
-      console.log(`fff - Fast File Finder CLI v${pkg.version}`);
+      const pkg = getPackageInfo();
+      console.log(`fff - Fast File Finder CLI (Node.js) v${pkg.version}`);
       console.log("");
       console.log("Usage:");
       console.log(
-        "  bunx fff download [tag]    Download native binary from GitHub (fallback)",
+        "  npx @ff-labs/fff-node download [tag]  Download native binary from GitHub (fallback)",
       );
-      console.log("  bunx fff info              Show platform and binary info");
-      console.log("  bunx fff version           Show version");
-      console.log("  bunx fff help              Show this help message");
+      console.log(
+        "  npx @ff-labs/fff-node info             Show platform and binary info",
+      );
+      console.log("  npx @ff-labs/fff-node version          Show version");
+      console.log("  npx @ff-labs/fff-node help             Show this help message");
       console.log("");
       console.log("Examples:");
-      console.log("  bunx fff download          Download latest binary from GitHub");
-      console.log("  bunx fff download abc1234  Download specific release tag");
+      console.log(
+        "  npx @ff-labs/fff-node download          Download latest binary from GitHub",
+      );
+      console.log(
+        "  npx @ff-labs/fff-node download abc1234  Download specific release tag",
+      );
       console.log("");
       console.log(
         "Note: Binaries are normally provided via platform-specific npm packages.",

@@ -23,7 +23,7 @@
  * finder.waitForScan(5000);
  *
  * // Search for files
- * const search = finder.search("main.ts");
+ * const search = finder.fileSearch("main.ts");
  * if (search.ok) {
  *   for (const item of search.value.items) {
  *     console.log(item.relativePath);
@@ -37,15 +37,11 @@
  * @packageDocumentation
  */
 
-export { FileFinder } from "./finder";
-
 export {
   binaryExists,
-  downloadBinary,
-  ensureBinary,
   findBinary,
-  getBinaryPath,
 } from "./download";
+export { FileFinder } from "./finder";
 
 export {
   getLibExtension,
