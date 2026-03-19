@@ -54,6 +54,7 @@ local M = {}
 --- @field smart_case boolean
 --- @field time_budget_ms number
 --- @field modes string[]
+--- @field classify_definitions boolean
 
 --- @class FffConfig
 --- @field base_path string
@@ -332,6 +333,7 @@ local function init()
       smart_case = true, -- Case-insensitive unless query has uppercase
       time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
       modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
+      classify_definitions = false, -- Mark definition lines like fn/struct/class
     },
   }
 

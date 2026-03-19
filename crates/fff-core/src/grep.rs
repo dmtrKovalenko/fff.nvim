@@ -1150,6 +1150,12 @@ fn collect_grep_results<'a>(
         }
     }
 
+    // Prioritize definition matches by sorting them to the top.
+    // Use a stable sort to maintain relative order within each category.
+    if options.classify_definitions {
+        crate::sort_buffer::sort_by_key_with_buffer(&mut all_matches, |m| !m.is_definition);
+    }
+
     // If no file had any match, we searched the entire slice.
     if result_files.is_empty() {
         files_consumed = files_to_search_len;

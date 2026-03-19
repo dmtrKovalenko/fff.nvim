@@ -141,6 +141,7 @@ impl IntoLua for GrepResultLua<'_> {
             item.set("col", m.col)?;
             item.set("byte_offset", m.byte_offset)?;
             item.set("line_content", m.line_content.as_str())?;
+            item.set("is_definition", m.is_definition)?;
 
             // Match byte ranges within line_content
             let ranges = lua.create_table()?;
