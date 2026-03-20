@@ -1,9 +1,10 @@
 [package]
-name = "fff-core"
-version = "0.1.0"
+name = "fff-search"
+version = "0.4.2"
 edition = "2024"
-description = "High-performance file finder core library"
 license = "MIT"
+authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
+description = "Faboulous & Fast File Finder - a fast and extremely correct file finder SDK with typo resistance, SIMD, prefiltering, and more"
 
 [lib]
 path = "src/lib.rs"
@@ -18,15 +19,12 @@ ffi = []
 zlob = ["dep:zlob", "fff-query-parser/zlob"]
 
 [dependencies]
-# Workspace dependencies
 ahash = { workspace = true }
 rayon = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-
-# Local crates
-fff-query-parser = { path = "../fff-query-parser", default-features = false }
+fff-query-parser = { workspace = true  }
 
 # External dependencies
 bindet = { workspace = true }
@@ -37,7 +35,7 @@ git2 = { workspace = true }
 glidesort = { workspace = true }
 globset = { workspace = true }
 grep-matcher = { workspace = true }
-grep-searcher = { workspace = true }
+fff-grep = { workspace = true  }
 aho-corasick = "1"
 memchr = "2"
 heed = { workspace = true }

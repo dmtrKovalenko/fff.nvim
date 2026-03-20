@@ -3,10 +3,10 @@
 //! Port of `packages/fff-mcp/src/output.ts` — token-efficient formatting
 //! with definition auto-expansion, frecency/git annotations, and Read suggestions.
 
-use fff_core::GrepMatch;
-use fff_core::git::format_git_status_opt;
-use fff_core::grep::is_import_line;
-use fff_core::types::FileItem;
+use fff::GrepMatch;
+use fff::git::format_git_status_opt;
+use fff::grep::is_import_line;
+use fff::types::FileItem;
 
 use crate::cursor::CursorStore;
 

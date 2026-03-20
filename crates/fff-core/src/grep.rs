@@ -7,12 +7,12 @@
 
 use crate::constraints::apply_constraints;
 use crate::sort_buffer::sort_with_buffer;
-use crate::types::FileItem;
+use crate::types::{ContentCacheBudget, FileItem};
 use aho_corasick::AhoCorasick;
+use fff_grep::lines::{self, LineStep};
+use fff_grep::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use fff_query_parser::{Constraint, FFFQuery, GrepConfig, QueryParser};
 use grep_matcher::{Match, Matcher, NoCaptures, NoError};
-use grep_searcher::lines::{self, LineStep};
-use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -721,7 +721,7 @@ impl Sink for PlainTextSink<'_> {
         Ok(true)
     }
 
-    fn finish(&mut self, _: &Searcher, _: &grep_searcher::SinkFinish) -> Result<(), Self::Error> {
+    fn finish(&mut self, _: &Searcher, _: &fff_grep::SinkFinish) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -779,7 +779,7 @@ impl Sink for RegexSink<'_> {
         Ok(true)
     }
 
-    fn finish(&mut self, _: &Searcher, _: &grep_searcher::SinkFinish) -> Result<(), Self::Error> {
+    fn finish(&mut self, _: &Searcher, _: &fff_grep::SinkFinish) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -862,7 +862,7 @@ impl Sink for AhoCorasickSink<'_> {
         Ok(true)
     }
 
-    fn finish(&mut self, _: &Searcher, _: &grep_searcher::SinkFinish) -> Result<(), Self::Error> {
+    fn finish(&mut self, _: &Searcher, _: &fff_grep::SinkFinish) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -879,6 +879,7 @@ pub fn multi_grep_search<'a>(
     patterns: &[&str],
     constraints: &[fff_query_parser::Constraint<'_>],
     options: &GrepSearchOptions,
+    budget: &ContentCacheBudget,
 ) -> GrepResult<'a> {
     let total_files = files.len();
 
@@ -937,6 +938,7 @@ pub fn multi_grep_search<'a>(
         total_files,
         filtered_file_count,
         None,
+        budget,
         |file_bytes: &[u8], max_matches: usize| {
             let state = SinkState {
                 file_index: 0,
@@ -1049,6 +1051,7 @@ fn run_file_search<'a, F>(
     total_files: usize,
     filtered_file_count: usize,
     regex_fallback_error: Option<String>,
+    budget: &ContentCacheBudget,
     search_file: F,
 ) -> GrepResult<'a>
 where
@@ -1079,8 +1082,8 @@ where
                 return None;
             }
 
-            let content = file.get_mmap()?;
-            let file_matches = search_file(content, options.max_matches_per_file);
+            let content = file.get_content_for_search(budget)?;
+            let file_matches = search_file(&content, options.max_matches_per_file);
 
             if file_matches.is_empty() {
                 return None;
@@ -1267,6 +1270,7 @@ fn fuzzy_grep_search<'a>(
     total_files: usize,
     filtered_file_count: usize,
     case_insensitive: bool,
+    budget: &ContentCacheBudget,
 ) -> GrepResult<'a> {
     // max_typos controls how many *needle* characters can be unmatched.
     // A transposition (e.g. "shcema" → "schema") costs ~1 typo with
@@ -1370,7 +1374,8 @@ fn fuzzy_grep_search<'a>(
                     return None;
                 }
 
-                let file_bytes = file.get_mmap()?;
+                let file_content = file.get_content_for_search(budget)?;
+                let file_bytes: &[u8] = &file_content;
 
                 // File-level prefilter: check if enough distinct needle chars
                 // exist anywhere in the file bytes.  Uses memchr for speed.
@@ -1564,6 +1569,7 @@ pub fn grep_search<'a>(
     files: &'a [FileItem],
     query: &FFFQuery<'_>,
     options: &GrepSearchOptions,
+    budget: &ContentCacheBudget,
 ) -> GrepResult<'a> {
     let total_files = files.len();
 
@@ -1646,6 +1652,7 @@ pub fn grep_search<'a>(
                 total_files,
                 filtered_file_count,
                 case_insensitive,
+                budget,
             );
         }
         GrepMode::Regex => build_regex(&grep_text, options.smart_case)
@@ -1697,6 +1704,7 @@ pub fn grep_search<'a>(
         total_files,
         filtered_file_count,
         regex_fallback_error,
+        budget,
         |file_bytes: &[u8], max_matches: usize| {
             let state = SinkState {
                 file_index: 0, // set by run_file_search
@@ -1944,6 +1952,7 @@ mod tests {
             &["GrepMode", "GrepMatch", "PlainTextMatcher"],
             &[],
             &options,
+            &ContentCacheBudget::zero(),
         );
 
         // Should find matches from file1 (GrepMode, GrepMatch) and file2 (PlainTextMatcher)
@@ -1975,7 +1984,13 @@ mod tests {
         assert_eq!(result.files.len(), 2, "Should match exactly 2 files");
 
         // Test with single pattern
-        let result2 = super::multi_grep_search(&files, &["PlainTextMatcher"], &[], &options);
+        let result2 = super::multi_grep_search(
+            &files,
+            &["PlainTextMatcher"],
+            &[],
+            &options,
+            &ContentCacheBudget::unlimited(),
+        );
         assert_eq!(
             result2.matches.len(),
             1,
@@ -1983,7 +1998,8 @@ mod tests {
         );
 
         // Test with empty patterns
-        let result3 = super::multi_grep_search(&files, &[], &[], &options);
+        let result3 =
+            super::multi_grep_search(&files, &[], &[], &options, &ContentCacheBudget::unlimited());
         assert_eq!(
             result3.matches.len(),
             0,

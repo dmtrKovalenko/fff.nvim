@@ -90,6 +90,27 @@ jobs:
         shell: bash
         run: make test-lua
 
+      - name: Run version resolution tests
+        shell: bash
+        run: make test-version
+
       - name: Run bun tests
         shell: bash
+        if: ${{ matrix.os == 'macos-latest' }}
         run: make test-bun
+
+      - name: Install Node.js
+        if: ${{ matrix.os != 'ubuntu-latest' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install node deps
+        if: ${{ matrix.os != 'ubuntu-latest' }}
+        shell: bash
+        run: npm install
+
+      - name: Run node tests
+        if: ${{ matrix.os != 'ubuntu-latest' }}
+        shell: bash
+        run: make test-node

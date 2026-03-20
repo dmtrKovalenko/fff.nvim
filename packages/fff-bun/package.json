@@ -13,19 +13,14 @@
     }
   },
   "bin": {
-    "fff": "./scripts/cli.ts",
     "fff-demo": "./examples/search.ts",
     "fff-grep": "./examples/grep.ts"
   },
   "files": [
     "src",
-    "bin",
-    "scripts",
     "examples"
   ],
   "scripts": {
-    "postinstall": "bun ./scripts/postinstall.ts",
-    "download": "bun ./scripts/cli.ts download",
     "test": "bun test src/",
     "typecheck": "tsc --noEmit",
     "demo": "bun ./examples/search.ts"
@@ -67,14 +62,14 @@
   },
   "homepage": "https://github.com/dmtrKovalenko/fff.nvim#readme",
   "optionalDependencies": {
-    "@ff-labs/fff-bun-darwin-arm64": "0.0.0",
-    "@ff-labs/fff-bun-darwin-x64": "0.0.0",
-    "@ff-labs/fff-bun-linux-x64-gnu": "0.0.0",
-    "@ff-labs/fff-bun-linux-arm64-gnu": "0.0.0",
-    "@ff-labs/fff-bun-linux-x64-musl": "0.0.0",
-    "@ff-labs/fff-bun-linux-arm64-musl": "0.0.0",
-    "@ff-labs/fff-bun-win32-x64": "0.0.0",
-    "@ff-labs/fff-bun-win32-arm64": "0.0.0"
+    "@ff-labs/fff-bin-darwin-arm64": "0.0.0",
+    "@ff-labs/fff-bin-darwin-x64": "0.0.0",
+    "@ff-labs/fff-bin-linux-x64-gnu": "0.0.0",
+    "@ff-labs/fff-bin-linux-arm64-gnu": "0.0.0",
+    "@ff-labs/fff-bin-linux-x64-musl": "0.0.0",
+    "@ff-labs/fff-bin-linux-arm64-musl": "0.0.0",
+    "@ff-labs/fff-bin-win32-x64": "0.0.0",
+    "@ff-labs/fff-bin-win32-arm64": "0.0.0"
   },
   "devDependencies": {
     "@types/bun": "^1.3.8",

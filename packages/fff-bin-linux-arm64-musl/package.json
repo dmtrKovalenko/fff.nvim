@@ -1,9 +1,9 @@
 {
-  "name": "@ff-labs/fff-bun-linux-x64-gnu",
+  "name": "@ff-labs/fff-bin-linux-arm64-musl",
   "version": "0.0.0",
-  "description": "fff native binary for Linux x64 (glibc)",
+  "description": "fff native binary for Linux ARM64 (musl)",
   "os": ["linux"],
-  "cpu": ["x64"],
+  "cpu": ["arm64"],
   "main": "libfff_c.so",
   "files": ["libfff_c.so"],
   "publishConfig": {
@@ -13,7 +13,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
-    "directory": "packages/fff-bun-linux-x64-gnu"
+    "directory": "packages/fff-bin-linux-arm64-musl"
   },
-  "libc": ["glibc"]
+  "libc": ["musl"]
 }

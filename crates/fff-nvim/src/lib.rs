@@ -1,12 +1,12 @@
 use crate::path_shortening::shorten_path_with_cache;
 use error::{IntoCoreError, IntoLuaResult};
-use fff_core::file_picker::FilePicker;
-use fff_core::frecency::FrecencyTracker;
-use fff_core::path_utils::expand_tilde;
-use fff_core::query_tracker::QueryTracker;
-use fff_core::{
-    DbHealthChecker, Error, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, Score,
-    SearchResult, SharedFrecency, SharedPicker, SharedQueryTracker,
+use fff::file_picker::FilePicker;
+use fff::frecency::FrecencyTracker;
+use fff::path_utils::expand_tilde;
+use fff::query_tracker::QueryTracker;
+use fff::{
+    DbHealthChecker, Error, FFFMode, FileSearchConfig, FuzzySearchOptions, PaginationArgs,
+    QueryParser, Score, SearchResult, SharedFrecency, SharedPicker, SharedQueryTracker,
 };
 use mimalloc::MiMalloc;
 use mlua::prelude::*;
@@ -48,7 +48,7 @@ pub fn init_db(
     drop(frecency);
 
     // Spawn background GC to purge stale entries without blocking startup
-    FrecencyTracker::spawn_gc(Arc::clone(&FRECENCY), frecency_db_path, use_unsafe_no_lock);
+    let _ = FrecencyTracker::spawn_gc(Arc::clone(&FRECENCY), frecency_db_path, use_unsafe_no_lock);
 
     let mut query_tracker = QUERY_TRACKER
         .write()
@@ -58,10 +58,10 @@ pub fn init_db(
         *query_tracker = None;
     }
 
-    let tracker = QueryTracker::new(&history_db_path, use_unsafe_no_lock).into_lua_result()?;
-    *query_tracker = Some(tracker);
-    tracing::info!("Query tracker database initialized at {}", history_db_path);
+    *query_tracker =
+        Some(QueryTracker::new(&history_db_path, use_unsafe_no_lock).into_lua_result()?);
 
+    tracing::info!("Query tracker database initialized at {}", history_db_path);
     Ok(true)
 }
 
@@ -145,7 +145,7 @@ pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<()> {
         )));
     }
 
-    let canonical_path = fff_core::path_utils::canonicalize(&path).map_err(|e| {
+    let canonical_path = fff::path_utils::canonicalize(&path).map_err(|e| {
         LuaError::RuntimeError(format!("Failed to canonicalize path '{}': {}", new_path, e))
     })?;
 
@@ -218,26 +218,16 @@ pub fn fuzzy_search_files(
     let base_path = picker.base_path();
     let min_combo_count = min_combo_count.unwrap_or(3);
 
-    let last_same_query_entry = {
-        let query_tracker = QUERY_TRACKER
-            .read()
-            .with_lock_error(Error::AcquireFrecencyLock)
-            .into_lua_result()?;
+    let query_tracker_guard = QUERY_TRACKER
+        .read()
+        .with_lock_error(Error::AcquireFrecencyLock)
+        .into_lua_result()?;
 
-        if query_tracker.as_ref().is_none() {
-            tracing::warn!("Query tracker not initialized");
-        }
-
-        query_tracker
-            .as_ref()
-            .map(|tracker| tracker.get_last_query_entry(&query, base_path, min_combo_count))
-            .transpose()
-            .into_lua_result()?
-            .flatten()
-    };
+    if query_tracker_guard.as_ref().is_none() {
+        tracing::warn!("Query tracker not initialized");
+    }
 
     tracing::debug!(
-        ?last_same_query_entry,
         ?base_path,
         ?query,
         ?min_combo_count,
@@ -246,19 +236,18 @@ pub fn fuzzy_search_files(
         "Fuzzy search parameters"
     );
 
-    // Parse the query once at the API boundary
-    let parser = QueryParser::default();
+    let parser = QueryParser::new(FileSearchConfig);
     let parsed = parser.parse(&query);
 
     let files = picker.get_files();
     let results = FilePicker::fuzzy_search(
         files,
         &parsed,
+        query_tracker_guard.as_ref(),
         FuzzySearchOptions {
             max_threads,
             current_file: current_file.as_deref(),
             project_path: Some(picker.base_path()),
-            last_same_query_match: last_same_query_entry.as_ref(),
             combo_boost_score_multiplier,
             min_combo_count,
             pagination: PaginationArgs {
@@ -332,15 +321,15 @@ pub fn live_grep(
         return Err(error::to_lua_error(Error::FilePickerMissing));
     };
 
-    let parsed = fff_core::grep::parse_grep_query(&query);
+    let parsed = fff::grep::parse_grep_query(&query);
 
     let mode = match grep_mode.as_deref() {
-        Some("regex") => fff_core::GrepMode::Regex,
-        Some("fuzzy") => fff_core::GrepMode::Fuzzy,
-        _ => fff_core::GrepMode::PlainText, // "plain" or nil or unknown
+        Some("regex") => fff::GrepMode::Regex,
+        Some("fuzzy") => fff::GrepMode::Fuzzy,
+        _ => fff::GrepMode::PlainText, // "plain" or nil or unknown
     };
 
-    let options = fff_core::GrepSearchOptions {
+    let options = fff::GrepSearchOptions {
         max_file_size: max_file_size.unwrap_or(10 * 1024 * 1024),
         max_matches_per_file: max_matches_per_file.unwrap_or(200),
         smart_case: smart_case.unwrap_or(true),
@@ -353,7 +342,8 @@ pub fn live_grep(
         classify_definitions: classify_definitions.unwrap_or(false),
     };
 
-    let result = fff_core::grep::grep_search(picker.get_files(), &parsed, &options);
+    let result =
+        fff::grep::grep_search(picker.get_files(), &parsed, &options, picker.cache_budget());
 
     lua_types::GrepResultLua::from(result).into_lua(lua)
 }
@@ -563,7 +553,7 @@ pub fn track_query_completion(_: &Lua, (query, file_path): (String, String)) -> 
     };
 
     // Canonicalize the file path before spawning thread
-    let file_path = match fff_core::path_utils::canonicalize(&file_path) {
+    let file_path = match fff::path_utils::canonicalize(&file_path) {
         Ok(path) => path,
         Err(e) => {
             tracing::warn!(?file_path, error = ?e, "Failed to canonicalize file path for tracking");
