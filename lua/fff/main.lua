@@ -36,7 +36,6 @@ function M.live_grep(opts)
     mode = 'grep',
     renderer = grep_renderer,
     grep_config = grep_config,
-    query = '',
   }, opts or {})
 
   picker_ui.open(picker_opts)
