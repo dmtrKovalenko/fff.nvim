@@ -12,6 +12,32 @@ use smallvec::SmallVec;
 
 use crate::git::is_modified_status;
 
+/// Case-insensitive ASCII substring search without allocation.
+/// `needle` must already be lowercase.
+#[inline]
+fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.len() > h.len() {
+        return false;
+    }
+    if n.is_empty() {
+        return true;
+    }
+    let first = n[0];
+    for i in 0..=(h.len() - n.len()) {
+        if h[i].to_ascii_lowercase() == first
+            && h[i..i + n.len()]
+                .iter()
+                .zip(n)
+                .all(|(a, b)| a.to_ascii_lowercase() == *b)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Minimum item count before switching to parallel iteration with rayon.
 /// Below this threshold, the overhead of thread pool dispatch outweighs the benefit.
 const PAR_THRESHOLD: usize = 10_000;
@@ -21,9 +47,6 @@ const PAR_THRESHOLD: usize = 10_000;
 pub trait Constrainable {
     /// The file's relative path (e.g. "src/main.rs")
     fn relative_path(&self) -> &str;
-
-    /// The file's lowercased relative path for case-insensitive matching
-    fn relative_path_lower(&self) -> &str;
 
     /// The file name component (e.g. "main.rs")
     fn file_name(&self) -> &str;
@@ -152,7 +175,7 @@ fn item_matches_constraint_at_index<T: Constrainable>(
         }
 
         // only works with negation
-        Constraint::Text(text) => item.relative_path_lower().contains(text),
+        Constraint::Text(text) => contains_ascii_ci(item.relative_path(), text),
 
         // Parts and Exclude are handled at a higher level
         Constraint::Parts(_) | Constraint::Exclude(_) | Constraint::FileType(_) => true,

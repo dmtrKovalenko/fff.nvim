@@ -44,7 +44,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff = { package = "fff-search", path = "../fff-core" , version = "0.4.0" }
+fff = { package = "fff-search", path = "../fff-core" , version = "0.4.0", features = ["mimalloc-collect"] }
 fff-query-parser = { path = "../fff-query-parser" , version = "0.4.2" }
 
 # External dependencies

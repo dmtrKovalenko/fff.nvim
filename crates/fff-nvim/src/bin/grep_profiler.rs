@@ -11,6 +11,7 @@ use fff::FileItem;
 ///   cargo build --release --bin grep_profiler
 ///   ./target/release/grep_profiler [--path /path/to/repo]
 use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
+use fff::types::{BigramFilter, BigramIndexBuilder, ContentCacheBudget};
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -115,6 +116,7 @@ impl BenchStats {
 struct GrepBench<'a> {
     files: &'a [FileItem],
     options: GrepSearchOptions,
+    bigram_index: Option<&'a BigramFilter>,
 }
 
 impl<'a> GrepBench<'a> {
@@ -125,6 +127,7 @@ impl<'a> GrepBench<'a> {
     fn with_mode(files: &'a [FileItem], mode: GrepMode) -> Self {
         Self {
             files,
+            bigram_index: None,
             options: GrepSearchOptions {
                 max_file_size: 10 * 1024 * 1024,
                 max_matches_per_file: 200,
@@ -140,6 +143,11 @@ impl<'a> GrepBench<'a> {
         }
     }
 
+    fn with_bigram(mut self, index: &'a BigramFilter) -> Self {
+        self.bigram_index = Some(index);
+        self
+    }
+
     /// Run a single grep search, return (duration, match_count, files_searched)
     fn run_once(&self, query: &str) -> (Duration, usize, usize) {
         let parsed = parse_grep_query(query);
@@ -148,7 +156,9 @@ impl<'a> GrepBench<'a> {
             self.files,
             &parsed,
             &self.options,
-            &fff::ContentCacheBudget::default(),
+            &ContentCacheBudget::default(),
+            self.bigram_index,
+            None,
         );
         let elapsed = start.elapsed();
         (elapsed, result.matches.len(), result.total_files_searched)
@@ -169,6 +179,23 @@ impl<'a> GrepBench<'a> {
 
         (stats, last_matches, last_files_searched)
     }
+}
+
+fn build_bigram_index(files: &[FileItem]) -> BigramFilter {
+    use rayon::prelude::*;
+
+    let builder = BigramIndexBuilder::new(files.len());
+    let budget = ContentCacheBudget::default();
+
+    files.par_iter().enumerate().for_each(|(idx, file)| {
+        if !file.is_binary
+            && let Some(content) = file.get_content_for_search(&budget)
+        {
+            builder.add_file_content(idx, &content);
+        }
+    });
+
+    builder.compress()
 }
 
 fn fmt_dur(d: Duration) -> String {
@@ -303,6 +330,27 @@ fn main() {
     for (name, query, iters) in &warm_queries {
         let (stats, matches, files_searched) = bench.bench_query(query, *iters);
         print_row(name, &stats, matches, files_searched, *iters);
+    }
+
+    // ── Bigram-accelerated benchmarks ───────────────────────────────────
+    eprintln!("\n[3b/7] Building bigram index...");
+    let bigram_start = Instant::now();
+    let bigram_index = build_bigram_index(&files);
+    eprintln!(
+        "  Built in {:.2}s ({} columns, {:.1} MB)\n",
+        bigram_start.elapsed().as_secs_f64(),
+        bigram_index.file_count(),
+        bigram_index.heap_bytes() as f64 / (1024.0 * 1024.0),
+    );
+
+    eprintln!("[3c/7] Bigram-accelerated warm benchmarks (same queries, with bigram prefilter)");
+    print_header();
+
+    let bigram_bench = GrepBench::new(&files).with_bigram(&bigram_index);
+    for (name, query, iters) in &warm_queries {
+        let bigram_name = format!("bg_{}", name.strip_prefix("warm_").unwrap_or(name));
+        let (stats, matches, files_searched) = bigram_bench.bench_query(query, *iters);
+        print_row(&bigram_name, &stats, matches, files_searched, *iters);
     }
 
     // ── Fuzzy grep benchmarks ─────────────────────────────────────────────
@@ -462,6 +510,8 @@ fn main() {
             &parsed,
             &opts,
             &fff::ContentCacheBudget::unlimited(),
+            None,
+            None,
         );
         let elapsed = start.elapsed();
         eprintln!(
@@ -483,7 +533,10 @@ fn main() {
     eprintln!("\n=== Summary ===");
     let mmap_count = files
         .iter()
-        .filter(|f| f.get_mmap(&fff::ContentCacheBudget::unlimited()).is_some())
+        .filter(|f| {
+            f.get_content_for_search(&fff::ContentCacheBudget::unlimited())
+                .is_some()
+        })
         .count();
     eprintln!("  Files with cached mmap: {}", mmap_count);
     eprintln!("  Total indexed files: {}", files.len());

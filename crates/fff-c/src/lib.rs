@@ -403,8 +403,14 @@ pub unsafe extern "C" fn fff_live_grep(
         classify_definitions,
     };
 
-    let result =
-        fff::grep::grep_search(picker.get_files(), &parsed, &options, picker.cache_budget());
+    let result = fff::grep::grep_search(
+        picker.get_files(),
+        &parsed,
+        &options,
+        picker.cache_budget(),
+        None,
+        None,
+    );
     let grep_result = FffGrepResult::from_core(&result);
     FffResult::ok_handle(grep_result as *mut c_void)
 }
