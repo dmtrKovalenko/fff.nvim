@@ -14,6 +14,9 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 default = []
 # Enable C FFI exports
 ffi = []
+# Call mi_collect(true) after large allocator churn (bigram build).
+# Requires mimalloc to be the global allocator (linked by fff-nvim).
+mimalloc-collect = ["dep:libmimalloc-sys"]
 # Use zlob (Zig-compiled C globbing library) for glob matching.
 # Requires Zig to be installed. When disabled, falls back to globset (pure Rust).
 zlob = ["dep:zlob", "fff-query-parser/zlob"]
@@ -55,6 +58,7 @@ toml = "0.8"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zlob = { workspace = true, optional = true }
+libmimalloc-sys = { version = "0.1", optional = true, features = ["extended"] }
 # Platform-specific: dunce for Windows to avoid \\?\ extended path prefix
 [target.'cfg(windows)'.dependencies]
 dunce = { workspace = true }
@@ -63,3 +67,11 @@ dunce = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = { version = "0.8", features = ["small_rng"] }
 tempfile = "3.8"
+
+[[bench]]
+name = "parse_bench"
+harness = false
+
+[[bench]]
+name = "bigram_bench"
+harness = false

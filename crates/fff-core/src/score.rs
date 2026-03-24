@@ -223,7 +223,7 @@ pub fn match_and_score_files<'a>(
             let file = working_files.index(file_idx);
 
             let mut base_score = path_match.score as i32;
-            let frecency_boost = base_score.saturating_mul(file.total_frecency_score as i32) / 100;
+            let frecency_boost = base_score.saturating_mul(file.total_frecency_score) / 100;
 
             // Give modified/dirty files a 15% boost to make them appear higher in results
             let git_status_boost = if file.git_status.is_some_and(is_modified_status) {
@@ -366,8 +366,8 @@ pub(crate) fn score_filtered_by_frecency<'a>(
     context: &ScoringContext,
 ) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
     let score_file = |file: &'a FileItem| {
-        let total_frecency_score = file.access_frecency_score as i32
-            + (file.modification_frecency_score as i32).saturating_mul(4);
+        let total_frecency_score =
+            file.access_frecency_score + file.modification_frecency_score.saturating_mul(4);
 
         // Give modified/dirty files a boost even in frecency-only mode
         let git_status_boost = if file.git_status.is_some_and(is_modified_status) {

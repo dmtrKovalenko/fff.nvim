@@ -45,7 +45,15 @@ import {
   wrapPointer,
 } from "ffi-rs";
 import { findBinary } from "./binary.js";
-import type { FileItem, GrepMatch, GrepResult, Location, Result, Score, SearchResult } from "./types.js";
+import type {
+  FileItem,
+  GrepMatch,
+  GrepResult,
+  Location,
+  Result,
+  Score,
+  SearchResult,
+} from "./types.js";
 import { createGrepCursor, err } from "./types.js";
 
 const LIBRARY_KEY = "fff_c";
@@ -216,7 +224,11 @@ function readResultEnvelope(
 }
 
 /** Call a function returning FffResult with void payload. */
-function callVoidResult(funcName: string, paramsType: DataType[], paramsValue: unknown[]): Result<void> {
+function callVoidResult(
+  funcName: string,
+  paramsType: DataType[],
+  paramsValue: unknown[],
+): Result<void> {
   const res = readResultEnvelope(funcName, paramsType, paramsValue);
   if ("ok" in res) return res;
   freeResult(res.rawPtr);
@@ -224,7 +236,11 @@ function callVoidResult(funcName: string, paramsType: DataType[], paramsValue: u
 }
 
 /** Call a function returning FffResult with int_value payload. */
-function callIntResult(funcName: string, paramsType: DataType[], paramsValue: unknown[]): Result<number> {
+function callIntResult(
+  funcName: string,
+  paramsType: DataType[],
+  paramsValue: unknown[],
+): Result<number> {
   const res = readResultEnvelope(funcName, paramsType, paramsValue);
   if ("ok" in res) return res;
   const value = Number(res.struct.int_value);
@@ -233,7 +249,11 @@ function callIntResult(funcName: string, paramsType: DataType[], paramsValue: un
 }
 
 /** Call a function returning FffResult with bool in int_value. */
-function callBoolResult(funcName: string, paramsType: DataType[], paramsValue: unknown[]): Result<boolean> {
+function callBoolResult(
+  funcName: string,
+  paramsType: DataType[],
+  paramsValue: unknown[],
+): Result<boolean> {
   const res = readResultEnvelope(funcName, paramsType, paramsValue);
   if ("ok" in res) return res;
   const value = Number(res.struct.int_value) !== 0;
@@ -242,7 +262,11 @@ function callBoolResult(funcName: string, paramsType: DataType[], paramsValue: u
 }
 
 /** Call a function returning FffResult with a C string in handle. */
-function callStringResult(funcName: string, paramsType: DataType[], paramsValue: unknown[]): Result<string | null> {
+function callStringResult(
+  funcName: string,
+  paramsType: DataType[],
+  paramsValue: unknown[],
+): Result<string | null> {
   const res = readResultEnvelope(funcName, paramsType, paramsValue);
   if ("ok" in res) return res;
   const handlePtr = res.struct.handle;
@@ -254,7 +278,11 @@ function callStringResult(funcName: string, paramsType: DataType[], paramsValue:
 }
 
 /** Call a function returning FffResult with a JSON string in handle. */
-function callJsonResult<T>(funcName: string, paramsType: DataType[], paramsValue: unknown[]): Result<T> {
+function callJsonResult<T>(
+  funcName: string,
+  paramsType: DataType[],
+  paramsValue: unknown[],
+): Result<T> {
   const res = readResultEnvelope(funcName, paramsType, paramsValue);
   if ("ok" in res) return res;
   const handlePtr = res.struct.handle;
@@ -306,9 +334,9 @@ export function ffiCreate(
   const { rawPtr, struct: structData } = callRaw(
     "fff_create_instance",
     [
-      DataType.String,  // base_path
-      DataType.String,  // frecency_db_path
-      DataType.String,  // history_db_path
+      DataType.String, // base_path
+      DataType.String, // frecency_db_path
+      DataType.String, // history_db_path
       DataType.Boolean, // use_unsafe_no_lock
       DataType.Boolean, // warmup_mmap_cache
       DataType.Boolean, // ai_mode
@@ -522,30 +550,30 @@ interface FffMatchRangeRaw {
 
 function readFileItemFromRaw(raw: FffFileItemRaw): FileItem {
   return {
-    path:                      readCString(raw.path) ?? "",
-    relativePath:              readCString(raw.relative_path) ?? "",
-    fileName:                  readCString(raw.file_name) ?? "",
-    gitStatus:                 readCString(raw.git_status) ?? "",
-    size:                      Number(raw.size),
-    modified:                  Number(raw.modified),
-    accessFrecencyScore:       Number(raw.access_frecency_score),
+    path: readCString(raw.path) ?? "",
+    relativePath: readCString(raw.relative_path) ?? "",
+    fileName: readCString(raw.file_name) ?? "",
+    gitStatus: readCString(raw.git_status) ?? "",
+    size: Number(raw.size),
+    modified: Number(raw.modified),
+    accessFrecencyScore: Number(raw.access_frecency_score),
     modificationFrecencyScore: Number(raw.modification_frecency_score),
-    totalFrecencyScore:        Number(raw.total_frecency_score),
+    totalFrecencyScore: Number(raw.total_frecency_score),
   };
 }
 
 function readScoreFromRaw(raw: FffScoreRaw): Score {
   return {
-    total:               raw.total,
-    baseScore:           raw.base_score,
-    filenameBonus:       raw.filename_bonus,
-    specialFilenameBonus:raw.special_filename_bonus,
-    frecencyBoost:       raw.frecency_boost,
-    distancePenalty:     raw.distance_penalty,
-    currentFilePenalty:  raw.current_file_penalty,
-    comboMatchBoost:     raw.combo_match_boost,
-    exactMatch:          raw.exact_match !== 0,
-    matchType:           readCString(raw.match_type) ?? "",
+    total: raw.total,
+    baseScore: raw.base_score,
+    filenameBonus: raw.filename_bonus,
+    specialFilenameBonus: raw.special_filename_bonus,
+    frecencyBoost: raw.frecency_boost,
+    distancePenalty: raw.distance_penalty,
+    currentFilePenalty: raw.current_file_penalty,
+    comboMatchBoost: raw.combo_match_boost,
+    exactMatch: raw.exact_match !== 0,
+    matchType: readCString(raw.match_type) ?? "",
   };
 }
 
@@ -619,20 +647,20 @@ function readGrepMatchFromRaw(raw: FffGrepMatchRaw): GrepMatch {
   }
 
   const match: GrepMatch = {
-    path:                      readCString(raw.path) ?? "",
-    relativePath:              readCString(raw.relative_path) ?? "",
-    fileName:                  readCString(raw.file_name) ?? "",
-    gitStatus:                 readCString(raw.git_status) ?? "",
-    lineContent:               readCString(raw.line_content) ?? "",
-    size:                      Number(raw.size),
-    modified:                  Number(raw.modified),
-    totalFrecencyScore:        Number(raw.total_frecency_score),
-    accessFrecencyScore:       Number(raw.access_frecency_score),
+    path: readCString(raw.path) ?? "",
+    relativePath: readCString(raw.relative_path) ?? "",
+    fileName: readCString(raw.file_name) ?? "",
+    gitStatus: readCString(raw.git_status) ?? "",
+    lineContent: readCString(raw.line_content) ?? "",
+    size: Number(raw.size),
+    modified: Number(raw.modified),
+    totalFrecencyScore: Number(raw.total_frecency_score),
+    accessFrecencyScore: Number(raw.access_frecency_score),
     modificationFrecencyScore: Number(raw.modification_frecency_score),
-    isBinary:                  raw.is_binary !== 0,
-    lineNumber:                Number(raw.line_number),
-    col:                       raw.col,
-    byteOffset:                Number(raw.byte_offset),
+    isBinary: raw.is_binary !== 0,
+    lineNumber: Number(raw.line_number),
+    col: raw.col,
+    byteOffset: Number(raw.byte_offset),
     matchRanges,
   };
 
@@ -686,7 +714,10 @@ function parseGrepResult(rawPtr: JsExternal): Result<GrepResult> {
   const items: GrepMatch[] = [];
   for (let i = 0; i < count; i++) {
     const rawMatch = callAccessor<FffGrepMatchRaw>(
-      "fff_grep_result_get_match", handlePtr, i, FFF_GREP_MATCH_STRUCT,
+      "fff_grep_result_get_match",
+      handlePtr,
+      i,
+      FFF_GREP_MATCH_STRUCT,
     );
     items.push(readGrepMatchFromRaw(rawMatch));
   }
@@ -770,12 +801,18 @@ function parseSearchResult(rawPtr: JsExternal): Result<SearchResult> {
 
   for (let i = 0; i < count; i++) {
     const rawItem = callAccessor<FffFileItemRaw>(
-      "fff_search_result_get_item", handlePtr, i, FFF_FILE_ITEM_STRUCT,
+      "fff_search_result_get_item",
+      handlePtr,
+      i,
+      FFF_FILE_ITEM_STRUCT,
     );
     items.push(readFileItemFromRaw(rawItem));
 
     const rawScore = callAccessor<FffScoreRaw>(
-      "fff_search_result_get_score", handlePtr, i, FFF_SCORE_STRUCT,
+      "fff_search_result_get_score",
+      handlePtr,
+      i,
+      FFF_SCORE_STRUCT,
     );
     scores.push(readScoreFromRaw(rawScore));
   }
@@ -789,7 +826,12 @@ function parseSearchResult(rawPtr: JsExternal): Result<SearchResult> {
     paramsValue: [handlePtr],
   });
 
-  const result: SearchResult = { items, scores, totalMatched: sr.total_matched, totalFiles: sr.total_files };
+  const result: SearchResult = {
+    items,
+    scores,
+    totalMatched: sr.total_matched,
+    totalFiles: sr.total_files,
+  };
   if (location) {
     result.location = location;
   }
@@ -817,15 +859,24 @@ export function ffiSearch(
     retType: DataType.External,
     paramsType: [
       DataType.External, // handle
-      DataType.String,   // query
-      DataType.String,   // current_file
-      DataType.U32,      // max_threads
-      DataType.U32,      // page_index
-      DataType.U32,      // page_size
-      DataType.I32,      // combo_boost_multiplier
-      DataType.U32,      // min_combo_count
+      DataType.String, // query
+      DataType.String, // current_file
+      DataType.U32, // max_threads
+      DataType.U32, // page_index
+      DataType.U32, // page_size
+      DataType.I32, // combo_boost_multiplier
+      DataType.U32, // min_combo_count
     ],
-    paramsValue: [handle, query, currentFile, maxThreads, pageIndex, pageSize, comboBoostMultiplier, minComboCount],
+    paramsValue: [
+      handle,
+      query,
+      currentFile,
+      maxThreads,
+      pageIndex,
+      pageSize,
+      comboBoostMultiplier,
+      minComboCount,
+    ],
     freeResultMemory: false,
   }) as JsExternal;
 
@@ -857,23 +908,31 @@ export function ffiLiveGrep(
     retType: DataType.External,
     paramsType: [
       DataType.External, // handle
-      DataType.String,   // query
-      DataType.U8,       // mode
-      DataType.U64,      // max_file_size
-      DataType.U32,      // max_matches_per_file
-      DataType.Boolean,  // smart_case
-      DataType.U32,      // file_offset
-      DataType.U32,      // page_limit
-      DataType.U64,      // time_budget_ms
-      DataType.U32,      // before_context
-      DataType.U32,      // after_context
-      DataType.Boolean,  // classify_definitions
+      DataType.String, // query
+      DataType.U8, // mode
+      DataType.U64, // max_file_size
+      DataType.U32, // max_matches_per_file
+      DataType.Boolean, // smart_case
+      DataType.U32, // file_offset
+      DataType.U32, // page_limit
+      DataType.U64, // time_budget_ms
+      DataType.U32, // before_context
+      DataType.U32, // after_context
+      DataType.Boolean, // classify_definitions
     ],
     paramsValue: [
-      handle, query, grepModeToU8(mode),
-      maxFileSize, maxMatchesPerFile, smartCase,
-      fileOffset, pageLimit, timeBudgetMs,
-      beforeContext, afterContext, classifyDefinitions,
+      handle,
+      query,
+      grepModeToU8(mode),
+      maxFileSize,
+      maxMatchesPerFile,
+      smartCase,
+      fileOffset,
+      pageLimit,
+      timeBudgetMs,
+      beforeContext,
+      afterContext,
+      classifyDefinitions,
     ],
     freeResultMemory: false,
   }) as JsExternal;
@@ -906,23 +965,31 @@ export function ffiMultiGrep(
     retType: DataType.External,
     paramsType: [
       DataType.External, // handle
-      DataType.String,   // patterns_joined
-      DataType.String,   // constraints
-      DataType.U64,      // max_file_size
-      DataType.U32,      // max_matches_per_file
-      DataType.Boolean,  // smart_case
-      DataType.U32,      // file_offset
-      DataType.U32,      // page_limit
-      DataType.U64,      // time_budget_ms
-      DataType.U32,      // before_context
-      DataType.U32,      // after_context
-      DataType.Boolean,  // classify_definitions
+      DataType.String, // patterns_joined
+      DataType.String, // constraints
+      DataType.U64, // max_file_size
+      DataType.U32, // max_matches_per_file
+      DataType.Boolean, // smart_case
+      DataType.U32, // file_offset
+      DataType.U32, // page_limit
+      DataType.U64, // time_budget_ms
+      DataType.U32, // before_context
+      DataType.U32, // after_context
+      DataType.Boolean, // classify_definitions
     ],
     paramsValue: [
-      handle, patternsJoined, constraints,
-      maxFileSize, maxMatchesPerFile, smartCase,
-      fileOffset, pageLimit, timeBudgetMs,
-      beforeContext, afterContext, classifyDefinitions,
+      handle,
+      patternsJoined,
+      constraints,
+      maxFileSize,
+      maxMatchesPerFile,
+      smartCase,
+      fileOffset,
+      pageLimit,
+      timeBudgetMs,
+      beforeContext,
+      afterContext,
+      classifyDefinitions,
     ],
     freeResultMemory: false,
   }) as JsExternal;
@@ -965,7 +1032,9 @@ interface FffScanProgressRaw {
 /**
  * Get scan progress.
  */
-export function ffiGetScanProgress(handle: NativeHandle): Result<{ scannedFilesCount: number; isScanning: boolean }> {
+export function ffiGetScanProgress(
+  handle: NativeHandle,
+): Result<{ scannedFilesCount: number; isScanning: boolean }> {
   loadLibrary();
   const res = readResultEnvelope("fff_get_scan_progress", [DataType.External], [handle]);
   if ("ok" in res) return res;
@@ -1001,14 +1070,22 @@ export function ffiGetScanProgress(handle: NativeHandle): Result<{ scannedFilesC
  * Wait for a tree scan to complete.
  */
 export function ffiWaitForScan(handle: NativeHandle, timeoutMs: number): Result<boolean> {
-  return callBoolResult("fff_wait_for_scan", [DataType.External, DataType.U64], [handle, timeoutMs]);
+  return callBoolResult(
+    "fff_wait_for_scan",
+    [DataType.External, DataType.U64],
+    [handle, timeoutMs],
+  );
 }
 
 /**
  * Restart index in new path.
  */
 export function ffiRestartIndex(handle: NativeHandle, newPath: string): Result<void> {
-  return callVoidResult("fff_restart_index", [DataType.External, DataType.String], [handle, newPath]);
+  return callVoidResult(
+    "fff_restart_index",
+    [DataType.External, DataType.String],
+    [handle, newPath],
+  );
 }
 
 /**
@@ -1040,7 +1117,11 @@ export function ffiGetHistoricalQuery(
   handle: NativeHandle,
   offset: number,
 ): Result<string | null> {
-  return callStringResult("fff_get_historical_query", [DataType.External, DataType.U64], [handle, offset]);
+  return callStringResult(
+    "fff_get_historical_query",
+    [DataType.External, DataType.U64],
+    [handle, offset],
+  );
 }
 
 /**

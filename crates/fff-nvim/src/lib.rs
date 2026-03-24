@@ -96,7 +96,7 @@ pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
 
     FilePicker::new_with_shared_state(
         base_path,
-        false,
+        true,
         FFFMode::Neovim,
         Arc::clone(&FILE_PICKER),
         Arc::clone(&FRECENCY),
@@ -127,7 +127,7 @@ fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
     // Create new picker — this atomically replaces the old one via write lock
     FilePicker::new_with_shared_state(
         path.to_string_lossy().to_string(),
-        false,
+        true,
         FFFMode::Neovim,
         Arc::clone(&FILE_PICKER),
         Arc::clone(&FRECENCY),
@@ -340,8 +340,16 @@ pub fn live_grep(
         classify_definitions: false,
     };
 
-    let result =
-        fff::grep::grep_search(picker.get_files(), &parsed, &options, picker.cache_budget());
+    let bigram_idx = picker.bigram_index.as_deref();
+    let bigram_overlay = picker.bigram_overlay.as_deref();
+    let result = fff::grep::grep_search(
+        picker.get_files(),
+        &parsed,
+        &options,
+        picker.cache_budget(),
+        bigram_idx,
+        bigram_overlay,
+    );
 
     lua_types::GrepResultLua::from(result).into_lua(lua)
 }
@@ -363,9 +371,9 @@ fn build_file_path_fallback(lua: &Lua, path: &Path, total_files: usize) -> LuaRe
     item.set("name", name.as_str())?;
     item.set("size", path.metadata().map(|m| m.len()).unwrap_or(0))?;
     item.set("modified", 0u64)?;
-    item.set("access_frecency_score", 0i64)?;
-    item.set("modification_frecency_score", 0i64)?;
-    item.set("total_frecency_score", 0i64)?;
+    item.set("access_frecency_score", 0i32)?;
+    item.set("modification_frecency_score", 0i32)?;
+    item.set("total_frecency_score", 0i32)?;
     item.set("git_status", "")?;
     item.set("is_binary", false)?;
 

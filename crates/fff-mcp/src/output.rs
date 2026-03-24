@@ -11,7 +11,7 @@ use fff::types::FileItem;
 use crate::cursor::CursorStore;
 
 /// Frecency score → single-token word. `None` for low-scoring files.
-fn frecency_word(score: i64) -> Option<&'static str> {
+fn frecency_word(score: i32) -> Option<&'static str> {
     if score >= 100 {
         Some("hot")
     } else if score >= 50 {
@@ -24,7 +24,7 @@ fn frecency_word(score: i64) -> Option<&'static str> {
 }
 
 /// Build " - hot git:modified" style suffix. Empty when nothing to report.
-pub fn file_suffix(git_status: Option<git2::Status>, frecency_score: i64) -> String {
+pub fn file_suffix(git_status: Option<git2::Status>, frecency_score: i32) -> String {
     match (
         frecency_word(frecency_score),
         format_git_status_opt(git_status),
