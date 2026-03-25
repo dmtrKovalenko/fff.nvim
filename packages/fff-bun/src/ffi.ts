@@ -241,9 +241,7 @@ function snakeToCamel(obj: unknown): unknown {
 
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-    const camelKey = key.replace(/_([a-z])/g, (_, letter) =>
-      letter.toUpperCase(),
-    );
+    const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
     result[camelKey] = snakeToCamel(value);
   }
   return result;
@@ -253,16 +251,18 @@ function snakeToCamel(obj: unknown): unknown {
 // FffResult byte offsets (must match #[repr(C)] layout on 64-bit)
 // { success: bool(1+7pad), error: *char(8), handle: *void(8), int_value: i64(8) }
 // ---------------------------------------------------------------------------
-const RES_SUCCESS   = 0;   // bool (1 + 7 padding)
-const RES_ERROR     = 8;   // *mut c_char (8)
-const RES_HANDLE    = 16;  // *mut c_void (8)
-const RES_INT_VALUE = 24;  // i64         (8)
+const RES_SUCCESS = 0; // bool (1 + 7 padding)
+const RES_ERROR = 8; // *mut c_char (8)
+const RES_HANDLE = 16; // *mut c_void (8)
+const RES_INT_VALUE = 24; // i64         (8)
 
 /**
  * Read the FffResult envelope: check success, extract payload, free envelope.
  * On error returns a Result<never>. On success returns the raw handle pointer and int_value.
  */
-function readResultEnvelope(resultPtr: Pointer | null): { success: true; handlePtr: number; intValue: number } | Result<never> {
+function readResultEnvelope(
+  resultPtr: Pointer | null,
+): { success: true; handlePtr: number; intValue: number } | Result<never> {
   if (resultPtr === null) {
     return err("FFI returned null pointer");
   }
@@ -651,16 +651,10 @@ function readGrepMatchStruct(p: number): GrepMatch {
     match.fuzzyScore = read.u16(pp, GM_FUZZY_SCORE);
   }
   if (ctxBeforeCount > 0) {
-    match.contextBefore = readCStringArray(
-      read.ptr(pp, GM_CTX_BEFORE),
-      ctxBeforeCount,
-    );
+    match.contextBefore = readCStringArray(read.ptr(pp, GM_CTX_BEFORE), ctxBeforeCount);
   }
   if (ctxAfterCount > 0) {
-    match.contextAfter = readCStringArray(
-      read.ptr(pp, GM_CTX_AFTER),
-      ctxAfterCount,
-    );
+    match.contextAfter = readCStringArray(read.ptr(pp, GM_CTX_AFTER), ctxAfterCount);
   }
 
   return match;
@@ -824,13 +818,15 @@ export function ffiIsScanning(handle: NativeHandle): boolean {
 }
 
 // FffScanProgress { scanned_files_count: u64(8), is_scanning: bool(1+7pad) }
-const SP_COUNT    = 0;  // u64 (8)
-const SP_SCANNING = 8;  // bool (1 + 7 pad)
+const SP_COUNT = 0; // u64 (8)
+const SP_SCANNING = 8; // bool (1 + 7 pad)
 
 /**
  * Get scan progress.
  */
-export function ffiGetScanProgress(handle: NativeHandle): Result<{ scannedFilesCount: number; isScanning: boolean }> {
+export function ffiGetScanProgress(
+  handle: NativeHandle,
+): Result<{ scannedFilesCount: number; isScanning: boolean }> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_get_scan_progress(handle);
   const envelope = readResultEnvelope(resultPtr);
@@ -852,10 +848,7 @@ export function ffiGetScanProgress(handle: NativeHandle): Result<{ scannedFilesC
 /**
  * Wait for scan to complete.
  */
-export function ffiWaitForScan(
-  handle: NativeHandle,
-  timeoutMs: number,
-): Result<boolean> {
+export function ffiWaitForScan(handle: NativeHandle, timeoutMs: number): Result<boolean> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_wait_for_scan(handle, BigInt(timeoutMs));
   return parseBoolResult(resultPtr);
@@ -864,10 +857,7 @@ export function ffiWaitForScan(
 /**
  * Restart index in new path.
  */
-export function ffiRestartIndex(
-  handle: NativeHandle,
-  newPath: string,
-): Result<void> {
+export function ffiRestartIndex(handle: NativeHandle, newPath: string): Result<void> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_restart_index(handle, ptr(encodeString(newPath)));
   return parseVoidResult(resultPtr);

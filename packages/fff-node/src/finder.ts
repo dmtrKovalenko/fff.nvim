@@ -445,4 +445,3 @@ export class FileFinder {
     return ffiHealthCheck(null, testPath || "") as Result<HealthCheck>;
   }
 }
-

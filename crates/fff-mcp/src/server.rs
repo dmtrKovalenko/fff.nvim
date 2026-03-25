@@ -251,10 +251,13 @@ impl FffServer {
 
         let files = picker.get_files();
         let budget = picker.cache_budget();
+        let bigram_idx = picker.bigram_index.as_deref();
+        let bigram_overlay = picker.bigram_overlay.as_deref();
 
         let parser = QueryParser::new(AiGrepConfig);
         let parsed = parser.parse(query);
-        let result = grep::grep_search(files, &parsed, &options, budget);
+        let result =
+            grep::grep_search(files, &parsed, &options, budget, bigram_idx, bigram_overlay);
 
         if result.matches.is_empty() && file_offset == 0 {
             // Auto-retry: try broadening multi-word queries by dropping first non-constraint word
@@ -277,8 +280,14 @@ impl FffServer {
                     };
 
                     let (retry_options, _) = make_grep_options(output_mode, retry_mode, 0, context);
-                    let retry_result =
-                        grep::grep_search(files, &rest_parsed, &retry_options, budget);
+                    let retry_result = grep::grep_search(
+                        files,
+                        &rest_parsed,
+                        &retry_options,
+                        budget,
+                        bigram_idx,
+                        bigram_overlay,
+                    );
 
                     if !retry_result.matches.is_empty() && retry_result.matches.len() <= 10 {
                         let mut cs = self.lock_cursors()?;
@@ -306,7 +315,8 @@ impl FffServer {
             let fuzzy_query = cleanup_fuzzy_query(query);
             let (fuzzy_options, _) = make_grep_options(output_mode, GrepMode::Fuzzy, 0, Some(0));
             let fuzzy_parsed = parser.parse(&fuzzy_query);
-            let fuzzy_result = grep::grep_search(files, &fuzzy_parsed, &fuzzy_options, budget);
+            let fuzzy_result =
+                grep::grep_search(files, &fuzzy_parsed, &fuzzy_options, budget, None, None);
 
             if !fuzzy_result.matches.is_empty() {
                 let mut lines: Vec<String> = Vec::new();
@@ -615,7 +625,8 @@ impl FffServer {
                 };
 
                 let parsed = parser.parse(&full_query);
-                let fb_result = grep::grep_search(files, &parsed, &fallback_options, budget);
+                let fb_result =
+                    grep::grep_search(files, &parsed, &fallback_options, budget, None, None);
 
                 if !fb_result.matches.is_empty() {
                     let fb_file_refs: Vec<&FileItem> = fb_result.files.to_vec();

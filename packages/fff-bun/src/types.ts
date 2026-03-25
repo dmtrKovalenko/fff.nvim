@@ -360,4 +360,3 @@ export interface MultiGrepOptions {
   /** Number of context lines to include after each match (default: 0) */
   afterContext?: number;
 }
-

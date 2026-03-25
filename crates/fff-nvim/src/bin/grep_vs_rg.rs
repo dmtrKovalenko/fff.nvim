@@ -210,7 +210,14 @@ fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
         classify_definitions: false,
     };
     let start = Instant::now();
-    let result = grep_search(files, &parsed, &options, &fff::ContentCacheBudget::zero());
+    let result = grep_search(
+        files,
+        &parsed,
+        &options,
+        &fff::ContentCacheBudget::zero(),
+        None,
+        None,
+    );
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
@@ -235,6 +242,8 @@ fn benchmark_fff_smart_case(files: &[FileItem], parsed: &FFFQuery<'_>) -> (usize
         parsed,
         &options,
         &fff::ContentCacheBudget::unlimited(),
+        None,
+        None,
     );
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
@@ -261,6 +270,8 @@ fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
         &parsed,
         &options,
         &fff::ContentCacheBudget::unlimited(),
+        None,
+        None,
     );
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)

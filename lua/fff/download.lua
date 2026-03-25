@@ -1,18 +1,9 @@
 local M = {}
 local system = require('fff.utils.system')
 local fs_utils = require('fff.utils.fs')
+local fff_version = require('fff.utils.version')
 
 local GITHUB_REPO = 'dmtrKovalenko/fff.nvim'
-
-local function get_current_version(plugin_dir, callback)
-  vim.system({ 'git', 'rev-parse', '--short', 'HEAD' }, { cwd = plugin_dir }, function(result)
-    if result.code ~= 0 or not result.stdout or result.stdout == '' then
-      callback(nil)
-      return
-    end
-    callback(result.stdout:gsub('%s+', ''))
-  end)
-end
 
 local function get_binary_dir(plugin_dir) return plugin_dir .. '/../target/release' end
 
@@ -168,20 +159,38 @@ function M.ensure_downloaded(opts, callback)
     return
   end
 
-  local function on_version(target_version)
-    if not target_version then
+  local function on_release_tag(release_tag)
+    if not release_tag then
       callback(false, 'Could not determine target version')
       return
     end
 
     local binary_path = get_binary_path(plugin_dir)
-    download_from_github(target_version, binary_path, opts, callback)
+    download_from_github(release_tag, binary_path, opts, callback)
   end
 
   if opts.version then
-    on_version(opts.version)
+    on_release_tag(opts.version)
   else
-    get_current_version(plugin_dir, on_version)
+    -- plugin_dir is <repo>/lua; parent is the repo root
+    local repo_root = vim.fn.fnamemodify(plugin_dir, ':h')
+
+    -- 1. Try reading the CI-created tag on HEAD (no version computation)
+    local tag = fff_version.current_release_tag(repo_root)
+    if tag then
+      on_release_tag(tag)
+      return
+    end
+
+    -- 2. No local tag — construct the nightly version (bumps patch so
+    --    the prerelease is higher than Cargo.toml base in semver)
+    local info, err = fff_version.resolve(repo_root)
+    if info then
+      on_release_tag(info.release_tag)
+      return
+    end
+
+    callback(false, err or 'Could not determine target version')
   end
 end
 

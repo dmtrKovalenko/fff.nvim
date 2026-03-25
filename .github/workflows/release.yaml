@@ -2,7 +2,7 @@ name: Prebuild
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/download-version]
     tags:
       - "v*"
   pull_request:
@@ -75,7 +75,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
 
@@ -206,7 +206,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
 
@@ -319,7 +319,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
 
@@ -366,6 +366,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install Lua
+        uses: leafo/gh-actions-lua@v12
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -432,7 +435,7 @@ jobs:
 
       - name: Determine version
         id: version
-        run: ./scripts/determine-version.sh
+        run: lua scripts/determine-version.lua
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
@@ -466,10 +469,14 @@ jobs:
     needs: [build-nvim, build-c, build-mcp]
     runs-on: ubuntu-latest
     if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/node' || startsWith(github.ref, 'refs/tags/v')))
-      || (github.event_name == 'pull_request' && (github.head_ref == 'main' || github.head_ref == 'node'))
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/download-version' || startsWith(github.ref, 'refs/tags/v')))
+      || (github.event_name == 'pull_request' && github.head_ref == 'main')
+
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install Lua
+        uses: leafo/gh-actions-lua@v12
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -479,7 +486,7 @@ jobs:
 
       - name: Determine version
         id: version
-        run: ./scripts/determine-version.sh
+        run: lua scripts/determine-version.lua
 
       - name: Publish crates
         env:
@@ -491,12 +498,15 @@ jobs:
     needs: [build-c]
     runs-on: ubuntu-latest
     if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/node' || startsWith(github.ref, 'refs/tags/v')))
-      || (github.event_name == 'pull_request' && (github.head_ref == 'main' || github.head_ref == 'node'))
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/download-version' || startsWith(github.ref, 'refs/tags/v')))
+      || (github.event_name == 'pull_request' && github.head_ref == 'main')
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install Lua
+        uses: leafo/gh-actions-lua@v12
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -506,7 +516,7 @@ jobs:
 
       - name: Determine version
         id: version
-        run: ./scripts/determine-version.sh
+        run: lua scripts/determine-version.lua
 
       - name: Download npm package artifacts
         uses: actions/download-artifact@v4
@@ -559,5 +569,5 @@ jobs:
 
           cd packages/fff-node
           npm install
-          npx tsc
+          npm run build
           npm publish --tag "$TAG" --access public || echo "Failed to publish @ff-labs/fff-node (may already exist)"

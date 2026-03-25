@@ -1,6 +1,6 @@
 PLENARY_DIR ?= ../plenary.nvim
 
-.PHONY: build test test-rust test-lua test-bun test-node prepare-bun prepare-node set-npm-version header
+.PHONY: build test test-rust test-lua test-version test-bun test-node prepare-bun prepare-node set-npm-version header
 
 build:
 	cargo build --release --features zlob
@@ -20,6 +20,10 @@ test-rust:
 test-lua: test-setup build
 	nvim --headless -u tests/minimal_init.lua \
 		-c "PlenaryBustedFile tests/fff_core_spec.lua" 2>&1
+
+test-version: test-setup
+	nvim --headless -u tests/minimal_init.lua \
+		-c "PlenaryBustedFile tests/version_spec.lua" 2>&1
 
 prepare-bun: build
 	mkdir -p packages/fff-bun/bin
@@ -41,7 +45,7 @@ test-bun: prepare-bun
 test-node: prepare-node
 	cd packages/fff-node && npm run build && node test/e2e.mjs
 
-test: test-rust test-lua test-bun test-node
+test: test-rust test-lua test-version test-bun test-node
 
 # Update version in a package.json, including optionalDependencies.
 # Usage: make set-npm-version PKG=packages/fff-bun VERSION=1.0.0-nightly.abc1234

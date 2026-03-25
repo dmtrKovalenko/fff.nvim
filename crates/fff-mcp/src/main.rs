@@ -285,7 +285,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         && let Ok(mut guard) = shared_picker.write()
         && let Some(ref mut picker) = *guard
     {
-        picker.cache_budget = std::sync::Arc::new(fff::ContentCacheBudget::new(limit));
+        picker.cache_budget = std::sync::Arc::new(fff::ContentCacheBudget::new_for_repo(limit));
     }
 
     if !args.no_update_check {

@@ -90,6 +90,10 @@ jobs:
         shell: bash
         run: make test-lua
 
+      - name: Run version resolution tests
+        shell: bash
+        run: make test-version
+
       - name: Run bun tests
         shell: bash
         if: ${{ matrix.os == 'macos-latest' }}

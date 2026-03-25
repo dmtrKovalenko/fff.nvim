@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use crate::constraints::Constrainable;
 use crate::query_tracker::QueryMatchEntry;
@@ -11,12 +11,14 @@ use fff_query_parser::{FFFQuery, FuzzyQuery, Location};
 /// On Windows, memory-mapped files hold the file handle open and prevent
 /// editors from saving (writing/replacing) those files. Reading into a
 /// `Vec<u8>` releases the handle immediately after the read completes.
+///
+/// The `Buffer` variant is also used on Unix for temporary (uncached) reads
+/// where the mmap/munmap syscall overhead exceeds the cost of a heap copy.
 #[derive(Debug)]
 #[allow(dead_code)] // variants are conditionally used per platform
 pub enum FileContent {
     #[cfg(not(target_os = "windows"))]
     Mmap(memmap2::Mmap),
-    #[cfg(target_os = "windows")]
     Buffer(Vec<u8>),
 }
 
@@ -26,7 +28,6 @@ impl std::ops::Deref for FileContent {
         match self {
             #[cfg(not(target_os = "windows"))]
             FileContent::Mmap(m) => m,
-            #[cfg(target_os = "windows")]
             FileContent::Buffer(b) => b,
         }
     }
@@ -44,16 +45,17 @@ impl std::ops::Deref for FileContent {
 pub struct FileItem {
     pub path: PathBuf,
     pub relative_path: String,
-    pub relative_path_lower: String,
     pub file_name: String,
-    pub file_name_lower: String,
     pub size: u64,
     pub modified: u64,
-    pub access_frecency_score: i64,
-    pub modification_frecency_score: i64,
-    pub total_frecency_score: i64,
+    pub access_frecency_score: i32,
+    pub modification_frecency_score: i32,
+    pub total_frecency_score: i32,
     pub git_status: Option<git2::Status>,
     pub is_binary: bool,
+    /// Tombstone flag — file was deleted but index slot is preserved so
+    /// bigram indices for other files stay valid.
+    pub is_deleted: bool,
     /// Lazily-initialized file contents for grep.
     /// Initialized on first grep access via `OnceLock`; lock-free on subsequent reads.
     content: OnceLock<FileContent>,
@@ -64,9 +66,7 @@ impl Clone for FileItem {
         Self {
             path: self.path.clone(),
             relative_path: self.relative_path.clone(),
-            relative_path_lower: self.relative_path_lower.clone(),
             file_name: self.file_name.clone(),
-            file_name_lower: self.file_name_lower.clone(),
             size: self.size,
             modified: self.modified,
             access_frecency_score: self.access_frecency_score,
@@ -74,6 +74,7 @@ impl Clone for FileItem {
             total_frecency_score: self.total_frecency_score,
             git_status: self.git_status,
             is_binary: self.is_binary,
+            is_deleted: self.is_deleted,
             // Don't clone the content — the clone lazily re-creates it on demand
             content: OnceLock::new(),
         }
@@ -118,8 +119,6 @@ impl FileItem {
         is_binary: bool,
     ) -> Self {
         Self {
-            relative_path_lower: relative_path.to_lowercase(),
-            file_name_lower: file_name.to_lowercase(),
             path,
             relative_path,
             file_name,
@@ -130,6 +129,7 @@ impl FileItem {
             total_frecency_score: 0,
             git_status,
             is_binary,
+            is_deleted: false,
             content: OnceLock::new(),
         }
     }
@@ -145,6 +145,7 @@ impl FileItem {
             budget.cached_count.fetch_sub(1, Ordering::Relaxed);
             budget.cached_bytes.fetch_sub(self.size, Ordering::Relaxed);
         }
+
         self.content = OnceLock::new();
     }
 
@@ -155,24 +156,26 @@ impl FileItem {
     /// of the budget should use [`get_content_for_search`].
     ///
     /// After the first call, this is lock-free (just an atomic load + pointer deref).
-    #[inline]
     pub fn get_content(&self, budget: &ContentCacheBudget) -> Option<&[u8]> {
         if let Some(content) = self.content.get() {
             return Some(content);
         }
 
-        if self.size == 0 || self.size > MAX_MMAP_FILE_SIZE {
+        let max_file_size = budget.max_file_size;
+        if self.size == 0 || self.size > max_file_size {
             return None;
         }
 
         // Check cache budget before creating a new persistent cache entry.
         let count = budget.cached_count.load(Ordering::Relaxed);
         let bytes = budget.cached_bytes.load(Ordering::Relaxed);
-        if count >= budget.max_files || bytes + self.size > MAX_CACHED_CONTENT_BYTES {
+        let max_files = budget.max_files;
+        let max_bytes = budget.max_bytes;
+        if count >= max_files || bytes + self.size > max_bytes {
             return None;
         }
 
-        let content = load_file_content(&self.path)?;
+        let content = load_file_content(&self.path, self.size)?;
         let result = self.content.get_or_init(|| content);
 
         // Bump counters. Slight over-count under races is fine — the budget
@@ -181,12 +184,6 @@ impl FileItem {
         budget.cached_bytes.fetch_add(self.size, Ordering::Relaxed);
 
         Some(result)
-    }
-
-    /// Backward-compatible alias for `get_content`.
-    #[inline]
-    pub fn get_mmap(&self, budget: &ContentCacheBudget) -> Option<&[u8]> {
-        self.get_content(budget)
     }
 
     /// Get file content for searching — **always returns content** for eligible
@@ -205,30 +202,56 @@ impl FileItem {
         }
 
         // get_content returned None — either ineligible or over budget.
-        if self.is_binary || self.size == 0 || self.size > MAX_MMAP_FILE_SIZE {
+        let max_file_size = budget.max_file_size;
+        if self.is_binary || self.size == 0 || self.size > max_file_size {
             return None;
         }
 
         // Over budget: create a temporary mmap that is unmapped on drop.
-        let content = load_file_content(&self.path)?;
+        let content = load_file_content(&self.path, self.size)?;
         Some(FileContentRef::Temp(content))
     }
 }
 
-/// Load file contents: mmap on Unix, heap buffer on Windows.
-fn load_file_content(path: &Path) -> Option<FileContent> {
+/// Maximum number of distinct bigrams tracked in the inverted index.
+/// 95 printable ASCII chars (32..=126) after lowercasing → ~70 distinct → 4900 possible.
+/// We cap at 5000 to cover all printable bigrams with margin.
+/// 5000 columns × 62.5KB (500k files) = 305MB. For 50k files: 30MB.
+const MAX_BIGRAM_COLUMNS: usize = 5000;
+
+/// Sentinel value: bigram has no allocated column.
+const NO_COLUMN: u32 = u32::MAX;
+
+/// Page size on Apple Silicon is 16KB; on x86-64 it's 4KB.
+/// Files smaller than one page waste the remainder when mmapped.
+/// Reading them into a heap buffer avoids this overhead.
+#[cfg(target_arch = "aarch64")]
+const MMAP_THRESHOLD: u64 = 16 * 1024;
+#[cfg(not(target_arch = "aarch64"))]
+const MMAP_THRESHOLD: u64 = 4 * 1024;
+
+/// Load file contents: small files are read into a heap buffer to avoid
+/// mmap page alignment waste; large files use mmap for zero-copy access.
+/// On Windows, always uses heap buffer (mmap holds the file handle open).
+fn load_file_content(path: &Path, size: u64) -> Option<FileContent> {
     #[cfg(not(target_os = "windows"))]
     {
-        let file = std::fs::File::open(path).ok()?;
-        // SAFETY: The mmap is backed by the kernel page cache and automatically
-        // reflects file modifications. The only risk is SIGBUS if the file is
-        // truncated while mapped.
-        let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
-        Some(FileContent::Mmap(mmap))
+        if size < MMAP_THRESHOLD {
+            let data = std::fs::read(path).ok()?;
+            Some(FileContent::Buffer(data))
+        } else {
+            let file = std::fs::File::open(path).ok()?;
+            // SAFETY: The mmap is backed by the kernel page cache and automatically
+            // reflects file modifications. The only risk is SIGBUS if the file is
+            // truncated while mapped.
+            let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+            Some(FileContent::Mmap(mmap))
+        }
     }
 
     #[cfg(target_os = "windows")]
     {
+        let _ = size;
         let data = std::fs::read(path).ok()?;
         Some(FileContent::Buffer(data))
     }
@@ -238,11 +261,6 @@ impl Constrainable for FileItem {
     #[inline]
     fn relative_path(&self) -> &str {
         &self.relative_path
-    }
-
-    #[inline]
-    fn relative_path_lower(&self) -> &str {
-        &self.relative_path_lower
     }
 
     #[inline]
@@ -345,6 +363,8 @@ const MAX_CACHED_CONTENT_BYTES: u64 = 512 * 1024 * 1024;
 #[derive(Debug)]
 pub struct ContentCacheBudget {
     pub max_files: usize,
+    pub max_bytes: u64,
+    pub max_file_size: u64,
     pub cached_count: AtomicUsize,
     pub cached_bytes: AtomicU64,
 }
@@ -355,6 +375,8 @@ impl ContentCacheBudget {
     pub fn unlimited() -> Self {
         Self {
             max_files: usize::MAX,
+            max_bytes: u64::MAX,
+            max_file_size: MAX_MMAP_FILE_SIZE,
             cached_count: AtomicUsize::new(0),
             cached_bytes: AtomicU64::new(0),
         }
@@ -363,14 +385,34 @@ impl ContentCacheBudget {
     pub fn zero() -> Self {
         Self {
             max_files: 0,
+            max_bytes: 0,
+            max_file_size: 0,
             cached_count: AtomicUsize::new(0),
             cached_bytes: AtomicU64::new(0),
         }
     }
 
-    pub fn new(max_files: usize) -> Self {
+    pub fn new_for_repo(file_count: usize) -> Self {
+        let max_files = if file_count > 50_000 {
+            5_000
+        } else if file_count > 10_000 {
+            10_000
+        } else {
+            30_000 // effectively unlimited for small repos
+        };
+
+        let max_bytes = if file_count > 50_000 {
+            128 * 1024 * 1024 // 128 MB
+        } else if file_count > 10_000 {
+            256 * 1024 * 1024 // 256 MB
+        } else {
+            MAX_CACHED_CONTENT_BYTES // 512 MB
+        };
+
         Self {
             max_files,
+            max_bytes,
+            max_file_size: MAX_MMAP_FILE_SIZE,
             cached_count: AtomicUsize::new(0),
             cached_bytes: AtomicU64::new(0),
         }
@@ -386,6 +428,503 @@ impl ContentCacheBudget {
 
 impl Default for ContentCacheBudget {
     fn default() -> Self {
-        Self::new(30_000)
+        Self::new_for_repo(30_000)
+    }
+}
+
+/// Temporary dense builder for the bigram index.
+/// Uses AtomicU64 for lock-free concurrent writes during the parallel build phase.
+/// Columns are allocated lazily on first use to avoid the massive upfront allocation
+/// (previously ~300MB for 500k files, now proportional to actual bigrams found).
+/// Call `compress()` to produce the final compact `BigramIndex`.
+pub struct BigramIndexBuilder {
+    lookup: Vec<AtomicU32>,
+    /// Per-column bitset data, lazily allocated via OnceLock.
+    col_data: Vec<OnceLock<Box<[AtomicU64]>>>,
+    next_column: AtomicU32,
+    words: usize,
+    file_count: usize,
+    populated: AtomicUsize,
+}
+
+impl BigramIndexBuilder {
+    pub fn new(file_count: usize) -> Self {
+        let words = file_count.div_ceil(64);
+        let mut lookup = Vec::with_capacity(65536);
+        lookup.resize_with(65536, || AtomicU32::new(NO_COLUMN));
+        let mut col_data = Vec::with_capacity(MAX_BIGRAM_COLUMNS);
+        col_data.resize_with(MAX_BIGRAM_COLUMNS, OnceLock::new);
+        Self {
+            lookup,
+            col_data,
+            next_column: AtomicU32::new(0),
+            words,
+            file_count,
+            populated: AtomicUsize::new(0),
+        }
+    }
+
+    #[inline]
+    fn get_or_alloc_column(&self, key: u16) -> u32 {
+        let current = self.lookup[key as usize].load(Ordering::Relaxed);
+        if current != NO_COLUMN {
+            return current;
+        }
+        let new_col = self.next_column.fetch_add(1, Ordering::Relaxed);
+        if new_col >= MAX_BIGRAM_COLUMNS as u32 {
+            return NO_COLUMN;
+        }
+
+        match self.lookup[key as usize].compare_exchange(
+            NO_COLUMN,
+            new_col,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => new_col,
+            Err(existing) => existing,
+        }
+    }
+
+    /// Get (or lazily allocate) the bitset for a given column index.
+    #[inline]
+    fn column_bitset(&self, col: u32) -> &[AtomicU64] {
+        let words = self.words;
+        self.col_data[col as usize].get_or_init(|| {
+            let mut v = Vec::with_capacity(words);
+            v.resize_with(words, || AtomicU64::new(0));
+            v.into_boxed_slice()
+        })
+    }
+
+    pub fn add_file_content(&self, file_idx: usize, content: &[u8]) {
+        if content.len() < 2 {
+            return;
+        }
+
+        debug_assert!(file_idx < self.file_count);
+        let word_idx = file_idx / 64;
+        let bit_mask = 1u64 << (file_idx % 64);
+
+        let mut prev = content[0];
+        for &b in &content[1..] {
+            if (32..=126).contains(&prev) && (32..=126).contains(&b) {
+                let key = (prev.to_ascii_lowercase() as u16) << 8 | b.to_ascii_lowercase() as u16;
+                let col = self.get_or_alloc_column(key);
+                if col != NO_COLUMN {
+                    self.column_bitset(col)[word_idx].fetch_or(bit_mask, Ordering::Relaxed);
+                }
+            }
+            prev = b;
+        }
+        self.populated.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.populated.load(Ordering::Relaxed) > 0
+    }
+
+    pub fn columns_used(&self) -> u32 {
+        self.next_column
+            .load(Ordering::Relaxed)
+            .min(MAX_BIGRAM_COLUMNS as u32)
+    }
+
+    /// Compress the dense builder into a compact `BigramIndex`.
+    /// Sparse columns become sorted u32 posting lists; dense columns stay as bitsets.
+    ///
+    /// Each column's `Box<[AtomicU64]>` (~60 KB for 500k files) is freed immediately
+    /// after compression via `OnceLock::take`, so peak memory during compress is
+    /// roughly `max(builder, result)` instead of `builder + result`.
+    pub fn compress(self) -> BigramFilter {
+        let cols = self.columns_used() as usize;
+        let words = self.words;
+        let file_count = self.file_count;
+        let populated = self.populated.load(Ordering::Relaxed);
+        let dense_bytes = words * 8; // cost of one dense column
+
+        // Destructure so we can incrementally free col_data entries.
+        let old_lookup = self.lookup;
+        let mut col_data = self.col_data;
+
+        // Build lookup: bigram key → new column index in compressed storage
+        let mut lookup = vec![NO_COLUMN; 65536];
+        let mut columns = Vec::with_capacity(cols);
+
+        for key in 0..65536u32 {
+            let old_col = old_lookup[key as usize].load(Ordering::Relaxed);
+            if old_col == NO_COLUMN || old_col as usize >= cols {
+                continue;
+            }
+            // Take the Box out of OnceLock — frees ~60 KB when dropped at end of iteration.
+            let Some(bitset) = col_data[old_col as usize].take() else {
+                continue;
+            };
+
+            // Count set bits to decide storage format
+            let mut popcount = 0u32;
+            for w in 0..words {
+                popcount += bitset[w].load(Ordering::Relaxed).count_ones();
+            }
+
+            let posting_bytes = popcount as usize * 4;
+            let new_col = columns.len() as u32;
+            lookup[key as usize] = new_col;
+
+            if posting_bytes < dense_bytes {
+                // Sparse: extract sorted file indices
+                let mut posting = Vec::with_capacity(popcount as usize);
+                for w in 0..words {
+                    let mut word = bitset[w].load(Ordering::Relaxed);
+                    let base = (w * 64) as u32;
+                    while word != 0 {
+                        let bit = word.trailing_zeros();
+                        posting.push(base + bit);
+                        word &= word - 1; // clear lowest set bit
+                    }
+                }
+                columns.push(Column::Sparse(posting));
+            } else {
+                // Dense: copy bitset words
+                let mut dense = Vec::with_capacity(words);
+                for w in 0..words {
+                    dense.push(bitset[w].load(Ordering::Relaxed));
+                }
+                columns.push(Column::Dense(dense));
+            }
+            // `bitset` (Box<[AtomicU64]>) dropped here — allocator can reuse the pages
+        }
+
+        // Explicitly drop builder remnants before returning.
+        drop(col_data);
+        drop(old_lookup);
+
+        BigramFilter {
+            lookup,
+            columns,
+            words,
+            file_count,
+            populated,
+        }
+    }
+}
+
+unsafe impl Send for BigramIndexBuilder {}
+unsafe impl Sync for BigramIndexBuilder {}
+
+/// Column storage: either a dense bitset or a sorted posting list.
+#[derive(Debug)]
+enum Column {
+    /// Dense bitset — one u64 per 64-file chunk.
+    Dense(Vec<u64>),
+    /// Sorted file indices — cheaper when few files contain this bigram.
+    Sparse(Vec<u32>),
+}
+
+/// Compressed bigram inverted index.
+///
+/// Built from `BigramIndexBuilder::compress()`. Sparse columns use sorted u32
+/// posting lists; dense columns use plain bitsets. Lossless — same filtering
+/// quality as the dense builder, significantly less memory.
+#[derive(Debug)]
+pub struct BigramFilter {
+    lookup: Vec<u32>,
+    columns: Vec<Column>,
+    words: usize,
+    file_count: usize,
+    populated: usize,
+}
+
+/// AND a dense bitset column into the result. Uses iterator zip to
+/// eliminate bounds checks so LLVM can emit NEON/SSE vector AND instructions.
+#[inline]
+fn bitset_and(result: &mut [u64], bitset: &[u64]) {
+    result
+        .iter_mut()
+        .zip(bitset.iter())
+        .for_each(|(r, b)| *r &= *b);
+}
+
+/// AND a sparse posting list into the result. Zeroes words not present
+/// in the posting list, ANDs accumulated masks for words that are.
+#[inline]
+fn bitset_and_sparse(result: &mut [u64], posting: &[u32]) {
+    let mut pos = 0;
+    let mut prev_w = 0;
+    while pos < posting.len() {
+        let w = posting[pos] as usize / 64;
+        // Zero gap between previous touched word and this one
+        for r in &mut result[prev_w..w] {
+            *r = 0;
+        }
+        // Accumulate OR mask for this word
+        let mut word_mask = 0u64;
+        while pos < posting.len() && posting[pos] as usize / 64 == w {
+            word_mask |= 1u64 << (posting[pos] as usize % 64);
+            pos += 1;
+        }
+        result[w] &= word_mask;
+        prev_w = w + 1;
+    }
+    // Zero remaining words after last posting entry
+    for r in &mut result[prev_w..] {
+        *r = 0;
+    }
+}
+
+impl BigramFilter {
+    /// Query: AND the posting lists for all query bigrams.
+    /// Returns None if no query bigrams are tracked.
+    pub fn query(&self, pattern: &[u8]) -> Option<Vec<u64>> {
+        if pattern.len() < 2 {
+            return None;
+        }
+
+        let mut result = vec![u64::MAX; self.words];
+        if !self.file_count.is_multiple_of(64) {
+            let last = self.words - 1;
+            result[last] = (1u64 << (self.file_count % 64)) - 1;
+        }
+
+        let mut has_filter = false;
+        let mut prev = pattern[0];
+        for &b in &pattern[1..] {
+            if (32..=126).contains(&prev) && (32..=126).contains(&b) {
+                let key = (prev.to_ascii_lowercase() as u16) << 8 | b.to_ascii_lowercase() as u16;
+                let col_idx = self.lookup[key as usize];
+                if col_idx != NO_COLUMN {
+                    match &self.columns[col_idx as usize] {
+                        Column::Dense(bitset) => {
+                            bitset_and(&mut result, bitset);
+                        }
+                        Column::Sparse(posting) => {
+                            bitset_and_sparse(&mut result, posting);
+                        }
+                    }
+                    has_filter = true;
+                }
+            }
+            prev = b;
+        }
+
+        if has_filter { Some(result) } else { None }
+    }
+
+    #[inline]
+    pub fn is_candidate(candidates: &[u64], file_idx: usize) -> bool {
+        let word = file_idx / 64;
+        let bit = file_idx % 64;
+        word < candidates.len() && candidates[word] & (1u64 << bit) != 0
+    }
+
+    pub fn count_candidates(candidates: &[u64]) -> usize {
+        candidates.iter().map(|w| w.count_ones() as usize).sum()
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.populated > 0
+    }
+
+    pub fn file_count(&self) -> usize {
+        self.file_count
+    }
+
+    pub fn columns_used(&self) -> usize {
+        self.columns.len()
+    }
+
+    pub fn sparse_columns(&self) -> usize {
+        self.columns
+            .iter()
+            .filter(|c| matches!(c, Column::Sparse(_)))
+            .count()
+    }
+
+    pub fn dense_columns(&self) -> usize {
+        self.columns
+            .iter()
+            .filter(|c| matches!(c, Column::Dense(_)))
+            .count()
+    }
+
+    /// Total heap bytes used by this index (lookup table + all column data).
+    pub fn heap_bytes(&self) -> usize {
+        let lookup_bytes = self.lookup.len() * std::mem::size_of::<u32>();
+        let column_bytes: usize = self
+            .columns
+            .iter()
+            .map(|c| {
+                std::mem::size_of::<Column>()
+                    + match c {
+                        Column::Dense(v) => v.len() * 8,
+                        Column::Sparse(v) => v.len() * 4,
+                    }
+            })
+            .sum();
+        lookup_bytes + column_bytes
+    }
+}
+
+unsafe impl Send for BigramFilter {}
+unsafe impl Sync for BigramFilter {}
+
+// ---------------------------------------------------------------------------
+// Shared bigram extraction
+// ---------------------------------------------------------------------------
+
+/// Extract deduplicated bigram keys from file content.
+/// Same logic as `BigramIndexBuilder::add_file_content`: consecutive printable
+/// ASCII pairs, lowercased, encoded as `(prev << 8) | cur`.
+pub fn extract_bigrams(content: &[u8]) -> Vec<u16> {
+    if content.len() < 2 {
+        return Vec::new();
+    }
+    // Use a flat bitset (65536 bits = 8 KB) for dedup — faster than HashSet.
+    let mut seen = vec![0u64; 1024]; // 1024 * 64 = 65536 bits
+    let mut bigrams = Vec::new();
+
+    let mut prev = content[0];
+    for &b in &content[1..] {
+        if (32..=126).contains(&prev) && (32..=126).contains(&b) {
+            let key = (prev.to_ascii_lowercase() as u16) << 8 | b.to_ascii_lowercase() as u16;
+            let word = key as usize / 64;
+            let bit = 1u64 << (key as usize % 64);
+            if seen[word] & bit == 0 {
+                seen[word] |= bit;
+                bigrams.push(key);
+            }
+        }
+        prev = b;
+    }
+    bigrams
+}
+
+// ---------------------------------------------------------------------------
+// Bigram overlay — incremental delta layer on top of the immutable base index
+// ---------------------------------------------------------------------------
+
+/// Tracks bigram changes since the base `BigramFilter` was built.
+///
+/// Modified and added files store their own bigram sets. Deleted files are
+/// tombstoned in a bitset so they can be excluded from base query results.
+/// This overlay is updated by the background watcher on every file event
+/// and cleared when the base index is rebuilt.
+#[derive(Debug)]
+pub struct BigramOverlay {
+    /// Per-file bigram sets for files modified since the base was built.
+    /// Key = file index in the base `Vec<FileItem>`.
+    modified: HashMap<usize, Vec<u16>>,
+
+    /// Tombstone bitset — one bit per base file. Set bits are excluded
+    /// from base query results.
+    tombstones: Vec<u64>,
+
+    /// Bigram sets for files added after the base was built (overflow files).
+    added: Vec<Vec<u16>>,
+
+    /// Number of base files this overlay was created for.
+    base_file_count: usize,
+}
+
+use std::collections::HashMap;
+
+impl BigramOverlay {
+    pub fn new(base_file_count: usize) -> Self {
+        let words = base_file_count.div_ceil(64);
+        Self {
+            modified: HashMap::new(),
+            tombstones: vec![0u64; words],
+            added: Vec::new(),
+            base_file_count,
+        }
+    }
+
+    /// Record updated bigram data for a modified base file.
+    pub fn modify_file(&mut self, file_idx: usize, content: &[u8]) {
+        self.modified.insert(file_idx, extract_bigrams(content));
+    }
+
+    /// Tombstone a deleted base file.
+    pub fn delete_file(&mut self, file_idx: usize) {
+        if file_idx < self.base_file_count {
+            let word = file_idx / 64;
+            self.tombstones[word] |= 1u64 << (file_idx % 64);
+        }
+        self.modified.remove(&file_idx);
+    }
+
+    /// Record bigrams for a newly added (overflow) file.
+    pub fn add_file(&mut self, content: &[u8]) {
+        self.added.push(extract_bigrams(content));
+    }
+
+    /// Return base file indices of modified files whose bigrams match ALL
+    /// of the given `pattern_bigrams`.
+    pub fn query_modified(&self, pattern_bigrams: &[u16]) -> Vec<usize> {
+        if pattern_bigrams.is_empty() {
+            return self.modified.keys().copied().collect();
+        }
+        self.modified
+            .iter()
+            .filter_map(|(&file_idx, bigrams)| {
+                let all_match = pattern_bigrams.iter().all(|pb| bigrams.contains(pb));
+                if all_match { Some(file_idx) } else { None }
+            })
+            .collect()
+    }
+
+    /// Return overflow indices (into the `added` vec) whose bigrams match
+    /// ALL of the given `pattern_bigrams`.
+    pub fn query_added(&self, pattern_bigrams: &[u16]) -> Vec<usize> {
+        if pattern_bigrams.is_empty() {
+            return (0..self.added.len()).collect();
+        }
+        self.added
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, bigrams)| {
+                let all_match = pattern_bigrams.iter().all(|pb| bigrams.contains(pb));
+                if all_match { Some(idx) } else { None }
+            })
+            .collect()
+    }
+
+    /// Get the tombstone bitset for clearing base candidates.
+    pub fn tombstones(&self) -> &[u64] {
+        &self.tombstones
+    }
+
+    pub fn is_tombstoned(&self, file_idx: usize) -> bool {
+        let word = file_idx / 64;
+        word < self.tombstones.len() && self.tombstones[word] & (1u64 << (file_idx % 64)) != 0
+    }
+
+    pub fn base_file_count(&self) -> usize {
+        self.base_file_count
+    }
+
+    /// Remove an overflow entry by index (when the file is deleted).
+    pub fn remove_added(&mut self, idx: usize) {
+        if idx < self.added.len() {
+            self.added.remove(idx);
+        }
+    }
+
+    /// Update an existing overflow entry's bigrams.
+    pub fn update_added(&mut self, idx: usize, bigrams: Vec<u16>) {
+        if idx < self.added.len() {
+            self.added[idx] = bigrams;
+        }
+    }
+
+    /// Total number of entries tracked (for deciding when to trigger a full rebuild).
+    pub fn overlay_size(&self) -> usize {
+        self.modified.len()
+            + self.added.len()
+            + self
+                .tombstones
+                .iter()
+                .map(|w| w.count_ones() as usize)
+                .sum::<usize>()
     }
 }
