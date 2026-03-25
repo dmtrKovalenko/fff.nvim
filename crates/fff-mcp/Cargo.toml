@@ -10,7 +10,9 @@ name = "fff-mcp"
 path = "src/main.rs"
 
 [features]
-default = ["zlob"]
+# Keep the default build on the pure-Rust glob path. On some macOS + Zig
+# combinations the upstream zlob build currently fails before Cargo can link.
+default = []
 zlob = ["fff/zlob"]
 
 [dependencies]
