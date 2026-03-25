@@ -1,0 +1,73 @@
+{
+  "name": "@ff-labs/pi-fff",
+  "version": "0.0.0",
+  "private": false,
+  "description": "FFF (Fast File Finder) extension for pi.dev — fuzzy search, frecency ranking, and grep for your coding agent",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "pi": {
+    "extensions": ["dist/src"]
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "pi-package",
+    "file-finder",
+    "fuzzy-search",
+    "grep",
+    "fff",
+    "coding-agent"
+  ],
+  "author": "Dmitry Kovalenko",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
+    "directory": "packages/pi-fff"
+  },
+  "bugs": {
+    "url": "https://github.com/dmtrKovalenko/fff.nvim/issues"
+  },
+  "homepage": "https://github.com/dmtrKovalenko/fff.nvim#readme",
+  "dependencies": {
+    "@ff-labs/fff-node": ">=0.1.37"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": false
+    }
+  },
+  "optionalDependencies": {
+    "@ff-labs/fff-bin-darwin-arm64": "0.0.0",
+    "@ff-labs/fff-bin-darwin-x64": "0.0.0",
+    "@ff-labs/fff-bin-linux-x64-gnu": "0.0.0",
+    "@ff-labs/fff-bin-linux-arm64-gnu": "0.0.0",
+    "@ff-labs/fff-bin-linux-x64-musl": "0.0.0",
+    "@ff-labs/fff-bin-linux-arm64-musl": "0.0.0",
+    "@ff-labs/fff-bin-win32-x64": "0.0.0",
+    "@ff-labs/fff-bin-win32-arm64": "0.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^22.0.0"
+  }
+}
