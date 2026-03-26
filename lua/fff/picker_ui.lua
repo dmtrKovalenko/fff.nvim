@@ -2100,42 +2100,6 @@ function M.recall_query_from_history()
   end)
 end
 
---- Find the first visible window with a normal file buffer
---- @return number|nil Window ID of the first suitable window, or nil if none found
-local function find_suitable_window()
-  local current_tabpage = vim.api.nvim_get_current_tabpage()
-  local windows = vim.api.nvim_tabpage_list_wins(current_tabpage)
-
-  for _, win in ipairs(windows) do
-    if vim.api.nvim_win_is_valid(win) then
-      local buf = vim.api.nvim_win_get_buf(win)
-      if vim.api.nvim_buf_is_valid(buf) then
-        local buftype = vim.api.nvim_get_option_value('buftype', { buf = buf })
-        local modifiable = vim.api.nvim_get_option_value('modifiable', { buf = buf })
-        local filetype = vim.api.nvim_get_option_value('filetype', { buf = buf })
-
-        local is_picker_window = (
-          win == M.state.input_win
-          or win == M.state.list_win
-          or win == M.state.preview_win
-          or win == M.state.file_info_win
-        )
-
-        if
-          (buftype == '' or buftype == 'acwrite')
-          and modifiable
-          and not is_picker_window
-          and filetype ~= 'undotree'
-        then
-          return win
-        end
-      end
-    end
-  end
-
-  return nil
-end
-
 --- Build a unique key for a grep match occurrence.
 --- Format: "path:line:col" — uniquely identifies one match entry.
 ---@param item table Grep match item with path, line_number, col
@@ -2330,17 +2294,10 @@ function M.select(action)
   vim.cmd('stopinsert')
   M.close()
 
+  local current_buf = vim.api.nvim_get_current_buf()
+  M.state.config.pre_select_hook(current_buf, action)
+
   if action == 'edit' then
-    local current_buf = vim.api.nvim_get_current_buf()
-    local current_buftype = vim.api.nvim_get_option_value('buftype', { buf = current_buf })
-    local current_buf_modifiable = vim.api.nvim_get_option_value('modifiable', { buf = current_buf })
-
-    -- If current active buffer is not a normal buffer we find a suitable window with a tab otherwise opening a new split
-    if current_buftype ~= '' or not current_buf_modifiable then
-      local suitable_win = find_suitable_window()
-      if suitable_win then vim.api.nvim_set_current_win(suitable_win) end
-    end
-
     vim.cmd('edit ' .. vim.fn.fnameescape(relative_path))
   elseif action == 'split' then
     vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
