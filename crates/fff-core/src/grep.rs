@@ -1786,7 +1786,7 @@ pub fn grep_search<'a>(
     // it is important that this step is coming as early as possible
     let (files_to_search, filtered_file_count) = match bigram_candidates {
         Some(ref candidates) if constraints_from_query.is_empty() => {
-            // this call is essentially free and much more efficient than alowing a recollection
+            // this call is essentially free and much more efficient than allowing a recollection
             let cap = BigramFilter::count_candidates(candidates);
             let mut result: Vec<&FileItem> = Vec::with_capacity(cap);
             for (word_idx, &word) in candidates.iter().enumerate() {
@@ -1875,20 +1875,15 @@ pub fn grep_search<'a>(
     }
     .build();
 
-    // Dispatch to the appropriate sink type at the boundary — zero runtime
-    // branching inside the per-line hot path.
-    //
-    // When not in regex mode, pass the memmem finder as a whole-file prefilter.
-    // A single SIMD memmem scan rejects non-matching files before the
-    // grep-searcher allocates state and splits lines — ~0.3us vs ~7us per file.
-    let prefilter = if regex.is_none() { Some(&finder) } else { None };
+    // prefilter looks for the literal occurrence if the search is case insensitive
+    let should_perfilter = regex.is_none() && !case_insensitive;
     let mut result = perform_grep(
         &files_to_search,
         options,
         total_files,
         filtered_file_count,
         budget,
-        prefilter,
+        should_perfilter.then_some(&finder),
         |file_bytes: &[u8], max_matches: usize| {
             let state = SinkState {
                 file_index: 0, // set by run_file_search
