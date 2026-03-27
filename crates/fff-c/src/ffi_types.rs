@@ -515,15 +515,23 @@ impl FffResult {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Scan progress
-// ---------------------------------------------------------------------------
-
 /// Scan progress returned by `fff_get_scan_progress`.
-///
 /// The caller must free this with `fff_free_scan_progress`.
 #[repr(C)]
 pub struct FffScanProgress {
     pub scanned_files_count: u64,
     pub is_scanning: bool,
+    pub is_watcher_ready: bool,
+    pub is_warmup_complete: bool,
+}
+
+impl From<fff::file_picker::ScanProgress> for FffScanProgress {
+    fn from(p: fff::file_picker::ScanProgress) -> Self {
+        Self {
+            scanned_files_count: p.scanned_files_count as u64,
+            is_scanning: p.is_scanning,
+            is_watcher_ready: p.is_watcher_ready,
+            is_warmup_complete: p.is_warmup_complete,
+        }
+    }
 }

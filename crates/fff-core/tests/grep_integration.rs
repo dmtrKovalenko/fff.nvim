@@ -328,7 +328,18 @@ fn plain_text_binary_files_are_skipped() {
     content.extend_from_slice(&[0u8; 100]); // NUL bytes make it binary
     content.extend_from_slice(b"match this text\n");
     fs::write(&binary_path, &content).unwrap();
-    let binary_file = FileItem::new(binary_path, tmp.path(), None);
+    // In production, binary detection by content happens during bigram build
+    // and sets is_binary = true. Simulate that here with new_raw.
+    let meta = fs::metadata(&binary_path).unwrap();
+    let binary_file = FileItem::new_raw(
+        binary_path,
+        "binary.dat".to_string(),
+        "binary.dat".to_string(),
+        meta.len(),
+        0,
+        None,
+        true,
+    );
 
     let text_file = create_file(tmp.path(), "text.txt", "match this text\n");
 

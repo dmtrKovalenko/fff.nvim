@@ -61,7 +61,7 @@
 //! )?;
 //!
 //! // 3. Wait for scan (in real app you would like to add some tokio flavor here)
-//! FilePicker::wait_for_scan(&shared_picker);
+//! let _ = FilePicker::wait_for_scan(&shared_picker, std::time::Duration::from_secs(10));
 //!
 //! // 4. Search: lock the picker and query tracker
 //! let picker_lock_guard = shared_picker.read().unwrap();
