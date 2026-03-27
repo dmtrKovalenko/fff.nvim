@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use crate::constraints::Constrainable;
 use crate::query_tracker::QueryMatchEntry;
+use ahash::AHashMap;
 use fff_query_parser::{FFFQuery, FuzzyQuery, Location};
 
 /// Cached file contents — mmap on Unix, heap buffer on Windows.
@@ -520,6 +521,35 @@ impl BigramIndexBuilder {
         self.populated.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Index skip-1 bigrams (stride 2) for a single file.
+    ///
+    /// For content "ABCDE" this extracts pairs (A,C), (B,D), (C,E).
+    /// These capture non-adjacent character relationships that are largely
+    /// independent from consecutive bigrams, enabling much tighter candidate
+    /// filtering when ANDead together.
+    pub fn add_file_content_skip(&self, file_idx: usize, content: &[u8]) {
+        if content.len() < 3 {
+            return;
+        }
+
+        debug_assert!(file_idx < self.file_count);
+        let word_idx = file_idx / 64;
+        let bit_mask = 1u64 << (file_idx % 64);
+
+        for i in 0..content.len() - 2 {
+            let a = content[i];
+            let b = content[i + 2];
+            if (32..=126).contains(&a) && (32..=126).contains(&b) {
+                let key = (a.to_ascii_lowercase() as u16) << 8 | b.to_ascii_lowercase() as u16;
+                let col = self.get_or_alloc_column(key);
+                if col != NO_COLUMN {
+                    self.column_bitset(col)[word_idx].fetch_or(bit_mask, Ordering::Relaxed);
+                }
+            }
+        }
+        // NOTE: populated count tracked by the consecutive builder, not here.
+    }
+
     pub fn is_ready(&self) -> bool {
         self.populated.load(Ordering::Relaxed) > 0
     }
@@ -530,12 +560,18 @@ impl BigramIndexBuilder {
             .min(MAX_BIGRAM_COLUMNS as u32)
     }
 
-    /// Compress the dense builder into a compact `BigramIndex`.
-    /// Sparse columns become sorted u32 posting lists; dense columns stay as bitsets.
+    /// Compress the dense builder into a compact `BigramFilter`.
     ///
-    /// Each column's `Box<[AtomicU64]>` (~60 KB for 500k files) is freed immediately
-    /// after compression via `OnceLock::take`, so peak memory during compress is
-    /// roughly `max(builder, result)` instead of `builder + result`.
+    /// Only dense columns (bitsets) are retained — sparse bigrams (those
+    /// appearing in fewer files than the dense threshold) are dropped.
+    /// The skip-1 bigram index provides equivalent or better filtering
+    /// for those cases, and dense-only storage enables SIMD-vectorized
+    /// AND operations with no per-column indirection.
+    ///
+    /// Each column's `Box<[AtomicU64]>` (~60 KB for 500k files) is freed
+    /// immediately after compression via `OnceLock::take`, so peak memory
+    /// during compress is roughly `max(builder, result)` instead of
+    /// `builder + result`.
     pub fn compress(self) -> BigramFilter {
         let cols = self.columns_used() as usize;
         let words = self.words;
@@ -547,64 +583,50 @@ impl BigramIndexBuilder {
         let old_lookup = self.lookup;
         let mut col_data = self.col_data;
 
-        // Build lookup: bigram key → new column index in compressed storage
         let mut lookup = vec![NO_COLUMN; 65536];
-        let mut columns = Vec::with_capacity(cols);
+        let mut dense_data: Vec<u64> = Vec::with_capacity(cols * words);
+        let mut dense_count: usize = 0;
 
         for key in 0..65536u32 {
             let old_col = old_lookup[key as usize].load(Ordering::Relaxed);
             if old_col == NO_COLUMN || old_col as usize >= cols {
                 continue;
             }
-            // Take the Box out of OnceLock — frees ~60 KB when dropped at end of iteration.
             let Some(bitset) = col_data[old_col as usize].take() else {
                 continue;
             };
 
-            // Count set bits to decide storage format
+            // Count set bits to decide if this column is dense enough to keep.
             let mut popcount = 0u32;
             for w in 0..words {
                 popcount += bitset[w].load(Ordering::Relaxed).count_ones();
             }
 
-            let posting_bytes = popcount as usize * 4;
-            let new_col = columns.len() as u32;
-            lookup[key as usize] = new_col;
-
-            if posting_bytes < dense_bytes {
-                // Sparse: extract sorted file indices
-                let mut posting = Vec::with_capacity(popcount as usize);
-                for w in 0..words {
-                    let mut word = bitset[w].load(Ordering::Relaxed);
-                    let base = (w * 64) as u32;
-                    while word != 0 {
-                        let bit = word.trailing_zeros();
-                        posting.push(base + bit);
-                        word &= word - 1; // clear lowest set bit
-                    }
-                }
-                columns.push(Column::Sparse(posting));
-            } else {
-                // Dense: copy bitset words
-                let mut dense = Vec::with_capacity(words);
-                for w in 0..words {
-                    dense.push(bitset[w].load(Ordering::Relaxed));
-                }
-                columns.push(Column::Dense(dense));
+            // Skip sparse bigrams — not worth storing.
+            if (popcount as usize * 4) < dense_bytes {
+                continue;
             }
-            // `bitset` (Box<[AtomicU64]>) dropped here — allocator can reuse the pages
+
+            let dense_idx = dense_count as u32;
+            lookup[key as usize] = dense_idx;
+            dense_count += 1;
+
+            for w in 0..words {
+                dense_data.push(bitset[w].load(Ordering::Relaxed));
+            }
         }
 
-        // Explicitly drop builder remnants before returning.
         drop(col_data);
         drop(old_lookup);
 
         BigramFilter {
             lookup,
-            columns,
+            dense_data,
+            dense_count,
             words,
             file_count,
             populated,
+            skip_index: None,
         }
     }
 }
@@ -612,29 +634,32 @@ impl BigramIndexBuilder {
 unsafe impl Send for BigramIndexBuilder {}
 unsafe impl Sync for BigramIndexBuilder {}
 
-/// Column storage: either a dense bitset or a sorted posting list.
-#[derive(Debug)]
-enum Column {
-    /// Dense bitset — one u64 per 64-file chunk.
-    Dense(Vec<u64>),
-    /// Sorted file indices — cheaper when few files contain this bigram.
-    Sparse(Vec<u32>),
-}
-
-/// Compressed bigram inverted index.
+/// Compressed bigram inverted index (dense-only).
 ///
-/// Built from `BigramIndexBuilder::compress()`. Sparse columns use sorted u32
-/// posting lists; dense columns use plain bitsets. Lossless — same filtering
-/// quality as the dense builder, significantly less memory.
+/// Built from `BigramIndexBuilder::compress()`. All columns are dense bitsets
+/// packed contiguously in `dense_data` at a fixed stride of `words` — column
+/// `i` lives at `i * words`. The `lookup` table maps bigram key → column
+/// index directly, so the query path is: one lookup load → one multiply →
+/// data access (no pointer chase, no enum discriminant check, SIMD-vectorized
+/// AND).
 #[derive(Debug)]
 pub struct BigramFilter {
     lookup: Vec<u32>,
-    columns: Vec<Column>,
+    /// Flat buffer of all dense column data laid out at fixed stride `words`.
+    /// Column `i` starts at `i * words`.
+    dense_data: Vec<u64>,
+    dense_count: usize,
     words: usize,
     file_count: usize,
     populated: usize,
+    /// Optional skip-1 bigram index (stride 2). Built from character pairs
+    /// at distance 2, e.g. "ABCDE" → (A,C),(B,D),(C,E). ANDead with the
+    /// consecutive bigram candidates during query to dramatically reduce
+    /// false positives.
+    skip_index: Option<Box<BigramFilter>>,
 }
 
+/// SIMD-friendly bitwise AND of two equal-length bitsets.
 // Auto vectorized (don't touch)
 #[inline]
 fn bitset_and(result: &mut [u64], bitset: &[u64]) {
@@ -644,34 +669,8 @@ fn bitset_and(result: &mut [u64], bitset: &[u64]) {
         .for_each(|(r, b)| *r &= *b);
 }
 
-// Auto vectorized (don't touch)
-#[inline]
-fn bitset_and_sparse(result: &mut [u64], posting: &[u32]) {
-    let mut pos = 0;
-    let mut prev_w = 0;
-    while pos < posting.len() {
-        let w = posting[pos] as usize / 64;
-        // Zero gap between previous touched word and this one
-        for r in &mut result[prev_w..w] {
-            *r = 0;
-        }
-        // Accumulate OR mask for this word
-        let mut word_mask = 0u64;
-        while pos < posting.len() && posting[pos] as usize / 64 == w {
-            word_mask |= 1u64 << (posting[pos] as usize % 64);
-            pos += 1;
-        }
-        result[w] &= word_mask;
-        prev_w = w + 1;
-    }
-    // Zero remaining words after last posting entry
-    for r in &mut result[prev_w..] {
-        *r = 0;
-    }
-}
-
 impl BigramFilter {
-    /// Query: AND the posting lists for all query bigrams.
+    /// AND the posting lists for all query bigrams (consecutive + skip).
     /// Returns None if no query bigrams are tracked.
     pub fn query(&self, pattern: &[u8]) -> Option<Vec<u64>> {
         if pattern.len() < 2 {
@@ -684,28 +683,71 @@ impl BigramFilter {
             result[last] = (1u64 << (self.file_count % 64)) - 1;
         }
 
+        let words = self.words;
         let mut has_filter = false;
+
+        // ── Consecutive bigrams (stride 1) ─────────────────────────────
         let mut prev = pattern[0];
         for &b in &pattern[1..] {
             if (32..=126).contains(&prev) && (32..=126).contains(&b) {
                 let key = (prev.to_ascii_lowercase() as u16) << 8 | b.to_ascii_lowercase() as u16;
-                let col_idx = self.lookup[key as usize];
-                if col_idx != NO_COLUMN {
-                    match &self.columns[col_idx as usize] {
-                        Column::Dense(bitset) => {
-                            bitset_and(&mut result, bitset);
-                        }
-                        Column::Sparse(posting) => {
-                            bitset_and_sparse(&mut result, posting);
-                        }
-                    }
+                let col = self.lookup[key as usize];
+                if col != NO_COLUMN {
+                    let offset = col as usize * words;
+                    // SAFETY: compress() guarantees offset + words <= dense_data.len()
+                    let slice = unsafe { self.dense_data.get_unchecked(offset..offset + words) };
+                    bitset_and(&mut result, slice);
                     has_filter = true;
                 }
             }
             prev = b;
         }
 
-        if has_filter { Some(result) } else { None }
+        // ── Skip-1 bigrams (stride 2) ──────────────────────────────────
+        if let Some(skip) = &self.skip_index
+            && pattern.len() >= 3
+            && let Some(skip_candidates) = skip.query_skip(pattern)
+        {
+            bitset_and(&mut result, &skip_candidates);
+            has_filter = true;
+        }
+
+        has_filter.then_some(result)
+    }
+
+    /// Query using stride-2 bigrams from the pattern.
+    /// For "ABCDE" queries with keys (A,C), (B,D), (C,E).
+    fn query_skip(&self, pattern: &[u8]) -> Option<Vec<u64>> {
+        let mut result = vec![u64::MAX; self.words];
+        if !self.file_count.is_multiple_of(64) {
+            let last = self.words - 1;
+            result[last] = (1u64 << (self.file_count % 64)) - 1;
+        }
+
+        let words = self.words;
+        let mut has_filter = false;
+
+        for i in 0..pattern.len().saturating_sub(2) {
+            let a = pattern[i];
+            let b = pattern[i + 2];
+            if (32..=126).contains(&a) && (32..=126).contains(&b) {
+                let key = (a.to_ascii_lowercase() as u16) << 8 | b.to_ascii_lowercase() as u16;
+                let col = self.lookup[key as usize];
+                if col != NO_COLUMN {
+                    let offset = col as usize * words;
+                    let slice = unsafe { self.dense_data.get_unchecked(offset..offset + words) };
+                    bitset_and(&mut result, slice);
+                    has_filter = true;
+                }
+            }
+        }
+
+        has_filter.then_some(result)
+    }
+
+    /// Attach a skip-1 bigram index for tighter candidate filtering.
+    pub fn set_skip_index(&mut self, skip: BigramFilter) {
+        self.skip_index = Some(Box::new(skip));
     }
 
     #[inline]
@@ -728,47 +770,22 @@ impl BigramFilter {
     }
 
     pub fn columns_used(&self) -> usize {
-        self.columns.len()
+        self.dense_count
     }
 
-    pub fn sparse_columns(&self) -> usize {
-        self.columns
-            .iter()
-            .filter(|c| matches!(c, Column::Sparse(_)))
-            .count()
-    }
-
-    pub fn dense_columns(&self) -> usize {
-        self.columns
-            .iter()
-            .filter(|c| matches!(c, Column::Dense(_)))
-            .count()
-    }
-
-    /// Total heap bytes used by this index (lookup table + all column data).
+    /// Total heap bytes used by this index (lookup + dense data + skip).
     pub fn heap_bytes(&self) -> usize {
         let lookup_bytes = self.lookup.len() * std::mem::size_of::<u32>();
-        let column_bytes: usize = self
-            .columns
-            .iter()
-            .map(|c| {
-                std::mem::size_of::<Column>()
-                    + match c {
-                        Column::Dense(v) => v.len() * 8,
-                        Column::Sparse(v) => v.len() * 4,
-                    }
-            })
-            .sum();
-        lookup_bytes + column_bytes
+        let dense_bytes = self.dense_data.len() * std::mem::size_of::<u64>();
+        let skip_bytes = self.skip_index.as_ref().map_or(0, |s| s.heap_bytes());
+        lookup_bytes + dense_bytes + skip_bytes
+    }
+
+    /// Check whether a bigram key is present in this index.
+    pub fn has_key(&self, key: u16) -> bool {
+        self.lookup[key as usize] != NO_COLUMN
     }
 }
-
-unsafe impl Send for BigramFilter {}
-unsafe impl Sync for BigramFilter {}
-
-// ---------------------------------------------------------------------------
-// Shared bigram extraction
-// ---------------------------------------------------------------------------
 
 /// Extract deduplicated bigram keys from file content.
 /// Same logic as `BigramIndexBuilder::add_file_content`: consecutive printable
@@ -797,10 +814,6 @@ pub fn extract_bigrams(content: &[u8]) -> Vec<u16> {
     bigrams
 }
 
-// ---------------------------------------------------------------------------
-// Bigram overlay — incremental delta layer on top of the immutable base index
-// ---------------------------------------------------------------------------
-
 /// Tracks bigram changes since the base `BigramFilter` was built.
 ///
 /// Modified and added files store their own bigram sets. Deleted files are
@@ -811,7 +824,7 @@ pub fn extract_bigrams(content: &[u8]) -> Vec<u16> {
 pub struct BigramOverlay {
     /// Per-file bigram sets for files modified since the base was built.
     /// Key = file index in the base `Vec<FileItem>`.
-    modified: HashMap<usize, Vec<u16>>,
+    modified: AHashMap<usize, Vec<u16>>,
 
     /// Tombstone bitset — one bit per base file. Set bits are excluded
     /// from base query results.
@@ -824,13 +837,11 @@ pub struct BigramOverlay {
     base_file_count: usize,
 }
 
-use std::collections::HashMap;
-
 impl BigramOverlay {
     pub fn new(base_file_count: usize) -> Self {
         let words = base_file_count.div_ceil(64);
         Self {
-            modified: HashMap::new(),
+            modified: AHashMap::new(),
             tombstones: vec![0u64; words],
             added: Vec::new(),
             base_file_count,
@@ -865,8 +876,10 @@ impl BigramOverlay {
         self.modified
             .iter()
             .filter_map(|(&file_idx, bigrams)| {
-                let all_match = pattern_bigrams.iter().all(|pb| bigrams.contains(pb));
-                if all_match { Some(file_idx) } else { None }
+                pattern_bigrams
+                    .iter()
+                    .all(|pb| bigrams.contains(pb))
+                    .then_some(file_idx)
             })
             .collect()
     }
@@ -881,8 +894,10 @@ impl BigramOverlay {
             .iter()
             .enumerate()
             .filter_map(|(idx, bigrams)| {
-                let all_match = pattern_bigrams.iter().all(|pb| bigrams.contains(pb));
-                if all_match { Some(idx) } else { None }
+                pattern_bigrams
+                    .iter()
+                    .all(|pb| bigrams.contains(pb))
+                    .then_some(idx)
             })
             .collect()
     }

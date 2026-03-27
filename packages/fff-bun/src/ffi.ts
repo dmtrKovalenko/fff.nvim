@@ -831,9 +831,7 @@ const SP_WARMUP_COMPLETE = 10; // bool (1)
 /**
  * Get scan progress.
  */
-export function ffiGetScanProgress(
-  handle: NativeHandle,
-): Result<ScanProgress> {
+export function ffiGetScanProgress(handle: NativeHandle): Result<ScanProgress> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_get_scan_progress(handle);
   const envelope = readResultEnvelope(resultPtr);
@@ -866,7 +864,10 @@ export function ffiWaitForScan(handle: NativeHandle, timeoutMs: number): Result<
 /**
  * Wait for the background file watcher to be ready.
  */
-export function ffiWaitForWatcher(handle: NativeHandle, timeoutMs: number): Result<boolean> {
+export function ffiWaitForWatcher(
+  handle: NativeHandle,
+  timeoutMs: number,
+): Result<boolean> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_wait_for_watcher(handle, BigInt(timeoutMs));
   return parseBoolResult(resultPtr);

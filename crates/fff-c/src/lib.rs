@@ -606,7 +606,7 @@ pub unsafe extern "C" fn fff_wait_for_scan(
         Err(e) => return e,
     };
 
-    let completed = FilePicker::wait_for_scan(&picker, Duration::from_millis(timeout_ms));
+    let completed = FilePicker::wait_for_scan(picker, Duration::from_millis(timeout_ms));
     FffResult::ok_int(completed as i64)
 }
 

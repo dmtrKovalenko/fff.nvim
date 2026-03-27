@@ -35,6 +35,10 @@ path = "src/bin/grep_profiler.rs"
 name = "grep_vs_rg"
 path = "src/bin/grep_vs_rg.rs"
 
+[[bin]]
+name = "bench_grep_query"
+path = "src/bin/bench_grep_query.rs"
+
 [dependencies]
 # Workspace dependencies
 ahash = { workspace = true }
