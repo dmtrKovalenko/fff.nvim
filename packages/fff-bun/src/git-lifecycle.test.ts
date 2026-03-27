@@ -127,7 +127,7 @@ describe.skipIf(process.platform === "win32")("Git lifecycle integration", () =>
   let tmpDir: string;
   let finder: FileFinder;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     // Create temp directory and initialise a git repo with two committed files.
     // Use realpathSync to resolve symlinks (macOS /var -> /private/var) so
     // that git2's resolved workdir paths match the file picker's base_path.
@@ -151,6 +151,20 @@ describe.skipIf(process.platform === "win32")("Git lifecycle integration", () =>
     // Wait for the initial scan to finish
     const scanResult = finder.waitForScan(10_000);
     expect(scanResult.ok).toBe(true);
+
+    // Poll getScanProgress until the watcher is ready so that
+    // filesystem events (file creates, deletes) are detected.
+    const start = Date.now();
+    while (Date.now() - start < WATCHER_TIMEOUT_MS) {
+      const progress = finder.getScanProgress();
+      if (progress.ok && progress.value.isWatcherReady) break;
+      await sleep(POLL_INTERVAL_MS);
+    }
+    const progress = finder.getScanProgress();
+    expect(progress.ok).toBe(true);
+    if (progress.ok) {
+      expect(progress.value.isWatcherReady).toBe(true);
+    }
   });
 
   afterAll(() => {

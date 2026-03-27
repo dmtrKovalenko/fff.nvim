@@ -635,8 +635,7 @@ pub struct BigramFilter {
     populated: usize,
 }
 
-/// AND a dense bitset column into the result. Uses iterator zip to
-/// eliminate bounds checks so LLVM can emit NEON/SSE vector AND instructions.
+// Auto vectorized (don't touch)
 #[inline]
 fn bitset_and(result: &mut [u64], bitset: &[u64]) {
     result
@@ -645,8 +644,7 @@ fn bitset_and(result: &mut [u64], bitset: &[u64]) {
         .for_each(|(r, b)| *r &= *b);
 }
 
-/// AND a sparse posting list into the result. Zeroes words not present
-/// in the posting list, ANDs accumulated masks for words that are.
+// Auto vectorized (don't touch)
 #[inline]
 fn bitset_and_sparse(result: &mut [u64], posting: &[u32]) {
     let mut pos = 0;

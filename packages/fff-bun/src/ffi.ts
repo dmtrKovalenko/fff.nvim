@@ -16,6 +16,7 @@ import type {
   GrepResult,
   Location,
   Result,
+  ScanProgress,
   Score,
   SearchResult,
 } from "./types";
@@ -122,6 +123,10 @@ const ffiDefinition = {
     returns: FFIType.ptr,
   },
   fff_wait_for_scan: {
+    args: [FFIType.ptr, FFIType.u64],
+    returns: FFIType.ptr,
+  },
+  fff_wait_for_watcher: {
     args: [FFIType.ptr, FFIType.u64],
     returns: FFIType.ptr,
   },
@@ -817,16 +822,18 @@ export function ffiIsScanning(handle: NativeHandle): boolean {
   return library.symbols.fff_is_scanning(handle) as boolean;
 }
 
-// FffScanProgress { scanned_files_count: u64(8), is_scanning: bool(1+7pad) }
+// FffScanProgress { scanned_files_count: u64(8), is_scanning: bool(1), is_watcher_ready: bool(1), is_warmup_complete: bool(1) + pad }
 const SP_COUNT = 0; // u64 (8)
-const SP_SCANNING = 8; // bool (1 + 7 pad)
+const SP_SCANNING = 8; // bool (1)
+const SP_WATCHER_READY = 9; // bool (1)
+const SP_WARMUP_COMPLETE = 10; // bool (1)
 
 /**
  * Get scan progress.
  */
 export function ffiGetScanProgress(
   handle: NativeHandle,
-): Result<{ scannedFilesCount: number; isScanning: boolean }> {
+): Result<ScanProgress> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_get_scan_progress(handle);
   const envelope = readResultEnvelope(resultPtr);
@@ -837,9 +844,11 @@ export function ffiGetScanProgress(
   }
 
   const hp = asPtr(envelope.handlePtr);
-  const result = {
+  const result: ScanProgress = {
     scannedFilesCount: Number(read.u64(hp, SP_COUNT)),
     isScanning: read.u8(hp, SP_SCANNING) !== 0,
+    isWatcherReady: read.u8(hp, SP_WATCHER_READY) !== 0,
+    isWarmupComplete: read.u8(hp, SP_WARMUP_COMPLETE) !== 0,
   };
   library.symbols.fff_free_scan_progress(hp);
   return { ok: true, value: result };
@@ -851,6 +860,15 @@ export function ffiGetScanProgress(
 export function ffiWaitForScan(handle: NativeHandle, timeoutMs: number): Result<boolean> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_wait_for_scan(handle, BigInt(timeoutMs));
+  return parseBoolResult(resultPtr);
+}
+
+/**
+ * Wait for the background file watcher to be ready.
+ */
+export function ffiWaitForWatcher(handle: NativeHandle, timeoutMs: number): Result<boolean> {
+  const library = loadLibrary();
+  const resultPtr = library.symbols.fff_wait_for_watcher(handle, BigInt(timeoutMs));
   return parseBoolResult(resultPtr);
 }
 

@@ -703,6 +703,7 @@ dependencies = [
 name = "fff-query-parser"
 version = "0.4.2"
 dependencies = [
+ "criterion",
  "zlob",
 ]
 

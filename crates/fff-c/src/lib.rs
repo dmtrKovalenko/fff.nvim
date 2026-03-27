@@ -588,11 +588,7 @@ pub unsafe extern "C" fn fff_get_scan_progress(fff_handle: *mut c_void) -> *mut 
         None => return FffResult::err("File picker not initialized"),
     };
 
-    let progress = picker.get_scan_progress();
-    let result = Box::into_raw(Box::new(FffScanProgress {
-        scanned_files_count: progress.scanned_files_count as u64,
-        is_scanning: progress.is_scanning,
-    }));
+    let result = Box::into_raw(Box::new(FffScanProgress::from(picker.get_scan_progress())));
     FffResult::ok_handle(result as *mut c_void)
 }
 
@@ -605,38 +601,31 @@ pub unsafe extern "C" fn fff_wait_for_scan(
     fff_handle: *mut c_void,
     timeout_ms: u64,
 ) -> *mut FffResult {
+    let FffInstance { picker, .. } = match unsafe { instance_ref(fff_handle) } {
+        Ok(i) => i,
+        Err(e) => return e,
+    };
+
+    let completed = FilePicker::wait_for_scan(&picker, Duration::from_millis(timeout_ms));
+    FffResult::ok_int(completed as i64)
+}
+
+/// Wait for the background file watcher to be ready.
+///
+/// ## Safety
+/// `fff_handle` must be a valid instance pointer from `fff_create_instance`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_wait_for_watcher(
+    fff_handle: *mut c_void,
+    timeout_ms: u64,
+) -> *mut FffResult {
     let inst = match unsafe { instance_ref(fff_handle) } {
         Ok(i) => i,
         Err(e) => return e,
     };
 
-    let scan_signal = {
-        let guard = match inst.picker.read() {
-            Ok(g) => g,
-            Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-        };
-
-        let picker = match guard.as_ref() {
-            Some(p) => p,
-            None => return FffResult::err("File picker not initialized"),
-        };
-
-        picker.scan_signal()
-    };
-
-    let timeout = Duration::from_millis(timeout_ms);
-    let start = std::time::Instant::now();
-    let mut sleep_duration = Duration::from_millis(1);
-
-    while scan_signal.load(std::sync::atomic::Ordering::Relaxed) {
-        if start.elapsed() >= timeout {
-            return FffResult::ok_int(0);
-        }
-        std::thread::sleep(sleep_duration);
-        sleep_duration = std::cmp::min(sleep_duration * 2, Duration::from_millis(50));
-    }
-
-    FffResult::ok_int(1)
+    let completed = FilePicker::wait_for_watcher(&inst.picker, Duration::from_millis(timeout_ms));
+    FffResult::ok_int(completed as i64)
 }
 
 /// Restart indexing in a new directory.

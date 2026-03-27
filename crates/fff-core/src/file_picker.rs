@@ -51,7 +51,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use tracing::{Level, debug, error, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -83,11 +83,13 @@ pub struct FuzzySearchOptions<'a> {
 
 #[derive(Debug, Clone)]
 struct FileSync {
-    /// Base files sorted by path for binary search. Deletions use tombstones
-    /// (`is_deleted = true`) to keep indices stable for the bigram index.
+    /// All files: `files[..base_count]` are sorted by path (base index, used
+    /// for binary search and bigram); `files[base_count..]` are overflow files
+    /// added since the last full reindex. Deletions in the base use tombstones
+    /// (`is_deleted = true`) to keep bigram indices stable.
     files: Vec<FileItem>,
-    /// Files added since the last full reindex. Not in the base bigram index.
-    overflow: Vec<FileItem>,
+    /// Number of base files (the sorted prefix used for binary search / bigram).
+    base_count: usize,
     pub git_workdir: Option<PathBuf>,
 }
 
@@ -95,15 +97,22 @@ impl FileSync {
     fn new() -> Self {
         Self {
             files: Vec::new(),
-            overflow: Vec::new(),
+            base_count: 0,
             git_workdir: None,
         }
     }
 
-    /// Get all files (read-only). Files are sorted by path.
+    /// Get all files (base + overflow). The base portion `[..base_count]` is
+    /// sorted by path; the overflow tail is unsorted.
     #[inline]
     fn files(&self) -> &[FileItem] {
         &self.files
+    }
+
+    /// Get the overflow portion (files added since last full reindex).
+    #[inline]
+    fn overflow_files(&self) -> &[FileItem] {
+        &self.files[self.base_count..]
     }
 
     #[allow(dead_code)]
@@ -111,16 +120,25 @@ impl FileSync {
         self.files.get(index)
     }
 
-    /// Get mutable file at index
+    /// Get mutable file at index (works for both base and overflow)
     #[inline]
     fn get_file_mut(&mut self, index: usize) -> Option<&mut FileItem> {
         self.files.get_mut(index)
     }
 
-    /// Find file index by path using binary search - O(log n)
+    /// Find file index by path using binary search on the sorted base portion.
     #[inline]
     fn find_file_index(&self, path: &Path) -> Result<usize, usize> {
-        self.files.binary_search_by(|f| f.path.as_path().cmp(path))
+        self.files[..self.base_count].binary_search_by(|f| f.path.as_path().cmp(path))
+    }
+
+    /// Find a file in the overflow portion by path (linear scan).
+    /// Returns the absolute index into `files`.
+    fn find_overflow_index(&self, path: &Path) -> Option<usize> {
+        self.files[self.base_count..]
+            .iter()
+            .position(|f| f.path == path)
+            .map(|pos| self.base_count + pos)
     }
 
     /// Get file count
@@ -143,14 +161,20 @@ impl FileSync {
         }
     }
 
-    /// Remove files matching predicate.
-    /// Returns number of files removed.
-    fn retain_files<F>(&mut self, predicate: F) -> usize
+    /// Remove files matching predicate from both base and overflow.
+    /// Returns number of files removed. Adjusts `base_count` accordingly.
+    fn retain_files<F>(&mut self, mut predicate: F) -> usize
     where
         F: FnMut(&FileItem) -> bool,
     {
         let initial_len = self.files.len();
+        // Count how many base files survive.
+        let base_retained = self.files[..self.base_count]
+            .iter()
+            .filter(|f| predicate(f))
+            .count();
         self.files.retain(predicate);
+        self.base_count = base_retained;
         initial_len - self.files.len()
     }
 
@@ -242,6 +266,7 @@ pub struct FilePicker {
     base_path: PathBuf,
     sync_data: FileSync,
     is_scanning: Arc<AtomicBool>,
+    watcher_ready: Arc<AtomicBool>,
     scanned_files_count: Arc<AtomicUsize>,
     background_watcher: Option<BackgroundWatcher>,
     warmup_mmap_cache: bool,
@@ -299,7 +324,7 @@ impl FilePicker {
     }
 
     pub fn get_overflow_files(&self) -> &[FileItem] {
-        &self.sync_data.overflow
+        self.sync_data.overflow_files()
     }
 
     /// Create a new FilePicker and place it into the provided shared handle.
@@ -330,6 +355,7 @@ impl FilePicker {
         // that races with the background thread sees "scanning in progress"
         // rather than a stale `false` (the thread hasn't started yet).
         let scan_signal = Arc::new(AtomicBool::new(true));
+        let watcher_ready = Arc::new(AtomicBool::new(false));
         let synced_files_count = Arc::new(AtomicUsize::new(0));
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -337,6 +363,7 @@ impl FilePicker {
             base_path: path.clone(),
             sync_data: FileSync::new(),
             is_scanning: Arc::clone(&scan_signal),
+            watcher_ready: Arc::clone(&watcher_ready),
             scanned_files_count: Arc::clone(&synced_files_count),
             background_watcher: None,
             warmup_mmap_cache,
@@ -357,6 +384,7 @@ impl FilePicker {
         spawn_scan_and_watcher(
             path.clone(),
             Arc::clone(&scan_signal),
+            Arc::clone(&watcher_ready),
             Arc::clone(&synced_files_count),
             warmup_mmap_cache,
             mode,
@@ -474,6 +502,8 @@ impl FilePicker {
         ScanProgress {
             scanned_files_count: scanned_count,
             is_scanning,
+            is_watcher_ready: self.watcher_ready.load(Ordering::Relaxed),
+            is_warmup_complete: self.bigram_index.is_some(),
         }
     }
 
@@ -554,7 +584,13 @@ impl FilePicker {
         file_path: impl AsRef<Path>,
         frecency_tracker: &FrecencyTracker,
     ) -> Result<(), Error> {
-        if let Ok(index) = self.sync_data.find_file_index(file_path.as_ref())
+        let path = file_path.as_ref();
+        let index = self
+            .sync_data
+            .find_file_index(path)
+            .ok()
+            .or_else(|| self.sync_data.find_overflow_index(path));
+        if let Some(index) = index
             && let Some(file) = self.sync_data.get_file_mut(index)
         {
             file.update_frecency_scores(frecency_tracker, self.mode)?;
@@ -571,10 +607,14 @@ impl FilePicker {
     }
 
     pub fn get_mut_file_by_path(&mut self, path: impl AsRef<Path>) -> Option<&mut FileItem> {
-        self.sync_data
-            .find_file_index(path.as_ref())
+        let path = path.as_ref();
+        // Check sorted base first (O(log n)), then overflow tail (O(k)).
+        let index = self
+            .sync_data
+            .find_file_index(path)
             .ok()
-            .and_then(|index| self.sync_data.get_file_mut(index))
+            .or_else(|| self.sync_data.find_overflow_index(path));
+        index.and_then(|i| self.sync_data.get_file_mut(i))
     }
 
     /// Add a file to the picker's files in sorted order (used by background watcher)
@@ -654,8 +694,8 @@ impl FilePicker {
         }
 
         // Check overflow for existing added files.
-        if let Some(overflow_pos) = self.sync_data.overflow.iter().position(|f| f.path == path) {
-            let file = &mut self.sync_data.overflow[overflow_pos];
+        if let Some(abs_pos) = self.sync_data.find_overflow_index(path) {
+            let file = &mut self.sync_data.files[abs_pos];
             let modified = std::fs::metadata(path)
                 .ok()
                 .and_then(|m| m.modified().ok())
@@ -671,28 +711,29 @@ impl FilePicker {
             if let Some(ref overlay) = self.bigram_overlay
                 && let Ok(content) = std::fs::read(path)
             {
+                let overflow_pos = abs_pos - self.sync_data.base_count;
                 let bigrams = crate::types::extract_bigrams(&content);
                 overlay.write().update_added(overflow_pos, bigrams);
             }
-            return Some(&self.sync_data.overflow[overflow_pos]);
+            return Some(&self.sync_data.files[abs_pos]);
         }
 
-        // New file — append to overflow (preserves base indices for bigram).
+        // New file — append to overflow tail (preserves base indices for bigram).
         debug!(
             "on_create_or_modify: file NEW, appending to overflow (base: {}, overflow: {})",
-            self.sync_data.files().len(),
-            self.sync_data.overflow.len(),
+            self.sync_data.base_count,
+            self.sync_data.overflow_files().len(),
         );
 
         let file_item = FileItem::new(path.to_path_buf(), &self.base_path, None);
-        self.sync_data.overflow.push(file_item);
+        self.sync_data.files.push(file_item);
 
         if let Some(ref overlay) = self.bigram_overlay {
             let content = std::fs::read(path).unwrap_or_default();
             overlay.write().add_file(&content);
         }
 
-        self.sync_data.overflow.last()
+        self.sync_data.files.last()
     }
 
     /// Tombstone a file instead of removing it, keeping base indices stable.
@@ -711,10 +752,11 @@ impl FilePicker {
             Err(_) => {
                 // Check overflow for added files — these can be removed directly
                 // since they aren't in the base bigram index.
-                if let Some(pos) = self.sync_data.overflow.iter().position(|f| f.path == path) {
-                    self.sync_data.overflow.remove(pos);
+                if let Some(abs_pos) = self.sync_data.find_overflow_index(path) {
+                    let overflow_pos = abs_pos - self.sync_data.base_count;
+                    self.sync_data.files.remove(abs_pos);
                     if let Some(ref overlay) = self.bigram_overlay {
-                        overlay.write().remove_added(pos);
+                        overlay.write().remove_added(overflow_pos);
                     }
                     true
                 } else {
@@ -806,25 +848,54 @@ impl FilePicker {
         Arc::clone(&self.is_scanning)
     }
 
+    /// Return a clone of the watcher-ready flag so callers can poll it without
+    /// holding a lock on the picker.
+    pub fn watcher_signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.watcher_ready)
+    }
+
     /// Block the current thread until the background filesystem scan finishes.
-    ///
-    /// Briefly acquires a read lock on the shared picker to obtain the scan
-    /// signal, then drops the lock and polls without holding it — so the
-    /// background thread can still write to the index.
-    ///
-    /// Returns immediately if no picker has been initialised yet.
-    pub fn wait_for_scan(shared_picker: &SharedPicker) {
+    /// Returns `true` if scan completed, `false` on timeout.
+    /// Use with CAUTION — blocking. Prefer `scan_signal` + async polling.
+    pub fn wait_for_scan(shared_picker: &SharedPicker, timeout: Duration) -> bool {
         let signal = {
             let guard = shared_picker.read().expect("shared picker lock poisoned");
             match guard.as_ref() {
                 Some(picker) => picker.scan_signal(),
-                None => return,
+                None => return true,
             }
         };
 
+        let start = std::time::Instant::now();
         while signal.load(Ordering::Acquire) {
+            if start.elapsed() >= timeout {
+                return false;
+            }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        true
+    }
+
+    /// Block the current thread until the background file watcher is ready.
+    /// Returns `true` if watcher is ready, `false` on timeout.
+    /// Use with CAUTION — blocking. Prefer `watcher_signal` + async polling.
+    pub fn wait_for_watcher(shared_picker: &SharedPicker, timeout: Duration) -> bool {
+        let signal = {
+            let guard = shared_picker.read().expect("shared picker lock poisoned");
+            match guard.as_ref() {
+                Some(picker) => picker.watcher_signal(),
+                None => return true,
+            }
+        };
+
+        let start = std::time::Instant::now();
+        while !signal.load(Ordering::Acquire) {
+            if start.elapsed() >= timeout {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        true
     }
 }
 
@@ -839,12 +910,15 @@ pub struct ScanProgress {
     pub scanned_files_count: usize,
     /// `true` while the background scan thread is still running.
     pub is_scanning: bool,
+    pub is_watcher_ready: bool,
+    pub is_warmup_complete: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_scan_and_watcher(
     base_path: PathBuf,
     scan_signal: Arc<AtomicBool>,
+    watcher_ready: Arc<AtomicBool>,
     synced_files_count: Arc<AtomicUsize>,
     warmup_mmap_cache: bool,
     mode: FFFMode,
@@ -857,7 +931,7 @@ fn spawn_scan_and_watcher(
         // so waiters see "scanning" even before this thread is scheduled.
         info!("Starting initial file scan");
 
-        let mut git_workdir = None;
+        let git_workdir;
 
         match walk_filesystem(&base_path, &synced_files_count, &shared_frecency, mode) {
             Ok(walk) => {
@@ -892,77 +966,6 @@ fn spawn_scan_and_watcher(
                 scan_signal.store(false, Ordering::Relaxed);
                 info!("Files indexed and searchable");
 
-                if warmup_mmap_cache && !cancelled.load(Ordering::Acquire) {
-                    let phase_start = std::time::Instant::now();
-
-                    // Scale cache limits based on repo size.
-                    if let Ok(mut guard) = shared_picker.write()
-                        && let Some(ref mut picker) = *guard
-                    {
-                        let file_count = picker.sync_data.files().len();
-                        picker.cache_budget =
-                            Arc::new(ContentCacheBudget::new_for_repo(file_count));
-                        info!(
-                            "Cache budget configured for {} files: max_files={}, max_bytes={}",
-                            file_count,
-                            picker.cache_budget.max_files,
-                            picker.cache_budget.max_bytes,
-                        );
-                    }
-
-                    // Warmup: read top-frecency files into cache.
-                    if !cancelled.load(Ordering::Acquire)
-                        && let Ok(guard) = shared_picker.read()
-                        && let Some(ref picker) = *guard
-                    {
-                        let warmup_start = std::time::Instant::now();
-                        warmup_mmaps(picker.sync_data.files(), &picker.cache_budget);
-                        info!(
-                            "Warmup completed in {:.2}s (cached {} files, {} bytes)",
-                            warmup_start.elapsed().as_secs_f64(),
-                            picker.cache_budget.cached_count.load(Ordering::Relaxed),
-                            picker.cache_budget.cached_bytes.load(Ordering::Relaxed),
-                        );
-                    }
-
-                    // Build bigram index without holding the lock.
-                    if !cancelled.load(Ordering::Acquire) {
-                        let snapshot = shared_picker.read().ok().and_then(|guard| {
-                            guard.as_ref().map(|picker| {
-                                (
-                                    picker.sync_data.files().to_vec(),
-                                    Arc::clone(&picker.cache_budget),
-                                )
-                            })
-                        });
-
-                        if let Some((files, budget)) = snapshot {
-                            let bigram_start = std::time::Instant::now();
-                            info!("Starting bigram index build for {} files...", files.len());
-                            let index = build_bigram_index(&files, &budget);
-                            info!(
-                                "Bigram index ready in {:.2}s",
-                                bigram_start.elapsed().as_secs_f64(),
-                            );
-
-                            if let Ok(mut guard) = shared_picker.write()
-                                && let Some(ref mut picker) = *guard
-                            {
-                                let file_count = picker.sync_data.files().len();
-                                picker.bigram_index = Some(Arc::new(index));
-                                picker.bigram_overlay = Some(Arc::new(parking_lot::RwLock::new(
-                                    BigramOverlay::new(file_count),
-                                )));
-                            }
-                        }
-                    }
-
-                    info!(
-                        "Post-scan warmup + bigram total: {:.2}s",
-                        phase_start.elapsed().as_secs_f64(),
-                    );
-                }
-
                 // Apply git status (may still be running — this waits for it).
                 if !cancelled.load(Ordering::Acquire) {
                     apply_git_status(&shared_picker, &shared_frecency, git_handle, mode);
@@ -971,12 +974,14 @@ fn spawn_scan_and_watcher(
             Err(e) => {
                 error!("Initial scan failed: {:?}", e);
                 scan_signal.store(false, Ordering::Relaxed);
+                watcher_ready.store(true, Ordering::Release);
+                return;
             }
         }
 
-        // Don't create a watcher if this picker instance was already replaced
         if cancelled.load(Ordering::Acquire) {
             info!("Picker was replaced, skipping background watcher creation");
+            watcher_ready.store(true, Ordering::Release);
             return;
         }
 
@@ -990,12 +995,10 @@ fn spawn_scan_and_watcher(
             Ok(watcher) => {
                 info!("Background file watcher initialized successfully");
 
-                // Final cancellation check: if the picker was replaced between
-                // watcher creation and this write, drop the watcher instead of
-                // storing it in the wrong picker.
                 if cancelled.load(Ordering::Acquire) {
                     info!("Picker was replaced, dropping orphaned watcher");
                     drop(watcher);
+                    watcher_ready.store(true, Ordering::Release);
                     return;
                 }
 
@@ -1012,6 +1015,82 @@ fn spawn_scan_and_watcher(
             Err(e) => {
                 error!("Failed to initialize background file watcher: {:?}", e);
             }
+        }
+
+        watcher_ready.store(true, Ordering::Release);
+
+        if warmup_mmap_cache && !cancelled.load(Ordering::Acquire) {
+            let phase_start = std::time::Instant::now();
+
+            // Scale cache limits based on repo size.
+            if let Ok(mut guard) = shared_picker.write()
+                && let Some(ref mut picker) = *guard
+            {
+                let file_count = picker.sync_data.files().len();
+                picker.cache_budget = Arc::new(ContentCacheBudget::new_for_repo(file_count));
+                info!(
+                    "Cache budget configured for {} files: max_files={}, max_bytes={}",
+                    file_count, picker.cache_budget.max_files, picker.cache_budget.max_bytes,
+                );
+            }
+
+            // Warmup: read top-frecency files into cache.
+            if !cancelled.load(Ordering::Acquire)
+                && let Ok(guard) = shared_picker.read()
+                && let Some(ref picker) = *guard
+            {
+                let warmup_start = std::time::Instant::now();
+                warmup_mmaps(picker.sync_data.files(), &picker.cache_budget);
+                info!(
+                    "Warmup completed in {:.2}s (cached {} files, {} bytes)",
+                    warmup_start.elapsed().as_secs_f64(),
+                    picker.cache_budget.cached_count.load(Ordering::Relaxed),
+                    picker.cache_budget.cached_bytes.load(Ordering::Relaxed),
+                );
+            }
+
+            // Build bigram index without holding the lock.
+            if !cancelled.load(Ordering::Acquire) {
+                let snapshot = shared_picker.read().ok().and_then(|guard| {
+                    guard.as_ref().map(|picker| {
+                        (
+                            picker.sync_data.files().to_vec(),
+                            Arc::clone(&picker.cache_budget),
+                        )
+                    })
+                });
+
+                if let Some((files, budget)) = snapshot {
+                    let bigram_start = std::time::Instant::now();
+                    info!("Starting bigram index build for {} files...", files.len());
+                    let (index, content_binary) = build_bigram_index(&files, &budget);
+                    info!(
+                        "Bigram index ready in {:.2}s",
+                        bigram_start.elapsed().as_secs_f64(),
+                    );
+
+                    if let Ok(mut guard) = shared_picker.write()
+                        && let Some(ref mut picker) = *guard
+                    {
+                        for &idx in &content_binary {
+                            if let Some(file) = picker.sync_data.get_file_mut(idx) {
+                                file.is_binary = true;
+                            }
+                        }
+
+                        let base_count = picker.sync_data.base_count;
+                        picker.bigram_index = Some(Arc::new(index));
+                        picker.bigram_overlay = Some(Arc::new(parking_lot::RwLock::new(
+                            BigramOverlay::new(base_count),
+                        )));
+                    }
+                }
+            }
+
+            info!(
+                "Post-scan warmup + bigram total: {:.2}s",
+                phase_start.elapsed().as_secs_f64(),
+            );
         }
 
         // the debouncer keeps running in its own thread
@@ -1086,11 +1165,19 @@ fn warmup_mmaps(files: &[FileItem], budget: &ContentCacheBudget) {
 /// For each non-binary, non-empty file: reads content (or uses cached mmap),
 /// populates the per-file bigram bloom filter, and adds it to the inverted index.
 /// Uses rayon for parallel processing.
-pub fn build_bigram_index(files: &[FileItem], budget: &ContentCacheBudget) -> BigramFilter {
+pub fn build_bigram_index(
+    files: &[FileItem],
+    budget: &ContentCacheBudget,
+) -> (BigramFilter, Vec<usize>) {
     let start = std::time::Instant::now();
     info!("Building bigram index for {} files...", files.len());
     let builder = BigramIndexBuilder::new(files.len());
     let max_file_size = budget.max_file_size;
+
+    // Collect indices of files that passed the extension heuristic but are
+    // actually binary (contain NUL bytes). These are marked `is_binary = true`
+    // on the real file list after the build, so grep never has to re-check.
+    let content_binary: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 
     files.par_iter().enumerate().for_each(|(i, file)| {
         if file.is_binary || file.size == 0 || file.size > max_file_size {
@@ -1099,16 +1186,28 @@ pub fn build_bigram_index(files: &[FileItem], budget: &ContentCacheBudget) -> Bi
         // Use cached content if available (no extra memory).
         // For uncached files, use read() instead of mmap() — heap memory is
         // freed immediately on drop, while mmap pages linger in RSS on macOS.
+        let data: Option<&[u8]>;
+        let owned;
         if let Some(cached) = file.get_content(budget) {
-            // Catch binary files not detected by extension heuristic
-            if !detect_binary_content(cached) {
-                builder.add_file_content(i, cached);
+            if detect_binary_content(cached) {
+                content_binary.lock().unwrap().push(i);
+                return;
             }
-        } else if let Ok(data) = std::fs::read(&file.path)
-            && !detect_binary_content(&data)
-        {
-            builder.add_file_content(i, &data);
+            data = Some(cached);
+            owned = None;
+        } else if let Ok(read_data) = std::fs::read(&file.path) {
+            if detect_binary_content(&read_data) {
+                content_binary.lock().unwrap().push(i);
+                return;
+            }
+            data = None;
+            owned = Some(read_data);
+        } else {
+            return;
         }
+
+        let content = data.unwrap_or_else(|| owned.as_ref().unwrap());
+        builder.add_file_content(i, content);
     });
 
     let cols = builder.columns_used();
@@ -1126,7 +1225,16 @@ pub fn build_bigram_index(files: &[FileItem], budget: &ContentCacheBudget) -> Bi
         index.dense_columns(),
         files.len(),
     );
-    index
+
+    let binary_indices = content_binary.into_inner().unwrap();
+    if !binary_indices.is_empty() {
+        info!(
+            "Bigram build detected {} content-binary files (not caught by extension)",
+            binary_indices.len(),
+        );
+    }
+
+    (index, binary_indices)
 }
 
 /// Result of the fast walk phase — files are searchable immediately,
@@ -1241,10 +1349,11 @@ fn walk_filesystem(
     let total_time = scan_start.elapsed();
     info!("SCAN: Walk + frecency completed in {:?}", total_time);
 
+    let base_count = files.len();
     Ok(WalkResult {
         sync: FileSync {
             files,
-            overflow: Vec::new(),
+            base_count,
             git_workdir,
         },
         git_handle,
@@ -1313,11 +1422,17 @@ fn is_known_binary_extension(path: &Path) -> bool {
     matches!(
         ext,
         // Images
-        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ico" | "webp" | "tiff" | "tif" | "avif" | "heic" |
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ico" | "webp" | "tiff" | "tif" | "avif" |
+        "heic" | "psd" | "icns" | "cur" | "raw" | "cr2" | "nef" | "dng" |
         // Video/Audio
-        "mp4" | "avi" | "mov" | "wmv" | "mkv" | "mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac" |
-        // Compressed
+        "mp4" | "avi" | "mov" | "wmv" | "mkv" | "mp3" | "wav" | "flac" | "ogg" | "m4a" |
+        "aac" | "webm" | "flv" | "mpg" | "mpeg" | "wma" | "opus" |
+        // Compressed/Archives
         "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" | "zst" | "lz4" | "lzma" |
+        "cab" | "cpio" |
+        // Packages/Installers
+        "deb" | "rpm" | "apk" | "dmg" | "msi" | "iso" | "nupkg" | "whl" | "egg" |
+        "snap" | "appimage" | "flatpak" |
         // Executables/Libraries
         "exe" | "dll" | "so" | "dylib" | "o" | "a" | "lib" | "bin" | "elf" |
         // Documents
@@ -1326,12 +1441,17 @@ fn is_known_binary_extension(path: &Path) -> bool {
         "db" | "sqlite" | "sqlite3" | "mdb" |
         // Fonts
         "ttf" | "otf" | "woff" | "woff2" | "eot" |
-        // Other binary
+        // Compiled/Runtime
         "class" | "pyc" | "pyo" | "wasm" | "dex" | "jar" | "war" |
-        // Lock/package files that are binary
-        "lock" |
+        // ML/Data Science
+        "npy" | "npz" | "pkl" | "pickle" | "h5" | "hdf5" | "pt" | "pth" | "onnx" |
+        "safetensors" | "tfrecord" |
+        // 3D/Game
+        "glb" | "fbx" | "blend" |
         // Data/serialized
-        "parquet" | "arrow" | "pb" | "protobuf"
+        "parquet" | "arrow" | "pb" |
+        // IDE/OS metadata
+        "DS_Store" | "suo"
     )
 }
 
