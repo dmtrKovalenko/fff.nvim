@@ -24,6 +24,7 @@ import {
   ffiSearch,
   ffiTrackQuery,
   ffiWaitForScan,
+  ffiWaitForWatcher,
   isAvailable,
   type NativeHandle,
 } from "./ffi";
@@ -343,6 +344,22 @@ export class FileFinder {
     const guard = this.ensureAlive();
     if (!guard.ok) return guard;
     return ffiWaitForScan(guard.value, timeoutMs);
+  }
+
+  /**
+   * Wait for the background file watcher to be ready.
+   *
+   * The watcher is created after the initial scan, git status, and optional
+   * warmup phases complete. Useful for tests that need to ensure filesystem
+   * events will be detected.
+   *
+   * @param timeoutMs - Maximum time to wait in milliseconds (default: 10000)
+   * @returns true if watcher is ready, false if timed out
+   */
+  waitForWatcher(timeoutMs: number = 10000): Result<boolean> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+    return ffiWaitForWatcher(guard.value, timeoutMs);
   }
 
   /**

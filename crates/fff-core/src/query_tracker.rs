@@ -246,7 +246,6 @@ impl QueryTracker {
         min_combo_count: u32,
     ) -> Result<Option<QueryMatchEntry>, Error> {
         let query_key = Self::create_query_key(project_path, query)?;
-        tracing::debug!(?query_key, "HASH");
         let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
 
         let last_match = self

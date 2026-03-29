@@ -23,11 +23,9 @@ fn bench_bigram_query(c: &mut Criterion) {
     for &file_count in &file_counts {
         let index = build_test_index(file_count);
         eprintln!(
-            "Index ({} files): {} columns ({} dense, {} sparse)",
+            "Index ({} files): {} columns",
             file_count,
             index.columns_used(),
-            index.dense_columns(),
-            index.sparse_columns(),
         );
 
         let mut group = c.benchmark_group(format!("bigram_query_{file_count}"));

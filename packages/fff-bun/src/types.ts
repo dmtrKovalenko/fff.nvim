@@ -144,6 +144,10 @@ export interface ScanProgress {
   scannedFilesCount: number;
   /** Whether a scan is currently in progress */
   isScanning: boolean;
+  /** Whether the background file watcher is ready */
+  isWatcherReady: boolean;
+  /** Whether the warmup/bigram phase has completed */
+  isWarmupComplete: boolean;
 }
 
 /**

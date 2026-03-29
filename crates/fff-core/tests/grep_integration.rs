@@ -328,7 +328,18 @@ fn plain_text_binary_files_are_skipped() {
     content.extend_from_slice(&[0u8; 100]); // NUL bytes make it binary
     content.extend_from_slice(b"match this text\n");
     fs::write(&binary_path, &content).unwrap();
-    let binary_file = FileItem::new(binary_path, tmp.path(), None);
+    // In production, binary detection by content happens during bigram build
+    // and sets is_binary = true. Simulate that here with new_raw.
+    let meta = fs::metadata(&binary_path).unwrap();
+    let binary_file = FileItem::new_raw(
+        binary_path,
+        "binary.dat".to_string(),
+        "binary.dat".to_string(),
+        meta.len(),
+        0,
+        None,
+        true,
+    );
 
     let text_file = create_file(tmp.path(), "text.txt", "match this text\n");
 
@@ -1796,5 +1807,34 @@ fn fuzzy_score_is_none_in_plain_mode() {
     assert!(
         m.fuzzy_score.is_none(),
         "fuzzy_score should be None in plain text mode"
+    );
+}
+
+/// Regression: memmem prefilter rejected files where content casing differed
+/// from the query, even under smart_case. E.g. "vfio-kvm" failed to find
+/// "VFIO-KVM" because the lowercased finder did a case-sensitive scan.
+#[test]
+fn plain_text_smart_case_finds_uppercase_content_with_lowercase_query() {
+    let tmp = TempDir::new().unwrap();
+    let files = vec![create_file(
+        tmp.path(),
+        "driver.c",
+        "// VFIO-KVM integration\nstatic int init(void) {}\n",
+    )];
+
+    let parsed = parse_grep_query("vfio-kvm");
+    let result = grep_search(
+        &files,
+        &parsed,
+        &plain_opts(),
+        &ContentCacheBudget::unlimited(),
+        None,
+        None,
+    );
+
+    assert_eq!(
+        result.matches.len(),
+        1,
+        "lowercase query should case-insensitively match 'VFIO-KVM'"
     );
 }
