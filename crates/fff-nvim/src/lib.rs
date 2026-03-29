@@ -300,6 +300,7 @@ pub fn live_grep(
         smart_case,
         grep_mode,
         time_budget_ms,
+        classify_definitions,
     ): (
         String,
         Option<usize>,
@@ -309,6 +310,7 @@ pub fn live_grep(
         Option<bool>,
         Option<String>,
         Option<u64>,
+        Option<bool>,
     ),
 ) -> LuaResult<LuaValue> {
     let file_picker_guard = FILE_PICKER
@@ -337,7 +339,7 @@ pub fn live_grep(
         time_budget_ms: time_budget_ms.unwrap_or(0),
         before_context: 0,
         after_context: 0,
-        classify_definitions: false,
+        classify_definitions: classify_definitions.unwrap_or(false),
     };
 
     let bigram_idx = picker.bigram_index.as_deref();
