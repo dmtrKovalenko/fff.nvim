@@ -2,7 +2,7 @@ use crate::{
     constraints::apply_constraints,
     git::is_modified_status,
     path_utils::calculate_distance_penalty,
-    sort_buffer::{sort_by_key_with_buffer, sort_with_buffer},
+    sort_buffer::sort_with_buffer,
     types::{FileItem, Score, ScoringContext},
 };
 use fff_query_parser::FuzzyQuery;
@@ -34,14 +34,6 @@ impl<'a> FileItems<'a> {
         self.len() == 0
     }
 
-    #[inline]
-    fn get(&self, index: usize) -> Option<&'a FileItem> {
-        match self {
-            FileItems::All(s) => s.get(index),
-            FileItems::Filtered(v) => v.get(index).copied(),
-        }
-    }
-
     /// Build the haystack of relative paths (original casing) for fuzzy matching.
     /// neo_frizbee lowercases internally for comparison but preserves original casing
     /// for capitalization_bonus and matching_case_bonus scoring.
@@ -70,6 +62,7 @@ fn match_fuzzy_parts(
     fuzzy_parts: &[&str],
     working_files: &FileItems<'_>,
     options: &neo_frizbee::Config,
+    max_threads: usize,
 ) -> Vec<neo_frizbee::Match> {
     if fuzzy_parts.is_empty() {
         return vec![];
@@ -90,13 +83,15 @@ fn match_fuzzy_parts(
     }
 
     if valid_parts.len() == 1 {
-        let matches = neo_frizbee::match_list(valid_parts[0], &haystack, options);
+        let matches =
+            neo_frizbee::match_list_parallel(valid_parts[0], &haystack, options, max_threads);
         return matches;
     }
 
     // Multiple parts - match first part, then filter by remaining parts
     // TODO figure out if we can move this logic to my frizbee fork at least
-    let mut matches = neo_frizbee::match_list(valid_parts[0], &haystack, options);
+    let mut matches =
+        neo_frizbee::match_list_parallel(valid_parts[0], &haystack, options, max_threads);
     for part in valid_parts[1..].iter() {
         let mut part_options = *options;
         part_options.max_typos = options.max_typos.map(|t| t.min(part.len() as u16));
@@ -176,53 +171,17 @@ pub fn match_and_score_files<'a>(
         },
     };
 
-    let path_matches = match_fuzzy_parts(fuzzy_parts, &working_files, &options);
-    let primary_text = fuzzy_parts[0]; // Use first part for filename matching
-    let haystack_of_filenames: Vec<&str> = path_matches
-        .iter()
-        .filter_map(|m| {
-            working_files
-                .get(m.index as usize)
-                .map(|f| f.file_name.as_str())
-        })
-        .collect();
+    let path_matches =
+        match_fuzzy_parts(fuzzy_parts, &working_files, &options, context.max_threads);
+    let needle_len = fuzzy_parts[0].len() as u16;
 
-    // if there is a / in the query we don't even match filenames
-    let filename_matches = if query_contains_path_separator {
-        vec![]
-    } else {
-        // Use parallel matching only if we have enough filenames to justify overhead
-        // Sequential matching is faster for small result sets (< 1000 matches)
-        let mut list = if haystack_of_filenames.len() > 1000 {
-            neo_frizbee::match_list_parallel(
-                primary_text,
-                &haystack_of_filenames,
-                &options,
-                context.max_threads,
-            )
-        } else {
-            neo_frizbee::match_list(primary_text, &haystack_of_filenames, &options)
-        };
-
-        // Sequential sort is faster for small lists
-        if list.len() > 1000 {
-            list.par_sort_unstable_by_key(|m| m.index);
-        } else {
-            sort_by_key_with_buffer(&mut list, |m| m.index);
-        }
-
-        list
-    };
-
-    let mut next_filename_match_index = 0;
     let results: Vec<_> = path_matches
         .into_iter()
-        .enumerate()
-        .map(|(index, path_match)| {
+        .map(|path_match| {
             let file_idx = path_match.index as usize;
             let file = working_files.index(file_idx);
 
-            let mut base_score = path_match.score as i32;
+            let base_score = path_match.score as i32;
             let frecency_boost = base_score.saturating_mul(file.total_frecency_score) / 100;
 
             // Give modified/dirty files a 15% boost to make them appear higher in results
@@ -235,45 +194,33 @@ pub fn match_and_score_files<'a>(
             let distance_penalty =
                 calculate_distance_penalty(context.current_file, &file.relative_path);
 
-            let filename_match = filename_matches
-                .get(next_filename_match_index)
-                .and_then(|m| {
-                    if m.index == index as u32 {
-                        next_filename_match_index += 1;
-                        Some(m)
-                    } else {
-                        None
-                    }
-                });
+            // Detect filename match using match_end_col from the SIMD pass.
+            // Approximate match start = end_col - needle_len + 1.
+            // If this falls within the filename region, it's a filename match.
+            let filename_start = (file.relative_path.len() - file.file_name.len()) as u16;
+            let match_start_approx = path_match.match_end_col.saturating_sub(needle_len - 1);
+            let is_filename_match =
+                !query_contains_path_separator && match_start_approx >= filename_start;
+            let is_exact_filename = path_match.exact && is_filename_match;
 
             let mut has_special_filename_bonus = false;
-            let filename_bonus = match filename_match {
-                Some(filename_match) if filename_match.exact => {
-                    filename_match.score as i32 / 5 * 2 // 40% bonus for exact filename match
-                }
-                // 16% bonus for fuzzy filename match but only if the score of matched path is
-                // equal or greater than the score of matched filename, thus we are not allowing
-                // typoed filename to score higher than the path match
-                Some(filename_match)
-                    if filename_match.score >= path_match.score
-                        && !query_contains_path_separator =>
-                {
-                    base_score = filename_match.score as i32;
-
-                    (base_score / 6)
-                        // for large queries around ~300 score the bonus is too big
-                        // it might lead to situations when much more fitting path with a larger
-                        // base score getting filtered out by combination of score + filename bonus
-                        // so we cap it at 10% of the roughly largest score you can get
-                        .min(30)
-                }
-                // 5% bonus for special file but not as much as file name to avoid sitatuions
+            let filename_bonus = if is_exact_filename {
+                base_score / 5 * 2 // 40% bonus for exact filename match
+            } else if is_filename_match {
+                // 16% bonus for fuzzy filename match that landed in the filename region
+                (base_score / 6)
+                    // for large queries around ~300 score the bonus is too big
+                    // it might lead to situations when much more fitting path with a larger
+                    // base score getting filtered out by combination of score + filename bonus
+                    // so we cap it at 10% of the roughly largest score you can get
+                    .min(30)
+            } else if !is_filename_match && is_special_entry_point_file(&file.file_name) {
+                // 5% bonus for special file but not as much as file name to avoid situations
                 // when you have /user_service/server.rs and /user_service/server/mod.rs
-                None if is_special_entry_point_file(&file.file_name) => {
-                    has_special_filename_bonus = true;
-                    base_score * 5 / 100
-                }
-                _ => 0,
+                has_special_filename_bonus = true;
+                base_score * 5 / 100
+            } else {
+                0
             };
 
             let current_file_penalty = calculate_current_file_penalty(file, base_score, context);
@@ -319,12 +266,15 @@ pub fn match_and_score_files<'a>(
                 git_status_boost,
                 distance_penalty,
                 combo_match_boost,
-                exact_match: path_match.exact || filename_match.is_some_and(|m| m.exact),
-                match_type: match filename_match {
-                    Some(filename_match) if filename_match.exact => "exact_filename",
-                    Some(_) => "fuzzy_filename",
-                    None if path_match.exact => "exact_path",
-                    None => "fuzzy_path",
+                exact_match: path_match.exact || is_exact_filename,
+                match_type: if is_exact_filename {
+                    "exact_filename"
+                } else if is_filename_match {
+                    "fuzzy_filename"
+                } else if path_match.exact {
+                    "exact_path"
+                } else {
+                    "fuzzy_path"
                 },
             };
 
