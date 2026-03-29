@@ -1213,11 +1213,14 @@ pub fn build_bigram_index(
     });
 
     let cols = builder.columns_used();
-    let mut index = builder.compress();
-    // Skip index: skip bigrams are inherently less specific than consecutive
-    // bigrams, so relevant columns are almost always dense. Dense-only saves
-    // ~20% memory vs all columns with no loss in filtering.
-    let skip_index = skip_builder.compress();
+    let mut index = builder.compress(None);
+
+    // Skip bigrams are supplementary — the consecutive index does the heavy
+    // lifting. Rare skip columns (< 12% of files) add virtually no filtering
+    // on either homogeneous (kernel) or polyglot (monorepo) codebases, but
+    // cost ~25-30% of total index memory. Using a higher sparse cutoff for
+    // the skip index drops these dead-weight columns with negligible loss.
+    let skip_index = skip_builder.compress(Some(12));
     index.set_skip_index(skip_index);
 
     // The builder just freed ~276 MB (for 500k files) of atomic bitsets.
