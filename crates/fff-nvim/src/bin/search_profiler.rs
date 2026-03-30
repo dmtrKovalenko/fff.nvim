@@ -98,16 +98,16 @@ fn main() {
 
     // Test queries representing different search patterns
     let test_queries = vec![
-        ("short_common", "mod", 5000),
-        ("medium_specific", "controller", 2000),
-        ("long_rare", "user_authentication", 1000),
-        ("typo_resistant", "contrlr", 2000),
-        ("path_like", "src/lib", 1500),
-        ("single_char", "a", 3000),
-        ("two_char", "st", 3000),
-        ("partial_word", "test", 2000),
-        ("deep_path", "drivers/net", 1000),
-        ("extension", ".rs", 2000),
+        ("short_common", "mod", 100),
+        ("medium_specific", "controller", 100),
+        ("long_rare", "user_authentication", 100),
+        ("typo_resistant", "contrlr", 100),
+        ("path_like", "src/lib", 100),
+        ("single_char", "a", 100),
+        ("two_char", "st", 100),
+        ("partial_word", "test", 100),
+        ("deep_path", "drivers/net", 100),
+        ("extension", ".rs", 100),
     ];
 
     eprintln!("Running search profiler...");
