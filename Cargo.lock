@@ -645,7 +645,6 @@ name = "fff-grep"
 version = "0.4.2"
 dependencies = [
  "bstr",
- "grep-matcher",
  "memchr",
 ]
 
@@ -724,7 +723,6 @@ dependencies = [
  "git2",
  "glidesort",
  "globset",
- "grep-matcher",
  "heed",
  "ignore",
  "libmimalloc-sys",
@@ -951,15 +949,6 @@ dependencies = [
  "log",
  "regex-automata",
  "regex-syntax",
-]
-
-[[package]]
-name = "grep-matcher"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36d7b71093325ab22d780b40d7df3066ae4aebb518ba719d38c697a8228a8023"
-dependencies = [
- "memchr",
 ]
 
 [[package]]

@@ -27,7 +27,6 @@ git2 = { version = "0.20.2", default-features = false, features = [
 ] }
 glidesort = "0.1"
 globset = "0.4"
-grep-matcher = "0.1.8"
 heed = "0.22.0"
 ignore = "0.4.22"
 memmap2 = "0.9"
