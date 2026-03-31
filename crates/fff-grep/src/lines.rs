@@ -2,10 +2,9 @@
 A collection of routines for performing operations on lines.
 */
 
-use {
-    bstr::ByteSlice,
-    grep_matcher::{LineTerminator, Match},
-};
+use bstr::ByteSlice;
+
+use crate::matcher::{LineTerminator, Match};
 
 /// An explicit iterator over lines in a particular slice of bytes.
 ///

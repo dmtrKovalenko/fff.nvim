@@ -10,9 +10,9 @@ use crate::sort_buffer::sort_with_buffer;
 use crate::types::{BigramFilter, BigramOverlay, ContentCacheBudget, FileItem, extract_bigrams};
 use aho_corasick::AhoCorasick;
 use fff_grep::lines::{self, LineStep};
+use fff_grep::matcher::{Match, Matcher, NoError};
 use fff_grep::{Searcher, SearcherBuilder, Sink, SinkMatch};
 use fff_query_parser::{Constraint, FFFQuery, GrepConfig, QueryParser};
-use grep_matcher::{Match, Matcher, NoCaptures, NoError};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -327,9 +327,8 @@ pub struct GrepSearchOptions {
 ///
 /// When `is_multiline` is false (the common case), we report `\n` as the
 /// line terminator. This enables the **fast** search path in `fff-searcher`:
-/// instead of calling `shortest_match()` on every single line (slow path),
-/// the searcher calls `find_candidate_line()` once on the entire remaining
-/// buffer, letting the regex DFA skip non-matching content in a single pass.
+/// the searcher calls `find()` once on the entire remaining buffer, letting
+/// the regex DFA skip non-matching content in a single pass.
 ///
 /// For multiline patterns we must NOT report a line terminator — the regex
 /// can match across line boundaries, so the searcher needs the `MultiLine`
@@ -340,7 +339,6 @@ struct RegexMatcher<'r> {
 }
 
 impl Matcher for RegexMatcher<'_> {
-    type Captures = NoCaptures;
     type Error = NoError;
 
     #[inline]
@@ -352,16 +350,11 @@ impl Matcher for RegexMatcher<'_> {
     }
 
     #[inline]
-    fn new_captures(&self) -> Result<NoCaptures, NoError> {
-        Ok(NoCaptures::new())
-    }
-
-    #[inline]
-    fn line_terminator(&self) -> Option<grep_matcher::LineTerminator> {
+    fn line_terminator(&self) -> Option<fff_grep::LineTerminator> {
         if self.is_multiline {
             None
         } else {
-            Some(grep_matcher::LineTerminator::byte(b'\n'))
+            Some(fff_grep::LineTerminator::byte(b'\n'))
         }
     }
 }
@@ -384,7 +377,6 @@ struct PlainTextMatcher<'a> {
 }
 
 impl Matcher for PlainTextMatcher<'_> {
-    type Captures = NoCaptures;
     type Error = NoError;
 
     #[inline]
@@ -403,13 +395,8 @@ impl Matcher for PlainTextMatcher<'_> {
     }
 
     #[inline]
-    fn new_captures(&self) -> Result<NoCaptures, NoError> {
-        Ok(NoCaptures::new())
-    }
-
-    #[inline]
-    fn line_terminator(&self) -> Option<grep_matcher::LineTerminator> {
-        Some(grep_matcher::LineTerminator::byte(b'\n'))
+    fn line_terminator(&self) -> Option<fff_grep::LineTerminator> {
+        Some(fff_grep::LineTerminator::byte(b'\n'))
     }
 }
 
@@ -795,7 +782,6 @@ struct AhoCorasickMatcher<'a> {
 }
 
 impl Matcher for AhoCorasickMatcher<'_> {
-    type Captures = NoCaptures;
     type Error = NoError;
 
     #[inline]
@@ -806,13 +792,8 @@ impl Matcher for AhoCorasickMatcher<'_> {
     }
 
     #[inline]
-    fn new_captures(&self) -> Result<NoCaptures, NoError> {
-        Ok(NoCaptures::new())
-    }
-
-    #[inline]
-    fn line_terminator(&self) -> Option<grep_matcher::LineTerminator> {
-        Some(grep_matcher::LineTerminator::byte(b'\n'))
+    fn line_terminator(&self) -> Option<fff_grep::LineTerminator> {
+        Some(fff_grep::LineTerminator::byte(b'\n'))
     }
 }
 
@@ -1487,8 +1468,8 @@ fn fuzzy_grep_search<'a>(
                 let estimated_lines = (file_bytes.len() / 40).max(64);
                 let mut file_lines: Vec<&str> = Vec::with_capacity(estimated_lines);
                 let mut line_meta: Vec<(u64, u64)> = Vec::with_capacity(estimated_lines);
-                let line_term_lf = grep_matcher::LineTerminator::byte(b'\n');
-                let line_term_cr = grep_matcher::LineTerminator::byte(b'\r');
+                let line_term_lf = fff_grep::LineTerminator::byte(b'\n');
+                let line_term_cr = fff_grep::LineTerminator::byte(b'\r');
 
                 let mut line_number: u64 = 1;
                 while let Some(line_match) = stepper.next_match(file_bytes) {
@@ -1886,7 +1867,7 @@ pub fn grep_search<'a>(
         should_perfilter.then_some(&finder),
         |file_bytes: &[u8], max_matches: usize| {
             let state = SinkState {
-                file_index: 0, // set by run_file_search
+                file_index: 0,
                 matches: Vec::with_capacity(4),
                 max_matches,
                 before_context: options.before_context,

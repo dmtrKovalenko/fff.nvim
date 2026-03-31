@@ -37,7 +37,6 @@ dirs = { workspace = true }
 git2 = { workspace = true }
 glidesort = { workspace = true }
 globset = { workspace = true }
-grep-matcher = { workspace = true }
 fff-grep = { workspace = true  }
 aho-corasick = "1"
 memchr = "2"

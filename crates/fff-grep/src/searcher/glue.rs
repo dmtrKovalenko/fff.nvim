@@ -1,7 +1,6 @@
-use grep_matcher::Matcher;
-
 use crate::{
     lines,
+    matcher::Matcher,
     searcher::{Config, Range, Searcher, core::Core},
     sink::Sink,
 };

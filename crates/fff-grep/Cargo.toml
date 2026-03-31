@@ -8,5 +8,4 @@ edition = "2024"
 
 [dependencies]
 bstr = { version = "1.6.2", default-features = false, features = ["std"] }
-grep-matcher = { workspace = true }
 memchr = "2.6.3"
