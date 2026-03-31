@@ -547,7 +547,7 @@ impl BigramIndexBuilder {
                 }
             }
         }
-        // NOTE: populated count tracked by the consecutive builder, not here.
+        self.populated.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn is_ready(&self) -> bool {
@@ -562,17 +562,16 @@ impl BigramIndexBuilder {
 
     /// Compress the dense builder into a compact `BigramFilter`.
     ///
-    /// Only dense columns (bitsets) are retained — sparse bigrams (those
-    /// appearing in fewer files than the dense threshold) are dropped.
-    /// The skip-1 bigram index provides equivalent or better filtering
-    /// for those cases, and dense-only storage enables SIMD-vectorized
-    /// AND operations with no per-column indirection.
+    /// Retains columns where the bigram appears in ≥`min_density_pct`% (or
+    /// the default ~3.1% heuristic when `None`) and <90% of indexed files.
+    /// Sparse columns carry too little data to justify their memory;
+    /// ubiquitous columns (≥90%) are nearly all-ones and barely filter.
     ///
     /// Each column's `Box<[AtomicU64]>` (~60 KB for 500k files) is freed
     /// immediately after compression via `OnceLock::take`, so peak memory
     /// during compress is roughly `max(builder, result)` instead of
     /// `builder + result`.
-    pub fn compress(self) -> BigramFilter {
+    pub fn compress(self, min_density_pct: Option<u32>) -> BigramFilter {
         let cols = self.columns_used() as usize;
         let words = self.words;
         let file_count = self.file_count;
@@ -596,14 +595,27 @@ impl BigramIndexBuilder {
                 continue;
             };
 
-            // Count set bits to decide if this column is dense enough to keep.
+            // Count set bits to decide if this column is worth keeping.
             let mut popcount = 0u32;
             for w in 0..words {
                 popcount += bitset[w].load(Ordering::Relaxed).count_ones();
             }
 
-            // Skip sparse bigrams — not worth storing.
-            if (popcount as usize * 4) < dense_bytes {
+            // Sparse threshold — drop bigrams appearing in too few files.
+            let sparse_ok = if let Some(min_pct) = min_density_pct {
+                // Percentage-based: require ≥ min_pct% of populated files.
+                populated > 0 && (popcount as usize) * 100 >= populated * min_pct as usize
+            } else {
+                // Default heuristic: popcount ≥ words × 2 (~3.1% of files).
+                (popcount as usize * 4) >= dense_bytes
+            };
+            if !sparse_ok {
+                continue;
+            }
+
+            // Drop ubiquitous bigrams — columns ≥90% ones carry almost no
+            // filtering power and just waste memory + AND cycles.
+            if populated > 0 && (popcount as usize) * 10 >= populated * 9 {
                 continue;
             }
 

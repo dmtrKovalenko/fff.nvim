@@ -14,7 +14,7 @@ fn build_test_index(file_count: usize) -> BigramFilter {
         builder.add_file_content(i, content.as_bytes());
     }
 
-    builder.compress()
+    builder.compress(None)
 }
 
 fn bench_bigram_query(c: &mut Criterion) {
@@ -97,7 +97,7 @@ fn bench_bigram_build(c: &mut Criterion) {
                     for (i, content) in contents.iter().enumerate() {
                         builder.add_file_content(i, content.as_bytes());
                     }
-                    let index = builder.compress();
+                    let index = builder.compress(None);
                     black_box(index.columns_used())
                 });
             },

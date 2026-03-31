@@ -212,8 +212,8 @@ fn main() {
         }
     });
 
-    let mut index = builder.compress();
-    let skip_index = skip_builder.compress();
+    let mut index = builder.compress(None);
+    let skip_index = skip_builder.compress(Some(12));
     let build_time = t.elapsed();
     eprintln!("done in {:.2}s", build_time.as_secs_f64());
     eprintln!(

@@ -195,7 +195,7 @@ fn build_bigram_index(files: &[FileItem]) -> BigramFilter {
         }
     });
 
-    builder.compress()
+    builder.compress(None)
 }
 
 fn fmt_dur(d: Duration) -> String {
