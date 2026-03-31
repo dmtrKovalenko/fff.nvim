@@ -11,6 +11,7 @@ result
 .repro/
 .wrangler/
 *.so
+*.dylib
 # all the perf like utility files
 *.data
 node_modules/

@@ -922,6 +922,7 @@ pub fn multi_grep_search<'a>(
         filtered_file_count,
         budget,
         None, // no memmem prefilter for multi-pattern search
+        false,
         |file_bytes: &[u8], max_matches: usize| {
             let state = SinkState {
                 file_index: 0,
@@ -1027,6 +1028,8 @@ fn char_indices_to_byte_offsets(line: &str, char_indices: &[usize]) -> SmallVec<
     result
 }
 
+use crate::case_insensitive_memmem;
+
 /// Minimum chunk size for paginated search. Must be large enough for good
 /// thread utilization across rayon's pool (~28 threads on modern hardware)
 /// but small enough to allow early termination after few chunks.
@@ -1040,6 +1043,7 @@ fn perform_grep<'a, F>(
     filtered_file_count: usize,
     budget: &ContentCacheBudget,
     prefilter: Option<&memchr::memmem::Finder<'_>>,
+    prefilter_case_insensitive: bool,
     search_file: F,
 ) -> GrepResult<'a>
 where
@@ -1095,13 +1099,17 @@ where
 
                 let content = file.get_content_for_search(budget)?;
 
-                // Fast whole-file memmem check before entering the
-                // grep-searcher machinery. Skips Vec alloc, Searcher
-                // setup, and line-splitting for files that can't match.
-                if let Some(pf) = prefilter
-                    && pf.find(&content).is_none()
-                {
-                    return None;
+                // A very important prefilter that skips line splitting and terminates early 
+                // if nothing is foiund. Should be as fast as possible and can be false positive
+                if let Some(pf) = prefilter {
+                    let found = if prefilter_case_insensitive {
+                        case_insensitive_memmem::search_packed_pair(&content, pf.needle())
+                    } else {
+                        pf.find(&content).is_some()
+                    };
+                    if !found {
+                        return None;
+                    }
                 }
 
                 let file_matches = search_file(&content, options.max_matches_per_file);
@@ -1856,15 +1864,15 @@ pub fn grep_search<'a>(
     }
     .build();
 
-    // prefilter looks for the literal occurrence if the search is case insensitive
-    let should_perfilter = regex.is_none() && !case_insensitive;
+    let should_prefilter = regex.is_none();
     let mut result = perform_grep(
         &files_to_search,
         options,
         total_files,
         filtered_file_count,
         budget,
-        should_perfilter.then_some(&finder),
+        should_prefilter.then_some(&finder),
+        case_insensitive,
         |file_bytes: &[u8], max_matches: usize| {
             let state = SinkState {
                 file_index: 0,
