@@ -92,6 +92,7 @@
 //! ```
 
 mod background_watcher;
+pub mod case_insensitive_memmem;
 mod constraints;
 mod db_healthcheck;
 mod error;

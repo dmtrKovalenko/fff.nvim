@@ -74,3 +74,7 @@ harness = false
 [[bench]]
 name = "bigram_bench"
 harness = false
+
+[[bench]]
+name = "memmem_bench"
+harness = false
