@@ -1,8 +1,8 @@
 use crate::error::Error;
 use crate::file_picker::{FFFMode, FilePicker};
 use crate::git::GitStatusCache;
+use crate::shared::{SharedFrecency, SharedPicker};
 use crate::sort_buffer::sort_with_buffer;
-use crate::{SharedFrecency, SharedPicker};
 use git2::Repository;
 use notify::event::{AccessKind, AccessMode};
 use notify::{Config, EventKind, RecursiveMode};
@@ -416,7 +416,7 @@ fn handle_debounced_events(
     if need_full_git_rescan {
         info!("Triggering full git rescan");
 
-        let result = FilePicker::refresh_git_status(shared_picker, shared_frecency);
+        let result = shared_picker.refresh_git_status(shared_frecency);
         if let Err(e) = result {
             error!("Failed to refresh git status: {:?}", e);
         }

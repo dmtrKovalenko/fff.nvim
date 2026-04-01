@@ -217,6 +217,7 @@ fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
         &fff::ContentCacheBudget::zero(),
         None,
         None,
+        None,
     );
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
@@ -242,6 +243,7 @@ fn benchmark_fff_smart_case(files: &[FileItem], parsed: &FFFQuery<'_>) -> (usize
         parsed,
         &options,
         &fff::ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -270,6 +272,7 @@ fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
         &parsed,
         &options,
         &fff::ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );

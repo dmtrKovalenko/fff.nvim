@@ -21,7 +21,7 @@ fn fmt_dur(us: u128) -> String {
     }
 }
 
-fn stats(times_us: &mut Vec<u128>) -> (u128, u128, u128, u128) {
+fn stats(times_us: &mut [u128]) -> (u128, u128, u128, u128) {
     times_us.sort();
     let sum: u128 = times_us.iter().sum();
     let mean = sum / times_us.len() as u128;

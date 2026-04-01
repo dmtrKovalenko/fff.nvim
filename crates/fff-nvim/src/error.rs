@@ -24,14 +24,3 @@ impl<T> IntoLuaResult<T> for Result<T, CoreError> {
         self.map_err(to_lua_error)
     }
 }
-
-/// Extension trait for Result<T, PoisonError> to convert to Result<T, CoreError>
-pub trait IntoCoreError<T> {
-    fn with_lock_error(self, err: CoreError) -> Result<T, CoreError>;
-}
-
-impl<T, G> IntoCoreError<T> for Result<T, std::sync::PoisonError<G>> {
-    fn with_lock_error(self, err: CoreError) -> Result<T, CoreError> {
-        self.map_err(|_| err)
-    }
-}

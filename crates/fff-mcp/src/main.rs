@@ -12,8 +12,6 @@ mod output;
 mod server;
 mod update_check;
 
-use std::sync::{Arc, RwLock};
-
 use clap::Parser;
 use fff::file_picker::FilePicker;
 use fff::frecency::FrecencyTracker;
@@ -254,16 +252,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let frecency_db_path = args.frecency_db_path.unwrap_or_default();
 
-    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
-    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
+    let shared_picker = SharedPicker::default();
+    let shared_frecency = SharedFrecency::default();
     match FrecencyTracker::new(&frecency_db_path, false) {
         Ok(tracker) => {
-            if let Ok(mut guard) = shared_frecency.write() {
-                *guard = Some(tracker);
-            }
-
-            let _ =
-                FrecencyTracker::spawn_gc(Arc::clone(&shared_frecency), frecency_db_path, false);
+            let _ = shared_frecency.init(tracker);
+            let _ = shared_frecency.spawn_gc(frecency_db_path, false);
         }
         Err(e) => {
             eprintln!("Warning: Failed to init frecency db: {}", e);
@@ -272,21 +266,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize file picker (spawns background scan + watcher)
     FilePicker::new_with_shared_state(
-        base_path,
-        !args.no_warmup, // warmup_mmap_cache
-        FFFMode::Ai,
-        Arc::clone(&shared_picker),
-        Arc::clone(&shared_frecency),
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        fff::FilePickerOptions {
+            base_path,
+            warmup_mmap_cache: !args.no_warmup,
+            mode: FFFMode::Ai,
+            cache_budget: args
+                .max_cached_files
+                .map(fff::ContentCacheBudget::new_for_repo),
+            ..Default::default()
+        },
     )
     .map_err(|e| format!("Failed to init file picker: {}", e))?;
-
-    // Apply user-configured cache limit after picker creation.
-    if let Some(limit) = args.max_cached_files
-        && let Ok(mut guard) = shared_picker.write()
-        && let Some(ref mut picker) = *guard
-    {
-        picker.cache_budget = std::sync::Arc::new(fff::ContentCacheBudget::new_for_repo(limit));
-    }
 
     if !args.no_update_check {
         update_check::spawn_update_check();
@@ -296,7 +288,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = FffServer::new(shared_picker.clone(), shared_frecency.clone());
 
     // Wait for initial scan in background — don't block server startup
-    let picker_clone_for_scan = Arc::clone(&shared_picker);
+    let picker_clone_for_scan = shared_picker.clone();
     tokio::task::spawn_blocking(move || {
         let start = std::time::Instant::now();
         loop {

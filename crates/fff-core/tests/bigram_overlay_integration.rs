@@ -2,14 +2,12 @@
 //! still makes the new content findable via grep (through the overlay layer).
 
 use std::fs;
-use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
 use fff_search::file_picker::{FFFMode, FilePicker};
-use fff_search::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
-use fff_search::types::ContentCacheBudget;
-use fff_search::{SharedFrecency, SharedPicker};
+use fff_search::grep::{GrepMode, GrepSearchOptions, parse_grep_query};
+use fff_search::{FilePickerOptions, SharedFrecency, SharedPicker};
 
 /// Create a temp directory with some initial files, run the full picker lifecycle,
 /// then modify a file and verify grep finds the new content.
@@ -28,15 +26,18 @@ fn modified_file_findable_via_overlay() {
     fs::write(base.join("gamma.txt"), "yet another file\nmore lines\n").unwrap();
 
     // ── Phase 1: Initialize picker ──────────────────────────────────────
-    let shared_picker: SharedPicker = Arc::new(std::sync::RwLock::new(None));
-    let shared_frecency: SharedFrecency = Arc::new(std::sync::RwLock::new(None));
+    let shared_picker = SharedPicker::default();
+    let shared_frecency = SharedFrecency::default();
 
     FilePicker::new_with_shared_state(
-        base.to_string_lossy().to_string(),
-        true, // warmup (builds bigram index)
-        FFFMode::Neovim,
-        Arc::clone(&shared_picker),
-        Arc::clone(&shared_frecency),
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        FilePickerOptions {
+            base_path: base.to_string_lossy().to_string(),
+            warmup_mmap_cache: true,
+            mode: FFFMode::Neovim,
+            ..Default::default()
+        },
     )
     .expect("Failed to create FilePicker");
 
@@ -51,7 +52,7 @@ fn modified_file_findable_via_overlay() {
             .map(|guard| {
                 guard
                     .as_ref()
-                    .map_or(false, |p| !p.is_scan_active() && p.bigram_index.is_some())
+                    .map_or(false, |p| !p.is_scan_active() && p.bigram_index().is_some())
             })
             .unwrap_or(false);
 
@@ -70,11 +71,11 @@ fn modified_file_findable_via_overlay() {
         let picker = guard.as_ref().unwrap();
         assert_eq!(picker.get_files().len(), 3, "Expected 3 files after scan");
         assert!(
-            picker.bigram_index.is_some(),
+            picker.bigram_index().is_some(),
             "Bigram index should be built"
         );
         assert!(
-            picker.bigram_overlay.is_some(),
+            picker.bigram_overlay().is_some(),
             "Overlay should be initialized"
         );
     }
@@ -86,14 +87,7 @@ fn modified_file_findable_via_overlay() {
         let picker = guard.as_ref().unwrap();
         let parsed = parse_grep_query("UNIQUE_NEEDLE");
         let opts = grep_opts();
-        let result = grep_search(
-            picker.get_files(),
-            &parsed,
-            &opts,
-            &ContentCacheBudget::unlimited(),
-            picker.bigram_index.as_deref(),
-            picker.bigram_overlay.as_deref(),
-        );
+        let result = picker.grep(&parsed, &opts);
         assert_eq!(
             result.matches.len(),
             0,
@@ -136,14 +130,7 @@ fn modified_file_findable_via_overlay() {
         let picker = guard.as_ref().unwrap();
         let parsed = parse_grep_query("UNIQUE_NEEDLE");
         let opts = grep_opts();
-        let result = grep_search(
-            picker.get_files(),
-            &parsed,
-            &opts,
-            &ContentCacheBudget::unlimited(),
-            picker.bigram_index.as_deref(),
-            picker.bigram_overlay.as_deref(),
-        );
+        let result = picker.grep(&parsed, &opts);
         assert!(
             !result.matches.is_empty(),
             "UNIQUE_NEEDLE should be findable after modification (overlay adds the candidate back)"
@@ -160,14 +147,7 @@ fn modified_file_findable_via_overlay() {
         let picker = guard.as_ref().unwrap();
         let parsed = parse_grep_query("UNIQUE_NEEDLE");
         let opts = grep_opts();
-        let result = grep_search(
-            picker.get_files(),
-            &parsed,
-            &opts,
-            &ContentCacheBudget::unlimited(),
-            picker.bigram_index.as_deref(),
-            None, // no overlay!
-        );
+        let result = picker.grep_without_overlay(&parsed, &opts);
         assert_eq!(
             result.matches.len(),
             0,
@@ -192,15 +172,18 @@ fn deleted_file_excluded_via_overlay() {
     fs::write(base.join("keep.txt"), "keep this content\n").unwrap();
     fs::write(base.join("remove.txt"), "DELETEME_TOKEN is here\n").unwrap();
 
-    let shared_picker: SharedPicker = Arc::new(std::sync::RwLock::new(None));
-    let shared_frecency: SharedFrecency = Arc::new(std::sync::RwLock::new(None));
+    let shared_picker = SharedPicker::default();
+    let shared_frecency = SharedFrecency::default();
 
     FilePicker::new_with_shared_state(
-        base.to_string_lossy().to_string(),
-        true,
-        FFFMode::Neovim,
-        Arc::clone(&shared_picker),
-        Arc::clone(&shared_frecency),
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        FilePickerOptions {
+            base_path: base.to_string_lossy().to_string(),
+            warmup_mmap_cache: true,
+            mode: FFFMode::Neovim,
+            ..Default::default()
+        },
     )
     .unwrap();
 
@@ -257,15 +240,18 @@ fn new_file_findable_after_add() {
 
     fs::write(base.join("existing.txt"), "original content\n").unwrap();
 
-    let shared_picker: SharedPicker = Arc::new(std::sync::RwLock::new(None));
-    let shared_frecency: SharedFrecency = Arc::new(std::sync::RwLock::new(None));
+    let shared_picker = SharedPicker::default();
+    let shared_frecency = SharedFrecency::default();
 
     FilePicker::new_with_shared_state(
-        base.to_string_lossy().to_string(),
-        true,
-        FFFMode::Neovim,
-        Arc::clone(&shared_picker),
-        Arc::clone(&shared_frecency),
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        FilePickerOptions {
+            base_path: base.to_string_lossy().to_string(),
+            warmup_mmap_cache: true,
+            mode: FFFMode::Neovim,
+            ..Default::default()
+        },
     )
     .unwrap();
 
@@ -326,14 +312,7 @@ fn grep_opts() -> GrepSearchOptions {
 
 fn grep_for<'a>(picker: &'a FilePicker, query: &str) -> fff_search::grep::GrepResult<'a> {
     let parsed = parse_grep_query(query);
-    grep_search(
-        picker.get_files(),
-        &parsed,
-        &grep_opts(),
-        &ContentCacheBudget::unlimited(),
-        picker.bigram_index.as_deref(),
-        picker.bigram_overlay.as_deref(),
-    )
+    picker.grep(&parsed, &grep_opts())
 }
 
 fn wait_for_bigram(shared_picker: &SharedPicker) {
@@ -346,7 +325,7 @@ fn wait_for_bigram(shared_picker: &SharedPicker) {
             .map(|guard| {
                 guard
                     .as_ref()
-                    .map_or(false, |p| !p.is_scan_active() && p.bigram_index.is_some())
+                    .map_or(false, |p| !p.is_scan_active() && p.bigram_index().is_some())
             })
             .unwrap_or(false);
         if ready {
