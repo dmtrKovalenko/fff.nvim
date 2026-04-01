@@ -2,7 +2,6 @@ use fff::file_picker::{FFFMode, FilePicker};
 use fff::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::env;
 use std::io::{self, Write};
-use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -79,17 +78,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Create shared state
-    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
-    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
+    let shared_picker = SharedPicker::default();
+    let shared_frecency = SharedFrecency::default();
 
     // Initialize the file picker
     println!("📁 Initializing FilePicker...");
     FilePicker::new_with_shared_state(
-        base_path.clone(),
-        false,
-        FFFMode::Neovim,
-        Arc::clone(&shared_picker),
-        Arc::clone(&shared_frecency),
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        fff::FilePickerOptions {
+            base_path: base_path.clone(),
+            warmup_mmap_cache: false,
+            mode: FFFMode::Neovim,
+            ..Default::default()
+        },
     )?;
 
     // Wait for initial scan to complete

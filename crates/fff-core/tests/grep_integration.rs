@@ -81,6 +81,7 @@ fn plain_text_finds_exact_literal() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(result.matches.len(), 1);
@@ -104,6 +105,7 @@ fn plain_text_smart_case_insensitive() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -131,6 +133,7 @@ fn plain_text_smart_case_sensitive_with_uppercase() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -161,6 +164,7 @@ fn plain_text_regex_metacharacters_are_literal() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(result.matches.len(), 1);
@@ -173,6 +177,7 @@ fn plain_text_regex_metacharacters_are_literal() {
         &parsed2,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -196,6 +201,7 @@ fn plain_text_dot_is_literal() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -225,6 +231,7 @@ fn plain_text_asterisk_is_literal() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].line_number, 1);
@@ -245,6 +252,7 @@ fn plain_text_backslash_is_literal() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -268,6 +276,7 @@ fn plain_text_across_multiple_files() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(result.matches.len(), 3);
@@ -286,6 +295,7 @@ fn plain_text_highlight_offsets_are_correct() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -311,6 +321,7 @@ fn plain_text_empty_query_returns_no_content_matches() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -353,6 +364,7 @@ fn plain_text_binary_files_are_skipped() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     // Only the text file should be searched, not the binary one
@@ -378,6 +390,7 @@ fn plain_text_max_matches_per_file() {
         &parsed,
         &opts,
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -407,6 +420,7 @@ fn plain_text_page_limit() {
         &parsed,
         &opts,
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -457,6 +471,7 @@ fn plain_text_file_offset_pagination() {
             &parsed,
             &opts,
             &ContentCacheBudget::unlimited(),
+            None,
             None,
             None,
         );
@@ -517,6 +532,7 @@ fn plain_text_line_numbers_are_correct() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(result.matches.len(), 4);
@@ -544,6 +560,7 @@ fn plain_text_max_file_size_filter() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(result.matches.len(), 0, "large file should be filtered out");
@@ -569,6 +586,7 @@ fn regex_basic_pattern() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(result.matches.len(), 1);
@@ -588,6 +606,7 @@ fn regex_capture_group_matching() {
         &parsed,
         &regex_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -620,6 +639,7 @@ fn regex_dot_matches_any_char() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(
@@ -646,6 +666,7 @@ fn regex_alternation() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(result.matches.len(), 2);
@@ -669,6 +690,7 @@ fn regex_character_class() {
         &parsed,
         &regex_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -701,6 +723,7 @@ fn regex_quantifiers() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(result.matches.len(), 3, "should match foo, fooo, foooo");
@@ -721,6 +744,7 @@ fn regex_anchors() {
         &parsed,
         &regex_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -747,6 +771,7 @@ fn regex_anchors_multiword() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(
@@ -769,6 +794,7 @@ fn regex_highlight_offsets_variable_length() {
         &parsed,
         &regex_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -801,6 +827,7 @@ fn regex_invalid_pattern_falls_back_to_literal() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     // Fallback to literal: finds "name(" in "call name(arg)"
@@ -822,6 +849,7 @@ fn regex_invalid_pattern_falls_back_to_literal() {
         &parsed2,
         &regex_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -847,6 +875,7 @@ fn regex_smart_case() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
     assert_eq!(result_lower.matches.len(), 3);
 
@@ -857,6 +886,7 @@ fn regex_smart_case() {
         &parsed_upper,
         &regex_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -888,6 +918,7 @@ fn regex_across_multiple_files() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     // Should match: fn main(), fn helper(), fn test_one(), fn test_two()
@@ -914,12 +945,14 @@ fn plain_text_and_regex_agree_on_simple_literal() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
     let regex_result = grep_search(
         &files,
         &parsed,
         &regex_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -949,6 +982,7 @@ fn plain_text_escapes_what_regex_does_not() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
     let parsed_regex = parse_grep_query("\\$100");
     let regex_result = grep_search(
@@ -956,6 +990,7 @@ fn plain_text_escapes_what_regex_does_not() {
         &parsed_regex,
         &regex_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -985,6 +1020,7 @@ fn grep_with_extension_constraint() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1022,6 +1058,7 @@ fn plain_text_bracket_is_literal() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(
@@ -1051,6 +1088,7 @@ fn grep_backslash_escapes_extension_filter() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
     assert_eq!(
         result_filter.files.len(),
@@ -1065,6 +1103,7 @@ fn grep_backslash_escapes_extension_filter() {
         &parsed_escaped,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1090,6 +1129,7 @@ fn grep_backslash_escapes_path_segment() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1118,6 +1158,7 @@ fn grep_backslash_escapes_negation() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
     assert_eq!(result.matches.len(), 1);
     assert!(result.matches[0].line_content.contains("!test"));
@@ -1138,6 +1179,7 @@ fn grep_with_path_constraint() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1164,6 +1206,7 @@ fn grep_with_negated_extension_constraint() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1199,6 +1242,7 @@ fn grep_with_negated_path_constraint() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(
@@ -1230,6 +1274,7 @@ fn grep_with_negated_text_constraint() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1270,6 +1315,7 @@ fn grep_empty_file_is_skipped() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(result.matches.len(), 1);
@@ -1286,6 +1332,7 @@ fn grep_single_line_no_trailing_newline() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1311,6 +1358,7 @@ fn grep_unicode_content() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].line_number, 2);
@@ -1321,6 +1369,7 @@ fn grep_unicode_content() {
         &parsed2,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1340,6 +1389,7 @@ fn grep_long_line_is_truncated() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1370,6 +1420,7 @@ fn regex_word_boundary() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(
@@ -1395,6 +1446,7 @@ fn plain_text_question_mark_is_literal() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1423,6 +1475,7 @@ fn plain_text_query_with_question_mark_in_word() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(
@@ -1444,6 +1497,7 @@ fn regex_question_mark_is_quantifier() {
         &parsed,
         &regex_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1472,6 +1526,7 @@ fn fuzzy_finds_exact_substring() {
         &parsed,
         &fuzzy_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1503,6 +1558,7 @@ fn fuzzy_finds_scattered_characters() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert!(
@@ -1523,6 +1579,7 @@ fn fuzzy_highlight_offsets_correct() {
         &parsed,
         &fuzzy_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1557,6 +1614,7 @@ fn fuzzy_unicode_char_indices() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     // Should fuzzy match "régulière" (with multi-byte é and è)
@@ -1576,6 +1634,7 @@ fn fuzzy_empty_query_returns_empty() {
         &parsed,
         &fuzzy_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1599,6 +1658,7 @@ fn fuzzy_with_extension_constraint() {
         &parsed,
         &fuzzy_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1632,6 +1692,7 @@ fn fuzzy_respects_page_limit() {
         &parsed,
         &opts,
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1677,6 +1738,7 @@ fn fuzzy_respects_max_matches_per_file() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(
@@ -1703,6 +1765,7 @@ fn fuzzy_filters_low_quality_matches() {
         &parsed,
         &fuzzy_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1742,6 +1805,7 @@ fn fuzzy_exact_match_always_passes() {
         &ContentCacheBudget::unlimited(),
         None,
         None,
+        None,
     );
 
     assert_eq!(
@@ -1767,6 +1831,7 @@ fn fuzzy_score_is_captured() {
         &parsed,
         &fuzzy_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1796,6 +1861,7 @@ fn fuzzy_score_is_none_in_plain_mode() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -1828,6 +1894,7 @@ fn plain_text_smart_case_finds_uppercase_content_with_lowercase_query() {
         &parsed,
         &plain_opts(),
         &ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );

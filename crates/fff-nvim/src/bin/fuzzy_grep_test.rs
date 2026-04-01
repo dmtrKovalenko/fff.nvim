@@ -85,6 +85,7 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         &fff::ContentCacheBudget::zero(),
         None,
         None,
+        None,
     );
     let elapsed = start.elapsed();
 

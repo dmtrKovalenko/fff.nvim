@@ -159,6 +159,7 @@ impl<'a> GrepBench<'a> {
             &ContentCacheBudget::default(),
             self.bigram_index,
             None,
+            None,
         );
         let elapsed = start.elapsed();
         (elapsed, result.matches.len(), result.total_files_searched)
@@ -510,6 +511,7 @@ fn main() {
             &parsed,
             &opts,
             &fff::ContentCacheBudget::unlimited(),
+            None,
             None,
             None,
         );

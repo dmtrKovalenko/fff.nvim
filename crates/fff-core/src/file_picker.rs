@@ -37,11 +37,11 @@ use crate::git::GitStatusCache;
 use crate::grep::{GrepResult, GrepSearchOptions, grep_search};
 use crate::query_tracker::QueryTracker;
 use crate::score::match_and_score_files;
+use crate::shared::{SharedFrecency, SharedPicker};
 use crate::types::{
     BigramFilter, BigramIndexBuilder, BigramOverlay, ContentCacheBudget, FileItem, PaginationArgs,
     ScoringContext, SearchResult,
 };
-use crate::{SharedFrecency, SharedPicker};
 use fff_query_parser::FFFQuery;
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
@@ -51,7 +51,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use tracing::{Level, debug, error, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -258,27 +258,46 @@ impl FileItem {
     }
 }
 
-/// The main file picker engine storage
-///
-/// It maintains an in memory index of all the files that are resent in the file system
-/// and borrows them to perform the search
+/// Options for creating a [`FilePicker`].
+pub struct FilePickerOptions {
+    pub base_path: String,
+    pub warmup_mmap_cache: bool,
+    pub mode: FFFMode,
+    /// Explicit cache budget. When `None`, the budget is auto-computed from
+    /// the repo size after the initial scan completes.
+    pub cache_budget: Option<ContentCacheBudget>,
+    /// When `false`, `new_with_shared_state` skips the background file watcher.
+    /// Files are still scanned, warmed up, and bigram-indexed.
+    pub watch: bool,
+}
+
+impl Default for FilePickerOptions {
+    fn default() -> Self {
+        Self {
+            base_path: ".".into(),
+            warmup_mmap_cache: false,
+            mode: FFFMode::default(),
+            cache_budget: None,
+            watch: true,
+        }
+    }
+}
+
 pub struct FilePicker {
-    base_path: PathBuf,
+    pub mode: FFFMode,
+    pub base_path: PathBuf,
+    pub is_scanning: Arc<AtomicBool>,
     sync_data: FileSync,
-    is_scanning: Arc<AtomicBool>,
+    cache_budget: Arc<ContentCacheBudget>,
+    has_explicit_cache_budget: bool,
     watcher_ready: Arc<AtomicBool>,
     scanned_files_count: Arc<AtomicUsize>,
     background_watcher: Option<BackgroundWatcher>,
     warmup_mmap_cache: bool,
+    watch: bool,
     cancelled: Arc<AtomicBool>,
-    mode: FFFMode,
-    pub cache_budget: Arc<ContentCacheBudget>,
-    /// Inverted bigram index for O(K × N/64) grep prefiltering.
-    /// Built during warmup phase; `None` until warmup completes.
-    pub bigram_index: Option<Arc<BigramFilter>>,
-    /// Incremental overlay tracking file changes since the base bigram index
-    /// was built. Updated by the background watcher on every file event.
-    pub bigram_overlay: Option<Arc<parking_lot::RwLock<BigramOverlay>>>,
+    bigram_index: Option<Arc<BigramFilter>>,
+    bigram_overlay: Option<Arc<parking_lot::RwLock<BigramOverlay>>>,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -312,6 +331,23 @@ impl FilePicker {
         &self.cache_budget
     }
 
+    pub fn bigram_index(&self) -> Option<&BigramFilter> {
+        self.bigram_index.as_deref()
+    }
+
+    pub fn bigram_overlay(&self) -> Option<&parking_lot::RwLock<BigramOverlay>> {
+        self.bigram_overlay.as_deref()
+    }
+
+    pub fn get_file_mut(&mut self, index: usize) -> Option<&mut FileItem> {
+        self.sync_data.get_file_mut(index)
+    }
+
+    pub fn set_bigram_index(&mut self, index: BigramFilter, overlay: BigramOverlay) {
+        self.bigram_index = Some(Arc::new(index));
+        self.bigram_overlay = Some(Arc::new(parking_lot::RwLock::new(overlay)));
+    }
+
     pub fn git_root(&self) -> Option<&Path> {
         self.sync_data.git_workdir.as_deref()
     }
@@ -327,72 +363,148 @@ impl FilePicker {
         self.sync_data.overflow_files()
     }
 
-    /// Create a new FilePicker and place it into the provided shared handle.
-    ///
-    /// The background scan thread and file-system watcher write into the
-    /// provided `SharedPicker` and read frecency data from the provided
-    /// `SharedFrecency`.
-    ///
-    /// Multiple independent instances can coexist in the same process.
-    pub fn new_with_shared_state(
-        base_path: String,
-        warmup_mmap_cache: bool,
-        mode: FFFMode,
-        shared_picker: SharedPicker,
-        shared_frecency: SharedFrecency,
-    ) -> Result<(), Error> {
-        info!(
-            "Initializing FilePicker with base_path: {}, warmup: {}, mode: {:?}",
-            base_path, warmup_mmap_cache, mode
-        );
-        let path = PathBuf::from(&base_path);
+    /// Create a new FilePicker from options.
+    /// Always prefer new_with_shared_state for the consumer application, use this only if you know
+    /// what you are doing. This won't spawn the backgraound watcher and won't walk the file tree.
+    pub fn new(options: FilePickerOptions) -> Result<Self, Error> {
+        let path = PathBuf::from(&options.base_path);
         if !path.exists() {
-            error!("Base path does not exist: {}", base_path);
+            error!("Base path does not exist: {}", options.base_path);
             return Err(Error::InvalidPath(path));
         }
 
-        // Initialize scan_signal to `true` so that any `wait_for_scan` call
-        // that races with the background thread sees "scanning in progress"
-        // rather than a stale `false` (the thread hasn't started yet).
-        let scan_signal = Arc::new(AtomicBool::new(true));
-        let watcher_ready = Arc::new(AtomicBool::new(false));
-        let synced_files_count = Arc::new(AtomicUsize::new(0));
-        let cancelled = Arc::new(AtomicBool::new(false));
+        let has_explicit_budget = options.cache_budget.is_some();
+        let initial_budget = options.cache_budget.unwrap_or_default();
 
-        let picker = FilePicker {
-            base_path: path.clone(),
+        Ok(FilePicker {
+            base_path: path,
             sync_data: FileSync::new(),
-            is_scanning: Arc::clone(&scan_signal),
-            watcher_ready: Arc::clone(&watcher_ready),
-            scanned_files_count: Arc::clone(&synced_files_count),
+            is_scanning: Arc::new(AtomicBool::new(false)),
+            watcher_ready: Arc::new(AtomicBool::new(false)),
+            scanned_files_count: Arc::new(AtomicUsize::new(0)),
             background_watcher: None,
-            warmup_mmap_cache,
-            cancelled: Arc::clone(&cancelled),
-            mode,
-            cache_budget: Arc::new(ContentCacheBudget::default()),
+            warmup_mmap_cache: options.warmup_mmap_cache,
+            watch: options.watch,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            mode: options.mode,
+            cache_budget: Arc::new(initial_budget),
             bigram_index: None,
             bigram_overlay: None,
-        };
+            has_explicit_cache_budget: has_explicit_budget,
+        })
+    }
 
-        // Place the picker into the shared handle before spawning the
-        // background thread so the thread can find it immediately.
+    /// Create a picker, place it into the shared handle, and spawn background
+    /// indexing + file-system watcher. This is the default entry point.
+    pub fn new_with_shared_state(
+        shared_picker: SharedPicker,
+        shared_frecency: SharedFrecency,
+        options: FilePickerOptions,
+    ) -> Result<(), Error> {
+        let picker = Self::new(options)?;
+
+        info!(
+            "Spawning background threads: base_path={}, warmup={}, mode={:?}",
+            picker.base_path.display(),
+            picker.warmup_mmap_cache,
+            picker.mode,
+        );
+
+        let warmup = picker.warmup_mmap_cache;
+        let watch = picker.watch;
+        let mode = picker.mode;
+
+        picker.is_scanning.store(true, Ordering::Release);
+
+        let scan_signal = Arc::clone(&picker.is_scanning);
+        let watcher_ready = Arc::clone(&picker.watcher_ready);
+        let synced_files_count = Arc::clone(&picker.scanned_files_count);
+        let cancelled = Arc::clone(&picker.cancelled);
+        let path = picker.base_path.clone();
+
         {
-            let mut guard = shared_picker.write().map_err(|_| Error::AcquireItemLock)?;
+            let mut guard = shared_picker.write()?;
             *guard = Some(picker);
         }
 
         spawn_scan_and_watcher(
-            path.clone(),
-            Arc::clone(&scan_signal),
-            Arc::clone(&watcher_ready),
-            Arc::clone(&synced_files_count),
-            warmup_mmap_cache,
+            path,
+            scan_signal,
+            watcher_ready,
+            synced_files_count,
+            warmup,
+            watch,
             mode,
             shared_picker,
             shared_frecency,
             cancelled,
         );
 
+        Ok(())
+    }
+
+    /// Synchronous filesystem scan — populates `self` with indexed files.
+    ///
+    /// Use this when you need direct access to the picker without shared state:
+    /// ```ignore
+    /// let mut picker = FilePicker::new(options)?;
+    /// picker.collect_files()?;
+    /// // picker.get_files() is now populated
+    /// ```
+    pub fn collect_files(&mut self) -> Result<(), Error> {
+        self.is_scanning.store(true, Ordering::Relaxed);
+        self.scanned_files_count.store(0, Ordering::Relaxed);
+
+        let empty_frecency = SharedFrecency::default();
+        let walk = walk_filesystem(
+            &self.base_path,
+            &self.scanned_files_count,
+            &empty_frecency,
+            self.mode,
+        )?;
+
+        self.sync_data = walk.sync;
+
+        // Recalculate cache budget based on actual file count (unless
+        // the caller provided an explicit budget via FilePickerOptions).
+        if !self.has_explicit_cache_budget {
+            let file_count = self.sync_data.files().len();
+            self.cache_budget = Arc::new(ContentCacheBudget::new_for_repo(file_count));
+        } else {
+            self.cache_budget.reset();
+        }
+
+        // Apply git status synchronously.
+        if let Ok(Some(git_cache)) = walk.git_handle.join() {
+            for file in self.sync_data.files.iter_mut() {
+                file.git_status = git_cache.lookup_status(&file.path);
+            }
+        }
+
+        self.is_scanning.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Start the background file-system watcher.
+    ///
+    /// The picker must already be placed into `shared_picker` (the watcher
+    /// needs the shared handle to apply live updates). Call after
+    /// [`collect_files`](Self::collect_files) or after an initial scan.
+    pub fn spawn_background_watcher(
+        &mut self,
+        shared_picker: &SharedPicker,
+        shared_frecency: &SharedFrecency,
+    ) -> Result<(), Error> {
+        let git_workdir = self.sync_data.git_workdir.clone();
+        let watcher = BackgroundWatcher::new(
+            self.base_path.clone(),
+            git_workdir,
+            shared_picker.clone(),
+            shared_frecency.clone(),
+            self.mode,
+        )?;
+        self.background_watcher = Some(watcher);
+        self.watcher_ready.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -486,13 +598,35 @@ impl FilePicker {
     }
 
     /// Perform a live grep search across indexed files with a pre-parsed query.
-    pub fn grep<'a>(
-        files: &'a [FileItem],
+    pub fn grep(&self, query: &FFFQuery<'_>, options: &GrepSearchOptions) -> GrepResult<'_> {
+        let overlay_guard = self.bigram_overlay.as_ref().map(|o| o.read());
+        grep_search(
+            self.get_files(),
+            query,
+            options,
+            self.cache_budget(),
+            self.bigram_index.as_deref(),
+            overlay_guard.as_deref(),
+            Some(&self.cancelled),
+        )
+    }
+
+    /// Like [`grep`](Self::grep) but ignores the bigram overlay.
+    /// Useful for testing that the overlay is actually contributing results.
+    pub fn grep_without_overlay(
+        &self,
         query: &FFFQuery<'_>,
         options: &GrepSearchOptions,
-        budget: &ContentCacheBudget,
-    ) -> GrepResult<'a> {
-        grep_search(files, query, options, budget, None, None)
+    ) -> GrepResult<'_> {
+        grep_search(
+            self.get_files(),
+            query,
+            options,
+            self.cache_budget(),
+            self.bigram_index.as_deref(),
+            None,
+            Some(&self.cancelled),
+        )
     }
 
     // Returns an ongoing or finisshed scan progress
@@ -519,9 +653,7 @@ impl FilePicker {
         );
 
         let mode = self.mode;
-        let frecency = shared_frecency
-            .read()
-            .map_err(|_| Error::AcquireFrecencyLock)?;
+        let frecency = shared_frecency.read()?;
         status_cache
             .into_iter()
             .try_for_each(|(path, status)| -> Result<(), Error> {
@@ -537,46 +669,6 @@ impl FilePicker {
             })?;
 
         Ok(())
-    }
-
-    /// Refreshes git statuses using the provided shared picker and frecency handles.
-    pub fn refresh_git_status(
-        shared_picker: &SharedPicker,
-        shared_frecency: &SharedFrecency,
-    ) -> Result<usize, Error> {
-        let git_status = {
-            let guard = shared_picker.read().map_err(|_| Error::AcquireItemLock)?;
-            let Some(ref picker) = *guard else {
-                return Err(Error::FilePickerMissing);
-            };
-
-            debug!(
-                "Refreshing git statuses for picker: {:?}",
-                picker.git_root()
-            );
-
-            GitStatusCache::read_git_status(
-                picker.git_root(),
-                StatusOptions::new()
-                    .include_untracked(true)
-                    .recurse_untracked_dirs(true)
-                    .include_unmodified(true)
-                    .exclude_submodules(true),
-            )
-        };
-
-        let mut guard = shared_picker.write().map_err(|_| Error::AcquireItemLock)?;
-        let picker = guard.as_mut().ok_or(Error::FilePickerMissing)?;
-
-        let statuses_count = if let Some(git_status) = git_status {
-            let count = git_status.statuses_len();
-            picker.update_git_statuses(git_status, shared_frecency)?;
-            count
-        } else {
-            0
-        };
-
-        Ok(statuses_count)
     }
 
     pub fn update_single_file_frecency(
@@ -800,6 +892,7 @@ impl FilePicker {
             shared_frecency,
             self.mode,
         );
+
         match walk_result {
             Ok(walk) => {
                 info!(
@@ -853,50 +946,6 @@ impl FilePicker {
     pub fn watcher_signal(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.watcher_ready)
     }
-
-    /// Block the current thread until the background filesystem scan finishes.
-    /// Returns `true` if scan completed, `false` on timeout.
-    /// Use with CAUTION — blocking. Prefer `scan_signal` + async polling.
-    pub fn wait_for_scan(shared_picker: &SharedPicker, timeout: Duration) -> bool {
-        let signal = {
-            let guard = shared_picker.read().expect("shared picker lock poisoned");
-            match guard.as_ref() {
-                Some(picker) => picker.scan_signal(),
-                None => return true,
-            }
-        };
-
-        let start = std::time::Instant::now();
-        while signal.load(Ordering::Acquire) {
-            if start.elapsed() >= timeout {
-                return false;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        true
-    }
-
-    /// Block the current thread until the background file watcher is ready.
-    /// Returns `true` if watcher is ready, `false` on timeout.
-    /// Use with CAUTION — blocking. Prefer `watcher_signal` + async polling.
-    pub fn wait_for_watcher(shared_picker: &SharedPicker, timeout: Duration) -> bool {
-        let signal = {
-            let guard = shared_picker.read().expect("shared picker lock poisoned");
-            match guard.as_ref() {
-                Some(picker) => picker.watcher_signal(),
-                None => return true,
-            }
-        };
-
-        let start = std::time::Instant::now();
-        while !signal.load(Ordering::Acquire) {
-            if start.elapsed() >= timeout {
-                return false;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        true
-    }
 }
 
 /// A point-in-time snapshot of the file-scanning progress.
@@ -921,6 +970,7 @@ fn spawn_scan_and_watcher(
     watcher_ready: Arc<AtomicBool>,
     synced_files_count: Arc<AtomicUsize>,
     warmup_mmap_cache: bool,
+    watch: bool,
     mode: FFFMode,
     shared_picker: SharedPicker,
     shared_frecency: SharedFrecency,
@@ -979,41 +1029,37 @@ fn spawn_scan_and_watcher(
             }
         }
 
-        if cancelled.load(Ordering::Acquire) {
-            info!("Picker was replaced, skipping background watcher creation");
-            watcher_ready.store(true, Ordering::Release);
-            return;
-        }
+        if watch && !cancelled.load(Ordering::Acquire) {
+            match BackgroundWatcher::new(
+                base_path,
+                git_workdir,
+                shared_picker.clone(),
+                shared_frecency.clone(),
+                mode,
+            ) {
+                Ok(watcher) => {
+                    info!("Background file watcher initialized successfully");
 
-        match BackgroundWatcher::new(
-            base_path,
-            git_workdir,
-            shared_picker.clone(),
-            shared_frecency.clone(),
-            mode,
-        ) {
-            Ok(watcher) => {
-                info!("Background file watcher initialized successfully");
-
-                if cancelled.load(Ordering::Acquire) {
-                    info!("Picker was replaced, dropping orphaned watcher");
-                    drop(watcher);
-                    watcher_ready.store(true, Ordering::Release);
-                    return;
-                }
-
-                let write_result = shared_picker.write().ok().map(|mut guard| {
-                    if let Some(ref mut picker) = *guard {
-                        picker.background_watcher = Some(watcher);
+                    if cancelled.load(Ordering::Acquire) {
+                        info!("Picker was replaced, dropping orphaned watcher");
+                        drop(watcher);
+                        watcher_ready.store(true, Ordering::Release);
+                        return;
                     }
-                });
 
-                if write_result.is_none() {
-                    error!("Failed to store background watcher in picker");
+                    let write_result = shared_picker.write().ok().map(|mut guard| {
+                        if let Some(ref mut picker) = *guard {
+                            picker.background_watcher = Some(watcher);
+                        }
+                    });
+
+                    if write_result.is_none() {
+                        error!("Failed to store background watcher in picker");
+                    }
                 }
-            }
-            Err(e) => {
-                error!("Failed to initialize background file watcher: {:?}", e);
+                Err(e) => {
+                    error!("Failed to initialize background file watcher: {:?}", e);
+                }
             }
         }
 
@@ -1022,9 +1068,10 @@ fn spawn_scan_and_watcher(
         if warmup_mmap_cache && !cancelled.load(Ordering::Acquire) {
             let phase_start = std::time::Instant::now();
 
-            // Scale cache limits based on repo size.
+            // Scale cache limits based on repo size (skip if caller provided an explicit budget).
             if let Ok(mut guard) = shared_picker.write()
                 && let Some(ref mut picker) = *guard
+                && !picker.has_explicit_cache_budget
             {
                 let file_count = picker.sync_data.files().len();
                 picker.cache_budget = Arc::new(ContentCacheBudget::new_for_repo(file_count));
@@ -1108,7 +1155,7 @@ fn spawn_scan_and_watcher(
 /// Files beyond the budget are still available via temporary mmaps on first
 /// grep access, so correctness is unaffected.
 #[tracing::instrument(skip(files), name = "warmup_mmaps", level = Level::DEBUG)]
-fn warmup_mmaps(files: &[FileItem], budget: &ContentCacheBudget) {
+pub fn warmup_mmaps(files: &[FileItem], budget: &ContentCacheBudget) {
     let max_files = budget.max_files;
     let max_bytes = budget.max_bytes;
     let max_file_size = budget.max_file_size;

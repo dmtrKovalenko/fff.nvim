@@ -1,7 +1,8 @@
 use crate::db_healthcheck::DbHealthChecker;
 use crate::error::{Error, Result};
 use crate::file_picker::FFFMode;
-use crate::{SharedFrecency, git::is_modified_status};
+use crate::git::is_modified_status;
+use crate::shared::SharedFrecency;
 use heed::{Database, Env, EnvOpenOptions};
 use heed::{
     EnvFlags,
