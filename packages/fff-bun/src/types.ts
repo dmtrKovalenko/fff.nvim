@@ -36,6 +36,8 @@ export interface InitOptions {
    * (default: false)
    */
   warmupMmapCache?: boolean;
+  /** enables optimizations for AI agent assistants. Provide as true if running via mcp/agent */
+  aiMode?: boolean;
 }
 
 /**
@@ -142,6 +144,10 @@ export interface ScanProgress {
   scannedFilesCount: number;
   /** Whether a scan is currently in progress */
   isScanning: boolean;
+  /** Whether the background file watcher is ready */
+  isWatcherReady: boolean;
+  /** Whether the warmup/bigram phase has completed */
+  isWarmupComplete: boolean;
 }
 
 /**
@@ -207,63 +213,6 @@ export interface HealthCheck {
 }
 
 /**
- * Internal: Options format sent to Rust FFI
- * @internal
- */
-export interface InitOptionsInternal {
-  base_path: string;
-  frecency_db_path?: string;
-  history_db_path?: string;
-  use_unsafe_no_lock: boolean;
-  warmup_mmap_cache: boolean;
-}
-
-/**
- * Internal: Search options format sent to Rust FFI
- * @internal
- */
-export interface SearchOptionsInternal {
-  max_threads?: number;
-  current_file?: string;
-  combo_boost_multiplier?: number;
-  min_combo_count?: number;
-  page_index?: number;
-  page_size?: number;
-}
-
-/**
- * Convert public InitOptions to internal format
- * @internal
- */
-export function toInternalInitOptions(opts: InitOptions): InitOptionsInternal {
-  return {
-    base_path: opts.basePath,
-    frecency_db_path: opts.frecencyDbPath,
-    history_db_path: opts.historyDbPath,
-    use_unsafe_no_lock: opts.useUnsafeNoLock ?? false,
-    warmup_mmap_cache: opts.warmupMmapCache ?? false,
-  };
-}
-
-/**
- * Convert public SearchOptions to internal format
- * @internal
- */
-export function toInternalSearchOptions(
-  opts?: SearchOptions,
-): SearchOptionsInternal {
-  return {
-    max_threads: opts?.maxThreads,
-    current_file: opts?.currentFile,
-    combo_boost_multiplier: opts?.comboBoostMultiplier,
-    min_combo_count: opts?.minComboCount,
-    page_index: opts?.pageIndex,
-    page_size: opts?.pageSize,
-  };
-}
-
-
-/**
  * Grep search mode
  */
 export type GrepMode = "plain" | "regex" | "fuzzy";
@@ -312,6 +261,10 @@ export interface GrepOptions {
    * partial results. 0 = unlimited. (default: 0)
    */
   timeBudgetMs?: number;
+  /** Number of context lines to include before each match (default: 0) */
+  beforeContext?: number;
+  /** Number of context lines to include after each match (default: 0) */
+  afterContext?: number;
 }
 
 /**
@@ -350,6 +303,10 @@ export interface GrepMatch {
   matchRanges: [number, number][];
   /** Fuzzy match score (only in fuzzy mode) */
   fuzzyScore?: number;
+  /** Lines before the match (context). Empty array when context is 0. */
+  contextBefore?: string[];
+  /** Lines after the match (context). Empty array when context is 0. */
+  contextAfter?: string[];
 }
 
 /**
@@ -376,29 +333,34 @@ export interface GrepResult {
 }
 
 /**
- * Internal: Grep options format sent to Rust FFI
- * @internal
+ * Options for multi-pattern grep (Aho-Corasick multi-needle search)
+ *
+ * Searches for lines matching ANY of the provided patterns using
+ * SIMD-accelerated Aho-Corasick multi-pattern matching.
  */
-export interface GrepOptionsInternal {
-  max_file_size?: number;
-  max_matches_per_file?: number;
-  smart_case?: boolean;
-  file_offset?: number;
-  mode?: string;
-  time_budget_ms?: number;
-}
-
-/**
- * Convert public GrepOptions to internal format
- * @internal
- */
-export function toInternalGrepOptions(opts?: GrepOptions): GrepOptionsInternal {
-  return {
-    max_file_size: opts?.maxFileSize,
-    max_matches_per_file: opts?.maxMatchesPerFile,
-    smart_case: opts?.smartCase,
-    file_offset: opts?.cursor?._offset ?? 0,
-    mode: opts?.mode,
-    time_budget_ms: opts?.timeBudgetMs,
-  };
+export interface MultiGrepOptions {
+  /** Patterns to search for (OR logic — matches lines containing any pattern) */
+  patterns: string[];
+  /** File constraints like "*.rs" or "/src/" */
+  constraints?: string;
+  /** Maximum file size to search in bytes (default: 10MB) */
+  maxFileSize?: number;
+  /** Maximum matching lines to collect from a single file (default: 0 = unlimited) */
+  maxMatchesPerFile?: number;
+  /** Smart case: case-insensitive when all patterns are lowercase (default: true) */
+  smartCase?: boolean;
+  /**
+   * Pagination cursor from a previous `GrepResult.nextCursor`.
+   * Omit (or pass `null`) for the first page.
+   */
+  cursor?: GrepCursor | null;
+  /**
+   * Maximum wall-clock time in milliseconds to spend searching before returning
+   * partial results. 0 = unlimited. (default: 0)
+   */
+  timeBudgetMs?: number;
+  /** Number of context lines to include before each match (default: 0) */
+  beforeContext?: number;
+  /** Number of context lines to include after each match (default: 0) */
+  afterContext?: number;
 }

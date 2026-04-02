@@ -1,5 +1,3 @@
-use smallvec::SmallVec;
-
 /// Constraint types that can be extracted from a query
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint<'a> {
@@ -22,6 +20,10 @@ pub enum Constraint<'a> {
     /// Path constraint: /src/ -> PathSegment("src")
     PathSegment(&'a str),
 
+    /// File path constraint (AI mode): "libswscale/input.c" → FilePath("libswscale/input.c")
+    /// Matches files whose relative path ends with this suffix at a `/` boundary.
+    FilePath(&'a str),
+
     /// File type constraint: type:rust -> FileType("rust")
     FileType(&'a str),
 
@@ -41,5 +43,5 @@ pub enum GitStatusFilter {
     Unmodified,
 }
 
-/// Stack-allocated buffer for text parts (up to 16 parts without heap allocation)
-pub(crate) type TextPartsBuffer<'a> = SmallVec<[&'a str; 16]>;
+/// Buffer for text parts during query parsing.
+pub(crate) type TextPartsBuffer<'a> = Vec<&'a str>;

@@ -1,4 +1,5 @@
-use fff_core::FileItem;
+use fff::FFFQuery;
+use fff::FileItem;
 /// FFF vs ripgrep comparison benchmark
 ///
 /// Demonstrates why a persistent in-process search engine (fff) is fundamentally
@@ -20,7 +21,7 @@ use fff_core::FileItem;
 /// Usage:
 ///   cargo build --release --bin grep_vs_rg
 ///   ./target/release/grep_vs_rg [--path /path/to/repo] [--iters 5]
-use fff_core::grep::{GrepSearchOptions, grep_search, parse_grep_query};
+use fff::grep::{GrepSearchOptions, grep_search, parse_grep_query};
 use std::io::Read;
 use std::path::Path;
 use std::process::Command;
@@ -204,9 +205,48 @@ fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
         page_limit: usize::MAX,
         mode: Default::default(),
         time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
+        classify_definitions: false,
     };
     let start = Instant::now();
-    let result = grep_search(files, query, parsed, &options);
+    let result = grep_search(
+        files,
+        &parsed,
+        &options,
+        &fff::ContentCacheBudget::zero(),
+        None,
+        None,
+        None,
+    );
+    let elapsed = start.elapsed();
+    (result.matches.len(), elapsed)
+}
+
+#[allow(dead_code)]
+fn benchmark_fff_smart_case(files: &[FileItem], parsed: &FFFQuery<'_>) -> (usize, Duration) {
+    let options = GrepSearchOptions {
+        max_file_size: 10 * 1024 * 1024,
+        max_matches_per_file: usize::MAX,
+        smart_case: true,
+        file_offset: 0,
+        page_limit: 5000,
+        mode: Default::default(),
+        time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
+        classify_definitions: false,
+    };
+    let start = Instant::now();
+    let result = grep_search(
+        files,
+        parsed,
+        &options,
+        &fff::ContentCacheBudget::unlimited(),
+        None,
+        None,
+        None,
+    );
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
@@ -222,9 +262,20 @@ fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
         page_limit: 50,
         mode: Default::default(),
         time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
+        classify_definitions: false,
     };
     let start = Instant::now();
-    let result = grep_search(files, query, parsed, &options);
+    let result = grep_search(
+        files,
+        &parsed,
+        &options,
+        &fff::ContentCacheBudget::unlimited(),
+        None,
+        None,
+        None,
+    );
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
@@ -292,7 +343,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let canonical = fff_core::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
+    let canonical = fff::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
 
     let rg_version = Command::new("rg")
         .arg("--version")

@@ -1,31 +1,29 @@
 /**
  * Binary resolution utilities for fff
  *
- * Resolves the native binary from:
- * 1. Platform-specific npm package (e.g. @ff-labs/fff-bun-darwin-arm64) - primary
- * 2. Local bin/ directory (legacy or manual download)
- * 3. Local dev build (target/release or target/debug)
- * 4. GitHub releases (fallback, requires network)
+ * Resolves the native library from:
+ * 1. Platform-specific npm package (e.g. @ff-labs/fff-bin-darwin-arm64)
+ * 2. Local dev build (target/release or target/debug)
  */
 
-import { existsSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import {
-  getTriple,
-  getLibExtension,
-  getLibFilename,
-  getNpmPackageName,
-} from "./platform";
-
-const GITHUB_REPO = "dmtrKovalenko/fff.nvim";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { getLibFilename, getNpmPackageName } from "./platform";
 
 /**
  * Get the current file's directory
  */
 function getCurrentDir(): string {
   const url = import.meta.url;
+
+  // When running in a compiled Bun binary, import.meta.url points to the virtual
+  // $bunfs filesystem. Use process.execPath to get the real filesystem location.
+  if (url.includes("$bunfs")) {
+    return dirname(process.execPath);
+  }
+
   if (url.startsWith("file://")) {
     return dirname(fileURLToPath(url));
   }
@@ -41,21 +39,6 @@ function getPackageDir(): string {
 }
 
 /**
- * Get the directory where binaries are stored (legacy/fallback)
- */
-export function getBinDir(): string {
-  return join(getPackageDir(), "bin");
-}
-
-/**
- * Get the full path to the native library in bin/ (legacy/fallback)
- */
-export function getBinaryPath(): string {
-  const binDir = getBinDir();
-  return join(binDir, getLibFilename());
-}
-
-/**
  * Check if the binary exists in any known location
  */
 export function binaryExists(): boolean {
@@ -65,8 +48,8 @@ export function binaryExists(): boolean {
 /**
  * Try to resolve the binary from the platform-specific npm package.
  *
- * When users install @ff-labs/bun, npm/bun automatically installs the matching
- * optionalDependency (e.g. @ff-labs/fff-bun-darwin-arm64). We resolve the binary
+ * When users install @ff-labs/fff-bun, npm/bun automatically installs the matching
+ * optionalDependency (e.g. @ff-labs/fff-bin-darwin-arm64). We resolve the binary
  * path by requiring that package's package.json and looking for the binary
  * in the same directory.
  */
@@ -94,7 +77,7 @@ function resolveFromNpmPackage(): string | null {
 /**
  * Get the development binary path (for local development)
  */
-export function getDevBinaryPath(): string | null {
+function getDevBinaryPath(): string | null {
   const packageDir = getPackageDir();
   const workspaceRoot = join(packageDir, "..", "..");
 
@@ -118,11 +101,20 @@ function isDevWorkspace(): boolean {
   return existsSync(join(workspaceRoot, "Cargo.toml"));
 }
 
+/**
+ * Find the native library binary.
+ *
+ * Resolution order:
+ * - Dev workspace: local dev build first, then npm package
+ * - Production: npm package first, then dev build
+ *
+ * @returns Absolute path to the library, or null if not found
+ */
 export function findBinary(): string | null {
   if (isDevWorkspace()) {
     // 1. Local bin/ directory (populated by `make prepare-bun`)
-    const installedPath = getBinaryPath();
-    if (existsSync(installedPath)) return installedPath;
+    const binPath = join(getPackageDir(), "bin", getLibFilename());
+    if (existsSync(binPath)) return binPath;
 
     // 2. Local dev build (target/release or target/debug)
     const devPath = getDevBinaryPath();
@@ -136,117 +128,9 @@ export function findBinary(): string | null {
   }
 
   // Production: npm package first
-  // 1. Try platform-specific npm package first
   const npmPath = resolveFromNpmPackage();
   if (npmPath) return npmPath;
 
-  // 2. Try local bin/ directory (legacy or manual download)
-  const installedPath = getBinaryPath();
-  if (existsSync(installedPath)) return installedPath;
-
-  // 3. Try local dev build
+  // Fallback: local dev build (e.g. user built from source)
   return getDevBinaryPath();
-}
-
-/**
- * Download the binary from GitHub releases as a fallback.
- * This is only used when the platform npm package is not available.
- *
- * @param tag - The release tag to download (e.g. commit hash), or "latest"
- */
-export async function downloadBinary(tag?: string): Promise<string> {
-  const resolvedTag = tag || "latest";
-  const triple = getTriple();
-  const ext = getLibExtension();
-
-  // Resolve "latest" tag via GitHub API
-  let releaseTag = resolvedTag;
-  if (releaseTag === "latest") {
-    console.log("fff: Fetching latest release tag from GitHub...");
-    releaseTag = await fetchLatestReleaseTag();
-  }
-
-  const binaryName = `c-lib-${triple}.${ext}`;
-  const baseUrl = `https://github.com/${GITHUB_REPO}/releases/download/${releaseTag}`;
-  const binaryUrl = `${baseUrl}/${binaryName}`;
-
-  console.log(`fff: Downloading native library for ${triple}...`);
-  console.log(`fff: Release: ${releaseTag}`);
-
-  const binaryResponse = await fetch(binaryUrl);
-  if (!binaryResponse.ok) {
-    throw new Error(
-      `Failed to download binary: ${binaryResponse.status} ${binaryResponse.statusText}\nURL: ${binaryUrl}`,
-    );
-  }
-
-  const binaryBuffer = Buffer.from(await binaryResponse.arrayBuffer());
-
-  const binDir = getBinDir();
-  if (!existsSync(binDir)) {
-    mkdirSync(binDir, { recursive: true });
-  }
-
-  const binaryPath = getBinaryPath();
-  writeFileSync(binaryPath, binaryBuffer);
-
-  // Make executable on Unix
-  if (process.platform !== "win32") {
-    chmodSync(binaryPath, 0o755);
-  }
-
-  console.log(`fff: Binary downloaded to ${binaryPath}`);
-  return releaseTag;
-}
-
-/**
- * Fetch the latest release tag from GitHub
- */
-async function fetchLatestReleaseTag(): Promise<string> {
-  const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
-
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github.v3+json",
-      "User-Agent": "fff-bun-client",
-    },
-  });
-
-  if (!response.ok) {
-    const allReleasesUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases`;
-    const allResponse = await fetch(allReleasesUrl, {
-      headers: {
-        Accept: "application/vnd.github.v3+json",
-        "User-Agent": "fff-bun-client",
-      },
-    });
-
-    if (!allResponse.ok) {
-      throw new Error(`Failed to fetch releases: ${allResponse.status}`);
-    }
-
-    const releases = (await allResponse.json()) as Array<{ tag_name: string }>;
-    if (releases.length === 0) {
-      throw new Error("No releases found");
-    }
-
-    return releases[0].tag_name;
-  }
-
-  const release = (await response.json()) as { tag_name: string };
-  return release.tag_name;
-}
-
-/**
- * Ensure the binary exists, downloading from GitHub if necessary.
- */
-export async function ensureBinary(): Promise<string> {
-  const existingPath = findBinary();
-  if (existingPath) {
-    return existingPath;
-  }
-
-  // Fallback: download from GitHub
-  await downloadBinary();
-  return getBinaryPath();
 }

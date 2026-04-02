@@ -2,6 +2,7 @@ local utils = require('fff.utils')
 local file_picker = require('fff.file_picker')
 local image = require('fff.file_picker.image')
 local location_utils = require('fff.location_utils')
+local rust = require('fff.rust')
 
 local M = {}
 
@@ -301,6 +302,8 @@ M.state = {
   location = nil, -- Current location data for highlighting
   location_namespace = nil, -- Namespace for location highlighting
   preview_generation = 0, -- Monotonically increasing token to detect stale async callbacks
+  is_binary_preview = false, -- Whether the current preview is a hex dump
+  hex_byte_offset = 0, -- Next byte offset for hex dump paging
 }
 
 --- Setup preview configuration
@@ -554,7 +557,69 @@ function M.preview_file(file_path, bufnr)
   return true
 end
 
---- Preview a binary file with async file type detection
+-- Hex preview highlight support: dynamically create hl groups from "#rrggbb"
+local hex_ns = nil
+local hex_hl_cache = {}
+
+local function ensure_hex_ns()
+  if not hex_ns then hex_ns = vim.api.nvim_create_namespace('fff_hex_preview') end
+  return hex_ns
+end
+
+local function get_hex_hl_group(hex_color)
+  local cached = hex_hl_cache[hex_color]
+  if cached then return cached end
+  local group = 'FffHex_' .. hex_color:sub(2)
+  vim.api.nvim_set_hl(0, group, { fg = hex_color })
+  hex_hl_cache[hex_color] = group
+  return group
+end
+
+--- Apply hex highlight spans to a buffer
+--- @param bufnr number Buffer number
+--- @param highlights table Array of {line_0idx, col_start, col_end, "#rrggbb"}
+--- @param line_offset number Lines to add to each highlight line index (for header)
+local function apply_hex_highlights(bufnr, highlights, line_offset)
+  if not highlights or not vim.api.nvim_buf_is_valid(bufnr) then return end
+  local ns = ensure_hex_ns()
+  for _, hl in ipairs(highlights) do
+    pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, hl[1] + line_offset, hl[2], {
+      end_col = hl[3],
+      hl_group = get_hex_hl_group(hl[4]),
+    })
+  end
+end
+
+--- Load a page of hex dump content from the Rust backend
+--- @param file_path string Path to the binary file
+--- @param byte_offset number Byte offset to start reading from
+--- @return table|nil Result with lines, highlights, has_more, next_offset
+local function load_hex_page(file_path, byte_offset)
+  local ok, result = pcall(rust.hex_dump, file_path, byte_offset, 4096)
+  if ok and result then return result end
+  return nil
+end
+
+--- Load more hex content when scrolling near the end of the buffer
+local function load_more_hex_content()
+  if not M.state.bufnr or not vim.api.nvim_buf_is_valid(M.state.bufnr) then return end
+  if not M.state.has_more_content or not M.state.current_file then return end
+
+  local current_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
+  local result = load_hex_page(M.state.current_file, M.state.hex_byte_offset)
+  if result and result.lines and #result.lines > 0 then
+    append_buffer_lines(M.state.bufnr, result.lines)
+    M.state.hex_byte_offset = result.next_offset
+    M.state.has_more_content = result.has_more
+    M.state.content_height = vim.api.nvim_buf_line_count(M.state.bufnr)
+    M.state.loaded_lines = M.state.content_height
+    apply_hex_highlights(M.state.bufnr, result.highlights, current_lines)
+  else
+    M.state.has_more_content = false
+  end
+end
+
+--- Preview a binary file using hexyl-powered hex dump with paging
 --- @param file_path string Path to the file
 --- @param bufnr number Buffer number for preview
 --- @return boolean Success status
@@ -562,49 +627,40 @@ function M.preview_binary_file(file_path, bufnr)
   local info = M.get_file_info(file_path)
   local lines = {}
 
+  M.state.is_binary_preview = true
+  M.state.hex_byte_offset = 0
+
+  -- Build header synchronously (file -b is fast, typically <10ms)
+  if vim.fn.executable('file') == 1 then
+    local output = vim.fn.system({ 'file', '-b', file_path })
+    if vim.v.shell_error == 0 and output then
+      local file_type = output:gsub('\n', '')
+      table.insert(lines, 'Binary file: ' .. file_type)
+      if info and info.size_formatted then table.insert(lines, 'Size: ' .. info.size_formatted) end
+      table.insert(lines, '')
+    end
+  end
+
+  local hex_result = load_hex_page(file_path, 0)
+  if hex_result and hex_result.lines then
+    for _, hex_line in ipairs(hex_result.lines) do
+      table.insert(lines, hex_line)
+    end
+    M.state.hex_byte_offset = hex_result.next_offset
+    M.state.has_more_content = hex_result.has_more
+  end
+
   set_buffer_lines(bufnr, lines)
   vim.api.nvim_set_option_value('filetype', 'text', { buf = bufnr })
   vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
   vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
 
-  if vim.fn.executable('file') == 1 then
-    local cmd = { 'file', '-b', file_path }
-    vim.system(cmd, { text = true }, function(result)
-      vim.schedule(function()
-        if not vim.api.nvim_buf_is_valid(bufnr) then return end
+  M.state.content_height = #lines
+  M.state.loaded_lines = #lines
 
-        if result.code == 0 and result.stdout then
-          local file_type = result.stdout:gsub('\n', '')
-          table.insert(lines, 'Binary file: ' .. file_type)
-          if info and info.size_formatted then table.insert(lines, 'Size: ' .. info.size_formatted) end
-
-          if vim.fn.executable('xxd') == 1 then
-            table.insert(lines, '')
-            set_buffer_lines(bufnr, lines)
-
-            local hex_cmd = { 'xxd', '-l', '8192', file_path }
-            vim.system(hex_cmd, { text = true }, function(hex_result)
-              vim.schedule(function()
-                if not vim.api.nvim_buf_is_valid(bufnr) then return end
-
-                if hex_result.code == 0 and hex_result.stdout then
-                  local hex_lines = vim.split(hex_result.stdout, '\n')
-                  for _, line in ipairs(hex_lines) do
-                    if line:match('%S') then table.insert(lines, line) end
-                  end
-                else
-                  table.insert(lines, 'Use a hex editor or appropriate application to view this file.')
-                end
-                set_buffer_lines(bufnr, lines)
-              end)
-            end)
-          else
-            table.insert(lines, 'Use a hex editor or appropriate application to view this file.')
-            set_buffer_lines(bufnr, lines)
-          end
-        end
-      end)
-    end)
+  if hex_result and hex_result.highlights then
+    local header_lines = #lines - (hex_result.lines and #hex_result.lines or 0)
+    apply_hex_highlights(bufnr, hex_result.highlights, header_lines)
   end
 
   return true
@@ -641,6 +697,9 @@ function M.preview(file_path, bufnr, location, is_binary)
   M.state.total_file_lines = nil
   M.state.has_more_content = true
   M.state.is_loading = false
+  M.state.hex_byte_offset = 0
+
+  M.state.is_binary_preview = false
 
   M.state.current_file = file_path
   M.state.bufnr = bufnr
@@ -672,15 +731,19 @@ function M.scroll(lines)
   -- If scrolling down and approaching end of loaded content, try to load more
   if lines > 0 and not M.state.is_loading then
     local target_line = new_offset + win_height
-    local buffer_needed = target_line + 20 -- Load a bit ahead
+    local buffer_needed = target_line + 20
 
     if current_buffer_lines < buffer_needed and M.state.has_more_content then
-      -- Load more content asynchronously but don't wait for it
-      ensure_content_loaded_async(target_line)
+      if M.state.is_binary_preview then
+        load_more_hex_content()
+        -- Re-read line count after loading more
+        current_buffer_lines = vim.api.nvim_buf_line_count(M.state.bufnr)
+      else
+        ensure_content_loaded_async(target_line)
+      end
     end
   end
 
-  -- Use actual buffer line count for scroll calculations
   local content_height = current_buffer_lines
   local half_screen = math.floor(win_height / 2)
   local max_scroll = math.max(0, content_height + half_screen - win_height)
@@ -732,7 +795,12 @@ function M.update_file_info_buffer(file, bufnr, file_index)
   vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
   vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
   vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
-  vim.api.nvim_set_option_value('wrap', false, { buf = bufnr })
+
+  -- Set wrap on the window (wrap is window-local, not buffer-local)
+  local wins = vim.fn.win_findbuf(bufnr)
+  for _, win in ipairs(wins) do
+    if vim.api.nvim_win_is_valid(win) then vim.api.nvim_set_option_value('wrap', false, { win = win }) end
+  end
 
   return true
 end
@@ -797,6 +865,8 @@ function M.clear()
   M.state.scroll_offset = 0
   M.state.content_height = 0
   M.state.location = nil
+  M.state.is_binary_preview = false
+  M.state.hex_byte_offset = 0
 end
 
 --- Apply location highlighting to the preview buffer

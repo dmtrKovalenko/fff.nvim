@@ -1,7 +1,7 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { findBinary } from "./download";
 import { FileFinder } from "./index";
-import { findBinary, getDevBinaryPath } from "./download";
-import { getTriple, getLibExtension, getLibFilename } from "./platform";
+import { getLibExtension, getLibFilename, getTriple } from "./platform";
 
 // Cross-platform path normalization helpers
 const normalizePath = (path: string | null | undefined): string | null => {
@@ -46,14 +46,6 @@ describe("Platform Detection", () => {
 });
 
 describe("Binary Detection", () => {
-  test("getDevBinaryPath finds local build", () => {
-    const devPath = getDevBinaryPath();
-    expect(devPath).not.toBeNull();
-    // Normalize path for cross-platform comparison (Windows uses backslashes)
-    const normalizedPath = normalizePath(devPath);
-    expect(normalizedPath).toContain("target/release");
-  });
-
   test("findBinary returns a path", () => {
     const path = findBinary();
     expect(path).not.toBeNull();
@@ -120,14 +112,14 @@ describe("FileFinder - Full Lifecycle", () => {
     if (progress.ok) {
     }
 
-    const result = finder.search("");
+    const result = finder.fileSearch("");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
       if (result.value.items.length > 0) {
         // Log first few paths to see format on Windows
         // Items are strings (file paths), not objects
-        const samplePaths = result.value.items
+        const _samplePaths = result.value.items
           .slice(0, 3)
           .map((item) =>
             normalizePath(typeof item === "string" ? item : item.relativePath),
@@ -140,7 +132,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search returns a valid result structure", () => {
-    const result = finder.search("Cargo.toml");
+    const result = finder.fileSearch("Cargo.toml");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -152,7 +144,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search returns empty for non-matching query", () => {
-    const result = finder.search("xyznonexistentfilenamexyz123456");
+    const result = finder.fileSearch("xyznonexistentfilenamexyz123456");
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -162,7 +154,7 @@ describe("FileFinder - Full Lifecycle", () => {
   });
 
   test("search respects pageSize option", () => {
-    const result = finder.search("ts", { pageSize: 3 });
+    const result = finder.fileSearch("ts", { pageSize: 3 });
     expect(result.ok).toBe(true);
 
     if (result.ok) {
@@ -170,8 +162,8 @@ describe("FileFinder - Full Lifecycle", () => {
     }
   });
 
-  test("liveGrep plain text returns matching lines", () => {
-    const result = finder.liveGrep("fff-core", {
+  test("grep plain text returns matching lines", () => {
+    const result = finder.grep("fff-core", {
       mode: "plain",
     });
     expect(result.ok).toBe(true);
@@ -180,7 +172,7 @@ describe("FileFinder - Full Lifecycle", () => {
       if (result.value.items.length > 0) {
         // Log sample match to verify content on Windows
         const first = result.value.items[0];
-        const normalizedPath = normalizePath(first.relativePath);
+        const _normalizedPath = normalizePath(first.relativePath);
       }
 
       expect(result.value.totalMatched).toBeGreaterThan(0);
@@ -205,9 +197,9 @@ describe("FileFinder - Full Lifecycle", () => {
     }
   });
 
-  test("liveGrep fuzzy mode returns results with scores", () => {
+  test("grep fuzzy mode returns results with scores", () => {
     // Intentional typo: "depdnency" instead of "dependency" to exercise fuzzy matching
-    const result = finder.liveGrep("depdnency", {
+    const result = finder.grep("depdnency", {
       mode: "fuzzy",
     });
     expect(result.ok).toBe(true);
@@ -236,9 +228,7 @@ describe("FileFinder - Full Lifecycle", () => {
       expect(result.value.filePicker.initialized).toBe(true);
       expect(result.value.filePicker.basePath).toBeDefined();
       // Normalize basePath for cross-platform comparison
-      const normalizedBasePath = normalizePath(
-        result.value.filePicker.basePath || "",
-      );
+      const normalizedBasePath = normalizePath(result.value.filePicker.basePath || "");
       const normalizedTestDir = normalizePath(testDir);
       expect(normalizedBasePath).toBe(normalizedTestDir);
       expect(typeof result.value.filePicker.indexedFiles).toBe("number");
@@ -275,8 +265,8 @@ describe("FileFinder - Full Lifecycle", () => {
       const finder2 = result2.value;
 
       // Both should work independently
-      const search1 = finder.search("Cargo");
-      const search2 = finder2.search("Cargo");
+      const search1 = finder.fileSearch("Cargo");
+      const search2 = finder2.fileSearch("Cargo");
 
       expect(search1.ok).toBe(true);
       expect(search2.ok).toBe(true);
@@ -284,7 +274,7 @@ describe("FileFinder - Full Lifecycle", () => {
       // Destroying one should not affect the other
       finder2.destroy();
 
-      const search3 = finder.search("Cargo");
+      const search3 = finder.fileSearch("Cargo");
       expect(search3.ok).toBe(true);
     }
   });
@@ -299,7 +289,7 @@ describe("FileFinder - Error Handling", () => {
     const f = createResult.value;
     f.destroy();
 
-    const result = f.search("test");
+    const result = f.fileSearch("test");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("destroyed");

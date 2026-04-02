@@ -61,10 +61,13 @@ impl DbHealthChecker for QueryTracker {
 }
 
 impl QueryTracker {
-    pub fn new(db_path: &str, use_unsafe_no_lock: bool) -> Result<Self, Error> {
+    pub fn new(db_path: impl AsRef<Path>, use_unsafe_no_lock: bool) -> Result<Self, Error> {
+        let db_path = db_path.as_ref();
         fs::create_dir_all(db_path).map_err(Error::CreateDir)?;
+
         let env = unsafe {
             let mut opts = EnvOpenOptions::new();
+            opts.map_size(10 * 1024 * 1024); // 100 MiB
             opts.max_dbs(16); // Allow up to 16 databases per environment
             if use_unsafe_no_lock {
                 opts.flags(EnvFlags::NO_LOCK | EnvFlags::NO_SYNC | EnvFlags::NO_META_SYNC);
@@ -243,7 +246,6 @@ impl QueryTracker {
         min_combo_count: u32,
     ) -> Result<Option<QueryMatchEntry>, Error> {
         let query_key = Self::create_query_key(project_path, query)?;
-        tracing::debug!(?query_key, "HASH");
         let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
 
         let last_match = self

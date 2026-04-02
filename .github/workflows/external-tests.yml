@@ -9,6 +9,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   MACOSX_DEPLOYMENT_TARGET: "13"
+  # Force Node 24 for all JS-based actions to avoid the libuv
+  # process_title assertion crash on Windows (known Node 20 bug).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   lua-tests:
@@ -25,7 +28,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
 
       - name: Install Zig
@@ -34,11 +37,11 @@ jobs:
           version: 0.15.2
 
       - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1.15.4
         with:
           cache: true
-          cache-on-failure: true
-          cache-key: "v1-lua-e2e"
+          cache-on-failure: false
+          cache-key: "v2-lua-e2e"
           rustflags: ""
           target: ${{ matrix.target || '' }}
 
@@ -87,6 +90,27 @@ jobs:
         shell: bash
         run: make test-lua
 
+      - name: Run version resolution tests
+        shell: bash
+        run: make test-version
+
       - name: Run bun tests
         shell: bash
+        if: ${{ matrix.os == 'macos-latest' }}
         run: make test-bun
+
+      - name: Install Node.js
+        if: ${{ matrix.os != 'ubuntu-latest' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install node deps
+        if: ${{ matrix.os != 'ubuntu-latest' }}
+        shell: bash
+        run: npm install
+
+      - name: Run node tests
+        if: ${{ matrix.os != 'ubuntu-latest' }}
+        shell: bash
+        run: make test-node

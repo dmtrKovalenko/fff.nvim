@@ -1,9 +1,10 @@
 [package]
-name = "fff-core"
-version = "0.1.0"
+name = "fff-search"
+version = "0.5.1"
 edition = "2024"
-description = "High-performance file finder core library"
 license = "MIT"
+authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
+description = "Faboulous & Fast File Finder - a fast and extremely correct file finder SDK with typo resistance, SIMD, prefiltering, and more"
 
 [lib]
 path = "src/lib.rs"
@@ -13,20 +14,20 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 default = []
 # Enable C FFI exports
 ffi = []
+# Call mi_collect(true) after large allocator churn (bigram build).
+# Requires mimalloc to be the global allocator (linked by fff-nvim).
+mimalloc-collect = ["dep:libmimalloc-sys"]
 # Use zlob (Zig-compiled C globbing library) for glob matching.
 # Requires Zig to be installed. When disabled, falls back to globset (pure Rust).
 zlob = ["dep:zlob", "fff-query-parser/zlob"]
 
 [dependencies]
-# Workspace dependencies
 ahash = { workspace = true }
 rayon = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-
-# Local crates
-fff-query-parser = { path = "../fff-query-parser", default-features = false }
+fff-query-parser = { workspace = true  }
 
 # External dependencies
 bindet = { workspace = true }
@@ -36,8 +37,8 @@ dirs = { workspace = true }
 git2 = { workspace = true }
 glidesort = { workspace = true }
 globset = { workspace = true }
-grep-matcher = { workspace = true }
-grep-searcher = { workspace = true }
+fff-grep = { workspace = true  }
+aho-corasick = "1"
 memchr = "2"
 heed = { workspace = true }
 ignore = { workspace = true }
@@ -50,10 +51,13 @@ parking_lot = { workspace = true }
 pathdiff = { workspace = true }
 regex = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 smartstring = { version = "1.0.1", features = ["serde"] }
+toml = "0.8"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zlob = { workspace = true, optional = true }
+libmimalloc-sys = { version = "0.1", optional = true, features = ["extended"] }
 # Platform-specific: dunce for Windows to avoid \\?\ extended path prefix
 [target.'cfg(windows)'.dependencies]
 dunce = { workspace = true }
@@ -62,3 +66,15 @@ dunce = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = { version = "0.8", features = ["small_rng"] }
 tempfile = "3.8"
+
+[[bench]]
+name = "parse_bench"
+harness = false
+
+[[bench]]
+name = "bigram_bench"
+harness = false
+
+[[bench]]
+name = "memmem_bench"
+harness = false

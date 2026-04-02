@@ -1,5 +1,5 @@
 import { FileFinder } from "./src/index";
-import { resolve, dirname } from "path";
+import { resolve, dirname } from "node:path";
 
 async function main() {
   console.log("=== fff Test Script ===\n");
@@ -21,7 +21,9 @@ async function main() {
   if (healthBefore.ok) {
     console.log(`  Version: ${healthBefore.value.version}`);
     console.log(`  Git available: ${healthBefore.value.git.available}`);
-    console.log(`  File picker initialized: ${healthBefore.value.filePicker.initialized}`);
+    console.log(
+      `  File picker initialized: ${healthBefore.value.filePicker.initialized}`,
+    );
   } else {
     console.error(`  Error: ${healthBefore.error}`);
   }
@@ -47,7 +49,7 @@ async function main() {
   console.log("Waiting for initial scan...");
   const startTime = Date.now();
   let lastCount = 0;
-  
+
   while (finder.isScanning()) {
     const progress = finder.getScanProgress();
     if (progress.ok && progress.value.scannedFilesCount !== lastCount) {
@@ -55,7 +57,7 @@ async function main() {
       console.log(`  Scanning: ${lastCount} files...`);
     }
     await new Promise((r) => setTimeout(r, 100));
-    
+
     if (Date.now() - startTime > 30000) {
       console.error("  Scan timeout after 30s");
       break;
@@ -72,7 +74,7 @@ async function main() {
 
   // Search test
   console.log("Searching for 'lib.rs'...");
-  const searchResult = finder.search("lib.rs", { pageSize: 5 });
+  const searchResult = finder.fileSearch("lib.rs", { pageSize: 5 });
 
   if (searchResult.ok) {
     console.log(`Found ${searchResult.value.totalMatched} matches (showing first 5):\n`);
@@ -80,7 +82,9 @@ async function main() {
       const item = searchResult.value.items[i];
       const score = searchResult.value.scores[i];
       console.log(`  ${item.relativePath}`);
-      console.log(`    Score: ${score.total} (base: ${score.baseScore}, filename: ${score.filenameBonus})`);
+      console.log(
+        `    Score: ${score.total} (base: ${score.baseScore}, filename: ${score.filenameBonus})`,
+      );
       console.log(`    Git: ${item.gitStatus}`);
     }
   } else {
@@ -90,7 +94,7 @@ async function main() {
 
   // Search with different query
   console.log("Searching for 'package.json'...");
-  const searchResult2 = finder.search("package.json", { pageSize: 3 });
+  const searchResult2 = finder.fileSearch("package.json", { pageSize: 3 });
 
   if (searchResult2.ok) {
     console.log(`Found ${searchResult2.value.totalMatched} matches:\n`);
@@ -121,18 +125,20 @@ async function main() {
   if (finder2Result.ok) {
     const finder2 = finder2Result.value;
     console.log("  Second instance created successfully");
-    
+
     finder2.waitForScan(5000);
-    const search2 = finder2.search("Cargo.toml");
+    const search2 = finder2.fileSearch("Cargo.toml");
     if (search2.ok) {
-      console.log(`  Second instance found ${search2.value.totalMatched} matches for 'Cargo.toml'`);
+      console.log(
+        `  Second instance found ${search2.value.totalMatched} matches for 'Cargo.toml'`,
+      );
     }
-    
+
     finder2.destroy();
     console.log("  Second instance destroyed");
-    
+
     // First instance should still work
-    const search3 = finder.search("Cargo.toml");
+    const search3 = finder.fileSearch("Cargo.toml");
     if (search3.ok) {
       console.log(`  First instance still works: ${search3.value.totalMatched} matches`);
     }

@@ -2,13 +2,13 @@
 #![allow(dead_code)]
 #![allow(clippy::enum_variant_names)]
 
-use fff_core::file_picker::FilePicker;
-use fff_core::git::format_git_status;
-use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
+use fff::file_picker::FilePicker;
+use fff::git::format_git_status;
+use fff::{FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::env;
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -25,11 +25,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let r = running.clone();
 
     // Create shared state
-    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
-    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
+    let shared_picker = SharedPicker::default();
+    let shared_frecency = SharedFrecency::default();
 
     // Clone for signal handler
-    let picker_for_cleanup = Arc::clone(&shared_picker);
+    let picker_for_cleanup = shared_picker.clone();
     ctrlc::set_handler(move || {
         println!("\n🛑 Received interrupt signal, shutting down...");
         if let Ok(mut guard) = picker_for_cleanup.write() {
@@ -46,10 +46,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize the file picker using shared state
     FilePicker::new_with_shared_state(
-        base_path.clone(),
-        false,
-        Arc::clone(&shared_picker),
-        Arc::clone(&shared_frecency),
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        fff::FilePickerOptions {
+            base_path: base_path.clone(),
+            warmup_mmap_cache: false,
+            mode: FFFMode::default(),
+            ..Default::default()
+        },
     )?;
 
     // Get initial file count from shared state
@@ -152,13 +156,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let parsed = parser.parse("rs");
             let search_results = FilePicker::fuzzy_search(
                 files,
-                "rs",
-                parsed,
+                &parsed,
+                None,
                 FuzzySearchOptions {
                     max_threads: 2,
                     current_file: None,
                     project_path: None,
-                    last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
                     pagination: PaginationArgs {
@@ -198,5 +201,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             picker.stop_background_monitor();
         }
     }
+
     Ok(())
 }

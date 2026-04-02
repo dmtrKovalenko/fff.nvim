@@ -1,4 +1,4 @@
-use fff_core::FileItem;
+use fff::FileItem;
 /// Live grep benchmark profiler for fff.nvim
 ///
 /// Benchmarks the full grep pipeline against a large repository (Linux kernel).
@@ -10,7 +10,8 @@ use fff_core::FileItem;
 /// Usage:
 ///   cargo build --release --bin grep_profiler
 ///   ./target/release/grep_profiler [--path /path/to/repo]
-use fff_core::grep::{GrepSearchOptions, grep_search, parse_grep_query};
+use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
+use fff::types::{BigramFilter, BigramIndexBuilder, ContentCacheBudget};
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -115,29 +116,51 @@ impl BenchStats {
 struct GrepBench<'a> {
     files: &'a [FileItem],
     options: GrepSearchOptions,
+    bigram_index: Option<&'a BigramFilter>,
 }
 
 impl<'a> GrepBench<'a> {
     fn new(files: &'a [FileItem]) -> Self {
+        Self::with_mode(files, GrepMode::PlainText)
+    }
+
+    fn with_mode(files: &'a [FileItem], mode: GrepMode) -> Self {
         Self {
             files,
+            bigram_index: None,
             options: GrepSearchOptions {
                 max_file_size: 10 * 1024 * 1024,
                 max_matches_per_file: 200,
                 smart_case: true,
                 file_offset: 0,
                 page_limit: 50,
-                mode: Default::default(),
+                mode,
                 time_budget_ms: 0,
+                before_context: 0,
+                after_context: 0,
+                classify_definitions: false,
             },
         }
+    }
+
+    fn with_bigram(mut self, index: &'a BigramFilter) -> Self {
+        self.bigram_index = Some(index);
+        self
     }
 
     /// Run a single grep search, return (duration, match_count, files_searched)
     fn run_once(&self, query: &str) -> (Duration, usize, usize) {
         let parsed = parse_grep_query(query);
         let start = Instant::now();
-        let result = grep_search(self.files, query, parsed, &self.options);
+        let result = grep_search(
+            self.files,
+            &parsed,
+            &self.options,
+            &ContentCacheBudget::default(),
+            self.bigram_index,
+            None,
+            None,
+        );
         let elapsed = start.elapsed();
         (elapsed, result.matches.len(), result.total_files_searched)
     }
@@ -157,6 +180,23 @@ impl<'a> GrepBench<'a> {
 
         (stats, last_matches, last_files_searched)
     }
+}
+
+fn build_bigram_index(files: &[FileItem]) -> BigramFilter {
+    use rayon::prelude::*;
+
+    let builder = BigramIndexBuilder::new(files.len());
+    let budget = ContentCacheBudget::default();
+
+    files.par_iter().enumerate().for_each(|(idx, file)| {
+        if !file.is_binary
+            && let Some(content) = file.get_content_for_search(&budget)
+        {
+            builder.add_file_content(idx, &content);
+        }
+    });
+
+    builder.compress(None)
 }
 
 fn fmt_dur(d: Duration) -> String {
@@ -215,12 +255,12 @@ fn main() {
         std::process::exit(1);
     }
 
-    let canonical = fff_core::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
+    let canonical = fff::path_utils::canonicalize(&repo).expect("Failed to canonicalize path");
     eprintln!("=== FFF Live Grep Profiler ===");
     eprintln!("Repository: {:?}", canonical);
 
     // Direct file loading (no background thread)
-    eprintln!("\n[1/5] Loading files...");
+    eprintln!("\n[1/7] Loading files...");
     let load_start = Instant::now();
     let files = load_files(&canonical);
     let load_time = load_start.elapsed();
@@ -236,7 +276,7 @@ fn main() {
 
     let bench = GrepBench::new(&files);
 
-    eprintln!("[2/5] Cold cache benchmarks (first search, mmap not yet loaded)");
+    eprintln!("[2/7] Cold cache benchmarks (first search, mmap not yet loaded)");
     eprintln!("  Each query runs once with fresh FileItem mmaps.\n");
     print_header();
 
@@ -259,7 +299,7 @@ fn main() {
         print_row(name, &stats, matches, files_searched, 1);
     }
 
-    eprintln!("\n[3/5] Warm cache benchmarks (mmap cache populated)");
+    eprintln!("\n[3/7] Warm cache benchmarks (plain text, mmap cache populated)");
     eprintln!("  Running 3 warmup iterations, then measuring.\n");
     print_header();
 
@@ -293,7 +333,105 @@ fn main() {
         print_row(name, &stats, matches, files_searched, *iters);
     }
 
-    eprintln!("\n[4/5] Incremental typing simulation");
+    // ── Bigram-accelerated benchmarks ───────────────────────────────────
+    eprintln!("\n[3b/7] Building bigram index...");
+    let bigram_start = Instant::now();
+    let bigram_index = build_bigram_index(&files);
+    eprintln!(
+        "  Built in {:.2}s ({} columns, {:.1} MB)\n",
+        bigram_start.elapsed().as_secs_f64(),
+        bigram_index.file_count(),
+        bigram_index.heap_bytes() as f64 / (1024.0 * 1024.0),
+    );
+
+    eprintln!("[3c/7] Bigram-accelerated warm benchmarks (same queries, with bigram prefilter)");
+    print_header();
+
+    let bigram_bench = GrepBench::new(&files).with_bigram(&bigram_index);
+    for (name, query, iters) in &warm_queries {
+        let bigram_name = format!("bg_{}", name.strip_prefix("warm_").unwrap_or(name));
+        let (stats, matches, files_searched) = bigram_bench.bench_query(query, *iters);
+        print_row(&bigram_name, &stats, matches, files_searched, *iters);
+    }
+
+    // ── Fuzzy grep benchmarks ─────────────────────────────────────────────
+    eprintln!("\n[4/7] Fuzzy grep warm benchmarks");
+    eprintln!("  Running 3 warmup iterations, then measuring.\n");
+    print_header();
+
+    let fuzzy_bench = GrepBench::with_mode(&files, GrepMode::Fuzzy);
+
+    let fuzzy_queries: Vec<(&str, &str, usize)> = vec![
+        ("fuzzy_exact", "mutex_lock", 15),
+        ("fuzzy_typo", "mutx_lock", 15),
+        ("fuzzy_camel", "InodeOps", 15),
+        ("fuzzy_abbrev", "sched_rt", 15),
+        ("fuzzy_short", "kfr", 15),
+        ("fuzzy_common", "return", 10),
+        ("fuzzy_define", "MODULE_LICENSE", 15),
+        ("fuzzy_struct", "file_operations", 15),
+        ("fuzzy_long", "static_int_init", 15),
+        ("fuzzy_path", "printk *.c", 15),
+    ];
+
+    // Warmup
+    for (_, query, _) in &fuzzy_queries {
+        for _ in 0..3 {
+            fuzzy_bench.run_once(query);
+        }
+    }
+
+    for (name, query, iters) in &fuzzy_queries {
+        let (stats, matches, files_searched) = fuzzy_bench.bench_query(query, *iters);
+        print_row(name, &stats, matches, files_searched, *iters);
+    }
+
+    // ── Fuzzy incremental typing ────────────────────────────────────────
+    eprintln!("\n[5/7] Fuzzy incremental typing simulation");
+    eprintln!("  Simulates user typing character by character (fuzzy mode).\n");
+
+    let fuzzy_typing_sequences: Vec<(&str, Vec<&str>)> = vec![
+        (
+            "mutex_lock",
+            vec![
+                "m",
+                "mu",
+                "mut",
+                "mute",
+                "mutex",
+                "mutex_",
+                "mutex_l",
+                "mutex_lo",
+                "mutex_loc",
+                "mutex_lock",
+            ],
+        ),
+        ("printk", vec!["p", "pr", "pri", "prin", "print", "printk"]),
+        ("kfree", vec!["k", "kf", "kfr", "kfre", "kfree"]),
+    ];
+
+    for (name, sequence) in &fuzzy_typing_sequences {
+        eprintln!("  Typing '{}' ({} keystrokes):", name, sequence.len());
+        eprintln!(
+            "    {:>16} | {:>8} | {:>6} | {:>6}",
+            "Query", "Latency", "Match", "Files"
+        );
+        eprintln!("    {:-<16}-+-{:-<8}-+-{:-<6}-+-{:-<6}", "", "", "", "");
+
+        for prefix in sequence {
+            let (elapsed, matches, files_searched) = fuzzy_bench.run_once(prefix);
+            eprintln!(
+                "    {:>16} | {:>8} | {:>6} | {:>6}",
+                format!("\"{}\"", prefix),
+                fmt_dur(elapsed),
+                matches,
+                files_searched,
+            );
+        }
+        eprintln!();
+    }
+
+    eprintln!("[6/7] Incremental typing simulation (plain text)");
     eprintln!("  Simulates user typing character by character.\n");
 
     let typing_sequences: Vec<(&str, Vec<&str>)> = vec![
@@ -338,7 +476,7 @@ fn main() {
         eprintln!();
     }
 
-    eprintln!("[5/5] Pagination benchmark");
+    eprintln!("[7/7] Pagination benchmark");
     eprintln!("  Testing page_offset performance for common query.\n");
 
     let pagination_query = "return";
@@ -363,9 +501,20 @@ fn main() {
             page_limit: 50,
             mode: Default::default(),
             time_budget_ms: 0,
+            before_context: 0,
+            after_context: 0,
+            classify_definitions: false,
         };
         let start = Instant::now();
-        let result = grep_search(&files, pagination_query, parsed, &opts);
+        let result = grep_search(
+            &files,
+            &parsed,
+            &opts,
+            &fff::ContentCacheBudget::unlimited(),
+            None,
+            None,
+            None,
+        );
         let elapsed = start.elapsed();
         eprintln!(
             "    {:>6} | {:>12} | {:>8} | {:>6} | {:>12}",
@@ -384,7 +533,13 @@ fn main() {
     }
 
     eprintln!("\n=== Summary ===");
-    let mmap_count = files.iter().filter(|f| f.get_mmap().is_some()).count();
+    let mmap_count = files
+        .iter()
+        .filter(|f| {
+            f.get_content_for_search(&fff::ContentCacheBudget::unlimited())
+                .is_some()
+        })
+        .count();
     eprintln!("  Files with cached mmap: {}", mmap_count);
     eprintln!("  Total indexed files: {}", files.len());
     eprintln!("  Non-binary files: {}", non_binary);

@@ -1,12 +1,5 @@
-//! Path utility functions for file picker scoring
-
 use std::path::{Path, PathBuf};
 
-/// Canonicalize a path, resolving symlinks and producing an absolute path.
-///
-/// On Windows, uses `dunce::canonicalize` to avoid the `\\?\` extended-length path prefix
-/// that `std::fs::canonicalize` produces. Neovim cannot open paths with this prefix.
-/// On other platforms, delegates directly to `std::fs::canonicalize`.
 #[cfg(windows)]
 pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     dunce::canonicalize(path)
@@ -15,6 +8,22 @@ pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
 #[cfg(not(windows))]
 pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     std::fs::canonicalize(path)
+}
+
+#[cfg(windows)]
+pub fn expand_tilde(path: &str) -> PathBuf {
+    return PathBuf::from(path);
+}
+
+#[cfg(not(windows))]
+pub fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(stripped) = path.strip_prefix("~/")
+        && let Some(home_dir) = dirs::home_dir()
+    {
+        return home_dir.join(stripped);
+    }
+
+    PathBuf::from(path)
 }
 
 /// Calculate distance penalty based on directory proximity

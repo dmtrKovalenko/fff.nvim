@@ -1,6 +1,47 @@
 use crate::constraints::Constraint;
 use crate::glob_detect::has_wildcards;
 
+/// Check if a token looks like a filename or file path for use as a `FilePath` constraint.
+///
+/// A token is a filename/path if ALL of:
+/// - Does NOT end with `/` (that's a directory/PathSegment)
+/// - Does NOT contain wildcards (`*`, `?`, `{`, `[`) — those are globs
+/// - Last component (after final `/`) contains `.` with a valid-looking extension
+///   (1–10 alphanumeric chars starting with a letter, e.g. `rs`, `json`, `tsx`)
+///
+/// This covers both bare filenames (`score.rs`) and path-prefixed ones (`src/main.rs`).
+#[inline]
+fn is_filename_constraint_token(token: &str) -> bool {
+    let bytes = token.as_bytes();
+
+    // Must NOT end with / (that's a PathSegment)
+    if bytes.last() == Some(&b'/') {
+        return false;
+    }
+
+    // Must NOT contain wildcards (those are globs)
+    if has_wildcards(token) {
+        return false;
+    }
+
+    // Get the filename component (after last /)
+    let filename = token.rsplit('/').next().unwrap_or(token);
+
+    // Extension must exist and look like a real file extension:
+    // starts with an ASCII letter (rejects version numbers like "v2.0"),
+    // followed by alphanumeric chars, max 10 chars total.
+    match filename.rfind('.') {
+        Some(dot_pos) => {
+            let ext = &filename[dot_pos + 1..];
+            !ext.is_empty()
+                && ext.len() <= 10
+                && ext.as_bytes()[0].is_ascii_alphabetic()
+                && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+        }
+        None => false,
+    }
+}
+
 /// Parser configuration trait - allows different picker types to customize parsing
 pub trait ParserConfig {
     fn enable_glob(&self) -> bool {
@@ -32,6 +73,13 @@ pub trait ParserConfig {
         true
     }
 
+    /// Should parse location suffixes (e.g., file:12, file:12:4)
+    /// Disabled for grep modes where colon-number patterns like localhost:8080
+    /// are search text, not file locations.
+    fn enable_location(&self) -> bool {
+        true
+    }
+
     /// Determine whether a token should be treated as a glob constraint.
     ///
     /// The default implementation delegates to `zlob::has_wildcards` with
@@ -51,10 +99,19 @@ pub trait ParserConfig {
 
 /// Default configuration for file picker - all features enabled
 #[derive(Debug, Clone, Copy, Default)]
-pub struct FilePickerConfig;
+pub struct FileSearchConfig;
 
-impl ParserConfig for FilePickerConfig {
-    // All defaults enabled
+impl ParserConfig for FileSearchConfig {
+    /// Detect bare filenames (`score.rs`) and path-prefixed filenames (`src/main.rs`)
+    /// as `FilePath` constraints so that multi-token queries like `score.rs file_picker`
+    /// filter by filename first, then fuzzy-match the remaining text against the path.
+    fn parse_custom<'a>(&self, token: &'a str) -> Option<Constraint<'a>> {
+        if is_filename_constraint_token(token) {
+            Some(Constraint::FilePath(token))
+        } else {
+            None
+        }
+    }
 }
 
 /// Configuration for full-text search (grep) - file constraints enabled for
@@ -73,6 +130,10 @@ impl ParserConfig for GrepConfig {
     }
 
     fn enable_git_status(&self) -> bool {
+        false
+    }
+
+    fn enable_location(&self) -> bool {
         false
     }
 
@@ -98,12 +159,76 @@ impl ParserConfig for GrepConfig {
             return true;
         }
 
-        // Brace expansion → useful for directory alternatives
-        if bytes.contains(&b'{') && bytes.contains(&b'}') {
-            return true;
+        // Brace expansion → useful for directory alternatives.
+        // Require a comma between `{` and `}` AND at least one letter to
+        // distinguish real glob expansions like `{src,lib}` or `*.{ts,tsx}`
+        // from code patterns like `format!("{}")` and regex quantifiers `{2,3}`.
+        if let Some(open) = bytes.iter().position(|&b| b == b'{')
+            && let Some(close) = bytes.iter().rposition(|&b| b == b'}')
+        {
+            let inner = &bytes[open + 1..close];
+            if inner.contains(&b',') && inner.iter().any(|b| b.is_ascii_alphabetic()) {
+                return true;
+            }
         }
 
         // Everything else (?, [, bare * without /) → treat as literal text
         false
+    }
+}
+
+/// Configuration for AI-mode grep — extends `GrepConfig` behavior with
+/// automatic file-path constraint detection.
+///
+/// Bare filenames with valid extensions (`schema.rs`) and path-prefixed
+/// filenames (`libswscale/input.c`) are detected as `FilePath` constraints
+/// so the search is scoped to matching files. The caller validates the
+/// constraint against the index and drops it if no files match (fallback).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AiGrepConfig;
+
+impl ParserConfig for AiGrepConfig {
+    fn enable_path_segments(&self) -> bool {
+        true
+    }
+
+    fn enable_git_status(&self) -> bool {
+        false
+    }
+
+    fn enable_location(&self) -> bool {
+        false
+    }
+
+    fn is_glob_pattern(&self, token: &str) -> bool {
+        // First check GrepConfig's strict rules (path globs, brace expansion)
+        if GrepConfig.is_glob_pattern(token) {
+            return true;
+        }
+
+        // AI agents use `*text*` to scope file searches (e.g. `*quote* TODO`).
+        // Recognise tokens that start AND end with `*` with non-empty text
+        // between them as glob constraints. Bare `*` or `**` are excluded.
+        if !has_wildcards(token) {
+            return false;
+        }
+        let bytes = token.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0] == b'*'
+            && bytes[bytes.len() - 1] == b'*'
+            && bytes[1..bytes.len() - 1].iter().all(|&b| b != b'*')
+        {
+            return true;
+        }
+
+        false
+    }
+
+    fn parse_custom<'a>(&self, token: &'a str) -> Option<Constraint<'a>> {
+        if is_filename_constraint_token(token) {
+            Some(Constraint::FilePath(token))
+        } else {
+            None
+        }
     }
 }

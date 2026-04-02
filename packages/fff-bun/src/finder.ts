@@ -9,43 +9,39 @@
  */
 
 import {
+  ensureLoaded,
   ffiCreate,
   ffiDestroy,
-  ffiSearch,
-  ffiLiveGrep,
-  ffiScanFiles,
-  ffiIsScanning,
-  ffiGetScanProgress,
-  ffiWaitForScan,
-  ffiRestartIndex,
-  ffiTrackAccess,
-  ffiRefreshGitStatus,
-  ffiTrackQuery,
   ffiGetHistoricalQuery,
+  ffiGetScanProgress,
   ffiHealthCheck,
-  ensureLoaded,
+  ffiIsScanning,
+  ffiLiveGrep,
+  ffiMultiGrep,
+  ffiRefreshGitStatus,
+  ffiRestartIndex,
+  ffiScanFiles,
+  ffiSearch,
+  ffiTrackQuery,
+  ffiWaitForScan,
+  ffiWaitForWatcher,
   isAvailable,
   type NativeHandle,
 } from "./ffi";
 
 import type {
-  Result,
-  InitOptions,
-  SearchOptions,
-  SearchResult,
-  ScanProgress,
-  HealthCheck,
   GrepOptions,
   GrepResult,
+  HealthCheck,
+  InitOptions,
+  MultiGrepOptions,
+  Result,
+  ScanProgress,
+  SearchOptions,
+  SearchResult,
 } from "./types";
 
-import {
-  err,
-  toInternalInitOptions,
-  toInternalSearchOptions,
-  toInternalGrepOptions,
-  createGrepCursor,
-} from "./types";
+import { err } from "./types";
 
 /**
  * FileFinder - Fast file finder with fuzzy search
@@ -106,8 +102,14 @@ export class FileFinder {
    * ```
    */
   static create(options: InitOptions): Result<FileFinder> {
-    const internalOpts = toInternalInitOptions(options);
-    const result = ffiCreate(JSON.stringify(internalOpts));
+    const result = ffiCreate(
+      options.basePath,
+      options.frecencyDbPath ?? "",
+      options.historyDbPath ?? "",
+      options.useUnsafeNoLock ?? false,
+      options.warmupMmapCache ?? false,
+      options.aiMode ?? false,
+    );
 
     if (!result.ok) {
       return result;
@@ -171,18 +173,20 @@ export class FileFinder {
    * }
    * ```
    */
-  search(query: string, options?: SearchOptions): Result<SearchResult> {
+  fileSearch(query: string, options?: SearchOptions): Result<SearchResult> {
     const guard = this.ensureAlive();
     if (!guard.ok) return guard;
 
-    const internalOpts = toInternalSearchOptions(options);
-    const result = ffiSearch(guard.value, query, JSON.stringify(internalOpts));
-
-    if (!result.ok) {
-      return result;
-    }
-
-    return result as Result<SearchResult>;
+    return ffiSearch(
+      guard.value,
+      query,
+      options?.currentFile ?? "",
+      options?.maxThreads ?? 0,
+      options?.pageIndex ?? 0,
+      options?.pageSize ?? 0,
+      options?.comboBoostMultiplier ?? 0,
+      options?.minComboCount ?? 0,
+    );
   }
 
   /**
@@ -207,50 +211,87 @@ export class FileFinder {
    * @example
    * ```typescript
    * // First page
-        * const result = finder.liveGrep("TODO", { mode: "plain" });
+   * const result = finder.grep("TODO", { mode: "plain" });
    * if (result.ok) {
    *   for (const match of result.value.items) {
    *     console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
    *   }
    *   // Fetch next page
    *   if (result.value.nextCursor) {
-   *     const page2 = finder.liveGrep("TODO", {
+   *     const page2 = finder.grep("TODO", {
    *       cursor: result.value.nextCursor,
    *     });
    *   }
    * }
    * ```
    */
-  liveGrep(query: string, options?: GrepOptions): Result<GrepResult> {
+  grep(query: string, options?: GrepOptions): Result<GrepResult> {
     const guard = this.ensureAlive();
     if (!guard.ok) return guard;
 
-    const internalOpts = toInternalGrepOptions(options);
-    const result = ffiLiveGrep(
+    return ffiLiveGrep(
       guard.value,
       query,
-      JSON.stringify(internalOpts)
+      options?.mode ?? "plain",
+      options?.maxFileSize ?? 0,
+      options?.maxMatchesPerFile ?? 0,
+      options?.smartCase ?? true,
+      options?.cursor?._offset ?? 0,
+      0, // page_limit (0 = default 50)
+      options?.timeBudgetMs ?? 0,
+      options?.beforeContext ?? 0,
+      options?.afterContext ?? 0,
+      false,
     );
+  }
 
-    if (!result.ok) {
-      return result;
+  /**
+   * Multi-pattern OR search using Aho-Corasick.
+   *
+   * Searches for lines matching ANY of the provided patterns using
+   * SIMD-accelerated multi-needle matching. Faster than regex alternation
+   * for literal text searches.
+   *
+   * Supports pagination. The result includes a `nextCursor` that can be
+   * passed back to fetch the next page.
+   *
+   * @param options - Multi-grep options including patterns and optional constraints
+   * @returns Grep results with matched lines and file metadata
+   *
+   * @example
+   * ```typescript
+   * const result = finder.multiGrep({
+   *   patterns: ["VideoFrame", "video_frame", "PreloadedImage"],
+   * });
+   * if (result.ok) {
+   *   for (const match of result.value.items) {
+   *     console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
+   *   }
+   * }
+   * ```
+   */
+  multiGrep(options: MultiGrepOptions): Result<GrepResult> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+
+    if (!options.patterns || options.patterns.length === 0) {
+      return err("patterns array must have at least 1 element");
     }
 
-    // Transform the raw FFI result: replace nextFileOffset with an opaque cursor
-    const raw = result.value as Record<string, unknown>;
-    const nextFileOffset = raw.nextFileOffset as number;
-
-    const grepResult: GrepResult = {
-      items: raw.items as GrepResult["items"],
-      totalMatched: raw.totalMatched as number,
-      totalFilesSearched: raw.totalFilesSearched as number,
-      totalFiles: raw.totalFiles as number,
-      filteredFileCount: raw.filteredFileCount as number,
-      nextCursor: nextFileOffset > 0 ? createGrepCursor(nextFileOffset) : null,
-      regexFallbackError: raw.regexFallbackError as string | undefined,
-    };
-
-    return { ok: true, value: grepResult };
+    return ffiMultiGrep(
+      guard.value,
+      options.patterns.join("\n"),
+      options.constraints ?? "",
+      options.maxFileSize ?? 0,
+      options.maxMatchesPerFile ?? 0,
+      options.smartCase ?? true,
+      options.cursor?._offset ?? 0,
+      0, // page_limit (0 = default 50)
+      options.timeBudgetMs ?? 0,
+      options.beforeContext ?? 0,
+      options.afterContext ?? 0,
+      false,
+    );
   }
 
   /**
@@ -306,6 +347,22 @@ export class FileFinder {
   }
 
   /**
+   * Wait for the background file watcher to be ready.
+   *
+   * The watcher is created after the initial scan, git status, and optional
+   * warmup phases complete. Useful for tests that need to ensure filesystem
+   * events will be detected.
+   *
+   * @param timeoutMs - Maximum time to wait in milliseconds (default: 10000)
+   * @returns true if watcher is ready, false if timed out
+   */
+  waitForWatcher(timeoutMs: number = 10000): Result<boolean> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+    return ffiWaitForWatcher(guard.value, timeoutMs);
+  }
+
+  /**
    * Change the indexed directory to a new path.
    *
    * This stops the current file watcher and starts indexing the new directory.
@@ -316,19 +373,6 @@ export class FileFinder {
     const guard = this.ensureAlive();
     if (!guard.ok) return guard;
     return ffiRestartIndex(guard.value, newPath);
-  }
-
-  /**
-   * Track file access for frecency scoring.
-   *
-   * Call this when a user opens a file to improve future search rankings.
-   *
-   * @param filePath - Absolute path to the accessed file
-   */
-  trackAccess(filePath: string): Result<boolean> {
-    const guard = this.ensureAlive();
-    if (!guard.ok) return guard;
-    return ffiTrackAccess(guard.value, filePath);
   }
 
   /**
@@ -377,10 +421,7 @@ export class FileFinder {
    * @param testPath - Optional path to test git repository detection
    */
   healthCheck(testPath?: string): Result<HealthCheck> {
-    return ffiHealthCheck(
-      this.handle,
-      testPath || ""
-    ) as Result<HealthCheck>;
+    return ffiHealthCheck(this.handle, testPath || "") as Result<HealthCheck>;
   }
 
   /**
@@ -390,14 +431,9 @@ export class FileFinder {
     return isAvailable();
   }
 
-  /**
-   * Ensure the native library is loaded.
-   *
-   * This will download the binary if needed and load it.
-   * Useful for preloading before first use.
-   */
-  static async ensureLoaded(): Promise<void> {
-    return ensureLoaded();
+  /** Ensure the native library is loaded. */
+  static ensureLoaded(): void {
+    ensureLoaded();
   }
 
   /**

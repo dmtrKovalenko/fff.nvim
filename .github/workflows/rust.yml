@@ -20,16 +20,16 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       # Zig is required to compile zlob
       - name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.2
 
       - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1.15.4
         with:
           cache: true
           cache-on-failure: true
@@ -37,15 +37,13 @@ jobs:
           components: rustfmt, clippy
 
       - name: Run tests
-        run: |
-          cargo test --verbose -p fff-core -p fff-query-parser -p fff-c --features zlob
-          cargo test --verbose -p grep-searcher
+        run: cargo test --features zlob --workspace --exclude fff-nvim
 
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -58,11 +56,11 @@ jobs:
     name: cargo clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       # Zig is required to compile zlob
       - name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.15.2
 
@@ -73,6 +71,4 @@ jobs:
           components: clippy
           
       - name: Run clippy
-        run: |
-          cargo clippy -p fff-core -p fff-query-parser -p fff-nvim -p fff-c --features zlob -- -D warnings
-          cargo clippy -p grep-searcher -- -D warnings
+        run: cargo clippy -- -D warnings

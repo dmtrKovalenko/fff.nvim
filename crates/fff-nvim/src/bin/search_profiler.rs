@@ -1,50 +1,23 @@
-use fff_core::file_picker::FilePicker;
-use fff_core::{
+use fff::file_picker::{FFFMode, FilePicker};
+use fff::{
     FileItem, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker,
 };
-use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 /// Wait for background scan to complete
 fn wait_for_scan(shared_picker: &SharedPicker, timeout_secs: u64) -> Result<usize, String> {
-    let start = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
-    let mut iteration = 0;
+    if !shared_picker.wait_for_scan(timeout) {
+        return Err(format!("Scan timed out after {} seconds", timeout_secs));
+    }
 
-    loop {
-        iteration += 1;
-
-        let picker_guard = shared_picker
-            .read()
-            .map_err(|_| "Failed to acquire read lock")?;
-        if let Some(ref picker) = *picker_guard {
-            let is_scanning = picker.is_scan_active();
-            let file_count = picker.get_files().len();
-
-            if iteration % 20 == 0 {
-                eprintln!(
-                    "  [{:.1}s] Scanning: {}, Files: {}",
-                    start.elapsed().as_secs_f64(),
-                    is_scanning,
-                    file_count
-                );
-            }
-
-            if !is_scanning && file_count > 0 {
-                return Ok(file_count);
-            }
-        } else if iteration % 20 == 0 {
-            eprintln!(
-                "  [{:.1}s] FilePicker is None",
-                start.elapsed().as_secs_f64()
-            );
-        }
-
-        if start.elapsed() > timeout {
-            return Err(format!("Scan timed out after {} seconds", timeout_secs));
-        }
-
-        std::thread::sleep(Duration::from_millis(100));
+    let picker_guard = shared_picker
+        .read()
+        .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
+    if let Some(ref picker) = *picker_guard {
+        Ok(picker.get_files().len())
+    } else {
+        Err("FilePicker not initialized".to_string())
     }
 }
 
@@ -52,7 +25,7 @@ fn wait_for_scan(shared_picker: &SharedPicker, timeout_secs: u64) -> Result<usiz
 fn get_files(shared_picker: &SharedPicker) -> Result<Vec<FileItem>, String> {
     let picker_guard = shared_picker
         .read()
-        .map_err(|_| "Failed to acquire read lock")?;
+        .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
     if let Some(ref picker) = *picker_guard {
         Ok(picker.get_files().to_vec())
     } else {
@@ -71,20 +44,24 @@ fn main() {
     }
 
     let canonical_path =
-        fff_core::path_utils::canonicalize(&big_repo_path).expect("Failed to canonicalize path");
+        fff::path_utils::canonicalize(&big_repo_path).expect("Failed to canonicalize path");
 
     // Create shared state
-    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
-    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
+    let shared_picker = SharedPicker::default();
+    let shared_frecency = SharedFrecency::default();
 
     eprintln!("Initializing FilePicker for: {:?}", canonical_path);
     FilePicker::new_with_shared_state(
-        canonical_path.to_string_lossy().to_string(),
-        false,
-        Arc::clone(&shared_picker),
-        Arc::clone(&shared_frecency),
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        fff::FilePickerOptions {
+            base_path: canonical_path.to_string_lossy().to_string(),
+            warmup_mmap_cache: false,
+            mode: FFFMode::Neovim,
+            ..Default::default()
+        },
     )
-    .expect("Failed to init FilePicker");
+    .expect("Failed to init FilePicker with shared state");
 
     // Give background thread time to start
     std::thread::sleep(Duration::from_millis(200));
@@ -97,16 +74,16 @@ fn main() {
 
     // Test queries representing different search patterns
     let test_queries = vec![
-        ("short_common", "mod", 5000),
-        ("medium_specific", "controller", 2000),
-        ("long_rare", "user_authentication", 1000),
-        ("typo_resistant", "contrlr", 2000),
-        ("path_like", "src/lib", 1500),
-        ("single_char", "a", 3000),
-        ("two_char", "st", 3000),
-        ("partial_word", "test", 2000),
-        ("deep_path", "drivers/net", 1000),
-        ("extension", ".rs", 2000),
+        ("short_common", "mod", 100),
+        ("medium_specific", "controller", 100),
+        ("long_rare", "user_authentication", 100),
+        ("typo_resistant", "contrlr", 100),
+        ("path_like", "src/lib", 100),
+        ("single_char", "a", 100),
+        ("two_char", "st", 100),
+        ("partial_word", "test", 100),
+        ("deep_path", "drivers/net", 100),
+        ("extension", ".rs", 100),
     ];
 
     eprintln!("Running search profiler...");
@@ -125,13 +102,12 @@ fn main() {
             let parsed = parser.parse(query);
             let results = FilePicker::fuzzy_search(
                 &files,
-                query,
-                parsed,
+                &parsed,
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
                     project_path: None,
-                    last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
                     pagination: PaginationArgs {

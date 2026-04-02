@@ -1,26 +1,45 @@
 use crate::error::Error;
-use crate::file_picker::FilePicker;
+use crate::file_picker::{FFFMode, FilePicker};
 use crate::git::GitStatusCache;
+use crate::shared::{SharedFrecency, SharedPicker};
 use crate::sort_buffer::sort_with_buffer;
-use crate::{SharedFrecency, SharedPicker};
 use git2::Repository;
 use notify::event::{AccessKind, AccessMode};
 use notify::{Config, EventKind, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, DebouncedEvent, NoCache, new_debouncer_opt};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing::{Level, debug, error, info, warn};
 
 type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, NoCache>;
 
+/// Owns the file-system watcher and guarantees that all background threads
+/// are fully joined before `stop()` / `Drop` returns.
+///
+/// Architecture:
+///   - The debouncer (and its internal watcher) live inside an **owner thread**
+///     that we spawn and hold the `JoinHandle` for.
+///   - `stop()` sets a flag, unparks the owner thread, and **joins** it.
+///   - Inside the owner thread, `Debouncer::stop()` is called which joins the
+///     debouncer's event-processing thread.
+///   - On Windows an additional short sleep is added after `Debouncer::stop()`
+///     because `notify`'s `ReadDirectoryChangesWatcher` discards its thread
+///     `JoinHandle`, so we cannot join it directly. The watcher's `Drop` does
+///     signal the thread via semaphore so it exits almost immediately, but we
+///     need to give the OS a moment to reclaim it.
 pub struct BackgroundWatcher {
-    debouncer: Arc<Mutex<Option<Debouncer>>>,
+    stop_signal: Arc<AtomicBool>,
+    owner_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_PATHS_THRESHOLD: usize = 1024;
 const MAX_SELECTIVE_WATCH_DIRS: usize = 100;
+/// Minimum seconds between frecency tracks of the same file in AI mode.
+/// Prevents score inflation from rapid burst edits by AI agents.
+const AI_MODE_COOLDOWN_SECS: u64 = 5 * 60;
 
 impl BackgroundWatcher {
     pub fn new(
@@ -28,18 +47,45 @@ impl BackgroundWatcher {
         git_workdir: Option<PathBuf>,
         shared_picker: SharedPicker,
         shared_frecency: SharedFrecency,
+        mode: FFFMode,
     ) -> Result<Self, Error> {
         info!(
-            "Initializing background watcher for path: {}",
-            base_path.display()
+            "Initializing background watcher for path: {}, mode: {:?}",
+            base_path.display(),
+            mode,
         );
 
         let debouncer =
-            Self::create_debouncer(base_path, git_workdir, shared_picker, shared_frecency)?;
+            Self::create_debouncer(base_path, git_workdir, shared_picker, shared_frecency, mode)?;
         info!("Background file watcher initialized successfully");
 
+        let stop_signal = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop_signal);
+
+        // The owner thread keeps the debouncer alive and ensures proper
+        // cleanup: `Debouncer::stop()` joins its internal thread, then the
+        // watcher `Drop` signals its I/O thread to exit.
+        let owner_thread = std::thread::Builder::new()
+            .name("fff-watcher-owner".into())
+            .spawn(move || {
+                while !stop_clone.load(Ordering::Acquire) {
+                    std::thread::park_timeout(Duration::from_secs(1));
+                }
+                // Debouncer::stop() joins the debouncer's event thread, then
+                // drops the watcher (whose Drop signals the I/O thread).
+                debouncer.stop();
+                // On Windows the notify crate discards the ReadDirectoryChangesW
+                // thread's JoinHandle — we cannot join it. Its Drop signals the
+                // thread via semaphore so it exits almost immediately; give the
+                // OS a moment to fully reclaim it.
+                #[cfg(windows)]
+                std::thread::sleep(Duration::from_millis(250));
+            })
+            .expect("failed to spawn fff-watcher-owner thread");
+
         Ok(Self {
-            debouncer: Arc::new(Mutex::new(Some(debouncer))),
+            stop_signal,
+            owner_thread: Some(owner_thread),
         })
     }
 
@@ -48,6 +94,7 @@ impl BackgroundWatcher {
         git_workdir: Option<PathBuf>,
         shared_picker: SharedPicker,
         shared_frecency: SharedFrecency,
+        mode: FFFMode,
     ) -> Result<Debouncer, Error> {
         // do not follow symlinks as then notifiers spawns a bunch of events for symlinked
         // files that could be git ignored, we have to property differentiate those and if
@@ -66,6 +113,7 @@ impl BackgroundWatcher {
                             &git_workdir_for_handler,
                             &shared_picker,
                             &shared_frecency,
+                            mode,
                         );
                     }
                     Err(errors) => {
@@ -123,25 +171,23 @@ impl BackgroundWatcher {
         Ok(debouncer)
     }
 
-    pub fn stop(&self) {
-        if let Ok(Some(debouncer)) = self.debouncer.lock().map(|mut debouncer| debouncer.take()) {
-            drop(debouncer);
-            info!("Background file watcher stopped successfully");
-        } else {
-            error!("Failed to stop background watcher");
+    pub fn stop(&mut self) {
+        self.stop_signal.store(true, Ordering::Release);
+        if let Some(handle) = self.owner_thread.take() {
+            handle.thread().unpark();
+
+            if let Err(e) = handle.join() {
+                error!("Watcher owner thread panicked: {:?}", e);
+            }
         }
+
+        info!("Background file watcher stopped successfully");
     }
 }
 
 impl Drop for BackgroundWatcher {
     fn drop(&mut self) {
-        if let Ok(mut debouncer_guard) = self.debouncer.lock() {
-            if let Some(debouncer) = debouncer_guard.take() {
-                drop(debouncer);
-            }
-        } else {
-            error!("Failed to acquire debouncer lock to drop");
-        }
+        self.stop();
     }
 }
 
@@ -151,6 +197,7 @@ fn handle_debounced_events(
     git_workdir: &Option<PathBuf>,
     shared_picker: &SharedPicker,
     shared_frecency: &SharedFrecency,
+    mode: FFFMode,
 ) {
     // this will be called very often, we have to minimiy the lock time for file picker
     let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
@@ -316,6 +363,50 @@ fn handle_debounced_events(
             Vec::new()
         };
 
+    // AI mode: auto-track frecency for all modified/created files.
+    // Uses a 5-minute cooldown per file to prevent score inflation from rapid
+    // burst edits (AI agents often edit the same file many times in minutes).
+    // This runs after apply_changes so the picker write lock is released.
+    if mode.is_ai() && !paths_to_add_or_modify.is_empty() {
+        let mut tracked_count = 0usize;
+        if let Ok(frecency_guard) = shared_frecency.read()
+            && let Some(ref frecency) = *frecency_guard
+        {
+            for path in &paths_to_add_or_modify {
+                // Skip if this file was tracked less than 5 minutes ago
+                let should_track = match frecency.seconds_since_last_access(path) {
+                    Ok(Some(secs)) => secs >= AI_MODE_COOLDOWN_SECS,
+                    Ok(None) => true, // Never tracked before
+                    Err(_) => true,   // DB error, track anyway
+                };
+                if !should_track {
+                    continue;
+                }
+
+                if let Err(e) = frecency.track_access(path) {
+                    error!("Failed to track frecency for {:?}: {:?}", path, e);
+                } else {
+                    tracked_count += 1;
+                }
+            }
+            if tracked_count > 0 {
+                info!("AI mode: tracked frecency for {} files", tracked_count);
+            }
+        }
+
+        // Update in-memory frecency scores for tracked files
+        if tracked_count > 0
+            && let Ok(mut picker_guard) = shared_picker.write()
+            && let Some(ref mut picker) = *picker_guard
+            && let Ok(frecency_guard) = shared_frecency.read()
+            && let Some(ref frecency) = *frecency_guard
+        {
+            for path in &paths_to_add_or_modify {
+                let _ = picker.update_single_file_frecency(path, frecency);
+            }
+        }
+    }
+
     // Git status updates require a repository.
     let Some(repo) = repo.as_ref() else {
         debug!("No git repo available, skipping git status updates");
@@ -325,7 +416,7 @@ fn handle_debounced_events(
     if need_full_git_rescan {
         info!("Triggering full git rescan");
 
-        let result = FilePicker::refresh_git_status(shared_picker, shared_frecency);
+        let result = shared_picker.refresh_git_status(shared_frecency);
         if let Err(e) = result {
             error!("Failed to refresh git status: {:?}", e);
         }

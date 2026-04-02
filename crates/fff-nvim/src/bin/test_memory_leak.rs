@@ -1,8 +1,7 @@
-use fff_core::file_picker::FilePicker;
-use fff_core::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
+use fff::file_picker::{FFFMode, FilePicker};
+use fff::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::env;
 use std::io::{self, Write};
-use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -79,16 +78,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Create shared state
-    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
-    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
+    let shared_picker = SharedPicker::default();
+    let shared_frecency = SharedFrecency::default();
 
     // Initialize the file picker
     println!("📁 Initializing FilePicker...");
     FilePicker::new_with_shared_state(
-        base_path.clone(),
-        false,
-        Arc::clone(&shared_picker),
-        Arc::clone(&shared_frecency),
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        fff::FilePickerOptions {
+            base_path: base_path.clone(),
+            warmup_mmap_cache: false,
+            mode: FFFMode::Neovim,
+            ..Default::default()
+        },
     )?;
 
     // Wait for initial scan to complete
@@ -199,13 +202,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let parsed = parser.parse(query);
                 let search_result = FilePicker::fuzzy_search(
                     picker.get_files(),
-                    query,
-                    parsed,
+                    &parsed,
+                    None,
                     FuzzySearchOptions {
                         max_threads,
                         current_file: None,
                         project_path: None,
-                        last_same_query_match: None,
                         combo_boost_score_multiplier: 100,
                         min_combo_count: 3,
                         pagination: PaginationArgs {

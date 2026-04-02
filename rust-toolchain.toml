@@ -1,10 +1,9 @@
 [toolchain]
-channel = "nightly-2026-02-10"
+channel = "stable"
 components = [
-  "clippy-preview",
-  "rustfmt-preview",
-  "llvm-tools-preview",
-  "miri",
+  "clippy",
+  "rustfmt",
+  "llvm-tools",
   "rust-src",
-  "rust-analyzer-preview",
+  "rust-analyzer",
 ]

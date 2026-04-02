@@ -71,16 +71,16 @@ vim.api.nvim_create_user_command('FFFDebug', function(opts)
   local config = require('fff.conf').get()
   if opts.args == 'toggle' or opts.args == '' then
     config.debug.show_scores = not config.debug.show_scores
-    config.debug.show_file_info = config.debug.show_scores
+    config.debug.enabled = config.debug.show_scores
     local status = config.debug.show_scores and 'enabled' or 'disabled'
     vim.notify('FFF debug scores ' .. status, vim.log.levels.INFO)
   elseif opts.args == 'on' then
     config.debug.show_scores = true
-    config.debug.show_file_info = true
+    config.debug.enabled = true
     vim.notify('FFF debug scores enabled', vim.log.levels.INFO)
   elseif opts.args == 'off' then
     config.debug.show_scores = false
-    config.debug.show_file_info = false
+    config.debug.enabled = false
     vim.notify('FFF debug scores disabled', vim.log.levels.INFO)
   else
     vim.notify('Usage: :FFFDebug [on|off|toggle]', vim.log.levels.ERROR)

@@ -90,7 +90,7 @@ local function get_preview_position()
 end
 
 local function compute_layout(config)
-  local debug_enabled_in_preview = M.enabled_preview() and config.debug and config.debug.show_file_info or false
+  local debug_enabled_in_preview = M.enabled_preview() and config.debug and config.debug.enabled or false
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
@@ -637,6 +637,16 @@ function M.setup_windows()
   vim.api.nvim_set_option_value('signcolumn', 'yes:1', { win = M.state.list_win }) -- Enable signcolumn for git status borders
   vim.api.nvim_set_option_value('foldcolumn', '0', { win = M.state.list_win })
   vim.api.nvim_set_option_value('winhighlight', win_hl, { win = M.state.list_win })
+
+  if M.state.file_info_win and vim.api.nvim_win_is_valid(M.state.file_info_win) then
+    vim.api.nvim_set_option_value('wrap', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('cursorline', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('number', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('relativenumber', false, { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('signcolumn', 'no', { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('foldcolumn', '0', { win = M.state.file_info_win })
+    vim.api.nvim_set_option_value('winhighlight', win_hl, { win = M.state.file_info_win })
+  end
 
   if M.enabled_preview() then
     vim.api.nvim_set_option_value('wrap', false, { win = M.state.preview_win })
@@ -1346,7 +1356,10 @@ local function format_file_display(item, max_width)
   return filename, display_path
 end
 
---- Adjust scroll for bottom prompt to eliminate gaps
+--- Adjust scroll for bottom prompt to eliminate gaps.
+--- When the cursor has moved above the bottom viewport (e.g. user scrolled up
+--- through many results), follow the cursor instead of forcing the view to the
+--- bottom — otherwise the selected item disappears off the top of the window.
 local function scroll_to_bottom()
   if not M.state.list_win or not vim.api.nvim_win_is_valid(M.state.list_win) then return end
 
@@ -1355,8 +1368,21 @@ local function scroll_to_bottom()
 
   vim.api.nvim_win_call(M.state.list_win, function()
     local view = vim.fn.winsaveview()
-    -- Force topline to show content at bottom
-    view.topline = math.max(1, buf_lines - win_height + 1)
+    local bottom_topline = math.max(1, buf_lines - win_height + 1)
+    local cursor_line = vim.api.nvim_win_get_cursor(M.state.list_win)[1]
+
+    if cursor_line >= bottom_topline then
+      -- Cursor is visible when anchored to bottom — keep content near prompt
+      view.topline = bottom_topline
+    elseif cursor_line < view.topline then
+      -- Cursor scrolled above the current viewport — shift topline up just
+      -- enough to keep the cursor visible (1 line margin above)
+      view.topline = math.max(1, cursor_line - 1)
+    elseif cursor_line >= view.topline + win_height then
+      -- Cursor below viewport (shouldn't happen often) — snap to bottom
+      view.topline = bottom_topline
+    end
+    -- Otherwise cursor is already within the current viewport — don't move it
     vim.fn.winrestview(view)
   end)
 end
@@ -1674,6 +1700,23 @@ function M.update_preview()
 
   -- Check if we need to update the preview (file changed OR location changed)
   local effective_location = M.state.location
+
+  -- Fallback: if location is nil but query has a :line suffix, parse it directly
+  if not effective_location and M.state.query and M.state.query ~= '' then
+    local line_str = M.state.query:match(':(%d+)$')
+    if line_str then
+      local line_num = tonumber(line_str)
+      if line_num and line_num > 0 then
+        local l, c = M.state.query:match(':(%d+):(%d+)$')
+        if l then
+          effective_location = { line = tonumber(l), col = tonumber(c) }
+        else
+          effective_location = { line = line_num }
+        end
+      end
+    end
+  end
+
   -- In grep mode (or when previewing grep suggestions), location comes from the match item
   local is_grep_item = M.state.mode == 'grep' or M.state.suggestion_source == 'grep'
   if is_grep_item and item.line_number and item.line_number > 0 then
@@ -2267,6 +2310,23 @@ function M.select(action)
     end
   end
 
+  -- Fallback: if location is nil but query has a :line suffix, parse it directly
+  if not location and query and query ~= '' then
+    local line_str = query:match(':(%d+)$')
+    if line_str then
+      local line_num = tonumber(line_str)
+      if line_num and line_num > 0 then
+        local col_and_line = query:match(':(%d+):(%d+)$')
+        if col_and_line then
+          local l, c = query:match(':(%d+):(%d+)$')
+          location = { line = tonumber(l), col = tonumber(c) }
+        else
+          location = { line = line_num }
+        end
+      end
+    end
+  end
+
   vim.cmd('stopinsert')
   M.close()
 
@@ -2575,6 +2635,8 @@ function M.open(opts)
   local merged_config, base_path = initialize_picker(opts)
   if not merged_config then return end
 
+  if base_path then M.change_indexing_directory(base_path) end
+
   -- Initialize grep_mode to first configured mode when opening in grep mode
   if M.state.mode == 'grep' then
     -- Use grep_config.modes if provided, otherwise fall back to global config
@@ -2588,6 +2650,34 @@ function M.open(opts)
   local current_file_cache = get_current_file_cache(base_path)
   local query = opts and opts.query or nil ---@type string|nil
   return open_ui_with_state(query, nil, nil, merged_config, current_file_cache)
+end
+
+--- Change the base directory for the file picker
+--- @param new_path string New directory path to use as base
+--- @return boolean `true` if successful, `false` otherwise
+function M.change_indexing_directory(new_path)
+  if not new_path or new_path == '' then
+    vim.notify('Directory path is required', vim.log.levels.ERROR)
+    return false
+  end
+
+  local expanded_path = vim.fn.expand(new_path)
+
+  if vim.fn.isdirectory(expanded_path) ~= 1 then
+    vim.notify('Directory does not exist: ' .. expanded_path, vim.log.levels.ERROR)
+    return false
+  end
+
+  local fuzzy = require('fff.core').ensure_initialized()
+  local ok, result = pcall(fuzzy.restart_index_in_path, expanded_path)
+  if not ok then
+    vim.notify('Failed to change directory: ' .. result, vim.log.levels.ERROR)
+    return false
+  end
+
+  local config = require('fff.conf').get()
+  config.base_path = expanded_path
+  return true
 end
 
 function M.monitor_scan_progress(iteration)

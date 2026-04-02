@@ -1,6 +1,6 @@
 /// Simple search profiler that directly uses scan_filesystem without background thread overhead
-use fff_core::file_picker::FilePicker;
-use fff_core::{FileItem, FuzzySearchOptions, PaginationArgs, QueryParser};
+use fff::file_picker::FilePicker;
+use fff::{FileItem, FuzzySearchOptions, PaginationArgs, QueryParser};
 use std::time::Instant;
 
 fn main() {
@@ -14,7 +14,7 @@ fn main() {
     }
 
     let canonical_path =
-        fff_core::path_utils::canonicalize(&big_repo_path).expect("Failed to canonicalize path");
+        fff::path_utils::canonicalize(&big_repo_path).expect("Failed to canonicalize path");
 
     eprintln!("Loading files from: {:?}", canonical_path);
 
@@ -87,13 +87,12 @@ fn main() {
             let parsed = parser.parse(query);
             let results = FilePicker::fuzzy_search(
                 &files,
-                query,
-                parsed,
+                &parsed,
+                None,
                 FuzzySearchOptions {
                     max_threads: 4,
                     current_file: None,
                     project_path: None,
-                    last_same_query_match: None,
                     combo_boost_score_multiplier: 100,
                     min_combo_count: 3,
                     pagination: PaginationArgs {

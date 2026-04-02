@@ -23,15 +23,12 @@
  * finder.waitForScan(5000);
  *
  * // Search for files
- * const search = finder.search("main.ts");
+ * const search = finder.fileSearch("main.ts");
  * if (search.ok) {
  *   for (const item of search.value.items) {
  *     console.log(item.relativePath);
  *   }
  * }
- *
- * // Track file access (for frecency)
- * finder.trackAccess("/path/to/project/src/main.ts");
  *
  * // Cleanup when done
  * finder.destroy();
@@ -40,44 +37,36 @@
  * @packageDocumentation
  */
 
-// Main API
-export { FileFinder } from "./finder";
-
-// Types
-export type {
-  Result,
-  InitOptions,
-  SearchOptions,
-  FileItem,
-  Score,
-  Location,
-  SearchResult,
-  ScanProgress,
-  HealthCheck,
-  DbHealth,
-  GrepMode,
-  GrepOptions,
-  GrepMatch,
-  GrepResult,
-  GrepCursor,
-} from "./types";
-
-// Result helpers
-export { ok, err } from "./types";
-
-// Binary management (for CLI tools)
 export {
-  downloadBinary,
-  ensureBinary,
   binaryExists,
-  getBinaryPath,
   findBinary,
 } from "./download";
+export { FileFinder } from "./finder";
 
-// Platform utilities
 export {
-  getTriple,
   getLibExtension,
   getLibFilename,
   getNpmPackageName,
+  getTriple,
 } from "./platform";
+
+export type {
+  DbHealth,
+  FileItem,
+  GrepCursor,
+  GrepMatch,
+  GrepMode,
+  GrepOptions,
+  GrepResult,
+  HealthCheck,
+  InitOptions,
+  Location,
+  MultiGrepOptions,
+  Result,
+  ScanProgress,
+  Score,
+  SearchOptions,
+  SearchResult,
+} from "./types";
+// Result helpers
+export { err, ok } from "./types";
