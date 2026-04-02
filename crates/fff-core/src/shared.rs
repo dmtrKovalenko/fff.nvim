@@ -113,7 +113,6 @@ impl SharedPicker {
     }
 }
 
-// ── SharedFrecency ─────────────────────────────────────────────────────
 
 /// Thread-safe shared handle to the [`FrecencyTracker`] instance.
 #[derive(Clone, Default)]
@@ -151,7 +150,6 @@ impl SharedFrecency {
     }
 }
 
-// ── SharedQueryTracker ─────────────────────────────────────────────────
 
 /// Thread-safe shared handle to the [`QueryTracker`] instance.
 #[derive(Clone, Default)]

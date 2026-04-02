@@ -25,7 +25,6 @@ fn modified_file_findable_via_overlay() {
     .unwrap();
     fs::write(base.join("gamma.txt"), "yet another file\nmore lines\n").unwrap();
 
-    // ── Phase 1: Initialize picker ──────────────────────────────────────
     let shared_picker = SharedPicker::default();
     let shared_frecency = SharedFrecency::default();
 
@@ -80,7 +79,6 @@ fn modified_file_findable_via_overlay() {
         );
     }
 
-    // ── Phase 2: Grep BEFORE modification ───────────────────────────────
     // "UNIQUE_NEEDLE" should NOT exist in any file yet.
     {
         let guard = shared_picker.read().unwrap();
@@ -95,7 +93,6 @@ fn modified_file_findable_via_overlay() {
         );
     }
 
-    // ── Phase 3: Modify a file on disk ──────────────────────────────────
     // Sleep so the filesystem mtime (seconds granularity) advances past the
     // value recorded during scan. Without this, on_create_or_modify skips
     // mmap invalidation and grep reads stale cached content.
@@ -121,7 +118,6 @@ fn modified_file_findable_via_overlay() {
         );
     }
 
-    // ── Phase 4: Grep AFTER modification — WITH overlay ─────────────────
     // The bigram index was built BEFORE the modification, so without the
     // overlay, beta.txt would be filtered out (its old bigrams don't contain
     // "UNIQUE_NEEDLE"). The overlay should fix that.
@@ -139,7 +135,6 @@ fn modified_file_findable_via_overlay() {
         assert!(result.matches[0].line_content.contains("UNIQUE_NEEDLE"));
     }
 
-    // ── Phase 5: Grep AFTER modification — WITHOUT overlay ──────────────
     // Prove the overlay is actually doing something: without it, the bigram
     // index would filter out beta.txt and the search would miss the needle.
     {

@@ -31,6 +31,7 @@
 //! the file index, so read-heavy search workloads rarely contend.
 
 use crate::background_watcher::BackgroundWatcher;
+use crate::bigram_filter::{BigramFilter, BigramIndexBuilder, BigramOverlay};
 use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
@@ -38,10 +39,7 @@ use crate::grep::{GrepResult, GrepSearchOptions, grep_search};
 use crate::query_tracker::QueryTracker;
 use crate::score::match_and_score_files;
 use crate::shared::{SharedFrecency, SharedPicker};
-use crate::types::{
-    BigramFilter, BigramIndexBuilder, BigramOverlay, ContentCacheBudget, FileItem, PaginationArgs,
-    ScoringContext, SearchResult,
-};
+use crate::types::{ContentCacheBudget, FileItem, PaginationArgs, ScoringContext, SearchResult};
 use fff_query_parser::FFFQuery;
 use git2::{Repository, Status, StatusOptions};
 use rayon::prelude::*;
@@ -804,7 +802,7 @@ impl FilePicker {
                 && let Ok(content) = std::fs::read(path)
             {
                 let overflow_pos = abs_pos - self.sync_data.base_count;
-                let bigrams = crate::types::extract_bigrams(&content);
+                let bigrams = crate::bigram_filter::extract_bigrams(&content);
                 overlay.write().update_added(overflow_pos, bigrams);
             }
             return Some(&self.sync_data.files[abs_pos]);

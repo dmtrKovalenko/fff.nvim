@@ -834,7 +834,6 @@ mod tests {
         }
     }
 
-    // ── AI grep config tests ──────────────────────────────────────────
 
     #[test]
     fn test_ai_grep_detects_file_path() {
@@ -1035,7 +1034,6 @@ mod tests {
         );
     }
 
-    // ── File picker filename constraint tests ─────────────────────────
 
     #[test]
     fn test_file_picker_bare_filename_constraint() {

@@ -3,7 +3,6 @@
 //! Implementations (fastest → simplest):
 //! - `search_packed_pair`: AVX2 packed-pair scan (two rare bytes at known offsets)
 //! - `search`:             memchr2 first-byte scan + verify
-//! - `search_scalar`:      memchr2 first-byte scan + scalar verify (baseline)
 //!
 //! The packed-pair approach mirrors what `memchr::memmem` does internally for
 //! case-sensitive search — pick two rare bytes from the needle, SIMD-scan for
@@ -562,34 +561,7 @@ pub fn search(haystack: &[u8], needle_lower: &[u8]) -> bool {
     false
 }
 
-pub fn search_scalar(haystack: &[u8], needle_lower: &[u8]) -> bool {
-    let n = needle_lower.len();
-    if n == 0 {
-        return true;
-    }
-    if n > haystack.len() {
-        return false;
-    }
 
-    let search_space = &haystack[..=haystack.len() - n];
-    let first = needle_lower[0];
-
-    if first.is_ascii_lowercase() {
-        let alt = ascii_swap_case(first);
-        for pos in memchr::memchr2_iter(first, alt, search_space) {
-            if unsafe { verify_scalar(haystack.as_ptr().add(pos), needle_lower) } {
-                return true;
-            }
-        }
-    } else {
-        for pos in memchr::memchr_iter(first, search_space) {
-            if unsafe { verify_scalar(haystack.as_ptr().add(pos), needle_lower) } {
-                return true;
-            }
-        }
-    }
-    false
-}
 
 #[cfg(test)]
 mod tests {

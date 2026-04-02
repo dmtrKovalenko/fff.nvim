@@ -8,8 +8,9 @@
 ///   cargo build --release --bin bench_grep_query
 ///   ./target/release/bench_grep_query --path ~/dev/chromium --query "MAX_FILE_SIZE" --iters 3
 use fff::FileItem;
+use fff::BigramIndexBuilder;
 use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
-use fff::types::{BigramIndexBuilder, ContentCacheBudget};
+use fff::types::ContentCacheBudget;
 use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
@@ -76,7 +77,7 @@ fn fmt_dur(us: u128) -> String {
 
 fn run_grep(
     files: &[FileItem],
-    index: Option<&fff::types::BigramFilter>,
+    index: Option<&fff::BigramFilter>,
     query: &str,
     iters: usize,
 ) {

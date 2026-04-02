@@ -5,13 +5,19 @@
 //! performance — the most relevant files are searched first, enabling early
 //! termination once enough results are collected.
 
-use crate::constraints::apply_constraints;
-use crate::sort_buffer::sort_with_buffer;
-use crate::types::{BigramFilter, BigramOverlay, ContentCacheBudget, FileItem, extract_bigrams};
+use crate::{
+    BigramFilter, BigramOverlay,
+    constraints::apply_constraints,
+    extract_bigrams,
+    sort_buffer::sort_with_buffer,
+    types::{ContentCacheBudget, FileItem},
+};
 use aho_corasick::AhoCorasick;
-use fff_grep::lines::{self, LineStep};
-use fff_grep::matcher::{Match, Matcher, NoError};
-use fff_grep::{Searcher, SearcherBuilder, Sink, SinkMatch};
+pub use fff_grep::{
+    Searcher, SearcherBuilder, Sink, SinkMatch,
+    lines::{self, LineStep},
+    matcher::{Match, Matcher, NoError},
+};
 use fff_query_parser::{Constraint, FFFQuery, GrepConfig, QueryParser};
 use rayon::prelude::*;
 use smallvec::SmallVec;

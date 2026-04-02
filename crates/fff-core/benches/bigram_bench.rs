@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use fff_search::types::{BigramFilter, BigramIndexBuilder};
+use fff_search::bigram_filter::{BigramFilter, BigramIndexBuilder};
 
 /// Build a realistic bigram index for benchmarking.
 /// Simulates a large repo by generating varied content per file.
@@ -53,7 +53,14 @@ fn bench_bigram_query(c: &mut Criterion) {
 
 fn bench_bigram_is_candidate(c: &mut Criterion) {
     let index = build_test_index(500_000);
-    let candidates = index.query(b"struct").unwrap();
+    let candidates = match index.query(b"struct") {
+        Some(c) => c,
+        None => {
+            // All bigrams ubiquitous at this size — skip candidate benches
+            eprintln!("Skipping is_candidate bench: query returned None (all bigrams ubiquitous)");
+            return;
+        }
+    };
 
     c.bench_function("is_candidate_500k", |b| {
         b.iter(|| {
