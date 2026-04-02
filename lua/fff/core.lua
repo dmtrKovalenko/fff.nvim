@@ -94,11 +94,11 @@ M.ensure_initialized = function()
   local history_db_path = config.history.db_path or (vim.fn.stdpath('data') .. '/fff_history')
 
   local ok, result = pcall(fuzzy.init_db, frecency_db_path, history_db_path, true)
-  if not ok then vim.notify('Failed to databases: ' .. result, vim.log.levels.WARN) end
+  if not ok then vim.notify('Failed to databases: ' .. tostring(result), vim.log.levels.WARN) end
 
   ok, result = pcall(fuzzy.init_file_picker, config.base_path)
   if not ok then
-    vim.notify('Failed to initialize file picker: ' .. result, vim.log.levels.ERROR)
+    vim.notify('Failed to initialize file picker: ' .. tostring(result), vim.log.levels.ERROR)
     return fuzzy
   end
 

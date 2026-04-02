@@ -192,7 +192,7 @@ function M.change_indexing_directory(new_path)
   local fuzzy = require('fff.core').ensure_initialized()
   local ok, result = pcall(fuzzy.restart_index_in_path, expanded_path)
   if not ok then
-    vim.notify('Failed to change directory: ' .. result, vim.log.levels.ERROR)
+    vim.notify('Failed to change directory: ' .. tostring(result), vim.log.levels.ERROR)
     return false
   end
 
