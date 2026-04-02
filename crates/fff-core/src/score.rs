@@ -253,13 +253,19 @@ pub fn match_and_score_files<'a>(
             let filename_bonus = if is_exact_filename {
                 base_score / 5 * 2 // 40% bonus for exact filename match
             } else if is_filename_match {
-                // 16% bonus for fuzzy filename match that landed in the filename region
-                (base_score / 6)
-                    // for large queries around ~300 score the bonus is too big
-                    // it might lead to situations when much more fitting path with a larger
-                    // base score getting filtered out by combination of score + filename bonus
-                    // so we cap it at 10% of the roughly largest score you can get
-                    .min(30)
+                // 16% bonus for fuzzy filename match that landed in the filename region.
+                // For fallback matches (where the path match landed in a directory segment),
+                // scale the bonus by the quality of the filename match — a contiguous match
+                // like "rename" in "rename.ts" gets the full bonus, while a scattered
+                // subsequence like r-e-n-a-m-e in "generateSessionName.ts" gets much less.
+                let max_bonus = (base_score / 6).min(30);
+                if let Some(fm) = simd_filename_match {
+                    let max_possible = main_needle_len as i32 * 16;
+                    let quality = (fm.score as i32).min(max_possible);
+                    max_bonus * quality / max_possible
+                } else {
+                    max_bonus
+                }
             } else if !is_filename_match && is_special_entry_point_file(&file.file_name) {
                 // 5% bonus for special file but not as much as file name to avoid situations
                 // when you have /user_service/server.rs and /user_service/server/mod.rs
