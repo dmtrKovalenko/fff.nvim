@@ -20,6 +20,7 @@ import { FileFinder, closeLibrary } from "../dist/src/index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
+const normalizePath = (p) => p.replace(/\\/g, "/");
 
 /** @type {import("../dist/src/finder.js").FileFinder | null} */
 let finder = null;
@@ -181,9 +182,14 @@ describe("fff-node", { concurrency: 1 }, () => {
       assert.ok(r.ok, `grep with context failed: ${!r.ok ? r.error : ""}`);
 
       const match = r.value.items.find(
-        (m) => m.relativePath === "packages/fff-node/src/ffi.ts",
+        (m) => normalizePath(m.relativePath) === "packages/fff-node/src/ffi.ts",
       );
-      assert.ok(match, "expected a match in packages/fff-node/src/ffi.ts");
+      assert.ok(
+        match,
+        `expected a match in packages/fff-node/src/ffi.ts, got: ${r.value.items
+          .map((m) => normalizePath(m.relativePath))
+          .join(", ")}`,
+      );
       assert.deepEqual(match.contextBefore, ["  if (raw.context_before_count > 0) {"]);
       assert.deepEqual(match.contextAfter, ["  }"]);
     });
