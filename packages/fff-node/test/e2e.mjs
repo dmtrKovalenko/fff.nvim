@@ -167,6 +167,26 @@ describe("fff-node", { concurrency: 1 }, () => {
       assert.ok(r.ok, `regex grep failed: ${!r.ok ? r.error : ""}`);
       assert.ok(r.value.items.length > 0);
     });
+
+    it("decodes before/after context lines", () => {
+      const r = finder.grep(
+        "match.contextBefore = readCStringArray(raw.context_before, raw.context_before_count);",
+        {
+          mode: "plain",
+          beforeContext: 1,
+          afterContext: 1,
+          maxMatchesPerFile: 5,
+        },
+      );
+      assert.ok(r.ok, `grep with context failed: ${!r.ok ? r.error : ""}`);
+
+      const match = r.value.items.find(
+        (m) => m.relativePath === "packages/fff-node/src/ffi.ts",
+      );
+      assert.ok(match, "expected a match in packages/fff-node/src/ffi.ts");
+      assert.deepEqual(match.contextBefore, ["  if (raw.context_before_count > 0) {"]);
+      assert.deepEqual(match.contextAfter, ["  }"]);
+    });
   });
 
   describe("multiGrep", { concurrency: 1 }, () => {

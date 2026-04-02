@@ -627,7 +627,7 @@ function readCStringArray(ptrArray: JsExternal, count: number): string[] {
     const elemPtr = ptrOffset(ptrArray, i * 8);
     const [charPtr] = restorePointer({
       retType: [DataType.External],
-      paramsValue: wrapPointer([elemPtr]),
+      paramsValue: [elemPtr],
     }) as unknown as [JsExternal];
     result.push(readCString(charPtr) ?? "");
   }
