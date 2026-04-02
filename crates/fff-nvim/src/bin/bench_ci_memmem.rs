@@ -158,7 +158,6 @@ fn main() {
     eprintln!("Needle: {:?}", std::str::from_utf8(&needle_lower).unwrap());
     eprintln!("Iters:  {}", iters);
 
-    // ── Load all file contents into memory ─────────────────────────────
     eprint!("\n[1/2] Loading files into memory... ");
     let t = Instant::now();
     let contents = load_file_contents(&canonical);
@@ -170,11 +169,10 @@ fn main() {
         t.elapsed().as_secs_f64()
     );
 
-    // ── Benchmark ──────────────────────────────────────────────────────
     eprintln!("\n[2/2] Benchmarking memmem prefilter (scanning ALL files)");
 
     bench_impl(
-        "Packed pair (AVX2 two-byte scan)",
+        "Packed pair: (AVX2 two-byte scan)",
         &contents,
         &needle_lower,
         total_bytes,
@@ -183,20 +181,11 @@ fn main() {
     );
 
     bench_impl(
-        "memchr2 first-byte + AVX2 verify",
+        "scalar: memchr2 first-byte + AVX2 verify",
         &contents,
         &needle_lower,
         total_bytes,
         iters,
         case_insensitive_memmem::search,
-    );
-
-    bench_impl(
-        "memchr2 first-byte + scalar verify",
-        &contents,
-        &needle_lower,
-        total_bytes,
-        iters,
-        case_insensitive_memmem::search_scalar,
     );
 }

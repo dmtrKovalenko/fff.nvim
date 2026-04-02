@@ -1,4 +1,3 @@
-use fff::FileItem;
 /// Live grep benchmark profiler for fff.nvim
 ///
 /// Benchmarks the full grep pipeline against a large repository (Linux kernel).
@@ -10,8 +9,11 @@ use fff::FileItem;
 /// Usage:
 ///   cargo build --release --bin grep_profiler
 ///   ./target/release/grep_profiler [--path /path/to/repo]
-use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
-use fff::types::{BigramFilter, BigramIndexBuilder, ContentCacheBudget};
+use fff::{
+    BigramFilter, BigramIndexBuilder, FileItem,
+    grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query},
+    types::ContentCacheBudget,
+};
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};

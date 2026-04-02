@@ -217,13 +217,11 @@ describe("fff-node", { concurrency: 1 }, () => {
     assert.ok(r.value > 0);
   });
 
-  // ── Scan ────────────────────────────────────────────────────────────
 
   it("isScanning returns a boolean", () => {
     assert.equal(typeof finder.isScanning(), "boolean");
   });
 
-  // ── Health check ────────────────────────────────────────────────────
 
   describe("healthCheck", { concurrency: 1 }, () => {
     it("reports initialized state with instance", () => {

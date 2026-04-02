@@ -93,12 +93,14 @@
 //! ```
 
 mod background_watcher;
-pub mod case_insensitive_memmem;
+mod bigram_filter;
 mod constraints;
 mod db_healthcheck;
 mod error;
 mod score;
 mod sort_buffer;
+// this is pub only for benchmarks
+pub mod case_insensitive_memmem;
 
 /// Core file picker: filesystem indexing, background watching, and fuzzy search.
 ///
@@ -139,6 +141,7 @@ pub mod types;
 /// and [`QueryTracker`].
 pub mod shared;
 
+pub use bigram_filter::*;
 pub use db_healthcheck::{DbHealth, DbHealthChecker};
 pub use error::{Error, Result};
 pub use fff_query_parser::*;
