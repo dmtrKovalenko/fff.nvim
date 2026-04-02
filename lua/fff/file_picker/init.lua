@@ -24,7 +24,7 @@ function M.scan_files()
 
   local ok, result = pcall(fuzzy.scan_files)
   if not ok then
-    vim.notify('Failed to trigger file scan: ' .. result, vim.log.levels.ERROR)
+    vim.notify('Failed to trigger file scan: ' .. tostring(result), vim.log.levels.ERROR)
     return
   end
 
@@ -121,7 +121,7 @@ function M.track_access(file_path)
   if not M.state.initialized then return end
 
   local ok, result = pcall(fuzzy.track_access, file_path)
-  if not ok then vim.notify('Failed to record file access: ' .. result, vim.log.levels.WARN) end
+  if not ok then vim.notify('Failed to record file access: ' .. tostring(result), vim.log.levels.WARN) end
 end
 
 --- Get file content for preview
@@ -156,7 +156,7 @@ function M.get_scan_progress()
 
   local ok, result = pcall(fuzzy.get_scan_progress)
   if not ok then
-    vim.notify('Failed to get scan progress: ' .. result, vim.log.levels.WARN)
+    vim.notify('Failed to get scan progress: ' .. tostring(result), vim.log.levels.WARN)
     return { scanned_files_count = 0, is_scanning = false }
   end
 
@@ -170,7 +170,7 @@ function M.refresh_git_status()
 
   local ok, result = pcall(fuzzy.refresh_git_status)
   if not ok then
-    vim.notify('Failed to refresh git status: ' .. result, vim.log.levels.WARN)
+    vim.notify('Failed to refresh git status: ' .. tostring(result), vim.log.levels.WARN)
     return {}
   end
 
@@ -185,7 +185,7 @@ function M.stop_background_monitor()
 
   local ok, result = pcall(fuzzy.stop_background_monitor)
   if not ok then
-    vim.notify('Failed to stop background monitor: ' .. result, vim.log.levels.WARN)
+    vim.notify('Failed to stop background monitor: ' .. tostring(result), vim.log.levels.WARN)
     return false
   end
   return result
@@ -199,7 +199,7 @@ function M.wait_for_initial_scan(timeout_ms)
 
   local ok, result = pcall(fuzzy.wait_for_initial_scan, timeout_ms)
   if not ok then
-    vim.notify('Failed to wait for initial scan: ' .. result, vim.log.levels.WARN)
+    vim.notify('Failed to wait for initial scan: ' .. tostring(result), vim.log.levels.WARN)
     return false
   end
   return result
