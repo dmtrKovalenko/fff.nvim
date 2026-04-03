@@ -396,8 +396,8 @@ impl BigramFilter {
         self.skip_index.as_deref()
     }
 
-    /// Reconstruct a `BigramFilter` from its components (for deserialization).
-    pub fn reconstruct(
+    /// Create a new bigram filter from the internal data
+    pub fn new(
         lookup: Vec<u16>,
         dense_data: Vec<u64>,
         dense_count: usize,
