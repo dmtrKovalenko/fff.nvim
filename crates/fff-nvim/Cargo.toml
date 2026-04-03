@@ -37,6 +37,7 @@ path = "src/bin/grep_vs_rg.rs"
 
 [[bin]]
 name = "bench_grep_query"
+ppath = "src/bin/bench_grep_query.rs"
 path = "src/bin/bench_grep_query.rs"
 
 [dependencies]
@@ -82,4 +83,3 @@ harness = false
 [[bench]]
 name = "query_tracker_bench"
 harness = false
-

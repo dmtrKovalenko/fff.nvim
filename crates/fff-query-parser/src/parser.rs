@@ -834,7 +834,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_ai_grep_detects_file_path() {
         use crate::AiGrepConfig;
@@ -1033,7 +1032,6 @@ mod tests {
             result.constraints
         );
     }
-
 
     #[test]
     fn test_file_picker_bare_filename_constraint() {

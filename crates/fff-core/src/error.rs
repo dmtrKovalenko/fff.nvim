@@ -7,6 +7,10 @@ pub enum Error {
     ThreadPanic,
     #[error("Invalid path {0}")]
     InvalidPath(std::path::PathBuf),
+    #[error(
+        "Can not start fff at the file system root {0} — pass a project or at least home directory instead"
+    )]
+    FilesystemRoot(std::path::PathBuf),
     #[error("File picker not initialized")]
     FilePickerMissing,
     #[error("Failed to acquire lock for frecency")]

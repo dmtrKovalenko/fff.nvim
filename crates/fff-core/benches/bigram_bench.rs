@@ -5,16 +5,20 @@ use fff_search::bigram_filter::{BigramFilter, BigramIndexBuilder};
 /// Simulates a large repo by generating varied content per file.
 fn build_test_index(file_count: usize) -> BigramFilter {
     let builder = BigramIndexBuilder::new(file_count);
+    let skip_builder = BigramIndexBuilder::new(file_count);
 
     for i in 0..file_count {
         // Generate varied content so we get a mix of sparse and dense columns
         let content = format!(
             "struct File{i} {{ fn process() {{ let controller = read(path); }} }} // module {i}"
         );
-        builder.add_file_content(i, content.as_bytes());
+        builder.add_file_content(&skip_builder, i, content.as_bytes());
     }
 
-    builder.compress(None)
+    let mut index = builder.compress(None);
+    let skip_index = skip_builder.compress(Some(12));
+    index.set_skip_index(skip_index);
+    index
 }
 
 fn bench_bigram_query(c: &mut Criterion) {
@@ -101,8 +105,9 @@ fn bench_bigram_build(c: &mut Criterion) {
             |b, &fc| {
                 b.iter(|| {
                     let builder = BigramIndexBuilder::new(fc);
+                    let skip_builder = BigramIndexBuilder::new(fc);
                     for (i, content) in contents.iter().enumerate() {
-                        builder.add_file_content(i, content.as_bytes());
+                        builder.add_file_content(&skip_builder, i, content.as_bytes());
                     }
                     let index = builder.compress(None);
                     black_box(index.columns_used())
