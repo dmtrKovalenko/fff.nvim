@@ -8,6 +8,8 @@ use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::cursor::CursorStore;
+use crate::output::{GrepFormatter, OutputMode, file_suffix};
 use fff::file_picker::FilePicker;
 use fff::grep::{self, GrepMode, GrepSearchOptions, has_regex_metacharacters};
 use fff::types::{FileItem, PaginationArgs};
@@ -17,9 +19,6 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{ServerHandler, schemars, tool, tool_handler, tool_router};
-
-use crate::cursor::CursorStore;
-use crate::output::{GrepFormatter, OutputMode, file_suffix};
 
 /// Strip common delimiters and lowercase for fuzzy fallback queries.
 fn cleanup_fuzzy_query(s: &str) -> String {
@@ -76,7 +75,8 @@ pub struct FindFilesParams {
     pub query: String,
     /// Max results (default 20).
     #[serde(rename = "maxResults")]
-    pub max_results: Option<usize>,
+    // this has to be float because llms are stupid
+    pub max_results: Option<f64>,
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
 }
@@ -88,7 +88,7 @@ pub struct GrepParams {
     pub query: String,
     /// Max matching lines (default 20).
     #[serde(rename = "maxResults")]
-    pub max_results: Option<usize>,
+    pub max_results: Option<f64>, // this has to be float because llms are stupid
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
     /// Output format (default 'content').
@@ -150,13 +150,13 @@ pub struct MultiGrepParams {
     pub constraints: Option<String>,
     /// Max matching lines (default 20).
     #[serde(rename = "maxResults")]
-    pub max_results: Option<usize>,
+    pub max_results: Option<f64>,
     /// Cursor from previous result.
     pub cursor: Option<String>,
     /// Output format (default 'content').
     pub output_mode: Option<String>,
     /// Context lines before/after each match.
-    pub context: Option<usize>,
+    pub context: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -399,7 +399,7 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<FindFilesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20);
+        let max_results = params.max_results.unwrap_or(20.0).round() as usize; // safe
         let query = &params.query;
 
         let page_offset = params
@@ -515,7 +515,7 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<GrepParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20);
+        let max_results = params.max_results.unwrap_or(20.0) as usize;
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
         let parsed = QueryParser::new(AiGrepConfig).parse(&params.query);
@@ -557,7 +557,8 @@ impl FffServer {
 
 impl FffServer {
     fn multi_grep_inner(&self, params: MultiGrepParams) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20);
+        let max_results = params.max_results.unwrap_or(20.0).round() as usize;
+        let context = params.context.map(|v| v.round() as usize);
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
         let file_offset = params
@@ -566,12 +567,8 @@ impl FffServer {
             .and_then(|id| self.cursor_store.lock().ok()?.get(id))
             .unwrap_or(0);
 
-        let (options, auto_expand) = make_grep_options(
-            output_mode,
-            GrepMode::PlainText,
-            file_offset,
-            params.context,
-        );
+        let (options, auto_expand) =
+            make_grep_options(output_mode, GrepMode::PlainText, file_offset, context);
 
         let ctx_lines = options.before_context;
         let constraint_query = params.constraints.as_deref().unwrap_or("");
@@ -597,7 +594,7 @@ impl FffServer {
         if result.matches.is_empty() && file_offset == 0 {
             // Fallback: try individual patterns with plain grep
             let (fallback_options, _) =
-                make_grep_options(output_mode, GrepMode::PlainText, 0, params.context);
+                make_grep_options(output_mode, GrepMode::PlainText, 0, context);
 
             let fallback_options = GrepSearchOptions {
                 time_budget_ms: 3000,
