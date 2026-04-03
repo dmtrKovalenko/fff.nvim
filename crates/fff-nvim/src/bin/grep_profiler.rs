@@ -10,7 +10,7 @@
 ///   cargo build --release --bin grep_profiler
 ///   ./target/release/grep_profiler [--path /path/to/repo]
 use fff::{
-    BigramFilter, BigramIndexBuilder, FileItem,
+    BigramFilter, FileItem,
     grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query},
     types::ContentCacheBudget,
 };
@@ -184,21 +184,15 @@ impl<'a> GrepBench<'a> {
     }
 }
 
-fn build_bigram_index(files: &[FileItem]) -> BigramFilter {
-    use rayon::prelude::*;
-
-    let builder = BigramIndexBuilder::new(files.len());
+fn build_bigram(files: &mut [FileItem]) -> BigramFilter {
     let budget = ContentCacheBudget::default();
+    let (index, binary_indices) = fff::build_bigram_index(files, &budget);
 
-    files.par_iter().enumerate().for_each(|(idx, file)| {
-        if !file.is_binary
-            && let Some(content) = file.get_content_for_search(&budget)
-        {
-            builder.add_file_content(idx, &content);
-        }
-    });
+    for &i in &binary_indices {
+        files[i].is_binary = true;
+    }
 
-    builder.compress(None)
+    index
 }
 
 fn fmt_dur(d: Duration) -> String {
@@ -264,7 +258,7 @@ fn main() {
     // Direct file loading (no background thread)
     eprintln!("\n[1/7] Loading files...");
     let load_start = Instant::now();
-    let files = load_files(&canonical);
+    let mut files = load_files(&canonical);
     let load_time = load_start.elapsed();
     let non_binary = files.iter().filter(|f| !f.is_binary).count();
     let large_files = files.iter().filter(|f| f.size > 10 * 1024 * 1024).count();
@@ -335,10 +329,9 @@ fn main() {
         print_row(name, &stats, matches, files_searched, *iters);
     }
 
-    // ── Bigram-accelerated benchmarks ───────────────────────────────────
     eprintln!("\n[3b/7] Building bigram index...");
     let bigram_start = Instant::now();
-    let bigram_index = build_bigram_index(&files);
+    let bigram_index = build_bigram(&mut files);
     eprintln!(
         "  Built in {:.2}s ({} columns, {:.1} MB)\n",
         bigram_start.elapsed().as_secs_f64(),
@@ -436,6 +429,7 @@ fn main() {
     eprintln!("[6/7] Incremental typing simulation (plain text)");
     eprintln!("  Simulates user typing character by character.\n");
 
+    let bench = GrepBench::new(&files);
     let typing_sequences: Vec<(&str, Vec<&str>)> = vec![
         (
             "mutex_lock",

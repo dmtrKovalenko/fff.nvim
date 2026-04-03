@@ -137,6 +137,7 @@ pub mod query_tracker;
 /// Core data types shared across the crate.
 pub mod types;
 
+mod ignore;
 /// Thread-safe shared handles for [`FilePicker`], [`FrecencyTracker`],
 /// and [`QueryTracker`].
 pub mod shared;

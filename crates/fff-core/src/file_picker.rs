@@ -36,6 +36,7 @@ use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
 use crate::grep::{GrepResult, GrepSearchOptions, grep_search};
+use crate::ignore::non_git_repo_overrides;
 use crate::query_tracker::QueryTracker;
 use crate::score::match_and_score_files;
 use crate::shared::{SharedFrecency, SharedPicker};
@@ -46,11 +47,30 @@ use rayon::prelude::*;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc,
+    Arc, LazyLock,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::SystemTime;
 use tracing::{Level, debug, error, info, warn};
+
+/// Dedicated thread pool for background work (scan, warmup, bigram build).
+/// Uses fewer threads than the global rayon pool so Neovim's event loop
+/// and search queries can still get CPU time.
+static BACKGROUND_THREAD_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
+    let total = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(4);
+    let bg_threads = total.saturating_sub(2).max(1);
+    info!(
+        "Background pool: {} threads (system has {})",
+        bg_threads, total
+    );
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(bg_threads)
+        .thread_name(|i| format!("fff-bg-{i}"))
+        .build()
+        .expect("failed to create background rayon pool")
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FFFMode {
@@ -370,25 +390,29 @@ impl FilePicker {
             error!("Base path does not exist: {}", options.base_path);
             return Err(Error::InvalidPath(path));
         }
+        if path.parent().is_none() {
+            error!("Refusing to index filesystem root: {}", path.display());
+            return Err(Error::FilesystemRoot(path));
+        }
 
         let has_explicit_budget = options.cache_budget.is_some();
         let initial_budget = options.cache_budget.unwrap_or_default();
 
         Ok(FilePicker {
-            base_path: path,
-            sync_data: FileSync::new(),
-            is_scanning: Arc::new(AtomicBool::new(false)),
-            watcher_ready: Arc::new(AtomicBool::new(false)),
-            scanned_files_count: Arc::new(AtomicUsize::new(0)),
             background_watcher: None,
-            warmup_mmap_cache: options.warmup_mmap_cache,
-            watch: options.watch,
-            cancelled: Arc::new(AtomicBool::new(false)),
-            mode: options.mode,
-            cache_budget: Arc::new(initial_budget),
+            base_path: path,
             bigram_index: None,
             bigram_overlay: None,
+            cache_budget: Arc::new(initial_budget),
+            cancelled: Arc::new(AtomicBool::new(false)),
             has_explicit_cache_budget: has_explicit_budget,
+            is_scanning: Arc::new(AtomicBool::new(false)),
+            mode: options.mode,
+            scanned_files_count: Arc::new(AtomicUsize::new(0)),
+            sync_data: FileSync::new(),
+            warmup_mmap_cache: options.warmup_mmap_cache,
+            watch: options.watch,
+            watcher_ready: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -905,11 +929,14 @@ impl FilePicker {
                 if let Ok(Some(git_cache)) = walk.git_handle.join() {
                     let frecency = shared_frecency.read().ok();
                     let frecency_ref = frecency.as_ref().and_then(|f| f.as_ref());
-                    self.sync_data.files.par_iter_mut().for_each(|file| {
-                        file.git_status = git_cache.lookup_status(&file.path);
-                        if let Some(frecency) = frecency_ref {
-                            let _ = file.update_frecency_scores(frecency, self.mode);
-                        }
+                    let mode = self.mode;
+                    BACKGROUND_THREAD_POOL.install(|| {
+                        self.sync_data.files.par_iter_mut().for_each(|file| {
+                            file.git_status = git_cache.lookup_status(&file.path);
+                            if let Some(frecency) = frecency_ref {
+                                let _ = file.update_frecency_scores(frecency, mode);
+                            }
+                        });
                     });
                 }
 
@@ -1079,36 +1106,45 @@ fn spawn_scan_and_watcher(
                 );
             }
 
-            // Warmup: read top-frecency files into cache.
-            if !cancelled.load(Ordering::Acquire)
-                && let Ok(guard) = shared_picker.read()
-                && let Some(ref picker) = *guard
-            {
-                let warmup_start = std::time::Instant::now();
-                warmup_mmaps(picker.sync_data.files(), &picker.cache_budget);
-                info!(
-                    "Warmup completed in {:.2}s (cached {} files, {} bytes)",
-                    warmup_start.elapsed().as_secs_f64(),
-                    picker.cache_budget.cached_count.load(Ordering::Relaxed),
-                    picker.cache_budget.cached_bytes.load(Ordering::Relaxed),
-                );
-            }
-
-            // Build bigram index without holding the lock.
-            if !cancelled.load(Ordering::Acquire) {
-                let snapshot = shared_picker.read().ok().and_then(|guard| {
-                    guard.as_ref().map(|picker| {
-                        (
-                            picker.sync_data.files().to_vec(),
-                            Arc::clone(&picker.cache_budget),
-                        )
+            // SAFETY: The file index Vec is not resized between the initial scan
+            // completing and the warmup + bigram phase finishing.
+            let files_snapshot: Option<(&[FileItem], Arc<ContentCacheBudget>)> =
+                if !cancelled.load(Ordering::Acquire) {
+                    let guard = shared_picker.read().ok();
+                    guard.and_then(|guard| {
+                        guard.as_ref().map(|picker| {
+                            let files = picker.sync_data.files();
+                            let ptr = files.as_ptr();
+                            let len = files.len();
+                            let budget = Arc::clone(&picker.cache_budget);
+                            // SAFETY: see comment above — Vec is stable during this window.
+                            let static_files: &[FileItem] =
+                                unsafe { std::slice::from_raw_parts(ptr, len) };
+                            (static_files, budget)
+                        })
                     })
-                });
+                } else {
+                    None
+                };
 
-                if let Some((files, budget)) = snapshot {
+            if let Some((files, budget)) = files_snapshot {
+                // Warmup: populate mmap caches for top-frecency files.
+                if !cancelled.load(Ordering::Acquire) {
+                    let warmup_start = std::time::Instant::now();
+                    warmup_mmaps(files, &budget);
+                    info!(
+                        "Warmup completed in {:.2}s (cached {} files, {} bytes)",
+                        warmup_start.elapsed().as_secs_f64(),
+                        budget.cached_count.load(Ordering::Relaxed),
+                        budget.cached_bytes.load(Ordering::Relaxed),
+                    );
+                }
+
+                // Build bigram index — entirely lock-free.
+                if !cancelled.load(Ordering::Acquire) {
                     let bigram_start = std::time::Instant::now();
                     info!("Starting bigram index build for {} files...", files.len());
-                    let (index, content_binary) = build_bigram_index(&files, &budget);
+                    let (index, content_binary) = build_bigram_index(files, &budget);
                     info!(
                         "Bigram index ready in {:.2}s",
                         bigram_start.elapsed().as_secs_f64(),
@@ -1183,33 +1219,35 @@ pub fn warmup_mmaps(files: &[FileItem], budget: &ContentCacheBudget) {
     let warmed_bytes = AtomicU64::new(0);
     let budget_exhausted = AtomicBool::new(false);
 
-    to_warm.par_iter().for_each(|file| {
-        if budget_exhausted.load(Ordering::Relaxed) {
-            return;
-        }
+    BACKGROUND_THREAD_POOL.install(|| {
+        to_warm.par_iter().for_each(|file| {
+            if budget_exhausted.load(Ordering::Relaxed) {
+                return;
+            }
 
-        if file.is_binary || file.size == 0 || file.size > max_file_size {
-            return;
-        }
+            if file.is_binary || file.size == 0 || file.size > max_file_size {
+                return;
+            }
 
-        // Byte budget.
-        let prev_bytes = warmed_bytes.fetch_add(file.size, Ordering::Relaxed);
-        if prev_bytes + file.size > max_bytes {
-            budget_exhausted.store(true, Ordering::Relaxed);
-            return;
-        }
+            // Byte budget.
+            let prev_bytes = warmed_bytes.fetch_add(file.size, Ordering::Relaxed);
+            if prev_bytes + file.size > max_bytes {
+                budget_exhausted.store(true, Ordering::Relaxed);
+                return;
+            }
 
-        if let Some(content) = file.get_content(budget) {
-            let _ = std::hint::black_box(content.first());
-        }
+            if let Some(content) = file.get_content(budget) {
+                let _ = std::hint::black_box(content.first());
+            }
+        });
     });
 }
 
-/// Build an inverted bigram index from all files in the index.
-///
-/// For each non-binary, non-empty file: reads content (or uses cached mmap),
-/// populates the per-file bigram bloom filter, and adds it to the inverted index.
-/// Uses rayon for parallel processing.
+/// Max bytes of file content scanned for bigram indexing. After this many
+/// bytes the ~4900 possible printable-ASCII bigrams are effectively saturated,
+/// so reading further adds no new information to the index.
+pub const BIGRAM_CONTENT_CAP: usize = 64 * 1024;
+
 pub fn build_bigram_index(
     files: &[FileItem],
     budget: &ContentCacheBudget,
@@ -1225,36 +1263,37 @@ pub fn build_bigram_index(
     // on the real file list after the build, so grep never has to re-check.
     let content_binary: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 
-    files.par_iter().enumerate().for_each(|(i, file)| {
-        if file.is_binary || file.size == 0 || file.size > max_file_size {
-            return;
-        }
-        // Use cached content if available (no extra memory).
-        // For uncached files, use read() instead of mmap() — heap memory is
-        // freed immediately on drop, while mmap pages linger in RSS on macOS.
-        let data: Option<&[u8]>;
-        let owned;
-        if let Some(cached) = file.get_content(budget) {
-            if detect_binary_content(cached) {
-                content_binary.lock().unwrap().push(i);
+    BACKGROUND_THREAD_POOL.install(|| {
+        files.par_iter().enumerate().for_each(|(i, file)| {
+            if file.is_binary || file.size == 0 || file.size > max_file_size {
                 return;
             }
-            data = Some(cached);
-            owned = None;
-        } else if let Ok(read_data) = std::fs::read(&file.path) {
-            if detect_binary_content(&read_data) {
-                content_binary.lock().unwrap().push(i);
+            // Use cached content if available (no extra memory).
+            // For uncached files, read from disk — heap memory is freed on drop.
+            let data: Option<&[u8]>;
+            let owned;
+            if let Some(cached) = file.get_content(budget) {
+                if detect_binary_content(cached) {
+                    content_binary.lock().unwrap().push(i);
+                    return;
+                }
+                data = Some(cached);
+                owned = None;
+            } else if let Ok(read_data) = std::fs::read(&file.path) {
+                if detect_binary_content(&read_data) {
+                    content_binary.lock().unwrap().push(i);
+                    return;
+                }
+                data = None;
+                owned = Some(read_data);
+            } else {
                 return;
             }
-            data = None;
-            owned = Some(read_data);
-        } else {
-            return;
-        }
 
-        let content = data.unwrap_or_else(|| owned.as_ref().unwrap());
-        builder.add_file_content(i, content);
-        skip_builder.add_file_content_skip(i, content);
+            let content = data.unwrap_or_else(|| owned.as_ref().unwrap());
+            let capped = &content[..content.len().min(BIGRAM_CONTENT_CAP)];
+            builder.add_file_content(&skip_builder, i, capped);
+        });
     });
 
     let cols = builder.columns_used();
@@ -1288,6 +1327,70 @@ pub fn build_bigram_index(
     }
 
     (index, binary_indices)
+}
+
+// pub for benchmarks
+pub fn scan_files(base_path: &Path) -> Vec<FileItem> {
+    use ignore::{WalkBuilder, WalkState};
+
+    let git_workdir = Repository::discover(base_path)
+        .ok()
+        .and_then(|repo| repo.workdir().map(Path::to_path_buf));
+    let is_git_repo = git_workdir.is_some();
+
+    let mut walk_builder = WalkBuilder::new(base_path);
+    walk_builder
+        .hidden(!is_git_repo)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .ignore(true)
+        .follow_links(false);
+
+    if !is_git_repo && let Some(overrides) = non_git_repo_overrides(base_path) {
+        walk_builder.overrides(overrides);
+    }
+
+    let walker = walk_builder.build_parallel();
+    let files = parking_lot::Mutex::new(Vec::new());
+
+    walker.run(|| {
+        let files = &files;
+        let base_path = base_path.to_path_buf();
+
+        Box::new(move |result| {
+            let Ok(entry) = result else {
+                return WalkState::Continue;
+            };
+
+            if entry.file_type().is_some_and(|ft| ft.is_file()) {
+                let path = entry.path();
+
+                if is_git_file(path) {
+                    return WalkState::Continue;
+                }
+
+                if !is_git_repo && is_known_binary_extension(path) {
+                    return WalkState::Continue;
+                }
+
+                let metadata = entry.metadata().ok();
+                let file_item = FileItem::new_with_metadata(
+                    path.to_path_buf(),
+                    &base_path,
+                    None,
+                    metadata.as_ref(),
+                );
+
+                files.lock().push(file_item);
+            }
+            WalkState::Continue
+        })
+    });
+
+    let mut files = files.into_inner();
+    files.sort_unstable_by(|a, b| a.path.as_os_str().cmp(b.path.as_os_str()));
+    files
 }
 
 /// Result of the fast walk phase — files are searchable immediately,
@@ -1336,14 +1439,24 @@ fn walk_filesystem(
     });
 
     // Walk files (the fast part, typically 2-3s even on huge repos).
-    let walker = WalkBuilder::new(base_path)
-        .hidden(false)
+    let is_git_repo = git_workdir.is_some();
+    let bg_threads = BACKGROUND_THREAD_POOL.current_num_threads();
+    let mut walk_builder = WalkBuilder::new(base_path);
+    walk_builder
+        // this is a very important guard for the user opening ~/ or other root non-git dir
+        .hidden(!is_git_repo)
         .git_ignore(true)
         .git_exclude(true)
         .git_global(true)
         .ignore(true)
         .follow_links(false)
-        .build_parallel();
+        .threads(bg_threads);
+
+    if !is_git_repo && let Some(overrides) = non_git_repo_overrides(base_path) {
+        walk_builder.overrides(overrides);
+    }
+
+    let walker = walk_builder.build_parallel();
 
     let walker_start = std::time::Instant::now();
     debug!("SCAN: Starting file walker");
@@ -1355,12 +1468,21 @@ fn walk_filesystem(
         let base_path = base_path.to_path_buf();
 
         Box::new(move |result| {
-            if let Ok(entry) = result
-                && entry.file_type().is_some_and(|ft| ft.is_file())
-            {
+            let Ok(entry) = result else {
+                return WalkState::Continue;
+            };
+
+            if entry.file_type().is_some_and(|ft| ft.is_file()) {
                 let path = entry.path();
 
                 if is_git_file(path) {
+                    return WalkState::Continue;
+                }
+
+                // Outside git repos, skip binary files entirely — they inflate
+                // the index with media, compiled artifacts, etc. that are never
+                // useful in a code finder.
+                if !is_git_repo && is_known_binary_extension(path) {
                     return WalkState::Continue;
                 }
 
@@ -1391,13 +1513,17 @@ fn walk_filesystem(
         .read()
         .map_err(|_| Error::AcquireFrecencyLock)?;
     if let Some(frecency) = frecency.as_ref() {
-        files
-            .par_iter_mut()
-            .try_for_each(|file| file.update_frecency_scores(frecency, mode))?;
+        BACKGROUND_THREAD_POOL.install(|| {
+            files.par_iter_mut().for_each(|file| {
+                let _ = file.update_frecency_scores(frecency, mode);
+            });
+        });
     }
     drop(frecency);
 
-    files.par_sort_unstable_by(|a, b| a.path.as_os_str().cmp(b.path.as_os_str()));
+    BACKGROUND_THREAD_POOL.install(|| {
+        files.par_sort_unstable_by(|a, b| a.path.as_os_str().cmp(b.path.as_os_str()));
+    });
 
     let total_time = scan_start.elapsed();
     info!("SCAN: Walk + frecency completed in {:?}", total_time);
@@ -1439,11 +1565,13 @@ fn apply_git_status(
         let frecency = shared_frecency.read().ok();
         let frecency_ref = frecency.as_ref().and_then(|f| f.as_ref());
 
-        picker.sync_data.files.par_iter_mut().for_each(|file| {
-            file.git_status = git_cache.lookup_status(&file.path);
-            if let Some(frecency) = frecency_ref {
-                let _ = file.update_frecency_scores(frecency, mode);
-            }
+        BACKGROUND_THREAD_POOL.install(|| {
+            picker.sync_data.files.par_iter_mut().for_each(|file| {
+                file.git_status = git_cache.lookup_status(&file.path);
+                if let Some(frecency) = frecency_ref {
+                    let _ = file.update_frecency_scores(frecency, mode);
+                }
+            });
         });
 
         info!(

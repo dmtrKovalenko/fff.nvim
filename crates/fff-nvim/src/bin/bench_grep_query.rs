@@ -1,69 +1,13 @@
 use fff::BigramIndexBuilder;
 /// Single-query grep benchmark with bigram index profiling.
 ///
-/// Scans a repository, builds the bigram index, reports its size, then runs
-/// a grep query for the requested number of iterations showing per-iteration
-/// and aggregate timing.
-///
 /// Usage:
 ///   cargo build --release --bin bench_grep_query
 ///   ./target/release/bench_grep_query --path ~/dev/chromium --query "MAX_FILE_SIZE" --iters 3
-use fff::FileItem;
+///   ./target/release/bench_grep_query --path ~/dev/chromium --query "TODO" --no-bigram
 use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
 use fff::types::ContentCacheBudget;
-use std::io::Read;
-use std::path::Path;
 use std::time::Instant;
-
-fn load_files(base_path: &Path) -> Vec<FileItem> {
-    use ignore::WalkBuilder;
-
-    let mut files = Vec::new();
-
-    WalkBuilder::new(base_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .ignore(true)
-        .follow_links(false)
-        .build()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-        .for_each(|entry| {
-            let path = entry.path().to_path_buf();
-            let relative = pathdiff::diff_paths(&path, base_path).unwrap_or_else(|| path.clone());
-            let relative_path = relative.to_string_lossy().into_owned();
-            let file_name = entry.file_name().to_string_lossy().into_owned();
-            let size = entry.metadata().ok().map_or(0, |m| m.len());
-            let is_binary = detect_binary(&path, size);
-
-            files.push(FileItem::new_raw(
-                path,
-                relative_path,
-                file_name,
-                size,
-                0,
-                None,
-                is_binary,
-            ));
-        });
-
-    files
-}
-
-fn detect_binary(path: &Path, size: u64) -> bool {
-    if size == 0 {
-        return false;
-    }
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut reader = std::io::BufReader::with_capacity(1024, file);
-    let mut buf = [0u8; 512];
-    let n = reader.read(&mut buf).unwrap_or(0);
-    buf[..n].contains(&0)
-}
 
 fn fmt_dur(us: u128) -> String {
     if us > 1_000_000 {
@@ -75,7 +19,8 @@ fn fmt_dur(us: u128) -> String {
     }
 }
 
-fn run_grep(files: &[FileItem], index: Option<&fff::BigramFilter>, query: &str, iters: usize) {
+
+fn run_grep(files: &[fff::FileItem], index: Option<&fff::BigramFilter>, query: &str, iters: usize) {
     let options = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
@@ -127,6 +72,17 @@ fn run_grep(files: &[FileItem], index: Option<&fff::BigramFilter>, query: &str, 
     }
 }
 
+fn build_bigram(files: &mut [fff::FileItem]) -> fff::BigramFilter {
+    let budget = ContentCacheBudget::default();
+    let (index, binary_indices) = fff::build_bigram_index(files, &budget);
+
+    for &i in &binary_indices {
+        files[i].is_binary = true;
+    }
+
+    index
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -170,17 +126,15 @@ fn main() {
     // ── 1. Scan files ──────────────────────────────────────────────────
     eprint!("[1/3] Scanning files... ");
     let t = Instant::now();
-    let files = load_files(&canonical);
-    let scan_time = t.elapsed();
+    let mut files = fff::scan_files(&canonical);
     let non_binary = files.iter().filter(|f| !f.is_binary).count();
     eprintln!(
         "{} files in {:.2}s ({} non-binary)",
         files.len(),
-        scan_time.as_secs_f64(),
+        t.elapsed().as_secs_f64(),
         non_binary,
     );
 
-    // ── 2. Build bigram index ──────────────────────────────────────────
     if no_bigram {
         eprintln!("[2/3] Bigram index skipped (--no-bigram)");
         eprintln!(
@@ -191,45 +145,18 @@ fn main() {
         return;
     }
 
-    use rayon::prelude::*;
-
-    eprint!("[2/3] Building bigram index... ");
+    // ── 2. Build bigram index ──────────────────────────────────────────
+    eprint!("[2/3] Bigram index... ");
     let t = Instant::now();
-    let budget = ContentCacheBudget::default();
-    let builder = BigramIndexBuilder::new(files.len());
-    let skip_builder = BigramIndexBuilder::new(files.len());
-
-    files.par_iter().enumerate().for_each(|(idx, file)| {
-        if !file.is_binary
-            && let Some(content) = file.get_content_for_search(&budget)
-        {
-            builder.add_file_content(idx, &content);
-            skip_builder.add_file_content_skip(idx, &content);
-        }
-    });
-
-    let mut index = builder.compress(None);
-    let skip_index = skip_builder.compress(Some(12));
-    let build_time = t.elapsed();
-    eprintln!("done in {:.2}s", build_time.as_secs_f64());
+    let index = build_bigram(&mut files);
     eprintln!(
-        "       consecutive: {} cols, {:.2} MB",
+        "done in {:.2}s  ({} cols, {:.1} MB)",
+        t.elapsed().as_secs_f64(),
         index.columns_used(),
         index.heap_bytes() as f64 / (1024.0 * 1024.0),
     );
-    eprintln!(
-        "       skip-1:      {} cols, {:.2} MB",
-        skip_index.columns_used(),
-        skip_index.heap_bytes() as f64 / (1024.0 * 1024.0),
-    );
-    index.set_skip_index(skip_index);
-    eprintln!(
-        "       total: {:.2} MB heap, {} files tracked",
-        index.heap_bytes() as f64 / (1024.0 * 1024.0),
-        index.file_count(),
-    );
 
-    // ── 3. Run grep query ──────────────────────────────────────────────
+    // ── 3. Grep ───────────────────────────────────────────────────────
     eprintln!(
         "\n[3/3] Running grep \"{}\" x {} iterations\n",
         query, iters
