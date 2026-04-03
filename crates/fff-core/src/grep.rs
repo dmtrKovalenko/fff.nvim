@@ -1114,6 +1114,7 @@ where
                 }
 
                 if let Some(budget) = time_budget
+                    && all_matches.len() > 1
                     && search_start.elapsed() > budget
                 {
                     budget_exceeded.store(true, Ordering::Relaxed);

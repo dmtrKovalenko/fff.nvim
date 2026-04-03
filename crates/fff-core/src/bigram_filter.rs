@@ -75,7 +75,7 @@ impl BigramIndexBuilder {
         })
     }
 
-    pub fn add_file_content(&self, file_idx: usize, content: &[u8]) {
+    pub(crate) fn add_file_content(&self, skip_builder: &Self, file_idx: usize, content: &[u8]) {
         if content.len() < 2 {
             return;
         }
@@ -84,47 +84,66 @@ impl BigramIndexBuilder {
         let word_idx = file_idx / 64;
         let bit_mask = 1u64 << (file_idx % 64);
 
-        let mut prev = content[0];
-        for &b in &content[1..] {
-            if (32..=126).contains(&prev) && (32..=126).contains(&b) {
-                let key = (prev.to_ascii_lowercase() as u16) << 8 | b.to_ascii_lowercase() as u16;
-                let col = self.get_or_alloc_column(key);
-                if col != NO_COLUMN {
-                    self.column_bitset(col)[word_idx].fetch_or(bit_mask, Ordering::Relaxed);
-                }
-            }
-            prev = b;
-        }
-        self.populated.fetch_add(1, Ordering::Relaxed);
-    }
+        // Stack-local dedup bitsets: 1024 × u64 = 8 KB each, covers all 65536
+        // possible bigram keys. Fits comfortably in L1 cache.
+        let mut seen_consec = [0u64; 1024];
+        let mut seen_skip = [0u64; 1024];
 
-    /// Index skip-1 bigrams (stride 2) for a single file.
-    ///
-    /// For content "ABCDE" this extracts pairs (A,C), (B,D), (C,E).
-    /// These capture non-adjacent character relationships that are largely
-    /// independent from consecutive bigrams, enabling much tighter candidate
-    /// filtering when ANDead together.
-    pub fn add_file_content_skip(&self, file_idx: usize, content: &[u8]) {
-        if content.len() < 3 {
-            return;
-        }
+        let bytes = content;
+        let len = bytes.len();
 
-        debug_assert!(file_idx < self.file_count);
-        let word_idx = file_idx / 64;
-        let bit_mask = 1u64 << (file_idx % 64);
-
-        for i in 0..content.len() - 2 {
-            let a = content[i];
-            let b = content[i + 2];
-            if (32..=126).contains(&a) && (32..=126).contains(&b) {
-                let key = (a.to_ascii_lowercase() as u16) << 8 | b.to_ascii_lowercase() as u16;
-                let col = self.get_or_alloc_column(key);
-                if col != NO_COLUMN {
-                    self.column_bitset(col)[word_idx].fetch_or(bit_mask, Ordering::Relaxed);
-                }
+        // First consecutive pair (no skip bigram possible yet).
+        let (a, b) = (bytes[0], bytes[1]);
+        if (32..=126).contains(&a) && (32..=126).contains(&b) {
+            let key = (a.to_ascii_lowercase() as u16) << 8 | b.to_ascii_lowercase() as u16;
+            let w = key as usize >> 6;
+            let bit = 1u64 << (key as usize & 63);
+            seen_consec[w] |= bit;
+            let col = self.get_or_alloc_column(key);
+            if col != NO_COLUMN {
+                self.column_bitset(col)[word_idx].fetch_or(bit_mask, Ordering::Relaxed);
             }
         }
+
+        // Main loop: consecutive (i-1, i) and skip-1 (i-2, i) in one pass.
+        for i in 2..len {
+            let cur = bytes[i];
+
+            // Consecutive bigram: (bytes[i-1], bytes[i])
+            let prev = bytes[i - 1];
+            if (32..=126).contains(&prev) && (32..=126).contains(&cur) {
+                let key = (prev.to_ascii_lowercase() as u16) << 8 | cur.to_ascii_lowercase() as u16;
+                let w = key as usize >> 6;
+                let bit = 1u64 << (key as usize & 63);
+                if seen_consec[w] & bit == 0 {
+                    seen_consec[w] |= bit;
+                    let col = self.get_or_alloc_column(key);
+                    if col != NO_COLUMN {
+                        self.column_bitset(col)[word_idx].fetch_or(bit_mask, Ordering::Relaxed);
+                    }
+                }
+            }
+
+            // Skip-1 bigram: (bytes[i-2], bytes[i])
+            let skip_prev = bytes[i - 2];
+            if (32..=126).contains(&skip_prev) && (32..=126).contains(&cur) {
+                let key =
+                    (skip_prev.to_ascii_lowercase() as u16) << 8 | cur.to_ascii_lowercase() as u16;
+                let w = key as usize >> 6;
+                let bit = 1u64 << (key as usize & 63);
+                if seen_skip[w] & bit == 0 {
+                    seen_skip[w] |= bit;
+                    let col = skip_builder.get_or_alloc_column(key);
+                    if col != NO_COLUMN {
+                        skip_builder.column_bitset(col)[word_idx]
+                            .fetch_or(bit_mask, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
         self.populated.fetch_add(1, Ordering::Relaxed);
+        skip_builder.populated.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn is_ready(&self) -> bool {
