@@ -70,12 +70,37 @@ fn make_grep_options(
     )
 }
 
+/// Deserialize max_results accepting both usize and whole-number f64 (e.g., "30" or "30.0")
+fn deserialize_max_results<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum MaxResultsRaw {
+        Usize(usize),
+        F64(f64),
+    }
+
+    let raw = Option::<MaxResultsRaw>::deserialize(deserializer)?;
+    Ok(raw.map(|r| match r {
+        MaxResultsRaw::Usize(v) => v,
+        MaxResultsRaw::F64(v) => {
+            if v.fract() == 0.0 {
+                v as usize
+            } else {
+                return Err(serde::de::Error::custom("maxResults must be a whole number"));
+            }
+        }
+    }))
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FindFilesParams {
     /// Fuzzy search query. Supports path prefixes and glob constraints.
     pub query: String,
     /// Max results (default 20).
-    #[serde(rename = "maxResults")]
+    #[serde(rename = "maxResults", deserialize_with = "deserialize_max_results")]
     pub max_results: Option<usize>,
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
@@ -87,7 +112,7 @@ pub struct GrepParams {
     /// Matches within single lines only — use ONE specific term, not multiple words.
     pub query: String,
     /// Max matching lines (default 20).
-    #[serde(rename = "maxResults")]
+    #[serde(rename = "maxResults", deserialize_with = "deserialize_max_results")]
     pub max_results: Option<usize>,
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
@@ -149,7 +174,7 @@ pub struct MultiGrepParams {
     /// File constraints (e.g. '*.{ts,tsx} !test/'). ALWAYS provide when possible.
     pub constraints: Option<String>,
     /// Max matching lines (default 20).
-    #[serde(rename = "maxResults")]
+    #[serde(rename = "maxResults", deserialize_with = "deserialize_max_results")]
     pub max_results: Option<usize>,
     /// Cursor from previous result.
     pub cursor: Option<String>,
