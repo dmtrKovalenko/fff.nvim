@@ -384,6 +384,56 @@ impl BigramFilter {
     pub fn has_key(&self, key: u16) -> bool {
         self.lookup[key as usize] != NO_COLUMN
     }
+
+    /// Raw lookup table (65536 entries mapping bigram key → column index).
+    pub fn lookup(&self) -> &[u16] {
+        &self.lookup
+    }
+
+    /// Flat dense bitset data at fixed stride `words`.
+    pub fn dense_data(&self) -> &[u64] {
+        &self.dense_data
+    }
+
+    /// Number of u64 words per column (= ceil(file_count / 64)).
+    pub fn words(&self) -> usize {
+        self.words
+    }
+
+    /// Number of dense columns retained after compression.
+    pub fn dense_count(&self) -> usize {
+        self.dense_count
+    }
+
+    /// Number of files that contributed content to the index.
+    pub fn populated(&self) -> usize {
+        self.populated
+    }
+
+    /// Reference to the optional skip-1 bigram sub-index.
+    pub fn skip_index(&self) -> Option<&BigramFilter> {
+        self.skip_index.as_deref()
+    }
+
+    /// Create a new bigram filter from the internal data
+    pub fn new(
+        lookup: Vec<u16>,
+        dense_data: Vec<u64>,
+        dense_count: usize,
+        words: usize,
+        file_count: usize,
+        populated: usize,
+    ) -> Self {
+        Self {
+            lookup,
+            dense_data,
+            dense_count,
+            words,
+            file_count,
+            populated,
+            skip_index: None,
+        }
+    }
 }
 
 pub fn extract_bigrams(content: &[u8]) -> Vec<u16> {

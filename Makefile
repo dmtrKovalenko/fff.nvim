@@ -2,6 +2,8 @@ PLENARY_DIR ?= ../plenary.nvim
 
 .PHONY: build test test-rust test-lua test-version test-bun test-node prepare-bun prepare-node set-npm-version header
 
+all: format test lint
+
 build:
 	cargo build --release --features zlob
 
