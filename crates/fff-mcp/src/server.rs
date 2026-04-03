@@ -70,12 +70,55 @@ fn make_grep_options(
     )
 }
 
+fn deserialize_optional_usize_lenient<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct OptionalUsizeVisitor;
+
+    impl<'de> de::Visitor<'de> for OptionalUsizeVisitor {
+        type Value = Option<usize>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("null, an integer, or a whole-number float")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+        fn visit_some<D2: de::Deserializer<'de>>(self, deserializer: D2) -> Result<Self::Value, D2::Error> {
+            deserializer.deserialize_any(self)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            usize::try_from(v).map(Some).map_err(|_| E::custom("value is too large for usize"))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            if (v < 0) { return Err(E::custom("value must be non-negative")); }
+            self.visit_u64(v as u64)
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            if (!v.is_finite() || v < 0.0) { return Err(E::custom("value must be a finite, non-negative whole number")); }
+            if (v.fract() != 0.0) { return Err(E::custom("value must be a whole number")); }
+            self.visit_u64(v as u64)
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            if let Ok(parsed) = v.parse::<usize>() { return Ok(Some(parsed)); }
+            if let Ok(parsed) = v.parse::<f64>() { return self.visit_f64(parsed); }
+            Err(E::custom("value must be an integer or a whole-number float"))
+        }
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> { self.visit_str(&v) }
+    }
+
+    deserializer.deserialize_option(OptionalUsizeVisitor)
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FindFilesParams {
     /// Fuzzy search query. Supports path prefixes and glob constraints.
     pub query: String,
     /// Max results (default 20).
-    #[serde(rename = "maxResults")]
+    #[serde(rename = "maxResults", deserialize_with = "deserialize_optional_usize_lenient")]
     pub max_results: Option<usize>,
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
@@ -87,7 +130,7 @@ pub struct GrepParams {
     /// Matches within single lines only — use ONE specific term, not multiple words.
     pub query: String,
     /// Max matching lines (default 20).
-    #[serde(rename = "maxResults")]
+    #[serde(rename = "maxResults", deserialize_with = "deserialize_optional_usize_lenient")]
     pub max_results: Option<usize>,
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
@@ -149,7 +192,7 @@ pub struct MultiGrepParams {
     /// File constraints (e.g. '*.{ts,tsx} !test/'). ALWAYS provide when possible.
     pub constraints: Option<String>,
     /// Max matching lines (default 20).
-    #[serde(rename = "maxResults")]
+    #[serde(rename = "maxResults", deserialize_with = "deserialize_optional_usize_lenient")]
     pub max_results: Option<usize>,
     /// Cursor from previous result.
     pub cursor: Option<String>,
@@ -664,6 +707,41 @@ impl FffServer {
         .format(&mut cs);
 
         Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FindFilesParams, GrepParams, MultiGrepParams};
+
+    #[test]
+    fn max_results_accepts_whole_number_floats() {
+        let params: MultiGrepParams = serde_json::from_str(
+            r#"{"patterns":["foo"],"maxResults":30.0}"#,
+        )
+        .expect("whole-number floats should deserialize");
+
+        assert_eq!(params.max_results, Some(30));
+    }
+
+    #[test]
+    fn max_results_rejects_fractional_floats() {
+        let err = serde_json::from_str::<GrepParams>(
+            r#"{"query":"foo","maxResults":30.5}"#,
+        )
+        .expect_err("fractional floats must be rejected");
+
+        assert!(err.to_string().contains("whole number"));
+    }
+
+    #[test]
+    fn max_results_still_accepts_integers() {
+        let params: FindFilesParams = serde_json::from_str(
+            r#"{"query":"foo","maxResults":20}"#,
+        )
+        .expect("integers should keep working");
+
+        assert_eq!(params.max_results, Some(20));
     }
 }
 
