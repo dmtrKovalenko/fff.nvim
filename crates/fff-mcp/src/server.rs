@@ -75,7 +75,7 @@ pub struct FindFilesParams {
     pub query: String,
     /// Max results (default 20).
     #[serde(rename = "maxResults")]
-    // this has to be float becuase llms are stupid
+    // this has to be float because llms are stupid
     pub max_results: Option<f64>,
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
@@ -88,7 +88,7 @@ pub struct GrepParams {
     pub query: String,
     /// Max matching lines (default 20).
     #[serde(rename = "maxResults")]
-    pub max_results: Option<f64>, // this has to be float becuase llms are stupid
+    pub max_results: Option<f64>, // this has to be float because llms are stupid
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
     /// Output format (default 'content').
