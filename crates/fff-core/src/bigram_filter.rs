@@ -366,8 +366,6 @@ impl BigramFilter {
         self.lookup[key as usize] != NO_COLUMN
     }
 
-    // ── Serialization accessors ────────────────────────────────────────
-
     /// Raw lookup table (65536 entries mapping bigram key → column index).
     pub fn lookup(&self) -> &[u16] {
         &self.lookup
@@ -398,8 +396,8 @@ impl BigramFilter {
         self.skip_index.as_deref()
     }
 
-    /// Reconstruct a `BigramFilter` from raw parts (for deserialization).
-    pub fn from_raw_parts(
+    /// Reconstruct a `BigramFilter` from its components (for deserialization).
+    pub fn reconstruct(
         lookup: Vec<u16>,
         dense_data: Vec<u64>,
         dense_count: usize,
