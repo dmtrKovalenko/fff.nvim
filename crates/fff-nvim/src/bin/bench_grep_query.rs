@@ -1,4 +1,3 @@
-use fff::BigramIndexBuilder;
 /// Single-query grep benchmark with bigram index profiling.
 ///
 /// Usage:
@@ -18,7 +17,6 @@ fn fmt_dur(us: u128) -> String {
         format!("{}µs", us)
     }
 }
-
 
 fn run_grep(files: &[fff::FileItem], index: Option<&fff::BigramFilter>, query: &str, iters: usize) {
     let options = GrepSearchOptions {
