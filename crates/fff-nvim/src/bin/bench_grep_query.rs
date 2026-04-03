@@ -1,3 +1,4 @@
+use fff::BigramIndexBuilder;
 /// Single-query grep benchmark with bigram index profiling.
 ///
 /// Scans a repository, builds the bigram index, reports its size, then runs
@@ -8,7 +9,6 @@
 ///   cargo build --release --bin bench_grep_query
 ///   ./target/release/bench_grep_query --path ~/dev/chromium --query "MAX_FILE_SIZE" --iters 3
 use fff::FileItem;
-use fff::BigramIndexBuilder;
 use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
 use fff::types::ContentCacheBudget;
 use std::io::Read;
@@ -75,12 +75,7 @@ fn fmt_dur(us: u128) -> String {
     }
 }
 
-fn run_grep(
-    files: &[FileItem],
-    index: Option<&fff::BigramFilter>,
-    query: &str,
-    iters: usize,
-) {
+fn run_grep(files: &[FileItem], index: Option<&fff::BigramFilter>, query: &str, iters: usize) {
     let options = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,

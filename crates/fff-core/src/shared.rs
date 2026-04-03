@@ -113,7 +113,6 @@ impl SharedPicker {
     }
 }
 
-
 /// Thread-safe shared handle to the [`FrecencyTracker`] instance.
 #[derive(Clone, Default)]
 pub struct SharedFrecency(pub(crate) Arc<RwLock<Option<FrecencyTracker>>>);
@@ -149,7 +148,6 @@ impl SharedFrecency {
         FrecencyTracker::spawn_gc(self.clone(), db_path, use_unsafe_no_lock)
     }
 }
-
 
 /// Thread-safe shared handle to the [`QueryTracker`] instance.
 #[derive(Clone, Default)]
