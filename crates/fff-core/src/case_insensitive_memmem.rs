@@ -561,8 +561,6 @@ pub fn search(haystack: &[u8], needle_lower: &[u8]) -> bool {
     false
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

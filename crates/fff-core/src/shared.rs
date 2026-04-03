@@ -9,11 +9,14 @@ use crate::query_tracker::QueryTracker;
 
 /// Thread-safe shared handle to the [`FilePicker`] instance.
 ///
-/// Wraps `Arc<RwLock<Option<FilePicker>>>` with convenience methods.
+/// Uses `parking_lot::RwLock` which is reader-fair — new readers are not
+/// blocked when a writer is waiting, preventing search query stalls during
+/// background bigram builds or watcher writes.
+///
 /// `Clone` gives a new handle to the same picker (Arc clone).
 /// `Default` creates an empty handle suitable for `Lazy::new(SharedPicker::default)`.
 #[derive(Clone, Default)]
-pub struct SharedPicker(pub(crate) Arc<RwLock<Option<FilePicker>>>);
+pub struct SharedPicker(pub(crate) Arc<parking_lot::RwLock<Option<FilePicker>>>);
 
 impl std::fmt::Debug for SharedPicker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -22,20 +25,20 @@ impl std::fmt::Debug for SharedPicker {
 }
 
 impl SharedPicker {
-    pub fn read(&self) -> Result<RwLockReadGuard<'_, Option<FilePicker>>, Error> {
-        self.0.read().map_err(|_| Error::AcquireItemLock)
+    pub fn read(&self) -> Result<parking_lot::RwLockReadGuard<'_, Option<FilePicker>>, Error> {
+        Ok(self.0.read())
     }
 
-    pub fn write(&self) -> Result<RwLockWriteGuard<'_, Option<FilePicker>>, Error> {
-        self.0.write().map_err(|_| Error::AcquireItemLock)
+    pub fn write(&self) -> Result<parking_lot::RwLockWriteGuard<'_, Option<FilePicker>>, Error> {
+        Ok(self.0.write())
     }
 
     /// Block until the background filesystem scan finishes.
     /// Returns `true` if scan completed, `false` on timeout.
     pub fn wait_for_scan(&self, timeout: Duration) -> bool {
         let signal = {
-            let guard = self.0.read().expect("shared picker lock poisoned");
-            match guard.as_ref() {
+            let guard = self.0.read();
+            match &*guard {
                 Some(picker) => picker.scan_signal(),
                 None => return true,
             }
@@ -55,8 +58,8 @@ impl SharedPicker {
     /// Returns `true` if watcher ready, `false` on timeout.
     pub fn wait_for_watcher(&self, timeout: Duration) -> bool {
         let signal = {
-            let guard = self.0.read().expect("shared picker lock poisoned");
-            match guard.as_ref() {
+            let guard = self.0.read();
+            match &*guard {
                 Some(picker) => picker.watcher_signal(),
                 None => return true,
             }
@@ -113,7 +116,6 @@ impl SharedPicker {
     }
 }
 
-
 /// Thread-safe shared handle to the [`FrecencyTracker`] instance.
 #[derive(Clone, Default)]
 pub struct SharedFrecency(pub(crate) Arc<RwLock<Option<FrecencyTracker>>>);
@@ -149,7 +151,6 @@ impl SharedFrecency {
         FrecencyTracker::spawn_gc(self.clone(), db_path, use_unsafe_no_lock)
     }
 }
-
 
 /// Thread-safe shared handle to the [`QueryTracker`] instance.
 #[derive(Clone, Default)]
