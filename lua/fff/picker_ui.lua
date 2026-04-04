@@ -487,10 +487,13 @@ M.state = {
 
   -- Custom renderer (optional, defaults to file_renderer if not provided)
   renderer = nil,
+  -- Custom source hook for non-file pickers (buffers, diagnostics, etc.)
+  source = nil,
 
   ns_id = nil,
 
   last_status_info = nil,
+  custom_status_info = nil,
 
   last_preview_file = nil,
   last_preview_location = nil, -- Track last preview location to detect changes
@@ -523,6 +526,160 @@ M.state = {
   suggestion_items = nil,
   suggestion_source = nil,
 }
+
+---@class FFFCustomSourceSearchContext
+---@field query string
+---@field page_index integer
+---@field page_size integer
+---@field picker_state table
+---@field config table
+---@field current_file string|nil
+---@field cwd string|nil
+---
+---@class FFFCustomSourceResult
+---@field items table[]
+---@field total_matched? integer
+---@field status_info? string
+---@field location? table
+---
+---@class FFFCustomSource
+---@field search fun(ctx: FFFCustomSourceSearchContext): FFFCustomSourceResult
+---@field preview? fun(item: table, preview_buf: integer, preview_win: integer, ctx: table)
+---@field select? fun(item: table, action: string, ctx: table)
+---@field item_key? fun(item: table): string|nil
+---@field to_quickfix? fun(ctx: table): table[]
+
+local function has_custom_source() return M.state.source ~= nil end
+
+local function reset_custom_source_state()
+  M.state.location = nil
+  M.state.custom_status_info = nil
+  M.state.pagination.total_matched = 0
+end
+
+local function normalize_custom_source_result(result)
+  local normalized = type(result) == 'table' and result or {}
+  local items = type(normalized.items) == 'table' and normalized.items or {}
+
+  return {
+    items = items,
+    total_matched = normalized.total_matched or #items,
+    status_info = normalized.status_info or nil,
+    location = normalized.location or nil,
+  }
+end
+
+local function run_custom_source_search(page_index, page_size)
+  local source = M.state.source
+  if not (source and source.search) then return nil end
+
+  local ok, result = pcall(source.search, {
+    query = M.state.query,
+    page_index = page_index,
+    page_size = page_size,
+    picker_state = M.state,
+    config = M.state.config,
+    current_file = M.state.current_file_cache,
+    cwd = (M.state.config and M.state.config.cwd) or vim.uv.cwd(),
+  })
+
+  if not ok then
+    reset_custom_source_state()
+    vim.notify('FFF custom source search failed: ' .. tostring(result), vim.log.levels.ERROR)
+    return {}
+  end
+
+  local normalized = normalize_custom_source_result(result)
+  M.state.location = normalized.location
+  M.state.custom_status_info = normalized.status_info
+  M.state.pagination.total_matched = normalized.total_matched
+  return normalized.items
+end
+
+local function get_custom_source_item_key(item)
+  local source = M.state.source
+  if source and source.item_key then
+    local ok, key = pcall(source.item_key, item)
+    if ok and type(key) == 'string' and key ~= '' then return key end
+    if not ok then
+      vim.notify('FFF custom source item_key failed: ' .. tostring(key), vim.log.levels.ERROR)
+    end
+  end
+
+  if item.path and item.path ~= '' then return item.path end
+  return nil
+end
+
+local function run_custom_source_preview(item, location)
+  local source = M.state.source
+  if not (source and source.preview) then return false end
+
+  local ok, err = pcall(source.preview, item, M.state.preview_buf, M.state.preview_win, {
+    location = location,
+    picker_state = M.state,
+    config = M.state.config,
+  })
+
+  if ok then return true end
+
+  vim.api.nvim_set_option_value('modifiable', true, { buf = M.state.preview_buf })
+  vim.api.nvim_buf_set_lines(M.state.preview_buf, 0, -1, false, {
+    'Failed to load preview:',
+    tostring(err),
+  })
+  vim.api.nvim_set_option_value('modifiable', false, { buf = M.state.preview_buf })
+  return true
+end
+
+local function run_custom_source_select(source, item, action, query, picker_config)
+  if not (source and source.select) then return false end
+
+  local ok, err = pcall(source.select, item, action, {
+    query = query,
+    config = picker_config,
+    picker_state = M.state,
+  })
+
+  if not ok then
+    vim.notify('FFF custom select failed: ' .. tostring(err), vim.log.levels.ERROR)
+  end
+
+  return true
+end
+
+local function build_custom_source_quickfix_list()
+  local source = M.state.source
+  if not source then return nil end
+  if not source.to_quickfix then
+    vim.notify('This picker does not support quickfix export', vim.log.levels.WARN)
+    return nil
+  end
+
+  local selected_items = {}
+  for _, item in pairs(M.state.selected_items) do
+    selected_items[#selected_items + 1] = item
+  end
+
+  local ok, qf_list = pcall(source.to_quickfix, {
+    items = M.state.filtered_items,
+    selected_items = selected_items,
+    query = M.state.query,
+    config = M.state.config,
+    picker_state = M.state,
+  })
+
+  if not ok then
+    vim.notify('FFF custom source quickfix export failed: ' .. tostring(qf_list), vim.log.levels.ERROR)
+    return nil
+  end
+
+  if type(qf_list) ~= 'table' or #qf_list == 0 then
+    vim.notify('No items to send to quickfix', vim.log.levels.WARN)
+    return nil
+  end
+
+  return qf_list
+end
 
 function M.create_ui()
   local config = M.state.config
@@ -1043,7 +1200,9 @@ function M.update_results_sync()
   end
 
   local results
-  if M.state.mode == 'grep' then
+  if has_custom_source() then
+    results = run_custom_source_search(0, page_size) or {}
+  elseif M.state.mode == 'grep' then
     M.state.grep_regex_fallback_error = nil
     if M.state.query == '' then
       -- Empty query: show empty state (no search needed)
@@ -1091,7 +1250,7 @@ function M.update_results_sync()
   -- query the opposite mode and store results as suggestions.
   M.state.suggestion_items = nil
   M.state.suggestion_source = nil
-  if #results == 0 and M.state.query ~= '' then
+  if not has_custom_source() and #results == 0 and M.state.query ~= '' then
     if M.state.mode == 'grep' then
       -- Grep returned nothing — try file search as suggestion
       local suggestion_results = file_picker.search_files_paginated(
@@ -1138,7 +1297,7 @@ function M.load_page_at_index(new_page_index, adjust_cursor_fn)
   local page_size = M.state.pagination.page_size
 
   if page_size == 0 then return false end
-  if M.state.mode ~= 'grep' then
+  if M.state.mode ~= 'grep' and not has_custom_source() then
     local total = M.state.pagination.total_matched
     if total == 0 then return false end
 
@@ -1149,7 +1308,10 @@ function M.load_page_at_index(new_page_index, adjust_cursor_fn)
     new_page_index = math.max(0, math.min(new_page_index, max_page_index))
   end
 
-  if M.state.mode == 'grep' then
+  if has_custom_source() then
+    ok = true
+    results = run_custom_source_search(new_page_index, page_size) or {}
+  elseif M.state.mode == 'grep' then
     -- File-based pagination: look up the file_offset for this page from our history
     local file_offset = M.state.pagination.grep_file_offsets[new_page_index + 1] -- 1-based Lua index
     if file_offset == nil then
@@ -1194,7 +1356,7 @@ function M.load_page_at_index(new_page_index, adjust_cursor_fn)
   -- CRITICAL: Update total_matched from the latest search metadata
   -- This prevents stale total_matched values that can cause out-of-bounds pagination
   -- For grep, total_matched was already updated above when extracting grep_result.
-  if M.state.mode ~= 'grep' then
+  if M.state.mode ~= 'grep' and not has_custom_source() then
     local metadata = file_picker.get_search_metadata()
     M.state.pagination.total_matched = metadata.total_matched
   end
@@ -1494,7 +1656,7 @@ local function build_render_context()
   -- Combo detection (only in file picker mode with real results, not grep or suggestions)
   local combo_boost_score_multiplier = config.history and config.history.combo_boost_score_multiplier or 100
   local has_combo, combo_header_line, combo_header_text_len, combo_item_index
-  if M.state.mode == 'grep' or M.state.suggestion_source then
+  if M.state.mode == 'grep' or M.state.suggestion_source or has_custom_source() then
     has_combo = false
     combo_header_line = nil
     combo_header_text_len = nil
@@ -1612,7 +1774,7 @@ end
 function M.update_preview_title(item, location)
   if not M.state.preview_win or not vim.api.nvim_win_is_valid(M.state.preview_win) then return end
 
-  local relative_path = item.relative_path or item.path
+  local relative_path = item.preview_title or item.relative_path or item.path or tostring(item.bufnr or M.state.cursor)
   local max_title_width = vim.api.nvim_win_get_width(M.state.preview_win)
 
   -- Append :line for grep mode or grep suggestions
@@ -1700,6 +1862,8 @@ function M.update_preview()
 
   -- Check if we need to update the preview (file changed OR location changed)
   local effective_location = M.state.location
+  local preview_key = (has_custom_source() and (item.preview_key or item.path or tostring(item.bufnr or M.state.cursor)))
+    or item.path
 
   -- Fallback: if location is nil but query has a :line suffix, parse it directly
   if not effective_location and M.state.query and M.state.query ~= '' then
@@ -1735,10 +1899,10 @@ function M.update_preview()
 
   local location_changed = not vim.deep_equal(M.state.last_preview_location, effective_location)
 
-  if M.state.last_preview_file == item.path and not location_changed then return end
+  if M.state.last_preview_file == preview_key and not location_changed then return end
 
   -- Same file, different location: just scroll and re-highlight instead of reloading
-  if M.state.last_preview_file == item.path and location_changed then
+  if M.state.last_preview_file == preview_key and location_changed and not has_custom_source() then
     M.state.last_preview_location = effective_location and vim.deepcopy(effective_location) or nil
     preview.state.location = effective_location
     -- Update title with new line number for grep/suggestion mode
@@ -1753,10 +1917,12 @@ function M.update_preview()
 
   preview.clear()
 
-  M.state.last_preview_file = item.path
+  M.state.last_preview_file = preview_key
   M.state.last_preview_location = effective_location and vim.deepcopy(effective_location) or nil
 
   M.update_preview_title(item, effective_location)
+
+  if run_custom_source_preview(item, effective_location) then return end
 
   if M.state.file_info_buf then preview.update_file_info_buffer(item, M.state.file_info_buf, M.state.cursor) end
 
@@ -1801,6 +1967,24 @@ function M.update_status(progress)
   if not M.state.active or not M.state.ns_id then return end
   local config = M.state.config
   if config == nil then return end
+
+  if has_custom_source() then
+    local status_info = M.state.custom_status_info or tostring(M.state.pagination.total_matched or 0)
+    if status_info == M.state.last_status_info then return end
+    M.state.last_status_info = status_info
+
+    vim.api.nvim_buf_clear_namespace(M.state.input_buf, M.state.ns_id, 0, -1)
+
+    local win_width = vim.api.nvim_win_get_width(M.state.input_win)
+    local available_width = win_width - 2
+    local col_position = available_width - #status_info
+
+    vim.api.nvim_buf_set_extmark(M.state.input_buf, M.state.ns_id, 0, 0, {
+      virt_text = { { status_info, 'LineNr' } },
+      virt_text_win_col = col_position,
+    })
+    return
+  end
 
   if M.state.mode == 'grep' then
     -- Determine available modes to decide if we should show the mode indicator
@@ -2153,11 +2337,24 @@ function M.toggle_select()
 
   ---@diagnostic disable-next-line: need-check-nil
   local item = items[M.state.cursor]
-  if not item or not item.path then return end
+  if not item then return end
 
   local was_selected
 
-  if M.state.mode == 'grep' then
+  if has_custom_source() then
+    local key = get_custom_source_item_key(item)
+    if not key then
+      vim.notify('This picker item cannot be selected', vim.log.levels.WARN)
+      return
+    end
+
+    was_selected = M.state.selected_items[key] ~= nil
+    if was_selected then
+      M.state.selected_items[key] = nil
+    else
+      M.state.selected_items[key] = item
+    end
+  elseif M.state.mode == 'grep' then
     -- Per-occurrence selection for grep mode
     local key = grep_item_key(item)
     was_selected = M.state.selected_items[key] ~= nil
@@ -2194,6 +2391,17 @@ end
 --- Grep mode without selections: re-runs search with large limit to collect all matches.
 function M.send_to_quickfix()
   if not M.state.active then return end
+
+  if has_custom_source() then
+    local qf_list = build_custom_source_quickfix_list()
+    if not qf_list then return end
+
+    M.close()
+    vim.fn.setqflist(qf_list, 'r')
+    vim.cmd('copen')
+    vim.notify(string.format('Added %d items to quickfix list', #qf_list), vim.log.levels.INFO)
+    return
+  end
 
   local qf_list = {}
 
@@ -2288,18 +2496,29 @@ function M.select(action)
 
   action = action or 'edit'
 
+  local location = M.state.location -- Capture location before closing
+  local query = M.state.query -- Capture query before closing for tracking
+  local mode = M.state.mode -- Capture mode before closing for tracking
+  local suggestion_source = M.state.suggestion_source -- Capture suggestion context
+  local picker_config = M.state.config
+  local source = M.state.source
+
+  if source and source.select then
+    vim.cmd('stopinsert')
+    M.close()
+    run_custom_source_select(source, item, action, query, picker_config)
+    return
+  end
+
   -- Strip Windows long path prefix (\\?\) if present.
   -- These can surface from Rust's fs::canonicalize on Windows when LongPathsEnabled is set.
   -- Neovim cannot open paths with this prefix. The Rust side uses dunce::canonicalize to avoid
   -- producing these, but we strip defensively here as well.
   local path = item.path
+  if not path or path == '' then return end
   if vim.startswith(path, '\\\\?\\') then path = path:sub(5) end
 
   local relative_path = vim.fn.fnamemodify(path, ':.')
-  local location = M.state.location -- Capture location before closing
-  local query = M.state.query -- Capture query before closing for tracking
-  local mode = M.state.mode -- Capture mode before closing for tracking
-  local suggestion_source = M.state.suggestion_source -- Capture suggestion context
 
   -- In grep mode (or when selecting a grep suggestion), derive location from the match item
   local is_grep_item = mode == 'grep' or suggestion_source == 'grep'
@@ -2470,11 +2689,13 @@ function M.close()
   M.state.selected_files = {}
   M.state.selected_items = {}
   M.state.mode = nil
+  M.state.source = nil
   M.state.grep_config = nil
   M.state.grep_mode = 'plain'
   M.state.grep_regex_fallback_error = nil
   M.state.suggestion_items = nil
   M.state.suggestion_source = nil
+  M.state.custom_status_info = nil
   M.state.combo_visible = true
   M.state.combo_initial_cursor = nil
   M.reset_history_state()
@@ -2516,7 +2737,7 @@ local function initialize_picker(opts)
   local base_path = opts and opts.cwd or vim.uv.cwd()
 
   -- Initialize file picker if needed
-  if not file_picker.is_initialized() then
+  if not (opts and opts.source) and not file_picker.is_initialized() then
     if not file_picker.setup() then
       vim.notify('Failed to initialize file picker', vim.log.levels.ERROR)
       return nil
@@ -2584,7 +2805,7 @@ local function open_ui_with_state(query, results, location, merged_config, curre
     vim.cmd('startinsert!')
   end
 
-  M.monitor_scan_progress(0)
+  if not has_custom_source() then M.monitor_scan_progress(0) end
   return true
 end
 
@@ -2595,6 +2816,10 @@ end
 --- @return boolean true if callback handled results, false if UI was opened
 function M.open_with_callback(query, callback, opts)
   if M.state.active then return false end
+  if opts and opts.source then
+    vim.notify('FFF open_with_callback() only supports file search. Use require("fff").pick() for custom sources.', vim.log.levels.ERROR)
+    return false
+  end
 
   local merged_config, base_path = initialize_picker(opts)
   if not merged_config then return false end
@@ -2629,13 +2854,14 @@ function M.open(opts)
   M.state.selected_files = {}
   M.state.selected_items = {}
   M.state.renderer = opts and opts.renderer or nil
+  M.state.source = opts and opts.source or nil
   M.state.mode = opts and opts.mode or nil
   M.state.grep_config = opts and opts.grep_config or nil
 
   local merged_config, base_path = initialize_picker(opts)
   if not merged_config then return end
 
-  if base_path then M.change_indexing_directory(base_path) end
+  if base_path and not has_custom_source() then M.change_indexing_directory(base_path) end
 
   -- Initialize grep_mode to first configured mode when opening in grep mode
   if M.state.mode == 'grep' then

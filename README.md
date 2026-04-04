@@ -351,6 +351,32 @@ require('fff').setup({
 })
 ```
 
+### Custom pickers
+
+You can reuse the FFF UI with your own searchable source:
+
+```lua
+require('fff').pick({
+  title = 'Buffers',
+  source = {
+    search = function(ctx)
+      return {
+        items = {}, -- current page items
+        total_matched = 0, -- optional
+        status_info = '0/0', -- optional
+      }
+    end,
+    preview = function(item, preview_buf, preview_win, ctx) end, -- optional
+    select = function(item, action, ctx) end, -- optional
+    item_key = function(item) return item.path end, -- optional, used for multi-select
+    to_quickfix = function(ctx) return {} end, -- optional
+  },
+  renderer = my_renderer, -- optional
+})
+```
+
+The source contract is intentionally small: search returns the current page of items plus optional status metadata, while preview/select/quickfix are opt-in when your source supports them.
+
 **Per-call configuration:**
 
 ```lua

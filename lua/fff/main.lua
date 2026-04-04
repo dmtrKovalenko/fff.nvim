@@ -17,6 +17,28 @@ function M.find_files(opts)
   end
 end
 
+--- Open a picker backed by a custom source.
+--- The source contract is:
+---   source.search(ctx) -> { items, total_matched?, status_info?, location? }
+---   source.preview?(item, preview_buf, preview_win, ctx)
+---   source.select?(item, action, ctx)
+---   source.item_key?(item) -> string|nil
+---   source.to_quickfix?(ctx) -> quickfix entries
+--- @param opts table Picker options. `opts.source` is required.
+function M.pick(opts)
+  if not opts or not opts.source then
+    vim.notify('FFF pick() requires opts.source', vim.log.levels.ERROR)
+    return
+  end
+
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  if picker_ok then
+    picker_ui.open(opts)
+  else
+    vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
+  end
+end
+
 --- Live grep: search file contents in the current directory
 --- @param opts? {cwd?: string, title?: string, prompt?: string, layout?: table, grep?: {max_file_size?: number, smart_case?: boolean, max_matches_per_file?: number, modes?: string[]}, query?: string} Optional configuration overrides
 function M.live_grep(opts)
