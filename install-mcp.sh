@@ -3,6 +3,11 @@ set -eo pipefail
 
 # FFF MCP Server installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
+#
+# Warp terminal integration note:
+#   Warp serializes integer MCP parameters as IEEE 754 floats (e.g. maxResults: 30.0).
+#   The fff-mcp server handles this transparently via a lenient usize deserializer
+#   so no special workaround is needed on the client side.
 
 REPO="dmtrKovalenko/fff.nvim"
 BINARY_NAME="fff-mcp"
@@ -216,6 +221,33 @@ print_setup_instructions() {
         success "[Codex] detected"
         echo ""
         echo "codex mcp add fff -- fff-mcp"
+        echo ""
+    fi
+
+    # Warp terminal
+    # Detection: running inside Warp ($TERM_PROGRAM) or Warp data dir exists.
+    # Warp uses the mcpServers JSON format; paste via Settings → AI → MCP Servers → + Add.
+    if [ "${TERM_PROGRAM}" = "WarpTerminal" ] \
+        || [ -d "$HOME/Library/Application Support/dev.warp.Warp-Stable" ] \
+        || [ -d "${XDG_STATE_HOME:-$HOME/.local/state}/warp-terminal" ]; then
+        found_any=true
+        success "[Warp] detected"
+        echo ""
+        echo "Go to Settings → AI → MCP Servers (or Warp Drive → MCP Servers) and click + Add."
+        echo "Paste this configuration:"
+        echo ""
+        print_json '{
+  "mcpServers": {
+    "fff": {
+      "command": "fff-mcp",
+      "args": []
+    }
+  }
+}'
+        echo ""
+        info "Tip: Create a Warp Drive Rule to always route file searches through fff:"
+        echo "  Warp Drive → Rules → New Rule:"
+        echo "  \"Use the fff MCP tools for all file search operations instead of default tools.\""
         echo ""
     fi
 
