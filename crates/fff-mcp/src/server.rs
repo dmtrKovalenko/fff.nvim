@@ -74,9 +74,8 @@ pub struct FindFilesParams {
     /// Fuzzy search query. Supports path prefixes and glob constraints.
     pub query: String,
     /// Max results (default 20).
-    #[serde(rename = "maxResults")]
-    // this has to be float because llms are stupid
-    pub max_results: Option<f64>,
+    #[serde(rename = "maxResults", deserialize_with = "deserialize_opt_lenient_usize")]
+    pub max_results: Option<usize>,
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
 }
@@ -87,8 +86,8 @@ pub struct GrepParams {
     /// Matches within single lines only — use ONE specific term, not multiple words.
     pub query: String,
     /// Max matching lines (default 20).
-    #[serde(rename = "maxResults")]
-    pub max_results: Option<f64>, // this has to be float because llms are stupid
+    #[serde(rename = "maxResults", deserialize_with = "deserialize_opt_lenient_usize")]
+    pub max_results: Option<usize>,
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
     /// Output format (default 'content').
@@ -141,6 +140,19 @@ where
     deserializer.deserialize_any(PatternsVisitor)
 }
 
+/// Accept integer or float JSON numbers for `Option<usize>` fields.
+///
+/// Some MCP clients (e.g. Warp) serialize integer parameters as IEEE 754
+/// floats (`30.0` instead of `30`). `serde_json` deserializes both forms as
+/// `f64` transparently, so we delegate to `Option<f64>` and then convert.
+fn deserialize_opt_lenient_usize<'de, D>(d: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    Ok(Option::<f64>::deserialize(d)?.map(|f| f.max(0.0).round() as usize))
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct MultiGrepParams {
     /// Patterns to match (OR logic). Include all naming conventions: snake_case, PascalCase, camelCase.
@@ -149,14 +161,15 @@ pub struct MultiGrepParams {
     /// File constraints (e.g. '*.{ts,tsx} !test/'). ALWAYS provide when possible.
     pub constraints: Option<String>,
     /// Max matching lines (default 20).
-    #[serde(rename = "maxResults")]
-    pub max_results: Option<f64>,
+    #[serde(rename = "maxResults", deserialize_with = "deserialize_opt_lenient_usize")]
+    pub max_results: Option<usize>,
     /// Cursor from previous result.
     pub cursor: Option<String>,
     /// Output format (default 'content').
     pub output_mode: Option<String>,
     /// Context lines before/after each match.
-    pub context: Option<f64>,
+    #[serde(deserialize_with = "deserialize_opt_lenient_usize")]
+    pub context: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -399,7 +412,7 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<FindFilesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20.0).round() as usize; // safe
+        let max_results = params.max_results.unwrap_or(20);
         let query = &params.query;
 
         let page_offset = params
@@ -515,7 +528,7 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<GrepParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20.0) as usize;
+        let max_results = params.max_results.unwrap_or(20);
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
         let parsed = QueryParser::new(AiGrepConfig).parse(&params.query);
@@ -557,8 +570,8 @@ impl FffServer {
 
 impl FffServer {
     fn multi_grep_inner(&self, params: MultiGrepParams) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20.0).round() as usize;
-        let context = params.context.map(|v| v.round() as usize);
+        let max_results = params.max_results.unwrap_or(20);
+        let context = params.context;
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
         let file_offset = params
