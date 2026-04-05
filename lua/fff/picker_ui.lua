@@ -442,6 +442,16 @@ end
 local preview_config = conf.get().preview
 if preview_config then preview.setup(preview_config) end
 
+local function suspend_paste()
+  if not vim.o.paste then return false end
+  vim.o.paste = false
+  return true
+end
+
+local function restore_paste(should_restore)
+  if should_restore then vim.o.paste = true end
+end
+
 M.state = {
   active = false,
   layout = nil,
@@ -491,6 +501,7 @@ M.state = {
   ns_id = nil,
 
   last_status_info = nil,
+  restore_paste = false,
 
   last_preview_file = nil,
   last_preview_location = nil, -- Track last preview location to detect changes
@@ -527,6 +538,9 @@ M.state = {
 function M.create_ui()
   local config = M.state.config
   if not config then return false end
+
+  -- Prompt editing should behave consistently even if the user has :set paste.
+  M.state.restore_paste = suspend_paste()
 
   if not M.state.ns_id then
     M.state.ns_id = vim.api.nvim_create_namespace('fff_picker_status')
@@ -2408,6 +2422,8 @@ function M.close()
   vim.cmd('stopinsert')
   M.state.active = false
 
+  restore_paste(M.state.restore_paste)
+
   combo_renderer.cleanup()
   scrollbar.cleanup()
 
@@ -2475,6 +2491,7 @@ function M.close()
   M.state.grep_regex_fallback_error = nil
   M.state.suggestion_items = nil
   M.state.suggestion_source = nil
+  M.state.restore_paste = false
   M.state.combo_visible = true
   M.state.combo_initial_cursor = nil
   M.reset_history_state()
