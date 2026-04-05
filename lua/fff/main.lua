@@ -55,6 +55,32 @@ function M.find_in_git_root()
   M.find_files_in_dir(git_root)
 end
 
+--- Clear FFF caches
+--- @param scope? string Cache scope: all|frecency|files
+function M.clear_cache(scope)
+  local fuzzy = require('fff.fuzzy')
+  scope = scope or 'all'
+
+  local ok = true
+
+  if scope == 'all' or scope == 'files' then
+    ok = pcall(fuzzy.cleanup_file_picker)
+    if ok then ok = pcall(fuzzy.destroy_db) end
+  end
+
+  if ok and (scope == 'all' or scope == 'frecency') then
+    ok = pcall(fuzzy.destroy_query_db)
+  end
+
+  if not ok then
+    vim.notify('Failed to clear FFF cache', vim.log.levels.ERROR)
+    return false
+  end
+
+  vim.notify('Cleared FFF cache: ' .. scope, vim.log.levels.INFO)
+  return true
+end
+
 --- Trigger rescan of files in the current directory
 function M.scan_files()
   local fuzzy = require('fff.core').ensure_initialized()
