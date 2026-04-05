@@ -1,6 +1,6 @@
 [package]
 name = "fff-search"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 license = "MIT"
 authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
@@ -27,7 +27,7 @@ rayon = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-fff-query-parser = { workspace = true  }
+fff-query-parser = { workspace = true  , version = "0.5.2" }
 
 # External dependencies
 bindet = { workspace = true }
@@ -37,7 +37,7 @@ dirs = { workspace = true }
 git2 = { workspace = true }
 glidesort = { workspace = true }
 globset = { workspace = true }
-fff-grep = { workspace = true  }
+fff-grep = { workspace = true  , version = "0.5.2" }
 aho-corasick = "1"
 memchr = "2"
 heed = { workspace = true }
