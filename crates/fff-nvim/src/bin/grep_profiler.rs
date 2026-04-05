@@ -159,7 +159,7 @@ impl<'a> GrepBench<'a> {
             &parsed,
             &self.options,
             &ContentCacheBudget::default(),
-            self.bigram_index,
+            self.bigram_index.map(|b| b as &dyn fff::BigramQuery),
             None,
             None,
         );

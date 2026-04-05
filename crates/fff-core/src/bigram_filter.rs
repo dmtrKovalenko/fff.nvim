@@ -3,6 +3,19 @@ use std::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
 use ahash::AHashMap;
 
+/// Query interface for bigram-based file filtering.
+///
+/// Implemented by `BigramFilter` (owned) and can be implemented by external
+/// types (e.g. a zero-copy mmap-backed index).
+pub trait BigramQuery {
+    /// AND the posting lists for all query bigrams.
+    /// Returns `None` if the pattern is too short or no bigrams are tracked.
+    fn query(&self, pattern: &[u8]) -> Option<Vec<u64>>;
+
+    /// Whether the index has been populated with at least one file.
+    fn is_ready(&self) -> bool;
+}
+
 /// Maximum number of distinct bigrams tracked in the inverted index.
 /// 95 printable ASCII chars (32..=126) after lowercasing → ~70 distinct → 4900 possible.
 /// We cap at 5000 to cover all printable bigrams with margin.
@@ -269,10 +282,20 @@ fn bitset_and(result: &mut [u64], bitset: &[u64]) {
         .for_each(|(r, b)| *r &= *b);
 }
 
+impl BigramQuery for BigramFilter {
+    fn query(&self, pattern: &[u8]) -> Option<Vec<u64>> {
+        self.query_inner(pattern)
+    }
+
+    fn is_ready(&self) -> bool {
+        self.populated > 0
+    }
+}
+
 impl BigramFilter {
     /// AND the posting lists for all query bigrams (consecutive + skip).
     /// Returns None if no query bigrams are tracked.
-    pub fn query(&self, pattern: &[u8]) -> Option<Vec<u64>> {
+    fn query_inner(&self, pattern: &[u8]) -> Option<Vec<u64>> {
         if pattern.len() < 2 {
             return None;
         }
@@ -358,10 +381,6 @@ impl BigramFilter {
 
     pub fn count_candidates(candidates: &[u64]) -> usize {
         candidates.iter().map(|w| w.count_ones() as usize).sum()
-    }
-
-    pub fn is_ready(&self) -> bool {
-        self.populated > 0
     }
 
     pub fn file_count(&self) -> usize {
@@ -560,5 +579,70 @@ impl BigramOverlay {
         if idx < self.added.len() {
             self.added[idx] = bigrams;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_test_index() -> BigramFilter {
+        let builder = BigramIndexBuilder::new(3);
+        let skip_builder = BigramIndexBuilder::new(3);
+        builder.add_file_content(&skip_builder, 0, b"fn main() { hello_world(); }");
+        builder.add_file_content(&skip_builder, 1, b"struct Foo { bar: i32 }");
+        builder.add_file_content(&skip_builder, 2, b"fn test_hello() { assert!(true); }");
+        builder.compress(None)
+    }
+
+    #[test]
+    fn test_bigram_query_trait_matches_inherent() {
+        let index = build_test_index();
+
+        // Inherent method
+        let inherent_result = index.query_inner(b"hello");
+        // Trait method
+        let trait_result = BigramQuery::query(&index, b"hello");
+
+        assert_eq!(inherent_result, trait_result);
+    }
+
+    #[test]
+    fn test_bigram_query_via_dyn() {
+        let index = build_test_index();
+        let dyn_ref: &dyn BigramQuery = &index;
+
+        assert!(dyn_ref.is_ready());
+
+        let candidates = dyn_ref.query(b"hello").expect("should match");
+        // Files 0 and 2 contain "hello"
+        assert!(BigramFilter::is_candidate(&candidates, 0));
+        assert!(BigramFilter::is_candidate(&candidates, 2));
+        // File 1 does not
+        assert!(!BigramFilter::is_candidate(&candidates, 1));
+    }
+
+    #[test]
+    fn test_bigram_query_not_ready() {
+        let empty = BigramFilter::new(
+            vec![NO_COLUMN; 65536],
+            vec![],
+            0,
+            0,
+            0,
+            0,
+        );
+        assert!(!BigramQuery::is_ready(&empty));
+    }
+
+    #[test]
+    fn test_bigram_query_short_pattern() {
+        let index = build_test_index();
+        let dyn_ref: &dyn BigramQuery = &index;
+
+        // Single byte: too short for bigrams
+        assert!(dyn_ref.query(b"x").is_none());
+        // Empty
+        assert!(dyn_ref.query(b"").is_none());
     }
 }

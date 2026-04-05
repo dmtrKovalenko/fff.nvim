@@ -38,7 +38,7 @@ fn run_grep(files: &[fff::FileItem], index: Option<&fff::BigramFilter>, query: &
 
     for i in 0..iters {
         let t = Instant::now();
-        let result = grep_search(files, &parsed, &options, &budget, index, None, None);
+        let result = grep_search(files, &parsed, &options, &budget, index.map(|b| b as &dyn fff::BigramQuery), None, None);
         let us = t.elapsed().as_micros();
         times_us.push(us);
 
