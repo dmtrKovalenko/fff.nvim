@@ -140,17 +140,14 @@ impl<'a> FileListView<'a> {
 
         for i in 0..self.records.len() {
             let r = &self.records[i];
-            let path_bytes = &self.strings[r.path_offset as usize
-                ..(r.path_offset as usize + r.path_len as usize)];
+            let path_bytes = &self.strings
+                [r.path_offset as usize..(r.path_offset as usize + r.path_len as usize)];
             let name_len = r.name_len() as usize;
 
-            let relative_path =
-                unsafe { String::from_utf8_unchecked(path_bytes.to_vec()) };
+            let relative_path = unsafe { String::from_utf8_unchecked(path_bytes.to_vec()) };
             let file_name = if name_len > 0 && name_len <= path_bytes.len() {
                 unsafe {
-                    String::from_utf8_unchecked(
-                        path_bytes[path_bytes.len() - name_len..].to_vec(),
-                    )
+                    String::from_utf8_unchecked(path_bytes[path_bytes.len() - name_len..].to_vec())
                 }
             } else {
                 relative_path.clone()
@@ -160,9 +157,8 @@ impl<'a> FileListView<'a> {
             full.extend_from_slice(base_bytes);
             full.push(b'/');
             full.extend_from_slice(path_bytes);
-            let full_path = PathBuf::from(unsafe {
-                std::ffi::OsString::from_encoded_bytes_unchecked(full)
-            });
+            let full_path =
+                PathBuf::from(unsafe { std::ffi::OsString::from_encoded_bytes_unchecked(full) });
 
             items.push(FileItem::new_raw(
                 full_path,

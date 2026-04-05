@@ -624,14 +624,7 @@ mod tests {
 
     #[test]
     fn test_bigram_query_not_ready() {
-        let empty = BigramFilter::new(
-            vec![NO_COLUMN; 65536],
-            vec![],
-            0,
-            0,
-            0,
-            0,
-        );
+        let empty = BigramFilter::new(vec![NO_COLUMN; 65536], vec![], 0, 0, 0, 0);
         assert!(!BigramQuery::is_ready(&empty));
     }
 
