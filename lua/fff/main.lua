@@ -216,10 +216,13 @@ function M.clear_cache(scope)
   scope = scope or 'all'
 
   local config = require('fff.conf').get()
+  local fuzzy = require('fff.fuzzy')
   local cleared = {}
 
   -- Clear frecency database
   if scope == 'all' or scope == 'frecency' then
+    -- Properly close LMDB before deleting to avoid memory-mapped file issues
+    pcall(fuzzy.destroy_db)
     local db_path = config.frecency and config.frecency.db_path
         or (vim.fn.stdpath('cache') .. '/fff_nvim')
     if vim.fn.isdirectory(db_path) == 1 then
@@ -230,6 +233,8 @@ function M.clear_cache(scope)
 
   -- Clear query history database
   if scope == 'all' or scope == 'files' then
+    -- Properly close query database before deleting
+    pcall(fuzzy.destroy_query_db)
     local hist_path = config.history and config.history.db_path
         or (vim.fn.stdpath('data') .. '/fff_queries')
     if vim.fn.isdirectory(hist_path) == 1 then
