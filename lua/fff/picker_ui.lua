@@ -1338,8 +1338,11 @@ local function shrink_path(path, max_width)
 end
 
 local function format_file_display(item, max_width)
+  -- vim.json.decode may return Blobs for strings with NUL bytes; coerce to string.
   local filename = item.name
+  if type(filename) ~= 'string' then filename = filename and tostring(filename) or '' end
   local dir_path = item.directory or ''
+  if type(dir_path) ~= 'string' then dir_path = dir_path and tostring(dir_path) or '' end
 
   if dir_path == '' and item.relative_path then
     local parent_dir = vim.fn.fnamemodify(item.relative_path, ':h')
