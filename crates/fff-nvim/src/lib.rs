@@ -5,8 +5,9 @@ use fff::frecency::FrecencyTracker;
 use fff::path_utils::expand_tilde;
 use fff::query_tracker::QueryTracker;
 use fff::{
-    DbHealthChecker, Error, FFFMode, FileSearchConfig, FuzzySearchOptions, PaginationArgs,
-    QueryParser, Score, SearchResult, SharedFrecency, SharedPicker, SharedQueryTracker,
+    DbHealthChecker, Error, FFFMode, FileSearchConfig, FuzzySearchOptions, GrepConfig,
+    PaginationArgs, QueryParser, Score, SearchResult, SharedFrecency, SharedPicker,
+    SharedQueryTracker,
 };
 use mimalloc::MiMalloc;
 use mlua::prelude::*;
@@ -582,6 +583,18 @@ pub fn get_historical_grep_query(_: &Lua, offset: usize) -> LuaResult<Option<Str
         .into_lua_result()
 }
 
+/// Parse a grep query string and return its text portion (with constraints stripped).
+///
+/// Uses the Rust `GrepConfig` parser as the single source of truth, so Lua
+/// code never needs to re-implement constraint detection.
+pub fn parse_grep_query(lua: &Lua, query: String) -> LuaResult<LuaTable> {
+    let parser = QueryParser::new(GrepConfig);
+    let parsed = parser.parse(&query);
+    let table = lua.create_table()?;
+    table.set("grep_text", parsed.grep_text())?;
+    Ok(table)
+}
+
 pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool> {
     // Extract the scan signal Arc WITHOUT holding the read lock, so the
     // scan thread can acquire the write lock to store its results.
@@ -822,6 +835,7 @@ fn create_exports(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set("health_check", lua.create_function(health_check)?)?;
     exports.set("shorten_path", lua.create_function(shorten_path)?)?;
     exports.set("hex_dump", lua.create_function(hex_dump::hex_dump)?)?;
+    exports.set("parse_grep_query", lua.create_function(parse_grep_query)?)?;
 
     Ok(exports)
 }

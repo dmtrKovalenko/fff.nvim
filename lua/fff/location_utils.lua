@@ -134,45 +134,6 @@ function M.highlight_location(bufnr, location, namespace)
   return #extmarks > 0 and extmarks or nil
 end
 
---- Check if a token is a grep constraint (matches Rust GrepConfig parser rules).
---- Keeps highlight stripping aligned with the actual query parser so preview
---- highlights match the grep results.
---- @param token string A single whitespace-delimited query token
---- @return boolean
-function M._is_grep_constraint(token)
-  if token == '' then return false end
-
-  -- Escaped tokens (leading \) are never constraints in the Rust parser
-  if token:sub(1, 1) == '\\' and #token > 1 then return false end
-
-  local first = token:sub(1, 1)
-
-  -- Extension: *.rs, *.{ts,tsx} (but not bare "*" or "*.")
-  if first == '*' then
-    if token == '*' or token == '*.' then return false end
-    if token:match('^%*%.') then return true end
-    return false
-  end
-
-  -- Exclusion: !foo, !*.rs
-  if first == '!' and #token > 1 then return true end
-
-  -- Path segment with leading slash: /src/, /lib
-  if first == '/' then return true end
-
-  -- Path segment with trailing slash: src/, lib/
-  if token:sub(-1) == '/' then return true end
-
-  -- Glob: tokens containing / or brace expansion with letters like {ts,tsx}
-  if token:find('/') then return true end
-  if token:match('{%a.*,%a.*}') then return true end
-
-  -- Type filter: type:rust
-  if token:match('^type:') then return true end
-
-  return false
-end
-
 --- Highlight all occurrences of a grep pattern in the preview buffer.
 --- For plain text and regex modes: highlights every match on all loaded lines
 --- using Lua string.find with the query text.
@@ -217,21 +178,12 @@ function M.highlight_grep_matches(bufnr, location, namespace)
 
   local query = location.grep_query
 
-  -- Extract search text by stripping constraint tokens, matching the Rust
-  -- query parser's GrepConfig rules (extensions, path segments, globs,
-  -- exclusions, type filters). Escaped leading backslash means "not a
-  -- constraint" in the Rust parser, so we keep those tokens too.
-  local parts = vim.split(query, '%s+')
-  local text_parts = {}
-  for _, part in ipairs(parts) do
-    if part ~= '' and not M._is_grep_constraint(part) then
-      -- Strip leading backslash when it escapes a constraint trigger (*, /, !)
-      -- so that e.g. \*.config highlights "*.config" not "\*.config"
-      if #part > 1 and part:sub(1, 1) == '\\' and part:sub(2, 2):match('[%*!/]') then part = part:sub(2) end
-      table.insert(text_parts, part)
-    end
-  end
-  local search_text = table.concat(text_parts, ' ')
+  -- Use the Rust GrepConfig parser as the single source of truth for
+  -- stripping constraint tokens. This avoids duplicating constraint
+  -- detection in Lua, which would break whenever a new token type is added.
+  local fuzzy = require('fff.fuzzy')
+  local parsed = fuzzy.parse_grep_query(query)
+  local search_text = parsed.grep_text
   if search_text == '' then search_text = query end
 
   if not search_text or search_text == '' then return nil end
