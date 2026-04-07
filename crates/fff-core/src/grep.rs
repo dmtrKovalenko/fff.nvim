@@ -6,7 +6,7 @@
 //! termination once enough results are collected.
 
 use crate::{
-    BigramFilter, BigramOverlay,
+    BigramFilter, BigramOverlay, BigramQuery,
     constraints::apply_constraints,
     extract_bigrams,
     sort_buffer::sort_with_buffer,
@@ -1676,7 +1676,7 @@ pub fn grep_search<'a>(
     query: &FFFQuery<'_>,
     options: &GrepSearchOptions,
     budget: &ContentCacheBudget,
-    bigram_index: Option<&BigramFilter>,
+    bigram_index: Option<&dyn BigramQuery>,
     bigram_overlay: Option<&BigramOverlay>,
     is_cancelled: Option<&AtomicBool>,
 ) -> GrepResult<'a> {

@@ -137,6 +137,9 @@ pub mod query_tracker;
 /// Core data types shared across the crate.
 pub mod types;
 
+/// Zero-copy file list view backed by repr(C) records and a string table.
+pub mod file_list_view;
+
 mod ignore;
 /// Thread-safe shared handles for [`FilePicker`], [`FrecencyTracker`],
 /// and [`QueryTracker`].

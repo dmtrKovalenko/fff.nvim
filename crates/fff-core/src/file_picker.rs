@@ -31,7 +31,7 @@
 //! the file index, so read-heavy search workloads rarely contend.
 
 use crate::background_watcher::BackgroundWatcher;
-use crate::bigram_filter::{BigramFilter, BigramIndexBuilder, BigramOverlay};
+use crate::bigram_filter::{BigramFilter, BigramIndexBuilder, BigramOverlay, BigramQuery};
 use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
@@ -630,7 +630,7 @@ impl FilePicker {
             query,
             options,
             self.cache_budget(),
-            self.bigram_index.as_deref(),
+            self.bigram_index.as_deref().map(|b| b as &dyn BigramQuery),
             overlay_guard.as_deref(),
             Some(&self.cancelled),
         )
@@ -648,7 +648,7 @@ impl FilePicker {
             query,
             options,
             self.cache_budget(),
-            self.bigram_index.as_deref(),
+            self.bigram_index.as_deref().map(|b| b as &dyn BigramQuery),
             None,
             Some(&self.cancelled),
         )
