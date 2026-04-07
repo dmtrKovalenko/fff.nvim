@@ -1,7 +1,8 @@
 use crate::db_healthcheck::DbHealthChecker;
 use crate::error::{Error, Result};
 use crate::file_picker::FFFMode;
-use crate::{SharedFrecency, git::is_modified_status};
+use crate::git::is_modified_status;
+use crate::shared::SharedFrecency;
 use heed::{Database, Env, EnvOpenOptions};
 use heed::{
     EnvFlags,
@@ -72,11 +73,28 @@ impl FrecencyTracker {
         env.clear_stale_readers()
             .map_err(Error::DbClearStaleReaders)?;
 
-        // we will open the default unnamed database
-        let mut wtxn = env.write_txn().map_err(Error::DbStartWriteTxn)?;
-        let db = env
-            .create_database(&mut wtxn, None)
-            .map_err(Error::DbCreate)?;
+        // Try read-only open first — avoids blocking on the LMDB write lock
+        // when another process (Neovim, another fff-mcp) already has it.
+        // Only fall back to create_database (which needs a write txn) if the
+        // database doesn't exist yet.
+        let rtxn = env.read_txn().map_err(Error::DbStartReadTxn)?;
+        let maybe_db: Option<Database<Bytes, SerdeBincode<VecDeque<u64>>>> =
+            env.open_database(&rtxn, None).map_err(Error::DbOpen)?;
+
+        drop(rtxn);
+
+        let db = match maybe_db {
+            Some(db) => db,
+            None => {
+                // First time: create the database (requires write lock).
+                let mut wtxn = env.write_txn().map_err(Error::DbStartWriteTxn)?;
+                let db = env
+                    .create_database(&mut wtxn, None)
+                    .map_err(Error::DbCreate)?;
+                wtxn.commit().map_err(Error::DbCommit)?;
+                db
+            }
+        };
 
         Ok(FrecencyTracker {
             db,

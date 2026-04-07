@@ -79,16 +79,16 @@ pub struct FffFileItem {
 impl From<&FileItem> for FffFileItem {
     fn from(item: &FileItem) -> Self {
         FffFileItem {
-            path: cstring_new(&item.path.to_string_lossy()),
-            relative_path: cstring_new(&item.relative_path),
-            file_name: cstring_new(&item.file_name),
+            path: cstring_new(item.path_str()),
+            relative_path: cstring_new(item.relative_path()),
+            file_name: cstring_new(item.file_name()),
             git_status: cstring_new(format_git_status(item.git_status)),
             size: item.size,
             modified: item.modified,
             access_frecency_score: item.access_frecency_score as i64,
             modification_frecency_score: item.modification_frecency_score as i64,
-            total_frecency_score: item.total_frecency_score as i64,
-            is_binary: item.is_binary,
+            total_frecency_score: item.total_frecency_score() as i64,
+            is_binary: item.is_binary(),
         }
     }
 }
@@ -312,9 +312,9 @@ impl FffGrepMatch {
         };
 
         FffGrepMatch {
-            path: cstring_new(&file.path.to_string_lossy()),
-            relative_path: cstring_new(&file.relative_path),
-            file_name: cstring_new(&file.file_name),
+            path: cstring_new(file.path_str()),
+            relative_path: cstring_new(file.relative_path()),
+            file_name: cstring_new(file.file_name()),
             git_status: cstring_new(format_git_status(file.git_status)),
             line_content: cstring_new(&m.line_content),
             match_ranges,
@@ -322,7 +322,7 @@ impl FffGrepMatch {
             context_after,
             size: file.size,
             modified: file.modified,
-            total_frecency_score: file.total_frecency_score as i64,
+            total_frecency_score: file.total_frecency_score() as i64,
             access_frecency_score: file.access_frecency_score as i64,
             modification_frecency_score: file.modification_frecency_score as i64,
             line_number: m.line_number,
@@ -333,7 +333,7 @@ impl FffGrepMatch {
             context_after_count,
             fuzzy_score,
             has_fuzzy_score,
-            is_binary: file.is_binary,
+            is_binary: file.is_binary(),
             is_definition: m.is_definition,
         }
     }

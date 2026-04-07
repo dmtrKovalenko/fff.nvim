@@ -24,8 +24,9 @@
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
 use std::time::Duration;
+
+use fff::shared::SharedQueryTracker;
 
 mod ffi_types;
 
@@ -45,7 +46,7 @@ use ffi_types::{
 struct FffInstance {
     picker: SharedPicker,
     frecency: SharedFrecency,
-    query_tracker: Arc<RwLock<Option<QueryTracker>>>,
+    query_tracker: SharedQueryTracker,
 }
 
 /// Helper to convert C string to Rust &str.
@@ -135,9 +136,9 @@ pub unsafe extern "C" fn fff_create_instance(
     let history_path = unsafe { optional_cstr(history_db_path) }.map(|s| s.to_string());
 
     // Create shared state that background threads will write into.
-    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
-    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
-    let query_tracker: Arc<RwLock<Option<QueryTracker>>> = Arc::new(RwLock::new(None));
+    let shared_picker = SharedPicker::default();
+    let shared_frecency = SharedFrecency::default();
+    let query_tracker = SharedQueryTracker::default();
 
     // Initialize frecency tracker if path is provided
     if let Some(ref frecency_path) = frecency_path {
@@ -147,19 +148,10 @@ pub unsafe extern "C" fn fff_create_instance(
 
         match FrecencyTracker::new(frecency_path, use_unsafe_no_lock) {
             Ok(tracker) => {
-                let mut guard = match shared_frecency.write() {
-                    Ok(g) => g,
-                    Err(e) => {
-                        return FffResult::err(&format!("Failed to acquire frecency lock: {}", e));
-                    }
-                };
-                *guard = Some(tracker);
-                drop(guard);
-                let _ = FrecencyTracker::spawn_gc(
-                    Arc::clone(&shared_frecency),
-                    frecency_path.clone(),
-                    use_unsafe_no_lock,
-                );
+                if let Err(e) = shared_frecency.init(tracker) {
+                    return FffResult::err(&format!("Failed to acquire frecency lock: {}", e));
+                }
+                let _ = shared_frecency.spawn_gc(frecency_path.clone(), use_unsafe_no_lock);
             }
             Err(e) => return FffResult::err(&format!("Failed to init frecency db: {}", e)),
         }
@@ -173,16 +165,9 @@ pub unsafe extern "C" fn fff_create_instance(
 
         match QueryTracker::new(history_path, use_unsafe_no_lock) {
             Ok(tracker) => {
-                let mut guard = match query_tracker.write() {
-                    Ok(g) => g,
-                    Err(e) => {
-                        return FffResult::err(&format!(
-                            "Failed to acquire query tracker lock: {}",
-                            e
-                        ));
-                    }
-                };
-                *guard = Some(tracker);
+                if let Err(e) = query_tracker.init(tracker) {
+                    return FffResult::err(&format!("Failed to acquire query tracker lock: {}", e));
+                }
             }
             Err(e) => return FffResult::err(&format!("Failed to init query tracker db: {}", e)),
         }
@@ -196,11 +181,15 @@ pub unsafe extern "C" fn fff_create_instance(
 
     // Initialize file picker (writes directly into shared_picker)
     if let Err(e) = FilePicker::new_with_shared_state(
-        base_path_str,
-        warmup_mmap_cache,
-        mode,
-        Arc::clone(&shared_picker),
-        Arc::clone(&shared_frecency),
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        fff::FilePickerOptions {
+            base_path: base_path_str,
+            warmup_mmap_cache,
+            mode,
+            cache_budget: None,
+            ..Default::default()
+        },
     ) {
         return FffResult::err(&format!("Failed to init file picker: {}", e));
     }
@@ -403,14 +392,7 @@ pub unsafe extern "C" fn fff_live_grep(
         classify_definitions,
     };
 
-    let result = fff::grep::grep_search(
-        picker.get_files(),
-        &parsed,
-        &options,
-        picker.cache_budget(),
-        None,
-        None,
-    );
+    let result = picker.grep(&parsed, &options);
     let grep_result = FffGrepResult::from_core(&result);
     FffResult::ok_handle(grep_result as *mut c_void)
 }
@@ -517,6 +499,7 @@ pub unsafe extern "C" fn fff_multi_grep(
         constraint_refs,
         &options,
         picker.cache_budget(),
+        None,
     );
     let grep_result = FffGrepResult::from_core(&result);
     FffResult::ok_handle(grep_result as *mut c_void)
@@ -606,7 +589,7 @@ pub unsafe extern "C" fn fff_wait_for_scan(
         Err(e) => return e,
     };
 
-    let completed = FilePicker::wait_for_scan(picker, Duration::from_millis(timeout_ms));
+    let completed = picker.wait_for_scan(Duration::from_millis(timeout_ms));
     FffResult::ok_int(completed as i64)
 }
 
@@ -624,7 +607,9 @@ pub unsafe extern "C" fn fff_wait_for_watcher(
         Err(e) => return e,
     };
 
-    let completed = FilePicker::wait_for_watcher(&inst.picker, Duration::from_millis(timeout_ms));
+    let completed = inst
+        .picker
+        .wait_for_watcher(Duration::from_millis(timeout_ms));
     FffResult::ok_int(completed as i64)
 }
 
@@ -675,11 +660,15 @@ pub unsafe extern "C" fn fff_restart_index(
     drop(guard);
 
     match FilePicker::new_with_shared_state(
-        canonical_path.to_string_lossy().to_string(),
-        warmup_caches,
-        mode,
-        Arc::clone(&inst.picker),
-        Arc::clone(&inst.frecency),
+        inst.picker.clone(),
+        inst.frecency.clone(),
+        fff::FilePickerOptions {
+            base_path: canonical_path.to_string_lossy().to_string(),
+            warmup_mmap_cache: warmup_caches,
+            mode,
+            cache_budget: None,
+            ..Default::default()
+        },
     ) {
         Ok(()) => FffResult::ok_empty(),
         Err(e) => FffResult::err(&format!("Failed to init file picker: {}", e)),
@@ -697,7 +686,7 @@ pub unsafe extern "C" fn fff_refresh_git_status(fff_handle: *mut c_void) -> *mut
         Err(e) => return e,
     };
 
-    match FilePicker::refresh_git_status(&inst.picker, &inst.frecency) {
+    match inst.picker.refresh_git_status(&inst.frecency) {
         Ok(count) => FffResult::ok_int(count as i64),
         Err(e) => FffResult::err(&format!("Failed to refresh git status: {}", e)),
     }

@@ -1,7 +1,6 @@
-use grep_matcher::{LineMatchKind, Matcher};
-
 use crate::{
-    lines::{self, LineStep},
+    lines,
+    matcher::Matcher,
     searcher::{Config, Range, Searcher},
     sink::{Sink, SinkError, SinkFinish, SinkMatch},
 };
@@ -52,17 +51,7 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
     }
 
     pub(crate) fn find(&mut self, slice: &[u8]) -> Result<Option<Range>, S::Error> {
-        match self.matcher.find(slice) {
-            Err(err) => Err(S::Error::error_message(err)),
-            Ok(m) => Ok(m),
-        }
-    }
-
-    fn shortest_match(&mut self, slice: &[u8]) -> Result<Option<usize>, S::Error> {
-        match self.matcher.shortest_match(slice) {
-            Err(err) => Err(S::Error::error_message(err)),
-            Ok(m) => Ok(m),
-        }
+        self.matcher.find(slice).map_err(S::Error::error_message)
     }
 
     pub(crate) fn begin(&mut self) -> Result<bool, S::Error> {
@@ -74,35 +63,8 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
     }
 
     pub(crate) fn match_by_line(&mut self, buf: &[u8]) -> Result<bool, S::Error> {
-        if self.is_line_by_line_fast() {
-            self.match_by_line_fast(buf)
-        } else {
-            self.match_by_line_slow(buf)
-        }
-    }
-
-    fn match_by_line_slow(&mut self, buf: &[u8]) -> Result<bool, S::Error> {
-        debug_assert!(!self.searcher.multi_line_with_matcher(&self.matcher));
-
-        let range = Range::new(self.pos(), buf.len());
-        let mut stepper =
-            LineStep::new(self.config.line_term.as_byte(), range.start(), range.end());
-        while let Some(line) = stepper.next_match(buf) {
-            let matched = {
-                let slice = lines::without_terminator(&buf[line], self.config.line_term);
-                self.shortest_match(slice)?.is_some()
-            };
-            self.set_pos(line.end());
-            if matched && !self.sink_matched(buf, &line)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
-    fn match_by_line_fast(&mut self, buf: &[u8]) -> Result<bool, S::Error> {
         while !buf[self.pos()..].is_empty() {
-            if let Some(line) = self.find_by_line_fast(buf)? {
+            if let Some(line) = self.find_by_line(buf)? {
                 self.set_pos(line.end());
                 if !self.sink_matched(buf, &line)? {
                     return Ok(false);
@@ -116,44 +78,27 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
     }
 
     #[inline(always)]
-    fn find_by_line_fast(&mut self, buf: &[u8]) -> Result<Option<Range>, S::Error> {
-        debug_assert!(!self.searcher.multi_line_with_matcher(&self.matcher));
-        debug_assert!(self.is_line_by_line_fast());
-
+    fn find_by_line(&mut self, buf: &[u8]) -> Result<Option<Range>, S::Error> {
         let mut pos = self.pos();
         while !buf[pos..].is_empty() {
-            match self.matcher.find_candidate_line(&buf[pos..]) {
-                Err(err) => return Err(S::Error::error_message(err)),
-                Ok(None) => return Ok(None),
-                Ok(Some(LineMatchKind::Confirmed(i))) => {
-                    let line = lines::locate(
-                        buf,
-                        self.config.line_term.as_byte(),
-                        Range::zero(i).offset(pos),
-                    );
-                    if line.start() == buf.len() {
-                        pos = buf.len();
-                        continue;
-                    }
-                    return Ok(Some(line));
-                }
-                Ok(Some(LineMatchKind::Candidate(i))) => {
-                    let line = lines::locate(
-                        buf,
-                        self.config.line_term.as_byte(),
-                        Range::zero(i).offset(pos),
-                    );
-                    let slice = lines::without_terminator(&buf[line], self.config.line_term);
-                    if self
-                        .matcher
-                        .is_match(slice)
-                        .map_err(S::Error::error_message)?
-                    {
-                        return Ok(Some(line));
-                    }
-                    pos = line.end();
-                }
+            let mat = match self
+                .matcher
+                .find(&buf[pos..])
+                .map_err(S::Error::error_message)?
+            {
+                None => return Ok(None),
+                Some(m) => m,
+            };
+            let line = lines::locate(
+                buf,
+                self.config.line_term.as_byte(),
+                Range::zero(mat.start()).offset(pos),
+            );
+            if line.start() == buf.len() {
+                pos = buf.len();
+                continue;
             }
+            return Ok(Some(line));
         }
         Ok(None)
     }
@@ -190,23 +135,5 @@ impl<'s, M: Matcher, S: Sink> Core<'s, M, S> {
             *line_number += count;
             self.last_line_counted = upto;
         }
-    }
-
-    fn is_line_by_line_fast(&self) -> bool {
-        debug_assert!(!self.searcher.multi_line_with_matcher(&self.matcher));
-        if let Some(line_term) = self.matcher.line_terminator() {
-            if line_term.as_byte() == b'\x00' {
-                return false;
-            }
-            if line_term == self.config.line_term {
-                return true;
-            }
-        }
-        if let Some(non_matching) = self.matcher.non_matching_bytes()
-            && non_matching.contains(self.config.line_term.as_byte())
-        {
-            return true;
-        }
-        false
     }
 }

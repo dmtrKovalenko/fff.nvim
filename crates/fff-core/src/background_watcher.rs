@@ -1,8 +1,8 @@
 use crate::error::Error;
 use crate::file_picker::{FFFMode, FilePicker};
 use crate::git::GitStatusCache;
+use crate::shared::{SharedFrecency, SharedPicker};
 use crate::sort_buffer::sort_with_buffer;
-use crate::{SharedFrecency, SharedPicker};
 use git2::Repository;
 use notify::event::{AccessKind, AccessMode};
 use notify::{Config, EventKind, RecursiveMode};
@@ -134,7 +134,7 @@ impl BackgroundWatcher {
         // directories like `target/` in rust causes buffer overflow, which drops real source file
         // events. Instead we watch the root non-recursively (for top-level file changes
         // and new directory detection) and each non-ignored subdirectory recursively.
-        let watch_dirs = collect_non_ignored_dirs(&base_path);
+        let watch_dirs = collect_non_ignored_dirs(&base_path, git_workdir.is_some());
 
         if watch_dirs.len() > MAX_SELECTIVE_WATCH_DIRS {
             tracing::warn!(
@@ -333,9 +333,9 @@ fn handle_debounced_events(
                             debug!(
                                 "on_create_or_modify({:?}) -> Some({})",
                                 path,
-                                file.path.display()
+                                file.path_str()
                             );
-                            files_to_update.push(file.path.clone());
+                            files_to_update.push(PathBuf::from(file.path_str()));
                         }
                         None => {
                             error!("on_create_or_modify({:?}) -> None (file not added!)", path);
@@ -416,7 +416,7 @@ fn handle_debounced_events(
     if need_full_git_rescan {
         info!("Triggering full git rescan");
 
-        let result = FilePicker::refresh_git_status(shared_picker, shared_frecency);
+        let result = shared_picker.refresh_git_status(shared_frecency);
         if let Err(e) = result {
             error!("Failed to refresh git status: {:?}", e);
         }
@@ -479,12 +479,19 @@ fn should_include_file(path: &Path, repo: &Option<Repository>) -> bool {
         return false;
     }
 
-    // If there is a git repo, respect its ignore rules.
-    // If there is no repo (or the check fails), include the file.
     match repo.as_ref() {
         Some(repo) => repo.is_path_ignored(path) != Ok(true),
-        None => true,
+        None => {
+            // No git repo — apply basic sanity filters.
+            // Hidden directories are skipped by the watcher setup (hidden(true)),
+            // but events can still arrive for files in known non-code directories.
+            !is_non_code_directory(path)
+        }
     }
+}
+
+fn is_non_code_directory(path: &Path) -> bool {
+    crate::ignore::is_non_code_directory(path)
 }
 
 #[inline]
@@ -572,18 +579,25 @@ fn watch_git_status_paths(debouncer: &mut Debouncer, git_workdir: Option<&PathBu
 /// to respect .gitignore, .ignore, and global gitignore rules. This is used to set up
 /// selective file watching — only non-ignored directories get a recursive watcher,
 /// preventing gitignored directories like `target/` from flooding the OS event buffer.
-fn collect_non_ignored_dirs(base_path: &Path) -> Vec<PathBuf> {
+fn collect_non_ignored_dirs(base_path: &Path, has_git_repo: bool) -> Vec<PathBuf> {
+    use crate::ignore::non_git_repo_overrides;
     use ignore::WalkBuilder;
 
-    let walker = WalkBuilder::new(base_path)
-        .hidden(false)
+    let mut walk_builder = WalkBuilder::new(base_path);
+    walk_builder
+        .hidden(!has_git_repo)
         .git_ignore(true)
         .git_exclude(true)
         .git_global(true)
         .ignore(true)
         .follow_links(false)
-        .max_depth(Some(1))
-        .build();
+        .max_depth(Some(1));
+
+    if !has_git_repo && let Some(overrides) = non_git_repo_overrides(base_path) {
+        walk_builder.overrides(overrides);
+    }
+
+    let walker = walk_builder.build();
 
     let mut dirs = Vec::new();
     for entry in walker {

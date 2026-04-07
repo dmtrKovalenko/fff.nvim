@@ -35,12 +35,17 @@ fn main() {
                     pathdiff::diff_paths(&path, &canonical_path).unwrap_or_else(|| path.clone());
 
                 let relative_path = relative.to_string_lossy().into_owned();
-                let file_name = entry.file_name().to_string_lossy().into_owned();
 
+                let path_string = path.to_string_lossy().into_owned();
+                let relative_start = (path_string.len() - relative_path.len()) as u16;
+                let filename_start = path_string
+                    .rfind('/')
+                    .map(|i| i + 1)
+                    .unwrap_or(relative_start as usize) as u16;
                 files.push(FileItem::new_raw(
-                    path,
-                    relative_path,
-                    file_name,
+                    path_string,
+                    relative_start,
+                    filename_start,
                     entry.metadata().ok().map_or(0, |m| m.len()),
                     0,
                     None,

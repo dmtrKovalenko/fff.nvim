@@ -35,9 +35,9 @@ impl IntoLua for LuaPosition {
 
 fn file_item_into_lua(item: &FileItem, lua: &Lua) -> LuaResult<LuaValue> {
     let table = lua.create_table()?;
-    table.set("path", item.path.to_string_lossy().to_string())?;
-    table.set("relative_path", item.relative_path.clone())?;
-    table.set("name", item.file_name.clone())?;
+    table.set("path", item.path_str())?;
+    table.set("relative_path", item.relative_path())?;
+    table.set("name", item.file_name())?;
     table.set("size", item.size)?;
     table.set("modified", item.modified)?;
     table.set("access_frecency_score", item.access_frecency_score)?;
@@ -45,9 +45,9 @@ fn file_item_into_lua(item: &FileItem, lua: &Lua) -> LuaResult<LuaValue> {
         "modification_frecency_score",
         item.modification_frecency_score,
     )?;
-    table.set("total_frecency_score", item.total_frecency_score)?;
+    table.set("total_frecency_score", item.total_frecency_score())?;
     table.set("git_status", format_git_status(item.git_status))?;
-    table.set("is_binary", item.is_binary)?;
+    table.set("is_binary", item.is_binary())?;
     Ok(LuaValue::Table(table))
 }
 
@@ -122,14 +122,14 @@ impl IntoLua for GrepResultLua<'_> {
 
             // File metadata from the deduplicated files vec
             let file = self.inner.files[m.file_index];
-            item.set("path", file.path.to_string_lossy().to_string())?;
-            item.set("relative_path", file.relative_path.as_str())?;
-            item.set("name", file.file_name.as_str())?;
-            item.set("is_binary", file.is_binary)?;
+            item.set("path", file.path_str())?;
+            item.set("relative_path", file.relative_path())?;
+            item.set("name", file.file_name())?;
+            item.set("is_binary", file.is_binary())?;
             item.set("git_status", format_git_status(file.git_status))?;
             item.set("size", file.size)?;
             item.set("modified", file.modified)?;
-            item.set("total_frecency_score", file.total_frecency_score)?;
+            item.set("total_frecency_score", file.total_frecency_score())?;
             item.set("access_frecency_score", file.access_frecency_score)?;
             item.set(
                 "modification_frecency_score",

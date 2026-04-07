@@ -5,14 +5,20 @@
 //! performance — the most relevant files are searched first, enabling early
 //! termination once enough results are collected.
 
-use crate::constraints::apply_constraints;
-use crate::sort_buffer::sort_with_buffer;
-use crate::types::{BigramFilter, BigramOverlay, ContentCacheBudget, FileItem, extract_bigrams};
+use crate::{
+    BigramFilter, BigramOverlay,
+    constraints::apply_constraints,
+    extract_bigrams,
+    sort_buffer::sort_with_buffer,
+    types::{ContentCacheBudget, FileItem},
+};
 use aho_corasick::AhoCorasick;
-use fff_grep::lines::{self, LineStep};
-use fff_grep::{Searcher, SearcherBuilder, Sink, SinkMatch};
+pub use fff_grep::{
+    Searcher, SearcherBuilder, Sink, SinkMatch,
+    lines::{self, LineStep},
+    matcher::{Match, Matcher, NoError},
+};
 use fff_query_parser::{Constraint, FFFQuery, GrepConfig, QueryParser};
-use grep_matcher::{Match, Matcher, NoCaptures, NoError};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -322,14 +328,23 @@ pub struct GrepSearchOptions {
     pub classify_definitions: bool,
 }
 
+#[derive(Clone, Copy)]
+struct GrepContext<'a, 'b> {
+    total_files: usize,
+    filtered_file_count: usize,
+    budget: &'a ContentCacheBudget,
+    prefilter: Option<&'a memchr::memmem::Finder<'b>>,
+    prefilter_case_insensitive: bool,
+    is_cancelled: Option<&'a AtomicBool>,
+}
+
 /// Lightweight wrapper around `regex::bytes::Regex` implementing the
 /// `grep_matcher::Matcher` trait required by `grep-searcher`.
 ///
 /// When `is_multiline` is false (the common case), we report `\n` as the
 /// line terminator. This enables the **fast** search path in `fff-searcher`:
-/// instead of calling `shortest_match()` on every single line (slow path),
-/// the searcher calls `find_candidate_line()` once on the entire remaining
-/// buffer, letting the regex DFA skip non-matching content in a single pass.
+/// the searcher calls `find()` once on the entire remaining buffer, letting
+/// the regex DFA skip non-matching content in a single pass.
 ///
 /// For multiline patterns we must NOT report a line terminator — the regex
 /// can match across line boundaries, so the searcher needs the `MultiLine`
@@ -340,7 +355,6 @@ struct RegexMatcher<'r> {
 }
 
 impl Matcher for RegexMatcher<'_> {
-    type Captures = NoCaptures;
     type Error = NoError;
 
     #[inline]
@@ -352,16 +366,11 @@ impl Matcher for RegexMatcher<'_> {
     }
 
     #[inline]
-    fn new_captures(&self) -> Result<NoCaptures, NoError> {
-        Ok(NoCaptures::new())
-    }
-
-    #[inline]
-    fn line_terminator(&self) -> Option<grep_matcher::LineTerminator> {
+    fn line_terminator(&self) -> Option<fff_grep::LineTerminator> {
         if self.is_multiline {
             None
         } else {
-            Some(grep_matcher::LineTerminator::byte(b'\n'))
+            Some(fff_grep::LineTerminator::byte(b'\n'))
         }
     }
 }
@@ -384,7 +393,6 @@ struct PlainTextMatcher<'a> {
 }
 
 impl Matcher for PlainTextMatcher<'_> {
-    type Captures = NoCaptures;
     type Error = NoError;
 
     #[inline]
@@ -403,13 +411,8 @@ impl Matcher for PlainTextMatcher<'_> {
     }
 
     #[inline]
-    fn new_captures(&self) -> Result<NoCaptures, NoError> {
-        Ok(NoCaptures::new())
-    }
-
-    #[inline]
-    fn line_terminator(&self) -> Option<grep_matcher::LineTerminator> {
-        Some(grep_matcher::LineTerminator::byte(b'\n'))
+    fn line_terminator(&self) -> Option<fff_grep::LineTerminator> {
+        Some(fff_grep::LineTerminator::byte(b'\n'))
     }
 }
 
@@ -795,7 +798,6 @@ struct AhoCorasickMatcher<'a> {
 }
 
 impl Matcher for AhoCorasickMatcher<'_> {
-    type Captures = NoCaptures;
     type Error = NoError;
 
     #[inline]
@@ -806,13 +808,8 @@ impl Matcher for AhoCorasickMatcher<'_> {
     }
 
     #[inline]
-    fn new_captures(&self) -> Result<NoCaptures, NoError> {
-        Ok(NoCaptures::new())
-    }
-
-    #[inline]
-    fn line_terminator(&self) -> Option<grep_matcher::LineTerminator> {
-        Some(grep_matcher::LineTerminator::byte(b'\n'))
+    fn line_terminator(&self) -> Option<fff_grep::LineTerminator> {
+        Some(fff_grep::LineTerminator::byte(b'\n'))
     }
 }
 
@@ -882,6 +879,7 @@ pub fn multi_grep_search<'a>(
     constraints: &[fff_query_parser::Constraint<'_>],
     options: &GrepSearchOptions,
     budget: &ContentCacheBudget,
+    is_cancelled: Option<&AtomicBool>,
 ) -> GrepResult<'a> {
     let total_files = files.len();
 
@@ -937,10 +935,14 @@ pub fn multi_grep_search<'a>(
     perform_grep(
         &files_to_search,
         options,
-        total_files,
-        filtered_file_count,
-        budget,
-        None, // no memmem prefilter for multi-pattern search
+        &GrepContext {
+            total_files,
+            filtered_file_count,
+            budget,
+            prefilter: None, // no memmem prefilter for multi-pattern search
+            prefilter_case_insensitive: false,
+            is_cancelled,
+        },
         |file_bytes: &[u8], max_matches: usize| {
             let state = SinkState {
                 file_index: 0,
@@ -1046,6 +1048,8 @@ fn char_indices_to_byte_offsets(line: &str, char_indices: &[usize]) -> SmallVec<
     result
 }
 
+use crate::case_insensitive_memmem;
+
 /// Minimum chunk size for paginated search. Must be large enough for good
 /// thread utilization across rayon's pool (~28 threads on modern hardware)
 /// but small enough to allow early termination after few chunks.
@@ -1055,10 +1059,7 @@ const PAGINATED_CHUNK_SIZE: usize = 512;
 fn perform_grep<'a, F>(
     files_to_search: &[&'a FileItem],
     options: &GrepSearchOptions,
-    total_files: usize,
-    filtered_file_count: usize,
-    budget: &ContentCacheBudget,
-    prefilter: Option<&memchr::memmem::Finder<'_>>,
+    ctx: &GrepContext<'_, '_>,
     search_file: F,
 ) -> GrepResult<'a>
 where
@@ -1105,22 +1106,35 @@ where
             .par_iter()
             .enumerate()
             .filter_map(|(local_idx, file)| {
+                if let Some(flag) = ctx.is_cancelled
+                    && flag.load(Ordering::Relaxed)
+                {
+                    budget_exceeded.store(true, Ordering::Relaxed);
+                    return None;
+                }
+
                 if let Some(budget) = time_budget
+                    && all_matches.len() > 1
                     && search_start.elapsed() > budget
                 {
                     budget_exceeded.store(true, Ordering::Relaxed);
                     return None;
                 }
 
-                let content = file.get_content_for_search(budget)?;
+                let content = file.get_content_for_search(ctx.budget)?;
 
                 // Fast whole-file memmem check before entering the
                 // grep-searcher machinery. Skips Vec alloc, Searcher
                 // setup, and line-splitting for files that can't match.
-                if let Some(pf) = prefilter
-                    && pf.find(&content).is_none()
-                {
-                    return None;
+                if let Some(pf) = ctx.prefilter {
+                    let found = if ctx.prefilter_case_insensitive {
+                        case_insensitive_memmem::search_packed_pair(&content, pf.needle())
+                    } else {
+                        pf.find(&content).is_some()
+                    };
+                    if !found {
+                        return None;
+                    }
                 }
 
                 let file_matches = search_file(&content, options.max_matches_per_file);
@@ -1179,8 +1193,8 @@ where
         files_with_matches: result_files.len(),
         files: result_files,
         total_files_searched: files_consumed,
-        total_files,
-        filtered_file_count,
+        total_files: ctx.total_files,
+        filtered_file_count: ctx.filtered_file_count,
         next_file_offset,
         regex_fallback_error: None,
     }
@@ -1273,17 +1287,17 @@ fn prepare_files_to_search<'a>(
     let prefiltered: Vec<&FileItem> = if constraints.is_empty() {
         files
             .iter()
-            .filter(|f| !f.is_binary && f.size > 0 && f.size <= options.max_file_size)
+            .filter(|f| !f.is_binary() && f.size > 0 && f.size <= options.max_file_size)
             .collect()
     } else {
         match apply_constraints(files, constraints) {
             Some(constrained) => constrained
                 .into_iter()
-                .filter(|f| !f.is_binary && f.size > 0 && f.size <= options.max_file_size)
+                .filter(|f| !f.is_binary() && f.size > 0 && f.size <= options.max_file_size)
                 .collect(),
             None => files
                 .iter()
-                .filter(|f| !f.is_binary && f.size > 0 && f.size <= options.max_file_size)
+                .filter(|f| !f.is_binary() && f.size > 0 && f.size <= options.max_file_size)
                 .collect(),
         }
     };
@@ -1296,12 +1310,12 @@ fn prepare_files_to_search<'a>(
     // skipping the O(n log n) sort saves ~200ms per query.
     let needs_sort = sorted_files
         .iter()
-        .any(|f| f.total_frecency_score != 0 || f.modified != 0);
+        .any(|f| f.total_frecency_score() != 0 || f.modified != 0);
 
     if needs_sort {
         sort_with_buffer(&mut sorted_files, |a, b| {
-            b.total_frecency_score
-                .cmp(&a.total_frecency_score)
+            b.total_frecency_score()
+                .cmp(&a.total_frecency_score())
                 .then(b.modified.cmp(&a.modified))
         });
     }
@@ -1350,6 +1364,7 @@ fn prepare_files_to_search<'a>(
 ///   2. Batch all lines through `match_list` (SIMD smith-waterman)
 ///   3. Filter results by `min_score`
 ///   4. Call `match_indices` only on passing lines to get character highlight offsets
+#[allow(clippy::too_many_arguments)]
 fn fuzzy_grep_search<'a>(
     grep_text: &str,
     files_to_search: &[&'a FileItem],
@@ -1358,6 +1373,7 @@ fn fuzzy_grep_search<'a>(
     filtered_file_count: usize,
     case_insensitive: bool,
     budget: &ContentCacheBudget,
+    is_cancelled: Option<&AtomicBool>,
 ) -> GrepResult<'a> {
     // max_typos controls how many *needle* characters can be unmatched.
     // A transposition (e.g. "shcema" → "schema") costs ~1 typo with
@@ -1450,6 +1466,13 @@ fn fuzzy_grep_search<'a>(
         .map_init(
             || matcher.clone(),
             |matcher, (idx, file)| {
+                if let Some(flag) = is_cancelled
+                    && flag.load(Ordering::Relaxed)
+                {
+                    budget_exceeded.store(true, Ordering::Relaxed);
+                    return None;
+                }
+
                 if let Some(budget) = time_budget
                     && search_start.elapsed() > budget
                 {
@@ -1487,8 +1510,8 @@ fn fuzzy_grep_search<'a>(
                 let estimated_lines = (file_bytes.len() / 40).max(64);
                 let mut file_lines: Vec<&str> = Vec::with_capacity(estimated_lines);
                 let mut line_meta: Vec<(u64, u64)> = Vec::with_capacity(estimated_lines);
-                let line_term_lf = grep_matcher::LineTerminator::byte(b'\n');
-                let line_term_cr = grep_matcher::LineTerminator::byte(b'\r');
+                let line_term_lf = fff_grep::LineTerminator::byte(b'\n');
+                let line_term_cr = fff_grep::LineTerminator::byte(b'\r');
 
                 let mut line_number: u64 = 1;
                 while let Some(line_match) = stepper.next_match(file_bytes) {
@@ -1647,14 +1670,15 @@ fn fuzzy_grep_search<'a>(
 ///
 /// When `query` is empty, returns git-modified/untracked files sorted by
 /// frecency for the "welcome state" UI.
-#[tracing::instrument(skip(files, options, budget, bigram_index, bigram_overlay), fields(file_count = files.len()))]
+#[tracing::instrument(skip(files, options, budget, bigram_index, bigram_overlay, is_cancelled), fields(file_count = files.len()))]
 pub fn grep_search<'a>(
     files: &'a [FileItem],
     query: &FFFQuery<'_>,
     options: &GrepSearchOptions,
     budget: &ContentCacheBudget,
     bigram_index: Option<&BigramFilter>,
-    bigram_overlay: Option<&parking_lot::RwLock<BigramOverlay>>,
+    bigram_overlay: Option<&BigramOverlay>,
+    is_cancelled: Option<&AtomicBool>,
 ) -> GrepResult<'a> {
     let total_files = files.len();
 
@@ -1730,6 +1754,7 @@ pub fn grep_search<'a>(
                 filtered_file_count,
                 case_insensitive,
                 budget,
+                is_cancelled,
             );
         }
         GrepMode::Regex => build_regex(&grep_text, options.smart_case)
@@ -1765,8 +1790,7 @@ pub fn grep_search<'a>(
         && idx.is_ready()
         && let Some(mut candidates) = idx.query(effective_pattern.as_bytes())
     {
-        if let Some(overlay_lock) = bigram_overlay {
-            let overlay = overlay_lock.read();
+        if let Some(overlay) = bigram_overlay {
             let pattern_bigrams = extract_bigrams(effective_pattern.as_bytes());
             for (r, t) in candidates.iter_mut().zip(overlay.tombstones().iter()) {
                 *r &= !t;
@@ -1800,7 +1824,7 @@ pub fn grep_search<'a>(
                     let file_idx = base + bit;
                     if file_idx < files.len() {
                         let f = unsafe { files.get_unchecked(file_idx) };
-                        if !f.is_binary && f.size <= options.max_file_size {
+                        if !f.is_binary() && f.size <= options.max_file_size {
                             result.push(f);
                         }
                     }
@@ -1811,12 +1835,12 @@ pub fn grep_search<'a>(
             let total_searchable = files.len();
             let needs_sort = result
                 .iter()
-                .any(|f| f.total_frecency_score != 0 || f.modified != 0);
+                .any(|f| f.total_frecency_score() != 0 || f.modified != 0);
 
             if needs_sort {
                 sort_with_buffer(&mut result, |a, b| {
-                    b.total_frecency_score
-                        .cmp(&a.total_frecency_score)
+                    b.total_frecency_score()
+                        .cmp(&a.total_frecency_score())
                         .then(b.modified.cmp(&a.modified))
                 });
             }
@@ -1875,18 +1899,21 @@ pub fn grep_search<'a>(
     }
     .build();
 
-    // prefilter looks for the literal occurrence if the search is case insensitive
-    let should_perfilter = regex.is_none() && !case_insensitive;
+    let should_prefilter = regex.is_none();
     let mut result = perform_grep(
         &files_to_search,
         options,
-        total_files,
-        filtered_file_count,
-        budget,
-        should_perfilter.then_some(&finder),
+        &GrepContext {
+            total_files,
+            filtered_file_count,
+            budget,
+            prefilter: should_prefilter.then_some(&finder),
+            prefilter_case_insensitive: case_insensitive,
+            is_cancelled,
+        },
         |file_bytes: &[u8], max_matches: usize| {
             let state = SinkState {
-                file_index: 0, // set by run_file_search
+                file_index: 0,
                 matches: Vec::with_capacity(4),
                 max_matches,
                 before_context: options.before_context,
@@ -2084,33 +2111,24 @@ mod tests {
         let meta3 = std::fs::metadata(&file3_path).unwrap();
 
         let files = vec![
-            FileItem::new_raw(
-                file1_path,
-                "grep.rs".to_string(),
-                "grep.rs".to_string(),
-                meta1.len(),
-                0,
-                None,
-                false,
-            ),
-            FileItem::new_raw(
-                file2_path,
-                "matcher.rs".to_string(),
-                "matcher.rs".to_string(),
-                meta2.len(),
-                0,
-                None,
-                false,
-            ),
-            FileItem::new_raw(
-                file3_path,
-                "other.rs".to_string(),
-                "other.rs".to_string(),
-                meta3.len(),
-                0,
-                None,
-                false,
-            ),
+            {
+                let p = file1_path.to_string_lossy().into_owned();
+                let rs = (p.len() - "grep.rs".len()) as u16;
+                let fs = rs;
+                FileItem::new_raw(p, rs, fs, meta1.len(), 0, None, false)
+            },
+            {
+                let p = file2_path.to_string_lossy().into_owned();
+                let rs = (p.len() - "matcher.rs".len()) as u16;
+                let fs = rs;
+                FileItem::new_raw(p, rs, fs, meta2.len(), 0, None, false)
+            },
+            {
+                let p = file3_path.to_string_lossy().into_owned();
+                let rs = (p.len() - "other.rs".len()) as u16;
+                let fs = rs;
+                FileItem::new_raw(p, rs, fs, meta3.len(), 0, None, false)
+            },
         ];
 
         let options = super::GrepSearchOptions {
@@ -2133,6 +2151,7 @@ mod tests {
             &[],
             &options,
             &ContentCacheBudget::unlimited(),
+            None,
         );
 
         // Should find matches from file1 (GrepMode, GrepMatch) and file2 (PlainTextMatcher)
@@ -2170,6 +2189,7 @@ mod tests {
             &[],
             &options,
             &ContentCacheBudget::unlimited(),
+            None,
         );
         assert_eq!(
             result2.matches.len(),
@@ -2178,8 +2198,14 @@ mod tests {
         );
 
         // Test with empty patterns
-        let result3 =
-            super::multi_grep_search(&files, &[], &[], &options, &ContentCacheBudget::unlimited());
+        let result3 = super::multi_grep_search(
+            &files,
+            &[],
+            &[],
+            &options,
+            &ContentCacheBudget::unlimited(),
+            None,
+        );
         assert_eq!(
             result3.matches.len(),
             0,

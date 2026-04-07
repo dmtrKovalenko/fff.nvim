@@ -31,14 +31,19 @@ fn load_files(base_path: &Path) -> Vec<FileItem> {
             let path = entry.path().to_path_buf();
             let relative = pathdiff::diff_paths(&path, base_path).unwrap_or_else(|| path.clone());
             let relative_path = relative.to_string_lossy().into_owned();
-            let file_name = entry.file_name().to_string_lossy().into_owned();
             let size = entry.metadata().ok().map_or(0, |m| m.len());
             let is_binary = detect_binary(&path, size);
 
+            let path_string = path.to_string_lossy().into_owned();
+            let relative_start = (path_string.len() - relative_path.len()) as u16;
+            let filename_start = path_string
+                .rfind('/')
+                .map(|i| i + 1)
+                .unwrap_or(relative_start as usize) as u16;
             files.push(FileItem::new_raw(
-                path,
-                relative_path,
-                file_name,
+                path_string,
+                relative_start,
+                filename_start,
                 size,
                 0,
                 None,
@@ -85,6 +90,7 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         &fff::ContentCacheBudget::zero(),
         None,
         None,
+        None,
     );
     let elapsed = start.elapsed();
 
@@ -109,7 +115,7 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         if m.file_index != current_file_idx {
             current_file_idx = m.file_index;
             let file = &result.files[m.file_index];
-            eprintln!("\n  ┌─ {}", file.relative_path);
+            eprintln!("\n  ┌─ {}", file.relative_path());
         }
 
         // Truncate long lines for display
@@ -180,7 +186,7 @@ fn main() {
     eprintln!("Loading files...");
     let load_start = Instant::now();
     let files = load_files(&canonical);
-    let non_binary = files.iter().filter(|f| !f.is_binary).count();
+    let non_binary = files.iter().filter(|f| !f.is_binary()).count();
     eprintln!(
         "Loaded {} files ({} non-binary) in {:.2}s\n",
         files.len(),

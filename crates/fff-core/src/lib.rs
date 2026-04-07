@@ -21,10 +21,9 @@
 //! ## Shared State
 //!
 //! [`SharedPicker`], [`SharedFrecency`], and [`SharedQueryTracker`] are
-//! `Arc<RwLock<Option<T>>>` type aliases for thread-safe shared access. FFF
-//! is designed for long-running processes that keep the file index in global
-//! state, so these wrappers let background threads (scanner, watcher) share
-//! data with the calling code safely.
+//! newtype wrappers around `Arc<RwLock<Option<T>>>` for thread-safe shared
+//! access. They provide `read()` / `write()` methods with built-in error
+//! conversion and convenience helpers like `wait_for_scan()`.
 //!
 //! ## Quick Start
 //!
@@ -33,49 +32,51 @@
 //! use fff_search::frecency::FrecencyTracker;
 //! use fff_search::query_tracker::QueryTracker;
 //! use fff_search::{
-//!     FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser,
+//!     FFFMode, FilePickerOptions, FuzzySearchOptions, PaginationArgs, QueryParser,
 //!     SharedFrecency, SharedPicker, SharedQueryTracker,
 //! };
 //!
-//! let shared_picker: SharedPicker = Default::default();
-//! let shared_frecency: SharedFrecency = Default::default();
-//! let shared_query_tracker: SharedQueryTracker = Default::default();
+//! let shared_picker = SharedPicker::default();
+//! let shared_frecency = SharedFrecency::default();
+//! let shared_query_tracker = SharedQueryTracker::default();
 //!
 //! let tmp = std::env::temp_dir().join("fff-doctest");
 //! std::fs::create_dir_all(&tmp).unwrap();
 //!
 //! // 1. Optionally initialize frecency and query tracker databases
 //! let frecency = FrecencyTracker::new(tmp.join("frecency"), false)?;
-//! *shared_frecency.write().unwrap() = Some(frecency);
+//! shared_frecency.init(frecency)?;
 //!
 //! let query_tracker = QueryTracker::new(tmp.join("queries"), false)?;
-//! *shared_query_tracker.write().unwrap() = Some(query_tracker);
+//! shared_query_tracker.init(query_tracker)?;
 //!
 //! // 2. Init the file picker (spawns background scan + watcher)
 //! FilePicker::new_with_shared_state(
-//!     ".".into(),
-//!     /* warmup memap caches = */ false,
-//!     FFFMode::Ai, // use AI for ai agents, and Neovim for editors
 //!     shared_picker.clone(),
 //!     shared_frecency.clone(),
+//!     FilePickerOptions {
+//!         base_path: ".".into(),
+//!         mode: FFFMode::Ai,
+//!         ..Default::default()
+//!     },
 //! )?;
 //!
-//! // 3. Wait for scan (in real app you would like to add some tokio flavor here)
-//! let _ = FilePicker::wait_for_scan(&shared_picker, std::time::Duration::from_secs(10));
+//! // 3. Wait for scan
+//! shared_picker.wait_for_scan(std::time::Duration::from_secs(10));
 //!
 //! // 4. Search: lock the picker and query tracker
-//! let picker_lock_guard = shared_picker.read().unwrap();
-//! let picker = picker_lock_guard.as_ref().unwrap();
-//! let query_tracker_lock_guard = shared_query_tracker.read().unwrap();
+//! let picker_guard = shared_picker.read()?;
+//! let picker = picker_guard.as_ref().unwrap();
+//! let qt_guard = shared_query_tracker.read()?;
 //!
-//! // 5. Parse the query and perform fuzzy search with frecency and combo-boost scoring
+//! // 5. Parse the query and perform fuzzy search
 //! let parser = QueryParser::default();
 //! let query = parser.parse("lib.rs");
 //!
 //! let results = FilePicker::fuzzy_search(
 //!     picker.get_files(),
 //!     &query,
-//!     query_tracker_lock_guard.as_ref(),
+//!     qt_guard.as_ref(),
 //!     FuzzySearchOptions {
 //!         max_threads: 0,
 //!         current_file: None,
@@ -85,18 +86,21 @@
 //! );
 //!
 //! assert!(results.total_matched > 0);
-//! assert!(results.items.first().unwrap().path.ends_with("lib.rs"));
+//! assert!(results.items.first().unwrap().as_path().ends_with("lib.rs"));
 //!
 //! let _ = std::fs::remove_dir_all(&tmp);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 mod background_watcher;
+mod bigram_filter;
 mod constraints;
 mod db_healthcheck;
 mod error;
 mod score;
 mod sort_buffer;
+// this is pub only for benchmarks
+pub mod case_insensitive_memmem;
 
 /// Core file picker: filesystem indexing, background watching, and fuzzy search.
 ///
@@ -133,17 +137,12 @@ pub mod query_tracker;
 /// Core data types shared across the crate.
 pub mod types;
 
-use std::sync::{Arc, RwLock};
+mod ignore;
+/// Thread-safe shared handles for [`FilePicker`], [`FrecencyTracker`],
+/// and [`QueryTracker`].
+pub mod shared;
 
-/// Thread-safe shared handle to the [`FilePicker`] instance.
-pub type SharedPicker = Arc<RwLock<Option<FilePicker>>>;
-
-/// Thread-safe shared handle to the [`FrecencyTracker`] instance.
-pub type SharedFrecency = Arc<RwLock<Option<FrecencyTracker>>>;
-
-/// Thread-safe shared handle to the [`QueryTracker`] instance.
-pub type SharedQueryTracker = Arc<RwLock<Option<QueryTracker>>>;
-
+pub use bigram_filter::*;
 pub use db_healthcheck::{DbHealth, DbHealthChecker};
 pub use error::{Error, Result};
 pub use fff_query_parser::*;
@@ -151,4 +150,5 @@ pub use file_picker::*;
 pub use frecency::*;
 pub use grep::*;
 pub use query_tracker::*;
+pub use shared::*;
 pub use types::*;
