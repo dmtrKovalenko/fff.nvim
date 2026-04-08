@@ -21,6 +21,11 @@ pub enum Error {
     AcquirePathCacheLock,
     #[error("Failed to create directory: {0}")]
     CreateDir(#[from] std::io::Error),
+    #[error("Failed to remove database directory {path}: {source}")]
+    RemoveDbDir {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
     #[error("Failed to open frecency database env: {0}")]
     EnvOpen(#[source] heed::Error),
     #[error("Failed to create frecency database: {0}")]

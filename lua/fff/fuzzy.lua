@@ -7,7 +7,7 @@ if not ok then error('Failed to load fff.rust module: ' .. rust_module) end
 
 -- export all functions from the Rust module
 M.init_db = rust_module.init_db
-M.destroy_db = rust_module.destroy_db
+M.destroy_frecency_db = rust_module.destroy_frecency_db
 M.access = rust_module.access
 M.set_provider_items = rust_module.set_provider_items
 M.fuzzy = rust_module.fuzzy

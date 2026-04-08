@@ -55,25 +55,29 @@ function M.find_in_git_root()
   M.find_files_in_dir(git_root)
 end
 
---- Clear FFF caches
+--- Clear FFF caches (both in-memory state and on-disk database files)
 --- @param scope? string Cache scope: all|frecency|files
 function M.clear_cache(scope)
   local fuzzy = require('fff.fuzzy')
-  scope = scope or 'all'
+  if not scope or scope == '' then scope = 'all' end
 
-  local ok = true
+  local errors = {}
 
   if scope == 'all' or scope == 'files' then
-    ok = pcall(fuzzy.cleanup_file_picker)
-    if ok then ok = pcall(fuzzy.destroy_db) end
+    local ok, err = pcall(fuzzy.cleanup_file_picker)
+    if not ok then table.insert(errors, 'cleanup file picker: ' .. tostring(err)) end
   end
 
-  if ok and (scope == 'all' or scope == 'frecency') then
-    ok = pcall(fuzzy.destroy_query_db)
+  if scope == 'all' or scope == 'frecency' then
+    local ok, err = pcall(fuzzy.destroy_frecency_db)
+    if not ok then table.insert(errors, 'destroy frecency db: ' .. tostring(err)) end
+
+    ok, err = pcall(fuzzy.destroy_query_db)
+    if not ok then table.insert(errors, 'destroy query db: ' .. tostring(err)) end
   end
 
-  if not ok then
-    vim.notify('Failed to clear FFF cache', vim.log.levels.ERROR)
+  if #errors > 0 then
+    vim.notify('FFF: errors clearing cache: ' .. table.concat(errors, '; '), vim.log.levels.ERROR)
     return false
   end
 

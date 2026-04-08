@@ -59,15 +59,11 @@ pub fn init_db(
 }
 
 pub fn destroy_frecency_db(_: &Lua, _: ()) -> LuaResult<bool> {
-    let mut frecency = FRECENCY.write().into_lua_result()?;
-    *frecency = None;
-    Ok(true)
+    Ok(FRECENCY.destroy().into_lua_result()?.is_some())
 }
 
 pub fn destroy_query_db(_: &Lua, _: ()) -> LuaResult<bool> {
-    let mut query_tracker = QUERY_TRACKER.write().into_lua_result()?;
-    *query_tracker = None;
-    Ok(true)
+    Ok(QUERY_TRACKER.destroy().into_lua_result()?.is_some())
 }
 
 pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {

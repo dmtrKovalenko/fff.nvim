@@ -61,6 +61,11 @@ impl DbHealthChecker for QueryTracker {
 }
 
 impl QueryTracker {
+    /// Returns the on-disk path of the LMDB environment directory.
+    pub fn db_path(&self) -> &Path {
+        self.env.path()
+    }
+
     pub fn new(db_path: impl AsRef<Path>, use_unsafe_no_lock: bool) -> Result<Self, Error> {
         let db_path = db_path.as_ref();
         fs::create_dir_all(db_path).map_err(Error::CreateDir)?;
