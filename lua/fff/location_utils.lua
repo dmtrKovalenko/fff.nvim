@@ -178,16 +178,13 @@ function M.highlight_grep_matches(bufnr, location, namespace)
 
   local query = location.grep_query
 
-  -- Extract the actual search text from the grep query (strip file constraints like *.rs /src/)
-  -- The query parser uses space-separated tokens; the first non-constraint token is the pattern.
-  -- Simple heuristic: strip tokens that look like constraints (start with *, /, or !)
-  local search_text = query
-  local parts = vim.split(query, '%s+')
-  local text_parts = {}
-  for _, part in ipairs(parts) do
-    if part ~= '' and not part:match('^[%*!/]') and not part:match('^%.') then table.insert(text_parts, part) end
-  end
-  if #text_parts > 0 then search_text = text_parts[1] end
+  -- Use the Rust GrepConfig parser as the single source of truth for
+  -- stripping constraint tokens. This avoids duplicating constraint
+  -- detection in Lua, which would break whenever a new token type is added.
+  local fuzzy = require('fff.fuzzy')
+  local parsed = fuzzy.parse_grep_query(query)
+  local search_text = parsed.grep_text
+  if search_text == '' then search_text = query end
 
   if not search_text or search_text == '' then return nil end
 

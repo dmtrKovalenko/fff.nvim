@@ -48,14 +48,19 @@ fn load_files(base_path: &Path) -> Vec<FileItem> {
             let path = entry.path().to_path_buf();
             let relative = pathdiff::diff_paths(&path, base_path).unwrap_or_else(|| path.clone());
             let relative_path = relative.to_string_lossy().into_owned();
-            let file_name = entry.file_name().to_string_lossy().into_owned();
             let size = entry.metadata().ok().map_or(0, |m| m.len());
             let is_binary = detect_binary(&path, size);
 
+            let path_string = path.to_string_lossy().into_owned();
+            let relative_start = (path_string.len() - relative_path.len()) as u16;
+            let filename_start = path_string
+                .rfind('/')
+                .map(|i| i + 1)
+                .unwrap_or(relative_start as usize) as u16;
             files.push(FileItem::new_raw(
-                path,
-                relative_path,
-                file_name,
+                path_string,
+                relative_start,
+                filename_start,
                 size,
                 0,
                 None,
@@ -217,6 +222,7 @@ fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
         &fff::ContentCacheBudget::zero(),
         None,
         None,
+        None,
     );
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
@@ -242,6 +248,7 @@ fn benchmark_fff_smart_case(files: &[FileItem], parsed: &FFFQuery<'_>) -> (usize
         parsed,
         &options,
         &fff::ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -270,6 +277,7 @@ fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
         &parsed,
         &options,
         &fff::ContentCacheBudget::unlimited(),
+        None,
         None,
         None,
     );
@@ -362,7 +370,7 @@ fn main() {
 
     eprintln!("[1/5] Indexing files...");
     let files = load_files(&canonical);
-    let non_binary = files.iter().filter(|f| !f.is_binary).count();
+    let non_binary = files.iter().filter(|f| !f.is_binary()).count();
     eprintln!("  {} files ({} searchable)\n", files.len(), non_binary);
 
     eprintln!("[2/5] Warming caches (fff mmap + OS page cache)...");

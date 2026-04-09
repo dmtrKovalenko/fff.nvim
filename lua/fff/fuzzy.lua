@@ -46,6 +46,7 @@ M.get_git_root = rust_module.get_git_root
 
 -- Grep functions
 M.live_grep = rust_module.live_grep
+M.parse_grep_query = rust_module.parse_grep_query
 
 -- Utility functions
 M.health_check = rust_module.health_check

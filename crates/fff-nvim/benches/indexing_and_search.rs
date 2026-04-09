@@ -2,11 +2,10 @@ use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_ma
 use fff::file_picker::{FFFMode, FilePicker};
 use fff::types::{ContentCacheBudget, FileItem, PaginationArgs};
 use fff::{
-    FuzzySearchOptions, GrepMode, GrepSearchOptions, QueryParser, SharedFrecency, SharedPicker,
-    build_bigram_index, grep,
+    FilePickerOptions, FuzzySearchOptions, GrepMode, GrepSearchOptions, QueryParser,
+    SharedFrecency, SharedPicker, build_bigram_index, grep,
 };
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 /// Initialize tracing to output to console
@@ -30,11 +29,14 @@ fn init_file_picker_internal(
     shared_frecency: &SharedFrecency,
 ) -> Result<(), String> {
     FilePicker::new_with_shared_state(
-        path.to_string(),
-        false,
-        FFFMode::Neovim,
-        Arc::clone(shared_picker),
-        Arc::clone(shared_frecency),
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        FilePickerOptions {
+            base_path: path.to_string(),
+            warmup_mmap_cache: false,
+            mode: FFFMode::Neovim,
+            ..Default::default()
+        },
     )
     .map_err(|e| format!("Failed to create FilePicker: {:?}", e))
 }
@@ -136,8 +138,8 @@ fn setup_once() -> Result<(Vec<FileItem>, SharedPicker, SharedFrecency), String>
         .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
     eprintln!("  Path: {:?}", canonical_path);
 
-    let shared_picker: SharedPicker = Arc::new(RwLock::new(None));
-    let shared_frecency: SharedFrecency = Arc::new(RwLock::new(None));
+    let shared_picker = SharedPicker::default();
+    let shared_frecency = SharedFrecency::default();
 
     init_file_picker_internal(
         &canonical_path.to_string_lossy(),
@@ -182,8 +184,8 @@ fn bench_indexing(c: &mut Criterion) {
 
     group.bench_function("index_big_repo", |b| {
         b.iter(|| {
-            let sp: SharedPicker = Arc::new(RwLock::new(None));
-            let sf: SharedFrecency = Arc::new(RwLock::new(None));
+            let sp = SharedPicker::default();
+            let sf = SharedFrecency::default();
 
             let start = std::time::Instant::now();
             init_file_picker_internal(black_box(&canonical_path.to_string_lossy()), &sp, &sf)
@@ -684,13 +686,12 @@ fn bench_grep_search(c: &mut Criterion) {
 
     eprintln!("  Building bigram index for {} files...", files.len());
     let start = std::time::Instant::now();
-    let bigram_index = build_bigram_index(&files, &budget);
+    let (bigram_filter, _overflow_indices) = build_bigram_index(&files, &budget);
     eprintln!(
         "  Bigram index built in {:.2}s ({} columns)",
         start.elapsed().as_secs_f64(),
-        bigram_index.columns_used(),
+        bigram_filter.columns_used(),
     );
-    let bigram_index = std::sync::Arc::new(bigram_index);
 
     let mut group = c.benchmark_group("grep");
     group.sample_size(50);
@@ -727,7 +728,8 @@ fn bench_grep_search(c: &mut Criterion) {
                     black_box(&parsed),
                     black_box(&options),
                     &budget,
-                    Some(&bigram_index),
+                    Some(&bigram_filter),
+                    None,
                     None,
                 );
                 result.matches.len()
@@ -742,6 +744,7 @@ fn bench_grep_search(c: &mut Criterion) {
                     black_box(&parsed),
                     black_box(&options),
                     &budget,
+                    None,
                     None,
                     None,
                 );

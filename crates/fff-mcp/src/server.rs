@@ -8,6 +8,8 @@ use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::cursor::CursorStore;
+use crate::output::{GrepFormatter, OutputMode, file_suffix};
 use fff::file_picker::FilePicker;
 use fff::grep::{self, GrepMode, GrepSearchOptions, has_regex_metacharacters};
 use fff::types::{FileItem, PaginationArgs};
@@ -17,9 +19,6 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{ServerHandler, schemars, tool, tool_handler, tool_router};
-
-use crate::cursor::CursorStore;
-use crate::output::{GrepFormatter, OutputMode, file_suffix};
 
 /// Strip common delimiters and lowercase for fuzzy fallback queries.
 fn cleanup_fuzzy_query(s: &str) -> String {
@@ -76,7 +75,8 @@ pub struct FindFilesParams {
     pub query: String,
     /// Max results (default 20).
     #[serde(rename = "maxResults")]
-    pub max_results: Option<usize>,
+    // this has to be float because llms are stupid
+    pub max_results: Option<f64>,
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
 }
@@ -88,7 +88,7 @@ pub struct GrepParams {
     pub query: String,
     /// Max matching lines (default 20).
     #[serde(rename = "maxResults")]
-    pub max_results: Option<usize>,
+    pub max_results: Option<f64>, // this has to be float because llms are stupid
     /// Cursor from previous result. Only use if previous results weren't sufficient.
     pub cursor: Option<String>,
     /// Output format (default 'content').
@@ -150,13 +150,13 @@ pub struct MultiGrepParams {
     pub constraints: Option<String>,
     /// Max matching lines (default 20).
     #[serde(rename = "maxResults")]
-    pub max_results: Option<usize>,
+    pub max_results: Option<f64>,
     /// Cursor from previous result.
     pub cursor: Option<String>,
     /// Output format (default 'content').
     pub output_mode: Option<String>,
     /// Context lines before/after each match.
-    pub context: Option<usize>,
+    pub context: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -249,15 +249,9 @@ impl FffServer {
             .as_ref()
             .ok_or_else(|| ErrorData::internal_error("File picker not initialized", None))?;
 
-        let files = picker.get_files();
-        let budget = picker.cache_budget();
-        let bigram_idx = picker.bigram_index.as_deref();
-        let bigram_overlay = picker.bigram_overlay.as_deref();
-
         let parser = QueryParser::new(AiGrepConfig);
         let parsed = parser.parse(query);
-        let result =
-            grep::grep_search(files, &parsed, &options, budget, bigram_idx, bigram_overlay);
+        let result = picker.grep(&parsed, &options);
 
         if result.matches.is_empty() && file_offset == 0 {
             // Auto-retry: try broadening multi-word queries by dropping first non-constraint word
@@ -280,14 +274,7 @@ impl FffServer {
                     };
 
                     let (retry_options, _) = make_grep_options(output_mode, retry_mode, 0, context);
-                    let retry_result = grep::grep_search(
-                        files,
-                        &rest_parsed,
-                        &retry_options,
-                        budget,
-                        bigram_idx,
-                        bigram_overlay,
-                    );
+                    let retry_result = picker.grep(&rest_parsed, &retry_options);
 
                     if !retry_result.matches.is_empty() && retry_result.matches.len() <= 10 {
                         let mut cs = self.lock_cursors()?;
@@ -315,8 +302,7 @@ impl FffServer {
             let fuzzy_query = cleanup_fuzzy_query(query);
             let (fuzzy_options, _) = make_grep_options(output_mode, GrepMode::Fuzzy, 0, Some(0));
             let fuzzy_parsed = parser.parse(&fuzzy_query);
-            let fuzzy_result =
-                grep::grep_search(files, &fuzzy_parsed, &fuzzy_options, budget, None, None);
+            let fuzzy_result = picker.grep(&fuzzy_parsed, &fuzzy_options);
 
             if !fuzzy_result.matches.is_empty() {
                 let mut lines: Vec<String> = Vec::new();
@@ -327,8 +313,8 @@ impl FffServer {
                 let mut current_file = "";
                 for m in fuzzy_result.matches.iter().take(3) {
                     let file = fuzzy_result.files[m.file_index];
-                    if file.relative_path.as_str() != current_file {
-                        current_file = &file.relative_path;
+                    if file.relative_path() != current_file {
+                        current_file = file.relative_path();
                         lines.push(current_file.to_string());
                     }
                     lines.push(format!(" {}: {}", m.line_number, m.line_content));
@@ -353,7 +339,8 @@ impl FffServer {
                         limit: 1,
                     },
                 };
-                let file_result = FilePicker::fuzzy_search(files, &file_query, None, file_opts);
+                let file_result =
+                    FilePicker::fuzzy_search(picker.get_files(), &file_query, None, file_opts);
                 if let (Some(top), Some(score)) =
                     (file_result.items.first(), file_result.scores.first())
                 {
@@ -362,7 +349,7 @@ impl FffServer {
                     if score.base_score > query_len * 10 {
                         return Ok(CallToolResult::success(vec![Content::text(format!(
                             "0 content matches. But there is a relevant file path: {}",
-                            top.relative_path
+                            top.relative_path()
                         ))]));
                     }
                 }
@@ -412,7 +399,7 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<FindFilesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20);
+        let max_results = params.max_results.unwrap_or(20.0).round() as usize; // safe
         let query = &params.query;
 
         let page_offset = params
@@ -483,11 +470,14 @@ impl FffServer {
 
         if page_offset == 0 {
             if is_exact_match {
-                lines.push(format!("→ Read {} (exact match!)", top_item.relative_path));
+                lines.push(format!(
+                    "→ Read {} (exact match!)",
+                    top_item.relative_path()
+                ));
             } else if scores.len() < 2 || scores[0].total > scores[1].total.saturating_mul(2) {
                 lines.push(format!(
                     "→ Read {} (best match — Read this file directly)",
-                    top_item.relative_path
+                    top_item.relative_path()
                 ));
             }
         }
@@ -502,8 +492,8 @@ impl FffServer {
         for item in &items {
             lines.push(format!(
                 "{}{}",
-                item.relative_path,
-                file_suffix(item.git_status, item.total_frecency_score)
+                item.relative_path(),
+                file_suffix(item.git_status, item.total_frecency_score())
             ));
         }
 
@@ -528,7 +518,7 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<GrepParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20);
+        let max_results = params.max_results.unwrap_or(20.0) as usize;
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
         let parsed = QueryParser::new(AiGrepConfig).parse(&params.query);
@@ -570,7 +560,8 @@ impl FffServer {
 
 impl FffServer {
     fn multi_grep_inner(&self, params: MultiGrepParams) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20);
+        let max_results = params.max_results.unwrap_or(20.0).round() as usize;
+        let context = params.context.map(|v| v.round() as usize);
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
         let file_offset = params
@@ -579,12 +570,8 @@ impl FffServer {
             .and_then(|id| self.cursor_store.lock().ok()?.get(id))
             .unwrap_or(0);
 
-        let (options, auto_expand) = make_grep_options(
-            output_mode,
-            GrepMode::PlainText,
-            file_offset,
-            params.context,
-        );
+        let (options, auto_expand) =
+            make_grep_options(output_mode, GrepMode::PlainText, file_offset, context);
 
         let ctx_lines = options.before_context;
         let constraint_query = params.constraints.as_deref().unwrap_or("");
@@ -603,13 +590,14 @@ impl FffServer {
 
         let files = picker.get_files();
         let budget = picker.cache_budget();
-        let result = grep::multi_grep_search(files, &patterns_refs, constraints, &options, budget);
+        let result =
+            grep::multi_grep_search(files, &patterns_refs, constraints, &options, budget, None);
         let file_refs: Vec<&FileItem> = result.files.to_vec();
 
         if result.matches.is_empty() && file_offset == 0 {
             // Fallback: try individual patterns with plain grep
             let (fallback_options, _) =
-                make_grep_options(output_mode, GrepMode::PlainText, 0, params.context);
+                make_grep_options(output_mode, GrepMode::PlainText, 0, context);
 
             let fallback_options = GrepSearchOptions {
                 time_budget_ms: 3000,
@@ -626,7 +614,7 @@ impl FffServer {
 
                 let parsed = parser.parse(&full_query);
                 let fb_result =
-                    grep::grep_search(files, &parsed, &fallback_options, budget, None, None);
+                    grep::grep_search(files, &parsed, &fallback_options, budget, None, None, None);
 
                 if !fb_result.matches.is_empty() {
                     let fb_file_refs: Vec<&FileItem> = fb_result.files.to_vec();
