@@ -6,6 +6,28 @@ local rust = require('fff.rust')
 
 local M = {}
 
+-- Preview buffers are scratch buffers. Detect the file's language and attach
+-- highlighting directly, but keep buffer filetype empty to avoid ftplugin and
+-- LSP side effects that are meant for real editing buffers.
+local function attach_preview_highlighter(bufnr, filetype)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
+
+  pcall(vim.treesitter.stop, bufnr)
+  vim.api.nvim_set_option_value('filetype', '', { buf = bufnr })
+  vim.api.nvim_set_option_value('syntax', '', { buf = bufnr })
+
+  if not filetype or filetype == '' then return end
+
+  local lang_ok, lang = pcall(vim.treesitter.language.get_lang, filetype)
+  if not lang_ok or not lang then lang = filetype end
+
+  if pcall(vim.treesitter.language.add, lang) then
+    pcall(vim.treesitter.start, bufnr, lang)
+  else
+    vim.api.nvim_set_option_value('syntax', filetype, { buf = bufnr })
+  end
+end
+
 local function set_buffer_lines(bufnr, lines)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return end
 
@@ -274,7 +296,7 @@ local function link_buffer_content(source_bufnr, target_bufnr)
   set_buffer_lines(target_bufnr, lines)
 
   local source_ft = vim.api.nvim_get_option_value('filetype', { buf = source_bufnr })
-  if source_ft ~= '' then vim.api.nvim_set_option_value('filetype', source_ft, { buf = target_bufnr }) end
+  if source_ft ~= '' then attach_preview_highlighter(target_bufnr, source_ft) end
 
   M.state.has_more_content = false
   M.state.total_file_lines = #lines
@@ -532,7 +554,7 @@ function M.preview_file(file_path, bufnr)
       set_buffer_lines(bufnr, content)
 
       local file_config = M.get_file_config(file_path)
-      vim.api.nvim_set_option_value('filetype', info.filetype, { buf = bufnr })
+      attach_preview_highlighter(bufnr, info.filetype)
       vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
       vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
       vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
@@ -651,7 +673,7 @@ function M.preview_binary_file(file_path, bufnr)
   end
 
   set_buffer_lines(bufnr, lines)
-  vim.api.nvim_set_option_value('filetype', 'text', { buf = bufnr })
+  attach_preview_highlighter(bufnr, 'text')
   vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
   vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
 
@@ -838,11 +860,8 @@ function M.clear_buffer(bufnr)
   cleanup_file_operation()
   M.clear_preview_visual_state(bufnr)
 
-  pcall(vim.treesitter.stop, bufnr)
-
   vim.api.nvim_set_option_value('modifiable', true, { buf = bufnr })
-  vim.api.nvim_set_option_value('filetype', '', { buf = bufnr })
-  vim.api.nvim_set_option_value('syntax', '', { buf = bufnr })
+  attach_preview_highlighter(bufnr, '')
   vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
 
   set_buffer_lines(bufnr, {})

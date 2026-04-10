@@ -54,6 +54,7 @@ local M = {}
 --- @field smart_case boolean
 --- @field time_budget_ms number
 --- @field modes string[]
+--- @field trim_whitespace boolean
 
 --- @alias FffSelectAction 'edit' | 'split' | 'vsplit' | 'tabedit'
 
@@ -389,6 +390,7 @@ local function init()
       smart_case = true, -- Case-insensitive unless query has uppercase
       time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
       modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
+      trim_whitespace = false, -- Strip leading whitespace from matched lines (useful for cleaner display)
     },
   }
 

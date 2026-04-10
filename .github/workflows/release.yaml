@@ -24,46 +24,46 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             zigbuild_target: x86_64-unknown-linux-gnu.2.17
-            artifact_name: target/x86_64-unknown-linux-gnu/release/libfff_nvim.so
+            artifact_name: target/x86_64-unknown-linux-gnu/ci/libfff_nvim.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             zigbuild_target: aarch64-unknown-linux-gnu.2.17
-            artifact_name: target/aarch64-unknown-linux-gnu/release/libfff_nvim.so
+            artifact_name: target/aarch64-unknown-linux-gnu/ci/libfff_nvim.so
             ext: so
           # Musl (statically linked)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            artifact_name: target/x86_64-unknown-linux-musl/release/libfff_nvim.so
+            artifact_name: target/x86_64-unknown-linux-musl/ci/libfff_nvim.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            artifact_name: target/aarch64-unknown-linux-musl/release/libfff_nvim.so
+            artifact_name: target/aarch64-unknown-linux-musl/ci/libfff_nvim.so
             ext: so
 
           ## Android (Termux)
           - os: ubuntu-latest
             target: aarch64-linux-android
-            artifact_name: target/aarch64-linux-android/release/libfff_nvim.so
+            artifact_name: target/aarch64-linux-android/ci/libfff_nvim.so
             ext: so
 
           ## macOS builds
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: target/x86_64-apple-darwin/release/libfff_nvim.dylib
+            artifact_name: target/x86_64-apple-darwin/ci/libfff_nvim.dylib
             ext: dylib
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: target/aarch64-apple-darwin/release/libfff_nvim.dylib
+            artifact_name: target/aarch64-apple-darwin/ci/libfff_nvim.dylib
             ext: dylib
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: target/x86_64-pc-windows-msvc/release/fff_nvim.dll
+            artifact_name: target/x86_64-pc-windows-msvc/ci/fff_nvim.dll
             ext: dll
           - os: windows-latest
             target: aarch64-pc-windows-msvc
-            artifact_name: target/aarch64-pc-windows-msvc/release/fff_nvim.dll
+            artifact_name: target/aarch64-pc-windows-msvc/ci/fff_nvim.dll
             ext: dll
 
     steps:
@@ -86,7 +86,7 @@ jobs:
       - name: Build for Linux
         if: contains(matrix.os, 'ubuntu') && !contains(matrix.target, 'android')
         run: |
-          cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-nvim --features zlob
+          cargo zigbuild --profile ci --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-nvim --features zlob
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for Android (Termux)
@@ -100,13 +100,13 @@ jobs:
           export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android24-clang"
 
-          cargo build --release --target ${{ matrix.target }} -p fff-nvim --features zlob
+          cargo build --profile ci --target ${{ matrix.target }} -p fff-nvim --features zlob
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for macOS
         if: contains(matrix.os, 'macos')
         run: |
-          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-nvim --features zlob
+          MACOSX_DEPLOYMENT_TARGET="13" cargo build --profile ci --target ${{ matrix.target }} -p fff-nvim --features zlob
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Ad-hoc sign macOS binary
@@ -117,7 +117,7 @@ jobs:
         if: contains(matrix.os, 'windows')
         shell: bash
         run: |
-          cargo build --release --target ${{ matrix.target }} -p fff-nvim --features zlob
+          cargo build --profile ci --target ${{ matrix.target }} -p fff-nvim --features zlob
           mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Upload artifacts
@@ -138,26 +138,26 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             zigbuild_target: x86_64-unknown-linux-gnu.2.17
-            artifact_name: target/x86_64-unknown-linux-gnu/release/libfff_c.so
+            artifact_name: target/x86_64-unknown-linux-gnu/ci/libfff_c.so
             npm_package: fff-bin-linux-x64-gnu
             lib_filename: libfff_c.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             zigbuild_target: aarch64-unknown-linux-gnu.2.17
-            artifact_name: target/aarch64-unknown-linux-gnu/release/libfff_c.so
+            artifact_name: target/aarch64-unknown-linux-gnu/ci/libfff_c.so
             npm_package: fff-bin-linux-arm64-gnu
             lib_filename: libfff_c.so
             ext: so
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            artifact_name: target/x86_64-unknown-linux-musl/release/libfff_c.so
+            artifact_name: target/x86_64-unknown-linux-musl/ci/libfff_c.so
             npm_package: fff-bin-linux-x64-musl
             lib_filename: libfff_c.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            artifact_name: target/aarch64-unknown-linux-musl/release/libfff_c.so
+            artifact_name: target/aarch64-unknown-linux-musl/ci/libfff_c.so
             npm_package: fff-bin-linux-arm64-musl
             lib_filename: libfff_c.so
             ext: so
@@ -165,20 +165,20 @@ jobs:
           ## Android (Termux)
           - os: ubuntu-latest
             target: aarch64-linux-android
-            artifact_name: target/aarch64-linux-android/release/libfff_c.so
+            artifact_name: target/aarch64-linux-android/ci/libfff_c.so
             lib_filename: libfff_c.so
             ext: so
 
           ## macOS builds
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: target/x86_64-apple-darwin/release/libfff_c.dylib
+            artifact_name: target/x86_64-apple-darwin/ci/libfff_c.dylib
             npm_package: fff-bin-darwin-x64
             lib_filename: libfff_c.dylib
             ext: dylib
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: target/aarch64-apple-darwin/release/libfff_c.dylib
+            artifact_name: target/aarch64-apple-darwin/ci/libfff_c.dylib
             npm_package: fff-bin-darwin-arm64
             lib_filename: libfff_c.dylib
             ext: dylib
@@ -186,13 +186,13 @@ jobs:
           ## Windows builds
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: target/x86_64-pc-windows-msvc/release/fff_c.dll
+            artifact_name: target/x86_64-pc-windows-msvc/ci/fff_c.dll
             npm_package: fff-bin-win32-x64
             lib_filename: fff_c.dll
             ext: dll
           - os: windows-latest
             target: aarch64-pc-windows-msvc
-            artifact_name: target/aarch64-pc-windows-msvc/release/fff_c.dll
+            artifact_name: target/aarch64-pc-windows-msvc/ci/fff_c.dll
             npm_package: fff-bin-win32-arm64
             lib_filename: fff_c.dll
             ext: dll
@@ -217,7 +217,7 @@ jobs:
       - name: Build for Linux
         if: contains(matrix.os, 'ubuntu') && !contains(matrix.target, 'android')
         run: |
-          cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-c --features zlob
+          cargo zigbuild --profile ci --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-c --features zlob
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for Android (Termux)
@@ -230,13 +230,13 @@ jobs:
           export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android24-clang"
 
-          cargo build --release --target ${{ matrix.target }} -p fff-c --features zlob
+          cargo build --profile ci --target ${{ matrix.target }} -p fff-c --features zlob
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Build for macOS
         if: contains(matrix.os, 'macos')
         run: |
-          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-c --features zlob
+          MACOSX_DEPLOYMENT_TARGET="13" cargo build --profile ci --target ${{ matrix.target }} -p fff-c --features zlob
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Ad-hoc sign macOS binary
@@ -247,7 +247,7 @@ jobs:
         if: contains(matrix.os, 'windows')
         shell: bash
         run: |
-          cargo build --release --target ${{ matrix.target }} -p fff-c --features zlob
+          cargo build --profile ci --target ${{ matrix.target }} -p fff-c --features zlob
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
       - name: Prepare npm package
@@ -282,33 +282,33 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             zigbuild_target: x86_64-unknown-linux-gnu.2.17
-            artifact_name: target/x86_64-unknown-linux-gnu/release/fff-mcp
+            artifact_name: target/x86_64-unknown-linux-gnu/ci/fff-mcp
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             zigbuild_target: aarch64-unknown-linux-gnu.2.17
-            artifact_name: target/aarch64-unknown-linux-gnu/release/fff-mcp
+            artifact_name: target/aarch64-unknown-linux-gnu/ci/fff-mcp
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            artifact_name: target/x86_64-unknown-linux-musl/release/fff-mcp
+            artifact_name: target/x86_64-unknown-linux-musl/ci/fff-mcp
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            artifact_name: target/aarch64-unknown-linux-musl/release/fff-mcp
+            artifact_name: target/aarch64-unknown-linux-musl/ci/fff-mcp
 
           ## macOS builds
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: target/x86_64-apple-darwin/release/fff-mcp
+            artifact_name: target/x86_64-apple-darwin/ci/fff-mcp
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: target/aarch64-apple-darwin/release/fff-mcp
+            artifact_name: target/aarch64-apple-darwin/ci/fff-mcp
 
           ## Windows builds
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: target/x86_64-pc-windows-msvc/release/fff-mcp.exe
+            artifact_name: target/x86_64-pc-windows-msvc/ci/fff-mcp.exe
           - os: windows-latest
             target: aarch64-pc-windows-msvc
-            artifact_name: target/aarch64-pc-windows-msvc/release/fff-mcp.exe
+            artifact_name: target/aarch64-pc-windows-msvc/ci/fff-mcp.exe
 
     steps:
       - uses: actions/checkout@v5
@@ -330,13 +330,13 @@ jobs:
       - name: Build for Linux
         if: contains(matrix.os, 'ubuntu')
         run: |
-          cargo zigbuild --release --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-mcp --features zlob
+          cargo zigbuild --profile ci --target ${{ matrix.zigbuild_target || matrix.target }} -p fff-mcp --features zlob
           cp "${{ matrix.artifact_name }}" "fff-mcp-${{ matrix.target }}"
 
       - name: Build for macOS
         if: contains(matrix.os, 'macos')
         run: |
-          MACOSX_DEPLOYMENT_TARGET="13" cargo build --release --target ${{ matrix.target }} -p fff-mcp --features zlob
+          MACOSX_DEPLOYMENT_TARGET="13" cargo build --profile ci --target ${{ matrix.target }} -p fff-mcp --features zlob
           cp "${{ matrix.artifact_name }}" "fff-mcp-${{ matrix.target }}"
 
       - name: Ad-hoc sign macOS binary
@@ -347,7 +347,7 @@ jobs:
         if: contains(matrix.os, 'windows')
         shell: bash
         run: |
-          cargo build --release --target ${{ matrix.target }} -p fff-mcp --features zlob
+          cargo build --profile ci --target ${{ matrix.target }} -p fff-mcp --features zlob
           cp "${{ matrix.artifact_name }}" "fff-mcp-${{ matrix.target }}.exe"
 
       - name: Upload artifact

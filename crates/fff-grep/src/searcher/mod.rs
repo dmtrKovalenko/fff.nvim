@@ -1,6 +1,5 @@
-use grep_matcher::{LineTerminator, Match, Matcher};
-
 use crate::{
+    matcher::{LineTerminator, Match, Matcher},
     searcher::glue::{MultiLine, SliceByLine},
     sink::{Sink, SinkError},
 };
@@ -187,11 +186,6 @@ impl Searcher {
         }
         if let Some(line_term) = matcher.line_terminator()
             && line_term == self.line_terminator()
-        {
-            return false;
-        }
-        if let Some(non_matching) = matcher.non_matching_bytes()
-            && non_matching.contains(self.line_terminator().as_byte())
         {
             return false;
         }

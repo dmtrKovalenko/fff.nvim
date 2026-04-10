@@ -1,6 +1,6 @@
 [package]
 name = "fff-search"
-version = "0.4.2"
+version = "0.5.2"
 edition = "2024"
 license = "MIT"
 authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
@@ -27,18 +27,18 @@ rayon = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-fff-query-parser = { workspace = true  }
+fff-query-parser = { workspace = true  , version = "0.5.2" }
 
 # External dependencies
 bindet = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
+libc = "0.2"
 git2 = { workspace = true }
 glidesort = { workspace = true }
 globset = { workspace = true }
-grep-matcher = { workspace = true }
-fff-grep = { workspace = true  }
+fff-grep = { workspace = true  , version = "0.5.2" }
 aho-corasick = "1"
 memchr = "2"
 heed = { workspace = true }
@@ -51,6 +51,7 @@ once_cell = { workspace = true }
 parking_lot = { workspace = true }
 pathdiff = { workspace = true }
 regex = { workspace = true }
+regex-syntax = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 smartstring = { version = "1.0.1", features = ["serde"] }
@@ -74,4 +75,8 @@ harness = false
 
 [[bench]]
 name = "bigram_bench"
+harness = false
+
+[[bench]]
+name = "memmem_bench"
 harness = false

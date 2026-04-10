@@ -182,11 +182,27 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
     if is_cursor then
       local base_hl = git_utils.get_border_highlight_selected(item.git_status)
       if base_hl and base_hl ~= '' then
-        local border_fg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(base_hl)), 'fg')
-        local cursor_bg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(ctx.config.hl.cursor)), 'bg')
-        local temp_hl_name = 'FFFGitBorderSelected_' .. item_idx
-        if border_fg ~= '' and cursor_bg ~= '' then
-          vim.api.nvim_set_hl(0, temp_hl_name, { fg = border_fg, bg = cursor_bg })
+        local base_id = vim.fn.synIDtrans(vim.fn.hlID(base_hl))
+        local cursor_id = vim.fn.synIDtrans(vim.fn.hlID(ctx.config.hl.cursor))
+        local border_fg_gui = vim.fn.synIDattr(base_id, 'fg', 'gui')
+        local border_fg_cterm = vim.fn.synIDattr(base_id, 'fg', 'cterm')
+        local cursor_bg_gui = vim.fn.synIDattr(cursor_id, 'bg', 'gui')
+        local cursor_bg_cterm = vim.fn.synIDattr(cursor_id, 'bg', 'cterm')
+        local has_gui = border_fg_gui ~= '' and cursor_bg_gui ~= ''
+        local has_cterm = border_fg_cterm ~= '' and cursor_bg_cterm ~= ''
+
+        if has_gui or has_cterm then
+          local temp_hl_name = 'FFFGitBorderSelected_' .. item_idx
+          local hl_opts = {}
+          if has_gui then
+            hl_opts.fg = border_fg_gui
+            hl_opts.bg = cursor_bg_gui
+          end
+          if has_cterm then
+            hl_opts.ctermfg = tonumber(border_fg_cterm)
+            hl_opts.ctermbg = tonumber(cursor_bg_cterm)
+          end
+          vim.api.nvim_set_hl(0, temp_hl_name, hl_opts)
           border_hl = temp_hl_name
         else
           border_hl = git_utils.get_border_highlight_selected(item.git_status)
@@ -225,7 +241,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
 
   -- 9. Query match
   if ctx.query and ctx.query ~= '' then
-    local match_start, match_end = string.find(line_content, ctx.query, 1)
+    local match_start, match_end = string.find(line_content, ctx.query, 1, true)
     if match_start and match_end then
       vim.api.nvim_buf_set_extmark(
         buf,

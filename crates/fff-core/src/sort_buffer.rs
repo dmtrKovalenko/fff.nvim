@@ -82,9 +82,9 @@ mod tests {
 
     #[test]
     fn test_sort_by_key_with_buffer() {
-        let mut data = vec![(2, "b"), (1, "a"), (3, "c")];
-        sort_by_key_with_buffer(&mut data, |item| item.0);
-        assert_eq!(data, vec![(1, "a"), (2, "b"), (3, "c")]);
+        let mut data = vec![(1, 50), (2, 20), (3, 80), (4, 10), (5, 90)];
+        sort_by_key_with_buffer(&mut data, |a| a.1);
+        assert_eq!(data, vec![(4, 10), (2, 20), (1, 50), (3, 80), (5, 90)]);
     }
 
     #[test]

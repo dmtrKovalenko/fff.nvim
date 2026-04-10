@@ -629,7 +629,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fff-c"
-version = "0.4.2"
+version = "0.5.2"
 dependencies = [
  "fff-query-parser",
  "fff-search",
@@ -642,16 +642,15 @@ dependencies = [
 
 [[package]]
 name = "fff-grep"
-version = "0.4.2"
+version = "0.5.2"
 dependencies = [
  "bstr",
- "grep-matcher",
  "memchr",
 ]
 
 [[package]]
 name = "fff-mcp"
-version = "0.4.2"
+version = "0.5.2"
 dependencies = [
  "clap",
  "fff-query-parser",
@@ -668,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "fff-nvim"
-version = "0.4.2"
+version = "0.5.2"
 dependencies = [
  "ahash",
  "blake3",
@@ -701,14 +700,15 @@ dependencies = [
 
 [[package]]
 name = "fff-query-parser"
-version = "0.4.2"
+version = "0.5.2"
 dependencies = [
+ "criterion",
  "zlob",
 ]
 
 [[package]]
 name = "fff-search"
-version = "0.4.2"
+version = "0.5.2"
 dependencies = [
  "ahash",
  "aho-corasick",
@@ -723,9 +723,9 @@ dependencies = [
  "git2",
  "glidesort",
  "globset",
- "grep-matcher",
  "heed",
  "ignore",
+ "libc",
  "libmimalloc-sys",
  "memchr",
  "memmap2",
@@ -738,6 +738,7 @@ dependencies = [
  "rand",
  "rayon",
  "regex",
+ "regex-syntax",
  "serde",
  "serde_json",
  "smallvec",
@@ -950,15 +951,6 @@ dependencies = [
  "log",
  "regex-automata",
  "regex-syntax",
-]
-
-[[package]]
-name = "grep-matcher"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36d7b71093325ab22d780b40d7df3066ae4aebb518ba719d38c697a8228a8023"
-dependencies = [
- "memchr",
 ]
 
 [[package]]
@@ -1516,9 +1508,9 @@ dependencies = [
 
 [[package]]
 name = "neo_frizbee"
-version = "0.8.2"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c3404d265de0390885288ecf22fcdc4fb77519fe58168bac3d26ce65033b18b"
+checksum = "3ad8072d52752b27cda31a8289ad0fa2d93fda78e17f284b0c05f9fdf06b942a"
 dependencies = [
  "itertools 0.14.0",
  "raw-cpuid",

@@ -81,34 +81,19 @@ fn trauncate_line_for_ai(
     match_ranges: Option<&[(u32, u32)]>,
     max_len: usize,
 ) -> String {
-    // Strip leading/trailing whitespace to save tokens — the LLM has file:line for location.
-    let trimmed = line.trim();
+    // Leading whitespace is already stripped by core (trim_whitespace option).
+    // Only strip trailing whitespace here.
+    let trimmed = line.trim_end();
     if trimmed.is_empty() {
         return String::new();
     }
-
-    let strip_offset = line.len() - line.trim_start().len();
 
     if trimmed.len() <= max_len {
         return trimmed.to_string();
     }
 
-    // Adjust match ranges for the stripped leading whitespace
-    let adjusted: Vec<(u32, u32)>;
-    let ranges = match match_ranges {
-        Some(r) if strip_offset > 0 => {
-            let off = strip_offset as u32;
-            adjusted = r
-                .iter()
-                .map(|&(s, e)| (s.saturating_sub(off), e.saturating_sub(off)))
-                .collect();
-            Some(adjusted.as_slice())
-        }
-        other => other,
-    };
-
     // Use first match range to center the window
-    if let Some(ranges) = ranges
+    if let Some(ranges) = match_ranges
         && let Some(&(match_start, match_end)) = ranges.first()
     {
         let match_start = match_start as usize;
@@ -252,10 +237,10 @@ impl GrepFormatter<'_> {
         let mut content_first_file = "";
         for fm in &file_preview {
             if content_first_file.is_empty() {
-                content_first_file = &fm.file.relative_path;
+                content_first_file = fm.file.relative_path();
             }
             if content_def_file.is_empty() && fm.is_definition {
-                content_def_file = &fm.file.relative_path;
+                content_def_file = fm.file.relative_path();
             }
         }
 
@@ -310,8 +295,8 @@ impl GrepFormatter<'_> {
             let file = files[m.file_index];
             let mut match_lines: Vec<String> = Vec::new();
 
-            if file.relative_path.as_str() != current_file {
-                current_file = &file.relative_path;
+            if file.relative_path() != current_file {
+                current_file = file.relative_path();
                 match_lines.push(current_file.to_string());
             }
 
@@ -362,14 +347,14 @@ impl GrepFormatter<'_> {
                 && !show_context
                 && m.is_definition
                 && !m.context_after.is_empty()
-                && !def_expanded_files.contains(file.relative_path.as_str())
+                && !def_expanded_files.contains(file.relative_path())
             {
                 let expand_limit = if def_expanded_files.is_empty() {
                     MAX_DEF_EXPAND_FIRST
                 } else {
                     MAX_DEF_EXPAND
                 };
-                def_expanded_files.insert(file.relative_path.as_str());
+                def_expanded_files.insert(file.relative_path());
                 let start_line = m.line_number + 1;
                 for (i, ctx) in m.context_after.iter().take(expand_limit).enumerate() {
                     if ctx.trim().is_empty() {
@@ -419,10 +404,10 @@ fn format_files_with_matches(
     let mut first_file = "";
     for fm in &file_map {
         if first_file.is_empty() {
-            first_file = &fm.file.relative_path;
+            first_file = fm.file.relative_path();
         }
         if first_def_file.is_empty() && fm.is_definition {
-            first_def_file = &fm.file.relative_path;
+            first_def_file = fm.file.relative_path();
         }
     }
     let suggest_path = if !first_def_file.is_empty() {
@@ -456,7 +441,7 @@ fn format_files_with_matches(
         let def_tag = if is_def { " [def]" } else { "" };
         lines.push(format!(
             "{}{}{}",
-            fm.file.relative_path,
+            fm.file.relative_path(),
             def_tag,
             size_tag(fm.file.size)
         ));
@@ -526,7 +511,7 @@ fn format_count(
     let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     let mut order: Vec<&str> = Vec::new();
     for m in items {
-        let path = files[m.file_index].relative_path.as_str();
+        let path = files[m.file_index].relative_path();
         let count = counts.entry(path).or_insert_with(|| {
             order.push(path);
             0
@@ -550,7 +535,7 @@ fn collect_file_preview<'a>(items: &[GrepMatch], files: &[&'a FileItem]) -> Vec<
     let mut seen = std::collections::HashSet::new();
     for m in items {
         let file = files[m.file_index];
-        if seen.insert(&file.relative_path) {
+        if seen.insert(file.relative_path()) {
             file_preview.push(FileMeta {
                 file,
                 line_number: m.line_number,
@@ -569,26 +554,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn trunc_strips_whitespace() {
-        assert_eq!(trauncate_line_for_ai("    foo()", None, 180), "foo()");
-        assert_eq!(trauncate_line_for_ai("  bar  ", None, 180), "bar");
+    fn trunc_strips_trailing_whitespace() {
+        // Leading whitespace is now stripped by core's trim_whitespace option.
+        // This function only strips trailing whitespace.
+        assert_eq!(trauncate_line_for_ai("foo()", None, 180), "foo()");
+        assert_eq!(trauncate_line_for_ai("bar  ", None, 180), "bar");
         assert_eq!(trauncate_line_for_ai("   ", None, 180), "");
     }
 
     #[test]
-    fn trunc_adjusts_match_ranges_after_strip() {
-        // "    hello" — match on "hello" at bytes 4..9
-        let line = "    hello";
-        let ranges = [(4, 9)];
+    fn trunc_preserves_pre_trimmed_match_ranges() {
+        // Core already stripped leading whitespace and adjusted offsets,
+        // so "hello" arrives with match at bytes 0..5.
+        let line = "hello";
+        let ranges = [(0, 5)];
         let result = trauncate_line_for_ai(line, Some(&ranges), 180);
-        // After stripping 4 leading spaces, the trimmed line is "hello"
         assert_eq!(result, "hello");
     }
 
     #[test]
     fn trunc_long_line_centered() {
-        let line = format!("{}match_here{}", " ".repeat(8), "x".repeat(200));
-        let ranges = [(8u32, 18u32)];
+        // Core already stripped leading whitespace; offsets are pre-adjusted.
+        let line = format!("match_here{}", "x".repeat(200));
+        let ranges = [(0u32, 10u32)];
         let result = trauncate_line_for_ai(&line, Some(&ranges), 50);
         assert!(result.contains("match_here"));
         assert!(result.len() <= 55); // budget + ellipsis chars

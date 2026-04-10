@@ -1,6 +1,6 @@
 [package]
 name = "fff-nvim"
-version = "0.4.2"
+version = "0.5.2"
 edition = "2024"
 
 [lib]
@@ -35,6 +35,22 @@ path = "src/bin/grep_profiler.rs"
 name = "grep_vs_rg"
 path = "src/bin/grep_vs_rg.rs"
 
+[[bin]]
+name = "bench_grep_query"
+path = "src/bin/bench_grep_query.rs"
+
+[[bin]]
+name = "fuzzy_grep_test"
+path = "src/bin/fuzzy_grep_test.rs"
+
+[[bin]]
+name = "test_memory_leak"
+path = "src/bin/test_memory_leak.rs"
+
+[[bin]]
+name = "bench_ci_memmem"
+path = "src/bin/bench_ci_memmem.rs"
+
 [dependencies]
 # Workspace dependencies
 ahash = { workspace = true }
@@ -44,8 +60,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff = { package = "fff-search", path = "../fff-core" , version = "0.4.0", features = ["mimalloc-collect"] }
-fff-query-parser = { path = "../fff-query-parser" , version = "0.4.2" }
+fff = { package = "fff-search", path = "../fff-core", version = "0.5.1", features = [
+	"mimalloc-collect",
+] }
+fff-query-parser = { path = "../fff-query-parser", version = "0.5.2" }
 
 # External dependencies
 blake3 = "1.8.2"
@@ -78,4 +96,3 @@ harness = false
 [[bench]]
 name = "query_tracker_bench"
 harness = false
-

@@ -7,6 +7,10 @@ pub enum Error {
     ThreadPanic,
     #[error("Invalid path {0}")]
     InvalidPath(std::path::PathBuf),
+    #[error(
+        "Can not start fff at the file system root {0} — pass a project or at least home directory instead"
+    )]
+    FilesystemRoot(std::path::PathBuf),
     #[error("File picker not initialized")]
     FilePickerMissing,
     #[error("Failed to acquire lock for frecency")]
@@ -17,10 +21,17 @@ pub enum Error {
     AcquirePathCacheLock,
     #[error("Failed to create directory: {0}")]
     CreateDir(#[from] std::io::Error),
+    #[error("Failed to remove database directory {path}: {source}")]
+    RemoveDbDir {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
     #[error("Failed to open frecency database env: {0}")]
     EnvOpen(#[source] heed::Error),
     #[error("Failed to create frecency database: {0}")]
     DbCreate(#[source] heed::Error),
+    #[error("Failed to open frecency database: {0}")]
+    DbOpen(#[source] heed::Error),
     #[error("Failed to clear stale readers for frecency database: {0}")]
     DbClearStaleReaders(#[source] heed::Error),
 

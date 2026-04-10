@@ -1,20 +1,24 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use fff_search::types::{BigramFilter, BigramIndexBuilder};
+use fff_search::bigram_filter::{BigramFilter, BigramIndexBuilder};
 
 /// Build a realistic bigram index for benchmarking.
 /// Simulates a large repo by generating varied content per file.
 fn build_test_index(file_count: usize) -> BigramFilter {
     let builder = BigramIndexBuilder::new(file_count);
+    let skip_builder = BigramIndexBuilder::new(file_count);
 
     for i in 0..file_count {
         // Generate varied content so we get a mix of sparse and dense columns
         let content = format!(
             "struct File{i} {{ fn process() {{ let controller = read(path); }} }} // module {i}"
         );
-        builder.add_file_content(i, content.as_bytes());
+        builder.add_file_content(&skip_builder, i, content.as_bytes());
     }
 
-    builder.compress()
+    let mut index = builder.compress(None);
+    let skip_index = skip_builder.compress(Some(12));
+    index.set_skip_index(skip_index);
+    index
 }
 
 fn bench_bigram_query(c: &mut Criterion) {
@@ -23,11 +27,9 @@ fn bench_bigram_query(c: &mut Criterion) {
     for &file_count in &file_counts {
         let index = build_test_index(file_count);
         eprintln!(
-            "Index ({} files): {} columns ({} dense, {} sparse)",
+            "Index ({} files): {} columns",
             file_count,
             index.columns_used(),
-            index.dense_columns(),
-            index.sparse_columns(),
         );
 
         let mut group = c.benchmark_group(format!("bigram_query_{file_count}"));
@@ -55,7 +57,14 @@ fn bench_bigram_query(c: &mut Criterion) {
 
 fn bench_bigram_is_candidate(c: &mut Criterion) {
     let index = build_test_index(500_000);
-    let candidates = index.query(b"struct").unwrap();
+    let candidates = match index.query(b"struct") {
+        Some(c) => c,
+        None => {
+            // All bigrams ubiquitous at this size — skip candidate benches
+            eprintln!("Skipping is_candidate bench: query returned None (all bigrams ubiquitous)");
+            return;
+        }
+    };
 
     c.bench_function("is_candidate_500k", |b| {
         b.iter(|| {
@@ -96,10 +105,11 @@ fn bench_bigram_build(c: &mut Criterion) {
             |b, &fc| {
                 b.iter(|| {
                     let builder = BigramIndexBuilder::new(fc);
+                    let skip_builder = BigramIndexBuilder::new(fc);
                     for (i, content) in contents.iter().enumerate() {
-                        builder.add_file_content(i, content.as_bytes());
+                        builder.add_file_content(&skip_builder, i, content.as_bytes());
                     }
-                    let index = builder.compress();
+                    let index = builder.compress(None);
                     black_box(index.columns_used())
                 });
             },

@@ -31,14 +31,19 @@ fn load_files(base_path: &Path) -> Vec<FileItem> {
             let path = entry.path().to_path_buf();
             let relative = pathdiff::diff_paths(&path, base_path).unwrap_or_else(|| path.clone());
             let relative_path = relative.to_string_lossy().into_owned();
-            let file_name = entry.file_name().to_string_lossy().into_owned();
             let size = entry.metadata().ok().map_or(0, |m| m.len());
             let is_binary = detect_binary(&path, size);
 
+            let path_string = path.to_string_lossy().into_owned();
+            let relative_start = (path_string.len() - relative_path.len()) as u16;
+            let filename_start = path_string
+                .rfind('/')
+                .map(|i| i + 1)
+                .unwrap_or(relative_start as usize) as u16;
             files.push(FileItem::new_raw(
-                path,
-                relative_path,
-                file_name,
+                path_string,
+                relative_start,
+                filename_start,
                 size,
                 0,
                 None,
@@ -74,6 +79,7 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         before_context: 0,
         after_context: 0,
         classify_definitions: false,
+        trim_whitespace: false,
     };
 
     let parsed = parse_grep_query(query);
@@ -82,7 +88,8 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         files,
         &parsed,
         &options,
-        &fff::ContentCacheBudget::zero(),
+        &fff::ContentCacheBudget::default(),
+        None,
         None,
         None,
     );
@@ -109,7 +116,7 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         if m.file_index != current_file_idx {
             current_file_idx = m.file_index;
             let file = &result.files[m.file_index];
-            eprintln!("\n  ┌─ {}", file.relative_path);
+            eprintln!("\n  ┌─ {}", file.relative_path());
         }
 
         // Truncate long lines for display
@@ -163,10 +170,28 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let repo_path = std::path::PathBuf::from(
-        std::env::var("HOME").unwrap_or_else(|_| "/Users/neogoose".to_string()),
-    )
-    .join("dev/lightsource");
+    let (repo_path, queries) = if let Some(idx) = args.iter().position(|a| a == "--path") {
+        let path = args
+            .get(idx + 1)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                eprintln!("--path requires an argument");
+                std::process::exit(1);
+            });
+        let queries: Vec<String> = args
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != idx && *i != idx + 1)
+            .map(|(_, s)| s.clone())
+            .collect();
+        (path, queries)
+    } else {
+        let path = std::path::PathBuf::from(
+            std::env::var("HOME").unwrap_or_else(|_| "/Users/neogoose".to_string()),
+        )
+        .join("dev/lightsource");
+        (path, args)
+    };
 
     if !repo_path.exists() {
         eprintln!("Repository not found at: {:?}", repo_path);
@@ -180,7 +205,7 @@ fn main() {
     eprintln!("Loading files...");
     let load_start = Instant::now();
     let files = load_files(&canonical);
-    let non_binary = files.iter().filter(|f| !f.is_binary).count();
+    let non_binary = files.iter().filter(|f| !f.is_binary()).count();
     eprintln!(
         "Loaded {} files ({} non-binary) in {:.2}s\n",
         files.len(),
@@ -188,7 +213,7 @@ fn main() {
         load_start.elapsed().as_secs_f64()
     );
 
-    if args.is_empty() {
+    if queries.is_empty() {
         // Run default test queries
         run_fuzzy_query(&files, "shcema", "transposition of 'schema'");
         run_fuzzy_query(&files, "SortedMap", "should match SortedArrayMap");
@@ -199,7 +224,7 @@ fn main() {
         );
     } else {
         // Run user-provided queries
-        for query in &args {
+        for query in &queries {
             run_fuzzy_query(&files, query, "user query");
         }
     }
