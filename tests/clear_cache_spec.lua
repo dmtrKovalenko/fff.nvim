@@ -1,4 +1,4 @@
----@diagnostic disable: undefined-field
+---@diagnostic disable: undefined-field, missing-fields
 local fff_rust = require('fff.rust')
 
 describe('clear_cache', function()
