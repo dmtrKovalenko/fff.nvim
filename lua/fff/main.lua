@@ -1,7 +1,5 @@
 local M = {}
 
-M.state = { initialized = false }
-
 --- Setup the file picker with the given configuration
 --- @param config table Configuration options
 function M.setup(config) vim.g.fff = config end
