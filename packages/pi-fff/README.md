@@ -29,7 +29,7 @@ Requirements:
 
 ### Install as a pi package
 
-Global install:
+**Via npm (recommended):**
 
 ```bash
 pi install npm:@ff-labs/pi-fff
@@ -40,14 +40,6 @@ Project-local install:
 ```bash
 pi install -l npm:@ff-labs/pi-fff
 ```
-
-Or install from git:
-
-```bash
-pi install git:github.com/dmtrKovalenko/fff.nvim
-```
-
-This is the recommended installation method. pi will clone the repo, install dependencies, and load the extension from the `pi` manifest in `package.json`.
 
 ### Local development / manual install
 
@@ -122,8 +114,7 @@ Parameters:
 Mode precedence:
 1. `--fff-mode <mode>` CLI flag
 2. `PI_FFF_MODE=<mode>` environment variable
-3. persisted config (`~/.pi/agent/fff/config.json`)
-4. default (`both`)
+3. default (`both`)
 
 ## Data
 
