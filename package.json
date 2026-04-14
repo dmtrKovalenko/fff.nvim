@@ -1,6 +1,6 @@
 {
   "private": true,
-  "workspaces": ["packages/fff-bun", "packages/fff-node"],
+  "workspaces": ["packages/fff-bun", "packages/fff-node", "packages/pi-fff"],
 
   "scripts": {
     "format": "biome format --write",
