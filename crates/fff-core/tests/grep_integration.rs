@@ -29,6 +29,7 @@ fn plain_opts() -> GrepSearchOptions {
         before_context: 0,
         after_context: 0,
         classify_definitions: false,
+        trim_whitespace: false,
     }
 }
 
@@ -45,6 +46,7 @@ fn regex_opts() -> GrepSearchOptions {
         before_context: 0,
         after_context: 0,
         classify_definitions: false,
+        trim_whitespace: false,
     }
 }
 
@@ -61,6 +63,7 @@ fn fuzzy_opts() -> GrepSearchOptions {
         before_context: 0,
         after_context: 0,
         classify_definitions: false,
+        trim_whitespace: false,
     }
 }
 

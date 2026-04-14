@@ -276,7 +276,10 @@ pub fn match_and_score_files<'a>(
                 0
             };
 
-            let current_file_penalty = calculate_current_file_penalty(file, base_score, context);
+            // Light penalty for the current file — just enough to demote it slightly,
+            // not enough to bury it when the query is a good match.
+            let current_file_penalty =
+                calculate_current_file_penalty(file, base_score / 4, context);
             let combo_match_boost = {
                 let last_same_query_match = context
                     .last_same_query_match
@@ -296,13 +299,42 @@ pub fn match_and_score_files<'a>(
                 }
             };
 
+            // Path alignment bonus: when the query looks like a file path,
+            // reward candidates whose path closely matches the typed query.
+            // Uses suffix overlap — bytes matching from the end. A full prefix
+            // match is just the 100% coverage case, so no separate branch needed.
+            let path_alignment_bonus = if query_contains_path_separator {
+                let path_bytes = file.relative_path().as_bytes();
+                let common_suffix = main_needle
+                    .iter()
+                    .rev()
+                    .zip(path_bytes.iter().rev())
+                    .take_while(|(n, p)| n.eq_ignore_ascii_case(p))
+                    .count();
+
+                let needle_len = main_needle.len();
+                if common_suffix > 10 && needle_len > 0 {
+                    let coverage = common_suffix * 100 / needle_len;
+                    if coverage >= 30 {
+                        base_score * coverage as i32 / 100
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
             let total = base_score
                 .saturating_add(frecency_boost)
                 .saturating_add(git_status_boost)
                 .saturating_add(distance_penalty)
                 .saturating_add(filename_bonus)
                 .saturating_add(current_file_penalty)
-                .saturating_add(combo_match_boost);
+                .saturating_add(combo_match_boost)
+                .saturating_add(path_alignment_bonus);
 
             let score = Score {
                 total,
@@ -318,6 +350,7 @@ pub fn match_and_score_files<'a>(
                 git_status_boost,
                 distance_penalty,
                 combo_match_boost,
+                path_alignment_bonus,
                 exact_match: is_exact_filename || path_match.exact,
                 match_type: if is_exact_filename {
                     "exact_filename"
@@ -391,6 +424,7 @@ pub(crate) fn score_filtered_by_frecency<'a>(
             distance_penalty: 0,
             special_filename_bonus: 0,
             combo_match_boost: 0,
+            path_alignment_bonus: 0,
             current_file_penalty,
             frecency_boost: total_frecency_score,
             git_status_boost,
@@ -428,10 +462,7 @@ fn calculate_current_file_penalty(
     if let Some(current) = context.current_file
         && file.relative_path() == current
     {
-        penalty -= match file.git_status {
-            Some(status) if is_modified_status(status) => base_score / 2,
-            _ => base_score,
-        };
+        penalty -= base_score;
     }
 
     penalty
@@ -510,6 +541,8 @@ mod tests {
     use crate::types::PaginationArgs;
     use fff_query_parser::QueryParser;
 
+    // ── Helpers ──────────────────────────────────────────────────────────
+
     fn create_test_file(path: &str, score: i32, modified: u64) -> (FileItem, Score) {
         let filename_start = path.rfind('/').map(|i| i + 1).unwrap_or(0) as u16;
         let file = FileItem::new_raw(
@@ -533,182 +566,39 @@ mod tests {
             exact_match: false,
             match_type: "test",
             combo_match_boost: 0,
+            path_alignment_bonus: 0,
         };
         (file, score_obj)
     }
-
-    #[test]
-    fn test_partial_sort_descending() {
-        // Create test data with known scores
-        let test_data = vec![
-            create_test_file("file1.rs", 100, 1000),
-            create_test_file("file2.rs", 200, 2000),
-            create_test_file("file3.rs", 50, 3000),
-            create_test_file("file4.rs", 300, 4000),
-            create_test_file("file5.rs", 150, 5000),
-            create_test_file("file6.rs", 250, 6000),
-            create_test_file("file7.rs", 80, 7000),
-            create_test_file("file8.rs", 180, 8000),
-            create_test_file("file9.rs", 120, 9000),
-            create_test_file("file10.rs", 90, 10000),
-        ];
-
-        // Convert to references like the actual function uses
-        let results: Vec<(&FileItem, Score)> = test_data
-            .iter()
-            .map(|(file, score)| (file, score.clone()))
-            .collect();
-
-        let query_str = "test";
-        let parser = QueryParser::default();
-        let query = parser.parse(query_str);
-        let context = ScoringContext {
-            query: &query,
-            max_threads: 1,
-            max_typos: 2,
-            current_file: None,
-            last_same_query_match: None,
-            project_path: None,
-            combo_boost_score_multiplier: 100,
-            min_combo_count: 3,
-
-            pagination: PaginationArgs {
-                offset: 0,
-                limit: 0,
-            },
-        };
-
-        // Test with full sort - returns all results sorted descending
-        let (items, scores, total) = sort_and_paginate(results.clone(), &context);
-
-        // Should return all 10 items sorted by score descending
-        assert_eq!(total, 10);
-        assert_eq!(scores.len(), 10);
-        assert_eq!(scores[0].total, 300, "First should be highest score");
-        assert_eq!(scores[1].total, 250, "Second should be second highest");
-        assert_eq!(scores[2].total, 200, "Third should be third highest");
-
-        // Verify the files match
-        assert_eq!(items[0].relative_path(), "file4.rs");
-        assert_eq!(items[1].relative_path(), "file6.rs");
-        assert_eq!(items[2].relative_path(), "file2.rs");
-    }
-
-    #[test]
-    fn test_partial_sort_with_same_scores() {
-        // Test tiebreaker with modified time
-        let test_data = [
-            create_test_file("file1.rs", 100, 5000), // Same score, older
-            create_test_file("file2.rs", 100, 8000), // Same score, newer
-            create_test_file("file3.rs", 100, 3000), // Same score, oldest
-            create_test_file("file4.rs", 200, 1000),
-            create_test_file("file5.rs", 200, 9000), // Higher score, newest
-        ];
-
-        let results: Vec<(&FileItem, Score)> = test_data
-            .iter()
-            .map(|(file, score)| (file, score.clone()))
-            .collect();
-
-        let query_str = "test";
-        let parser = QueryParser::default();
-        let query = parser.parse(query_str);
-        let context = ScoringContext {
-            query: &query,
-            max_threads: 1,
-            max_typos: 2,
-            current_file: None,
-            last_same_query_match: None,
-            project_path: None,
-            combo_boost_score_multiplier: 100,
-            min_combo_count: 3,
-
-            pagination: PaginationArgs {
-                offset: 0,
-                limit: 0,
-            },
-        };
-
-        let (items, scores, _) = sort_and_paginate(results, &context);
-
-        // Should return all 5 items sorted: 200(9000), 200(1000), 100(8000), 100(5000), 100(3000)
-        assert_eq!(scores.len(), 5);
-        assert_eq!(scores[0].total, 200);
-        assert_eq!(items[0].modified, 9000, "First 200 should be newest");
-        assert_eq!(scores[1].total, 200);
-        assert_eq!(items[1].modified, 1000, "Second 200 should be older");
-        assert_eq!(scores[2].total, 100);
-        assert_eq!(items[2].modified, 8000, "First 100 should be newest");
-        assert_eq!(scores[3].total, 100);
-        assert_eq!(items[3].modified, 5000);
-        assert_eq!(scores[4].total, 100);
-        assert_eq!(items[4].modified, 3000, "Last 100 should be oldest");
-    }
-
-    #[test]
-    fn test_no_partial_sort_for_small_results() {
-        // When results.len() <= threshold, should use regular sort
-        let test_data = [
-            create_test_file("file1.rs", 100, 1000),
-            create_test_file("file2.rs", 200, 2000),
-            create_test_file("file3.rs", 50, 3000),
-        ];
-
-        let results: Vec<(&FileItem, Score)> = test_data
-            .iter()
-            .map(|(file, score)| (file, score.clone()))
-            .collect();
-
-        let query_str = "test";
-        let parser = QueryParser::default();
-        let query = parser.parse(query_str);
-        let context = ScoringContext {
-            query: &query,
-            max_threads: 1,
-            max_typos: 2,
-            current_file: None,
-            last_same_query_match: None,
-            project_path: None,
-            combo_boost_score_multiplier: 100,
-            min_combo_count: 3,
-
-            pagination: PaginationArgs {
-                offset: 0,
-                limit: 0,
-            },
-        };
-
-        // Returns all results sorted descending
-        let (items, scores, _) = sort_and_paginate(results, &context);
-
-        assert_eq!(scores.len(), 3);
-        assert_eq!(scores[0].total, 200);
-        assert_eq!(scores[1].total, 100);
-        assert_eq!(scores[2].total, 50);
-        assert_eq!(items[0].relative_path(), "file2.rs");
-        assert_eq!(items[1].relative_path(), "file1.rs");
-        assert_eq!(items[2].relative_path(), "file3.rs");
-    }
-}
-
-#[cfg(test)]
-mod filename_bonus_tests {
-    use super::*;
-    use crate::types::PaginationArgs;
-    use fff_query_parser::QueryParser;
 
     fn make_file(path: &str) -> FileItem {
         let filename_start = path.rfind('/').map(|i| i + 1).unwrap_or(0) as u16;
         FileItem::new_raw(path.to_string(), 0, filename_start, 0, 0, None, false)
     }
 
+    fn make_file_with_frecency(path: &str, access_frecency: i16) -> FileItem {
+        let filename_start = path.rfind('/').map(|i| i + 1).unwrap_or(0) as u16;
+        let mut file = FileItem::new_raw(path.to_string(), 0, filename_start, 0, 0, None, false);
+        file.access_frecency_score = access_frecency;
+        file
+    }
+
+    /// Run `match_and_score_files` with production-like max_typos scaling.
     fn search(files: &[FileItem], query: &str) -> Vec<(String, Score)> {
         let parser = QueryParser::default();
         let parsed = parser.parse(query);
+
+        let effective_query = match &parsed.fuzzy_query {
+            FuzzyQuery::Text(t) => *t,
+            FuzzyQuery::Parts(parts) if !parts.is_empty() => parts[0],
+            _ => query,
+        };
+        let max_typos = (effective_query.len() as u16 / 4).clamp(2, 6);
+
         let ctx = ScoringContext {
             query: &parsed,
             max_threads: 1,
-            max_typos: 2,
+            max_typos,
             current_file: None,
             last_same_query_match: None,
             project_path: None,
@@ -725,6 +615,148 @@ mod filename_bonus_tests {
             .zip(scores.iter())
             .map(|(f, s)| (f.relative_path().to_string(), s.clone()))
             .collect()
+    }
+
+    // ── Sort / pagination ───────────────────────────────────────────────
+
+    #[test]
+    fn test_partial_sort_descending() {
+        let test_data = vec![
+            create_test_file("file1.rs", 100, 1000),
+            create_test_file("file2.rs", 200, 2000),
+            create_test_file("file3.rs", 50, 3000),
+            create_test_file("file4.rs", 300, 4000),
+            create_test_file("file5.rs", 150, 5000),
+            create_test_file("file6.rs", 250, 6000),
+            create_test_file("file7.rs", 80, 7000),
+            create_test_file("file8.rs", 180, 8000),
+            create_test_file("file9.rs", 120, 9000),
+            create_test_file("file10.rs", 90, 10000),
+        ];
+
+        let results: Vec<(&FileItem, Score)> = test_data
+            .iter()
+            .map(|(file, score)| (file, score.clone()))
+            .collect();
+
+        let query_str = "test";
+        let parser = QueryParser::default();
+        let query = parser.parse(query_str);
+        let context = ScoringContext {
+            query: &query,
+            max_threads: 1,
+            max_typos: 2,
+            current_file: None,
+            last_same_query_match: None,
+            project_path: None,
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
+            pagination: PaginationArgs {
+                offset: 0,
+                limit: 0,
+            },
+        };
+
+        let (items, scores, total) = sort_and_paginate(results.clone(), &context);
+
+        assert_eq!(total, 10);
+        assert_eq!(scores.len(), 10);
+        assert_eq!(scores[0].total, 300, "First should be highest score");
+        assert_eq!(scores[1].total, 250, "Second should be second highest");
+        assert_eq!(scores[2].total, 200, "Third should be third highest");
+        assert_eq!(items[0].relative_path(), "file4.rs");
+        assert_eq!(items[1].relative_path(), "file6.rs");
+        assert_eq!(items[2].relative_path(), "file2.rs");
+    }
+
+    #[test]
+    fn test_partial_sort_with_same_scores() {
+        let test_data = [
+            create_test_file("file1.rs", 100, 5000),
+            create_test_file("file2.rs", 100, 8000),
+            create_test_file("file3.rs", 100, 3000),
+            create_test_file("file4.rs", 200, 1000),
+            create_test_file("file5.rs", 200, 9000),
+        ];
+
+        let results: Vec<(&FileItem, Score)> = test_data
+            .iter()
+            .map(|(file, score)| (file, score.clone()))
+            .collect();
+
+        let query_str = "test";
+        let parser = QueryParser::default();
+        let query = parser.parse(query_str);
+        let context = ScoringContext {
+            query: &query,
+            max_threads: 1,
+            max_typos: 2,
+            current_file: None,
+            last_same_query_match: None,
+            project_path: None,
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
+            pagination: PaginationArgs {
+                offset: 0,
+                limit: 0,
+            },
+        };
+
+        let (items, scores, _) = sort_and_paginate(results, &context);
+
+        assert_eq!(scores.len(), 5);
+        assert_eq!(scores[0].total, 200);
+        assert_eq!(items[0].modified, 9000, "First 200 should be newest");
+        assert_eq!(scores[1].total, 200);
+        assert_eq!(items[1].modified, 1000, "Second 200 should be older");
+        assert_eq!(scores[2].total, 100);
+        assert_eq!(items[2].modified, 8000, "First 100 should be newest");
+        assert_eq!(scores[3].total, 100);
+        assert_eq!(items[3].modified, 5000);
+        assert_eq!(scores[4].total, 100);
+        assert_eq!(items[4].modified, 3000, "Last 100 should be oldest");
+    }
+
+    #[test]
+    fn test_no_partial_sort_for_small_results() {
+        let test_data = [
+            create_test_file("file1.rs", 100, 1000),
+            create_test_file("file2.rs", 200, 2000),
+            create_test_file("file3.rs", 50, 3000),
+        ];
+
+        let results: Vec<(&FileItem, Score)> = test_data
+            .iter()
+            .map(|(file, score)| (file, score.clone()))
+            .collect();
+
+        let query_str = "test";
+        let parser = QueryParser::default();
+        let query = parser.parse(query_str);
+        let context = ScoringContext {
+            query: &query,
+            max_threads: 1,
+            max_typos: 2,
+            current_file: None,
+            last_same_query_match: None,
+            project_path: None,
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
+            pagination: PaginationArgs {
+                offset: 0,
+                limit: 0,
+            },
+        };
+
+        let (items, scores, _) = sort_and_paginate(results, &context);
+
+        assert_eq!(scores.len(), 3);
+        assert_eq!(scores[0].total, 200);
+        assert_eq!(scores[1].total, 100);
+        assert_eq!(scores[2].total, 50);
+        assert_eq!(items[0].relative_path(), "file2.rs");
+        assert_eq!(items[1].relative_path(), "file1.rs");
+        assert_eq!(items[2].relative_path(), "file3.rs");
     }
 
     #[test]
@@ -757,8 +789,6 @@ mod filename_bonus_tests {
 
     #[test]
     fn test_exact_filename_beats_fuzzy_filename() {
-        // "username.rs" exactly matches "username.rs" → exact filename
-        // "username.rs" is a fuzzy match of "user_name_handler.rs" → fuzzy bonus only
         let files = vec![
             make_file("src/user_name_handler.rs"),
             make_file("src/username.rs"),
@@ -777,8 +807,6 @@ mod filename_bonus_tests {
 
     #[test]
     fn test_same_length_filename_no_false_exact() {
-        // "item.rs" exactly matches "item.rs" → exact_filename
-        // "item.rs" should NOT get exact_filename on "file.rs" even though stem lengths match
         let files = vec![
             make_file("src/item_sync/file.rs"),
             make_file("src/models/item.rs"),
@@ -807,44 +835,65 @@ mod filename_bonus_tests {
             "path-like query should not get filename bonus"
         );
     }
-}
 
-#[cfg(test)]
-mod multi_part_tests {
+    /// Regression: full-path query should rank the near-exact path match first.
+    /// https://x.com/mbarneyjr/status/2043474268390817861
+    #[test]
+    fn test_full_path_query_prefers_closer_filename_match() {
+        let files = vec![
+            make_file("test-utils/completion/condition-key/yaml_partial-svc-colon.yml"),
+            make_file("test-utils/test-cases/completion/condition-key/yaml_partial-svc.yml"),
+            make_file("test-utils/action-value/yaml_inline_partial-svc-colon.yml"),
+            make_file("test-utils/completion/action-value/yaml_array_partial-svc-colon.yml"),
+            make_file("test-utils/completion/action-value/yaml_array_partial-svc.yml"),
+            make_file("test-utils/completion/condition-key/yaml_global-tag-keys.yml"),
+            make_file_with_frecency(
+                "test-utils/test-cases/completion/condition-key/yaml_partial.yml",
+                10,
+            ),
+        ];
+
+        let results = search(
+            &files,
+            "t-utils/test-cases/completion/condition-key/yaml_partial-svc.yml",
+        );
+
+        assert!(!results.is_empty(), "query should match at least one file");
+
+        assert_eq!(
+            results[0].0, "test-utils/test-cases/completion/condition-key/yaml_partial-svc.yml",
+            "near-exact full-path match should rank first, but got: {} \
+             (total={}, base={}, frecency={})",
+            results[0].0, results[0].1.total, results[0].1.base_score, results[0].1.frecency_boost,
+        );
+    }
+
     #[test]
     fn test_single_path_matching() {
         let path = "core_workflow_service/kafka_event_consumer/src/ai_part_extraction_request/ai_part_extraction_request_handler.rs";
 
-        // Test with max_typos = 2 (safe for short needles)
         let options = neo_frizbee::Config {
             max_typos: Some(2),
             sort: false,
             ..Default::default()
         };
 
-        // Test "aipart" matching
         let matches = neo_frizbee::match_list("aipart", &[path], &options);
-        println!("'aipart' matches (max_typos=2): {:?}", matches);
         assert!(!matches.is_empty(), "'aipart' should match the path");
 
-        // Test "core" matching
         let matches = neo_frizbee::match_list("core", &[path], &options);
-        println!("'core' matches (max_typos=2): {:?}", matches);
         assert!(!matches.is_empty(), "'core' should match the path");
 
-        // Test "co" matching - need max_typos <= needle.len()
         let co_options = neo_frizbee::Config {
-            max_typos: Some(2), // Safe: 2 <= len("co") = 2
+            max_typos: Some(2),
             ..options
         };
         let matches = neo_frizbee::match_list("co", &[path], &co_options);
-        println!("'co' matches (max_typos=2): {:?}", matches);
         assert!(!matches.is_empty(), "'co' should match the path");
     }
 
     #[test]
     fn test_lowercase_path_matching() {
-        // The actual paths are lowercased
         let path = "core_workflow_service/kafka_event_consumer/src/ai_part_extraction_request/ai_part_extraction_request_handler.rs".to_lowercase();
 
         let options = neo_frizbee::Config {
@@ -853,14 +902,10 @@ mod multi_part_tests {
             ..Default::default()
         };
 
-        // Test "co" matching on lowercase path
         let matches = neo_frizbee::match_list("co", &[path.as_str()], &options);
-        println!("'co' matches lowercase path (max_typos=2): {:?}", matches);
         assert!(!matches.is_empty(), "'co' should match the lowercase path");
 
-        // Test "core" matching on lowercase path
         let matches = neo_frizbee::match_list("core", &[path.as_str()], &options);
-        println!("'core' matches lowercase path (max_typos=2): {:?}", matches);
         assert!(
             !matches.is_empty(),
             "'core' should match the lowercase path"

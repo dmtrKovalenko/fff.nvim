@@ -1,4 +1,5 @@
-*fff.nvim.txt*         For Neovim >= 0.10.0         Last change: 2026 April 09
+*fff.nvim.txt*
+                            For Neovim >= 0.10.0    Last change: 2026 April 13
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -8,7 +9,7 @@ Table of Contents                                 *fff.nvim-table-of-contents*
   - MCP                                                         |fff.nvim-mcp|
   - Neovim guide                                       |fff.nvim-neovim-guide|
 1. Links                                                      |fff.nvim-links|
-FFFAI agents (MCP)   |   Neovim usersA fast file search for your AI and neovim, with memory built-in
+FFFAI agents (MCP)   |   Neovim usersA fast file search for your AI and neovim, with memory built-in
 
 
 
@@ -398,6 +399,7 @@ all available options:
           smart_case = true, -- Case-insensitive unless query has uppercase
           time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
           modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
+          trim_whitespace = false, -- Strip leading whitespace from matched lines
         },
       })
 <

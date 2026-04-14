@@ -707,6 +707,7 @@ fn bench_grep_search(c: &mut Criterion) {
         before_context: 0,
         after_context: 0,
         classify_definitions: false,
+        trim_whitespace: false,
     };
 
     let test_queries = vec![

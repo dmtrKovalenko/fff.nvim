@@ -7,6 +7,7 @@
 
 use crate::{
     BigramFilter, BigramOverlay,
+    bigram_query::{fuzzy_to_bigram_query, regex_to_bigram_query},
     constraints::apply_constraints,
     extract_bigrams,
     sort_buffer::sort_with_buffer,
@@ -279,6 +280,35 @@ pub struct GrepMatch {
     pub context_after: Vec<String>,
 }
 
+impl GrepMatch {
+    /// Strip leading whitespace from `line_content` and all context lines,
+    /// adjusting `col` and `match_byte_offsets` so highlights remain correct.
+    pub fn trim_leading_whitespace(&mut self) {
+        let strip_len = self.line_content.len() - self.line_content.trim_start().len();
+        if strip_len > 0 {
+            self.line_content.drain(..strip_len);
+            let off = strip_len as u32;
+            self.col = self.col.saturating_sub(strip_len);
+            for range in &mut self.match_byte_offsets {
+                range.0 = range.0.saturating_sub(off);
+                range.1 = range.1.saturating_sub(off);
+            }
+        }
+        for line in &mut self.context_before {
+            let n = line.len() - line.trim_start().len();
+            if n > 0 {
+                line.drain(..n);
+            }
+        }
+        for line in &mut self.context_after {
+            let n = line.len() - line.trim_start().len();
+            if n > 0 {
+                line.drain(..n);
+            }
+        }
+    }
+}
+
 /// Result of a grep search.
 #[derive(Debug, Clone, Default)]
 pub struct GrepResult<'a> {
@@ -326,6 +356,28 @@ pub struct GrepSearchOptions {
     /// Whether to classify each match as a definition line. Adds ~2% overhead
     /// on large repos; disable for interactive grep where it is not needed.
     pub classify_definitions: bool,
+    /// Strip leading whitespace from matched lines and context lines, adjusting
+    /// highlight byte offsets accordingly. Useful for AI/MCP consumers and UIs
+    /// that don't need indentation. Default: false.
+    pub trim_whitespace: bool,
+}
+
+impl Default for GrepSearchOptions {
+    fn default() -> Self {
+        Self {
+            max_file_size: 10 * 1024 * 1024,
+            max_matches_per_file: 200,
+            smart_case: true,
+            file_offset: 0,
+            page_limit: 50,
+            mode: GrepMode::default(),
+            time_budget_ms: 0,
+            before_context: 0,
+            after_context: 0,
+            classify_definitions: false,
+            trim_whitespace: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -873,12 +925,15 @@ impl Sink for AhoCorasickSink<'_> {
 /// searches because Aho-Corasick uses SIMD-accelerated multi-needle matching.
 ///
 /// Returns the same `GrepResult` type as `grep_search`.
+#[allow(clippy::too_many_arguments)]
 pub fn multi_grep_search<'a>(
     files: &'a [FileItem],
     patterns: &[&str],
     constraints: &[fff_query_parser::Constraint<'_>],
     options: &GrepSearchOptions,
     budget: &ContentCacheBudget,
+    bigram_index: Option<&BigramFilter>,
+    bigram_overlay: Option<&BigramOverlay>,
     is_cancelled: Option<&AtomicBool>,
 ) -> GrepResult<'a> {
     let total_files = files.len();
@@ -891,6 +946,51 @@ pub fn multi_grep_search<'a>(
         };
     }
 
+    // Bigram prefiltering: OR the candidate bitsets for each pattern.
+    // A file is a candidate if it matches ANY of the patterns' bigrams.
+    let bigram_candidates = if let Some(idx) = bigram_index
+        && idx.is_ready()
+    {
+        let mut combined: Option<Vec<u64>> = None;
+        for pattern in patterns {
+            if let Some(candidates) = idx.query(pattern.as_bytes()) {
+                combined = Some(match combined {
+                    None => candidates,
+                    Some(mut acc) => {
+                        // OR: file is candidate if it matches any pattern
+                        acc.iter_mut()
+                            .zip(candidates.iter())
+                            .for_each(|(a, b)| *a |= *b);
+                        acc
+                    }
+                });
+            }
+        }
+
+        if let Some(ref mut candidates) = combined
+            && let Some(overlay) = bigram_overlay
+        {
+            // Clear tombstoned files
+            for (r, t) in candidates.iter_mut().zip(overlay.tombstones().iter()) {
+                *r &= !t;
+            }
+            // Add modified files whose bigrams match any pattern
+            for pattern in patterns {
+                let pattern_bigrams = extract_bigrams(pattern.as_bytes());
+                for file_idx in overlay.query_modified(&pattern_bigrams) {
+                    let word = file_idx / 64;
+                    if word < candidates.len() {
+                        candidates[word] |= 1u64 << (file_idx % 64);
+                    }
+                }
+            }
+        }
+
+        combined
+    } else {
+        None
+    };
+
     let (mut files_to_search, mut filtered_file_count) =
         prepare_files_to_search(files, constraints, options);
 
@@ -902,6 +1002,15 @@ pub fn multi_grep_search<'a>(
         let (retry_files, retry_count) = prepare_files_to_search(files, &stripped, options);
         files_to_search = retry_files;
         filtered_file_count = retry_count;
+    }
+
+    // Apply bigram prefilter to the file list
+    if let Some(ref candidates) = bigram_candidates {
+        let base_ptr = files.as_ptr();
+        files_to_search.retain(|f| {
+            let file_idx = unsafe { (*f as *const FileItem).offset_from(base_ptr) as usize };
+            BigramFilter::is_candidate(candidates, file_idx)
+        });
     }
 
     if files_to_search.is_empty() {
@@ -1157,6 +1266,9 @@ where
 
             for mut m in file_matches {
                 m.file_index = file_result_idx;
+                if options.trim_whitespace {
+                    m.trim_leading_whitespace();
+                }
                 all_matches.push(m);
             }
 
@@ -1237,6 +1349,9 @@ fn collect_grep_results<'a>(
 
         for mut m in file_matches {
             m.file_index = file_result_idx;
+            if options.trim_whitespace {
+                m.trim_leading_whitespace();
+            }
             all_matches.push(m);
         }
 
@@ -1381,6 +1496,9 @@ fn fuzzy_grep_search<'a>(
     //   1-2 chars → 0 typos (exact subsequence only)
     //   3-5 chars → 1 typo
     //   6+  chars → 2 typos
+    // Cap at 2: higher values (3+) let the SIMD prefilter pass lines
+    // missing key characters entirely (e.g. query "flvencodeX" matching
+    // lines without 'l' or 'v'). Quality comes from the post-match filters.
     let max_typos = (grep_text.len() / 3).min(2);
     let scoring = neo_frizbee::Scoring {
         // Use default gap penalties. Higher values (e.g. 20) cause
@@ -1411,15 +1529,16 @@ fn fuzzy_grep_search<'a>(
     let perfect_score = (grep_text.len() as u16) * 16;
     let min_score = (perfect_score * 50) / 100;
 
-    // We allow up to needle_len * 2 to accommodate fuzzy subsequence
-    // matches in longer identifiers (e.g. "SortedMap" → "SortedArrayMap"
-    // has span 13 for needle 9). Quality is enforced by the density and
-    // gap checks below, not just span alone.
-    let max_match_span = grep_text.len() * 2;
+    // Target identifiers are often longer than the query due to delimiters
+    // (e.g. query "flvencodepicture" → "ff_flv_encode_picture_header").
+    // Allow 3x needle length to accommodate underscore/dot-separated names.
+    let max_match_span = grep_text.len() * 3;
     let needle_len = grep_text.len();
 
-    // We scale by needle_len: longer needles tolerate more gaps.
-    let max_gaps = (needle_len / 4).max(1);
+    // Each delimiter (_, .) in the target creates a gap. A typical C/Rust
+    // identifier like "ff_flv_encode_picture_header" has 4-5 underscores.
+    // Scale generously so delimiter gaps don't reject valid matches.
+    let max_gaps = (needle_len / 3).max(2);
 
     // File-level prefilter: collect unique needle chars (both cases) for
     // a fast memchr scan.  If a file doesn't contain enough distinct
@@ -1581,11 +1700,10 @@ fn fuzzy_grep_search<'a>(
                     // upstream returns indices in reverse order, sort ascending
                     match_indices.indices.sort_unstable();
 
-                    // Minimum matched chars: at least (needle_len - 1) characters
-                    // must appear in the match indices. This allows one missing
-                    // char (a single typo/transposition) but rejects matches that
-                    // only hit a partial substring (e.g. "HashMap" for "shcema").
-                    let min_matched = needle_len.saturating_sub(1).max(1);
+                    // Minimum matched chars: at least (needle_len - max_typos)
+                    // characters must appear. This is consistent with the typo
+                    // budget: each typo can drop one needle char from the alignment.
+                    let min_matched = needle_len.saturating_sub(max_typos).max(1);
                     if match_indices.indices.len() < min_matched {
                         continue;
                     }
@@ -1601,12 +1719,14 @@ fn fuzzy_grep_search<'a>(
 
                         // Density check: matched chars / span must be dense enough.
                         // Relaxed for perfect subsequence matches (all needle chars
-                        // present), stricter when typos are involved.
+                        // present), slightly relaxed for typo matches to handle
+                        // delimiter-heavy targets (e.g. "ff_flv_encode_picture_header"
+                        // has span inflated by underscores → density ~68%).
                         let density = (indices.len() * 100) / span;
                         let min_density = if indices.len() >= needle_len {
-                            50 // Perfect subsequence — relaxed
+                            45 // Perfect subsequence — relaxed (delimiters inflate span)
                         } else {
-                            70 // Has typos — stricter
+                            65 // Has typos — moderately strict
                         };
                         if density < min_density {
                             continue;
@@ -1728,7 +1848,6 @@ pub fn grep_search<'a>(
     let regex = match options.mode {
         GrepMode::PlainText => None,
         GrepMode::Fuzzy => {
-            // Fuzzy mode doesn't use bigram — prepare and return early.
             let (mut files_to_search, mut filtered_file_count) =
                 prepare_files_to_search(files, constraints_from_query, options);
             if files_to_search.is_empty()
@@ -1746,6 +1865,39 @@ pub fn grep_search<'a>(
                     ..Default::default()
                 };
             }
+
+            // Bigram prefilter: pick 5 evenly-spaced probe bigrams, require
+            // (5 - max_typos) of them to appear. Widely-spaced probes are
+            // far more selective than sliding windows of adjacent bigrams.
+            if let Some(idx) = bigram_index
+                && idx.is_ready()
+            {
+                let bq = fuzzy_to_bigram_query(&grep_text, 7);
+                if !bq.is_any()
+                    && let Some(mut candidates) = bq.evaluate(idx)
+                {
+                    if let Some(overlay) = bigram_overlay {
+                        for (r, t) in candidates.iter_mut().zip(overlay.tombstones().iter()) {
+                            *r &= !t;
+                        }
+                        // Fuzzy: conservatively add all modified files
+                        for file_idx in overlay.modified_indices() {
+                            let word = file_idx / 64;
+                            if word < candidates.len() {
+                                candidates[word] |= 1u64 << (file_idx % 64);
+                            }
+                        }
+                    }
+
+                    let base_ptr = files.as_ptr();
+                    files_to_search.retain(|f| {
+                        let file_idx =
+                            unsafe { (*f as *const FileItem).offset_from(base_ptr) as usize };
+                        BigramFilter::is_candidate(&candidates, file_idx)
+                    });
+                }
+            }
+
             return fuzzy_grep_search(
                 &grep_text,
                 &files_to_search,
@@ -1785,24 +1937,50 @@ pub fn grep_search<'a>(
     let pattern_len = finder_pattern.len() as u32;
 
     // Bigram prefiltering: query the inverted index + merge overlay.
-    let bigram_candidates = if regex.is_none()
-        && let Some(idx) = bigram_index
+    // For PlainText mode: extract bigrams directly from the literal pattern.
+    // For Regex mode: decompose the regex HIR into an AND/OR bigram query tree
+    // and evaluate it against the inverted index (supports alternation, optional
+    // groups, character classes, and sparse-1 bigrams across single-byte wildcards).
+    let bigram_candidates = if let Some(idx) = bigram_index
         && idx.is_ready()
-        && let Some(mut candidates) = idx.query(effective_pattern.as_bytes())
     {
-        if let Some(overlay) = bigram_overlay {
-            let pattern_bigrams = extract_bigrams(effective_pattern.as_bytes());
-            for (r, t) in candidates.iter_mut().zip(overlay.tombstones().iter()) {
-                *r &= !t;
-            }
-            for file_idx in overlay.query_modified(&pattern_bigrams) {
-                let word = file_idx / 64;
-                if word < candidates.len() {
-                    candidates[word] |= 1u64 << (file_idx % 64);
+        let raw_candidates = if regex.is_none() {
+            // PlainText or regex-fallback-to-plain: literal bigram query
+            idx.query(effective_pattern.as_bytes())
+        } else {
+            // Regex mode: decompose pattern into bigram query tree
+            let bq = regex_to_bigram_query(&effective_pattern);
+            if !bq.is_any() { bq.evaluate(idx) } else { None }
+        };
+
+        if let Some(mut candidates) = raw_candidates {
+            if let Some(overlay) = bigram_overlay {
+                // Clear tombstoned (deleted) files from candidates
+                for (r, t) in candidates.iter_mut().zip(overlay.tombstones().iter()) {
+                    *r &= !t;
+                }
+
+                if regex.is_none() {
+                    let pattern_bigrams = extract_bigrams(effective_pattern.as_bytes());
+                    for file_idx in overlay.query_modified(&pattern_bigrams) {
+                        let word = file_idx / 64;
+                        if word < candidates.len() {
+                            candidates[word] |= 1u64 << (file_idx % 64);
+                        }
+                    }
+                } else {
+                    for file_idx in overlay.modified_indices() {
+                        let word = file_idx / 64;
+                        if word < candidates.len() {
+                            candidates[word] |= 1u64 << (file_idx % 64);
+                        }
+                    }
                 }
             }
+            Some(candidates)
+        } else {
+            None
         }
-        Some(candidates)
     } else {
         None
     };
@@ -2158,6 +2336,7 @@ mod tests {
             before_context: 0,
             after_context: 0,
             classify_definitions: false,
+            trim_whitespace: false,
         };
 
         // Test with 3 patterns
@@ -2167,6 +2346,8 @@ mod tests {
             &[],
             &options,
             &ContentCacheBudget::unlimited(),
+            None,
+            None,
             None,
         );
 
@@ -2206,6 +2387,8 @@ mod tests {
             &options,
             &ContentCacheBudget::unlimited(),
             None,
+            None,
+            None,
         );
         assert_eq!(
             result2.matches.len(),
@@ -2220,6 +2403,8 @@ mod tests {
             &[],
             &options,
             &ContentCacheBudget::unlimited(),
+            None,
+            None,
             None,
         );
         assert_eq!(

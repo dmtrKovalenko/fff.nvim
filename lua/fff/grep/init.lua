@@ -33,7 +33,8 @@ function M.search(query, file_offset, page_size, config, grep_mode)
     conf.max_matches_per_file,
     conf.smart_case,
     grep_mode or 'plain',
-    conf.time_budget_ms
+    conf.time_budget_ms,
+    conf.trim_whitespace
   )
   return last_result
 end

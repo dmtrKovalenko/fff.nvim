@@ -30,6 +30,7 @@ fn run_grep(files: &[fff::FileItem], index: Option<&fff::BigramFilter>, query: &
         before_context: 0,
         after_context: 0,
         classify_definitions: false,
+        trim_whitespace: false,
     };
 
     let parsed = parse_grep_query(query);

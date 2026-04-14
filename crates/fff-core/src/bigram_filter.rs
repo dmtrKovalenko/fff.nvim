@@ -518,4 +518,10 @@ impl BigramOverlay {
     pub(crate) fn tombstones(&self) -> &[u64] {
         &self.tombstones
     }
+
+    /// Get all modified file indices (for conservative overlay merging when
+    /// we can't extract precise bigrams, e.g. regex patterns).
+    pub(crate) fn modified_indices(&self) -> Vec<usize> {
+        self.modified.keys().copied().collect()
+    }
 }

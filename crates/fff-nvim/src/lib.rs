@@ -60,15 +60,11 @@ pub fn init_db(
 }
 
 pub fn destroy_frecency_db(_: &Lua, _: ()) -> LuaResult<bool> {
-    let mut frecency = FRECENCY.write().into_lua_result()?;
-    *frecency = None;
-    Ok(true)
+    Ok(FRECENCY.destroy().into_lua_result()?.is_some())
 }
 
 pub fn destroy_query_db(_: &Lua, _: ()) -> LuaResult<bool> {
-    let mut query_tracker = QUERY_TRACKER.write().into_lua_result()?;
-    *query_tracker = None;
-    Ok(true)
+    Ok(QUERY_TRACKER.destroy().into_lua_result()?.is_some())
 }
 
 pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
@@ -280,6 +276,7 @@ pub fn live_grep(
         smart_case,
         grep_mode,
         time_budget_ms,
+        trim_whitespace,
     ): (
         String,
         Option<usize>,
@@ -289,6 +286,7 @@ pub fn live_grep(
         Option<bool>,
         Option<String>,
         Option<u64>,
+        Option<bool>,
     ),
 ) -> LuaResult<LuaValue> {
     let file_picker_guard = FILE_PICKER.read().into_lua_result()?;
@@ -314,6 +312,7 @@ pub fn live_grep(
         before_context: 0,
         after_context: 0,
         classify_definitions: false,
+        trim_whitespace: trim_whitespace.unwrap_or(false),
     };
 
     let result = picker.grep(&parsed, &options);

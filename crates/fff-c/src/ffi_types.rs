@@ -125,6 +125,7 @@ pub struct FffScore {
     pub distance_penalty: i32,
     pub current_file_penalty: i32,
     pub combo_match_boost: i32,
+    pub path_alignment_bonus: i32,
     pub exact_match: bool,
     pub match_type: *mut c_char,
 }
@@ -140,6 +141,7 @@ impl From<&Score> for FffScore {
             distance_penalty: score.distance_penalty,
             current_file_penalty: score.current_file_penalty,
             combo_match_boost: score.combo_match_boost,
+            path_alignment_bonus: score.path_alignment_bonus,
             exact_match: score.exact_match,
             match_type: cstring_new(score.match_type),
         }

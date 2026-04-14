@@ -146,6 +146,7 @@ impl<'a> GrepBench<'a> {
                 before_context: 0,
                 after_context: 0,
                 classify_definitions: false,
+                trim_whitespace: false,
             },
         }
     }
@@ -386,6 +387,19 @@ fn main() {
         print_row(name, &stats, matches, files_searched, *iters);
     }
 
+    // ── Fuzzy + bigram prefilter benchmarks ─────────────────────────────
+    eprintln!("\n[4b/7] Fuzzy grep with bigram prefilter");
+    print_header();
+
+    let fuzzy_bigram_bench =
+        GrepBench::with_mode(&files, GrepMode::Fuzzy).with_bigram(&bigram_index);
+
+    for (name, query, iters) in &fuzzy_queries {
+        let bg_name = format!("bg_{}", name);
+        let (stats, matches, files_searched) = fuzzy_bigram_bench.bench_query(query, *iters);
+        print_row(&bg_name, &stats, matches, files_searched, *iters);
+    }
+
     // ── Fuzzy incremental typing ────────────────────────────────────────
     eprintln!("\n[5/7] Fuzzy incremental typing simulation");
     eprintln!("  Simulates user typing character by character (fuzzy mode).\n");
@@ -505,6 +519,7 @@ fn main() {
             before_context: 0,
             after_context: 0,
             classify_definitions: false,
+            trim_whitespace: false,
         };
         let start = Instant::now();
         let result = grep_search(

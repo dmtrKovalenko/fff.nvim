@@ -61,6 +61,7 @@ fn score_into_lua(score: &Score, lua: &Lua) -> LuaResult<LuaValue> {
     table.set("distance_penalty", score.distance_penalty)?;
     table.set("current_file_penalty", score.current_file_penalty)?;
     table.set("combo_match_boost", score.combo_match_boost)?;
+    table.set("path_alignment_bonus", score.path_alignment_bonus)?;
     table.set("match_type", score.match_type)?;
     table.set("exact_match", score.exact_match)?;
     Ok(LuaValue::Table(table))

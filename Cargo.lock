@@ -738,6 +738,7 @@ dependencies = [
  "rand",
  "rayon",
  "regex",
+ "regex-syntax",
  "serde",
  "serde_json",
  "smallvec",

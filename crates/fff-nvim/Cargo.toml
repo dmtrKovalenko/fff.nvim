@@ -37,8 +37,19 @@ path = "src/bin/grep_vs_rg.rs"
 
 [[bin]]
 name = "bench_grep_query"
-ppath = "src/bin/bench_grep_query.rs"
 path = "src/bin/bench_grep_query.rs"
+
+[[bin]]
+name = "fuzzy_grep_test"
+path = "src/bin/fuzzy_grep_test.rs"
+
+[[bin]]
+name = "test_memory_leak"
+path = "src/bin/test_memory_leak.rs"
+
+[[bin]]
+name = "bench_ci_memmem"
+path = "src/bin/bench_ci_memmem.rs"
 
 [dependencies]
 # Workspace dependencies
@@ -49,8 +60,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff = { package = "fff-search", path = "../fff-core" , version = "0.5.1", features = ["mimalloc-collect"] }
-fff-query-parser = { path = "../fff-query-parser" , version = "0.5.2" }
+fff = { package = "fff-search", path = "../fff-core", version = "0.5.1", features = [
+	"mimalloc-collect",
+] }
+fff-query-parser = { path = "../fff-query-parser", version = "0.5.2" }
 
 # External dependencies
 blake3 = "1.8.2"

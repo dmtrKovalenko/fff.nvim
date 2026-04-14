@@ -66,26 +66,29 @@ pub trait Constrainable {
 /// - `path_ends_with_suffix("xlibswscale/input.c", "libswscale/input.c")` → false (no boundary)
 #[inline]
 pub fn path_ends_with_suffix(path: &str, suffix: &str) -> bool {
-    if path.len() < suffix.len() {
+    let path_bytes = path.as_bytes();
+    let suffix_bytes = suffix.as_bytes();
+    if path_bytes.len() < suffix_bytes.len() {
         return false;
     }
-    let start = path.len() - suffix.len();
-    if !path[start..].eq_ignore_ascii_case(suffix) {
+    let start = path_bytes.len() - suffix_bytes.len();
+    if !path_bytes[start..].eq_ignore_ascii_case(suffix_bytes) {
         return false;
     }
     // Exact match, or the character before is /
-    start == 0 || path.as_bytes()[start - 1] == b'/'
+    start == 0 || path_bytes[start - 1] == b'/'
 }
 
 /// Check if file extension matches (without allocation)
 #[inline]
 pub fn file_has_extension(file_name: &str, ext: &str) -> bool {
-    if file_name.len() <= ext.len() + 1 {
+    let name_bytes = file_name.as_bytes();
+    let ext_bytes = ext.as_bytes();
+    if name_bytes.len() <= ext_bytes.len() + 1 {
         return false;
     }
-    let start = file_name.len() - ext.len() - 1;
-    file_name.as_bytes().get(start) == Some(&b'.')
-        && file_name[start + 1..].eq_ignore_ascii_case(ext)
+    let start = name_bytes.len() - ext_bytes.len() - 1;
+    name_bytes.get(start) == Some(&b'.') && name_bytes[start + 1..].eq_ignore_ascii_case(ext_bytes)
 }
 
 /// Check if path contains segment (without allocation)
@@ -94,28 +97,29 @@ pub fn file_has_extension(file_name: &str, ext: &str) -> bool {
 #[inline]
 pub fn path_contains_segment(path: &str, segment: &str) -> bool {
     let path_bytes = path.as_bytes();
-    let segment_len = segment.len();
+    let segment_bytes = segment.as_bytes();
+    let segment_len = segment_bytes.len();
 
     // Check segment/ at start of path
-    if path.len() > segment_len
+    if path_bytes.len() > segment_len
         && path_bytes.get(segment_len) == Some(&b'/')
-        && path[..segment_len].eq_ignore_ascii_case(segment)
+        && path_bytes[..segment_len].eq_ignore_ascii_case(segment_bytes)
     {
         return true;
     }
 
     // Check /segment/ anywhere using byte scanning
-    if path.len() < segment_len + 2 {
+    if path_bytes.len() < segment_len + 2 {
         return false;
     }
 
-    for i in 0..path.len().saturating_sub(segment_len + 1) {
+    for i in 0..path_bytes.len().saturating_sub(segment_len + 1) {
         if path_bytes[i] == b'/' {
             let start = i + 1;
             let end = start + segment_len;
-            if end < path.len()
+            if end < path_bytes.len()
                 && path_bytes[end] == b'/'
-                && path[start..end].eq_ignore_ascii_case(segment)
+                && path_bytes[start..end].eq_ignore_ascii_case(segment_bytes)
             {
                 return true;
             }
@@ -468,5 +472,34 @@ mod tests {
         // Simple path
         assert!(path_ends_with_suffix("src/main.rs", "src/main.rs"));
         assert!(path_ends_with_suffix("crates/src/main.rs", "src/main.rs"));
+    }
+
+    #[test]
+    fn test_path_ends_with_suffix_unicode_apostrophe_mismatch() {
+        assert!(!path_ends_with_suffix(
+            "dir/\u{2019}bar/file.txt",
+            "'bar/file.txt"
+        ));
+    }
+
+    #[test]
+    fn test_path_ends_with_suffix_unicode_space_mismatch() {
+        assert!(!path_ends_with_suffix(
+            "dir/\u{202f}am/file.txt",
+            " am/file.txt"
+        ));
+    }
+
+    #[test]
+    fn test_path_contains_segment_unicode_no_panic() {
+        assert!(!path_contains_segment(
+            "Library/Cloud/Project\u{2019}s Folder/books.ttl",
+            "Project's Folder"
+        ));
+    }
+
+    #[test]
+    fn test_file_has_extension_unicode_no_panic() {
+        assert!(!file_has_extension("cat\u{00e9}.rs", "s"));
     }
 }

@@ -79,6 +79,7 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         before_context: 0,
         after_context: 0,
         classify_definitions: false,
+        trim_whitespace: false,
     };
 
     let parsed = parse_grep_query(query);
@@ -87,7 +88,7 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         files,
         &parsed,
         &options,
-        &fff::ContentCacheBudget::zero(),
+        &fff::ContentCacheBudget::default(),
         None,
         None,
         None,
@@ -169,10 +170,28 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let repo_path = std::path::PathBuf::from(
-        std::env::var("HOME").unwrap_or_else(|_| "/Users/neogoose".to_string()),
-    )
-    .join("dev/lightsource");
+    let (repo_path, queries) = if let Some(idx) = args.iter().position(|a| a == "--path") {
+        let path = args
+            .get(idx + 1)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                eprintln!("--path requires an argument");
+                std::process::exit(1);
+            });
+        let queries: Vec<String> = args
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != idx && *i != idx + 1)
+            .map(|(_, s)| s.clone())
+            .collect();
+        (path, queries)
+    } else {
+        let path = std::path::PathBuf::from(
+            std::env::var("HOME").unwrap_or_else(|_| "/Users/neogoose".to_string()),
+        )
+        .join("dev/lightsource");
+        (path, args)
+    };
 
     if !repo_path.exists() {
         eprintln!("Repository not found at: {:?}", repo_path);
@@ -194,7 +213,7 @@ fn main() {
         load_start.elapsed().as_secs_f64()
     );
 
-    if args.is_empty() {
+    if queries.is_empty() {
         // Run default test queries
         run_fuzzy_query(&files, "shcema", "transposition of 'schema'");
         run_fuzzy_query(&files, "SortedMap", "should match SortedArrayMap");
@@ -205,7 +224,7 @@ fn main() {
         );
     } else {
         // Run user-provided queries
-        for query in &args {
+        for query in &queries {
             run_fuzzy_query(&files, query, "user query");
         }
     }

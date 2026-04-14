@@ -94,6 +94,7 @@
 
 mod background_watcher;
 mod bigram_filter;
+pub mod bigram_query;
 mod constraints;
 mod db_healthcheck;
 mod error;

@@ -390,6 +390,7 @@ pub unsafe extern "C" fn fff_live_grep(
         before_context: before_context as usize,
         after_context: after_context as usize,
         classify_definitions,
+        trim_whitespace: false,
     };
 
     let result = picker.grep(&parsed, &options);
@@ -491,14 +492,18 @@ pub unsafe extern "C" fn fff_multi_grep(
         before_context: before_context as usize,
         after_context: after_context as usize,
         classify_definitions,
+        trim_whitespace: false,
     };
 
+    let overlay_guard = picker.bigram_overlay().map(|o| o.read());
     let result = fff::multi_grep_search(
         picker.get_files(),
         &patterns,
         constraint_refs,
         &options,
         picker.cache_budget(),
+        picker.bigram_index(),
+        overlay_guard.as_deref(),
         None,
     );
     let grep_result = FffGrepResult::from_core(&result);
