@@ -116,7 +116,7 @@ Parameters:
 
 - `/fff-health` — show FFF status (indexed files, git info, frecency/history DB status)
 - `/fff-rescan` — trigger a file rescan
-- `/fff-mode both|tools-only` — switch mode and persist it
+- `/fff-mode both|tools-only` — switch mode and persist it (writes to `~/.pi/agent/fff/config.json`)
 
 ## Modes
 
@@ -125,8 +125,9 @@ Parameters:
 
 Mode precedence:
 1. `--fff-mode <mode>` CLI flag
-2. `PI_FFF_MODE=<mode>` environment variable
-3. default (`both`)
+2. `PI_FFF_MODE=<mode>` environment variable  
+3. Config file (`~/.pi/agent/fff/config.json`)
+4. default (`both`)
 
 ## Data
 

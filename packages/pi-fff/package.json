@@ -31,11 +31,13 @@
   "files": [
     "src"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ff-labs/fff-bin-darwin-arm64": "^0.5.2",
     "@ff-labs/fff-node": "^0.1.37"
   },
   "peerDependencies": {
@@ -44,7 +46,7 @@
     "@sinclair/typebox": "*"
   },
   "devDependencies": {
-    "@types/node": "^24.5.2",
+    "@types/node": "^22.0.0",
     "typescript": "^5.0.0"
   }
 }
