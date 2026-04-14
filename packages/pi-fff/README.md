@@ -41,6 +41,18 @@ Project-local install:
 pi install -l npm:@ff-labs/pi-fff
 ```
 
+**Via git:**
+
+```bash
+pi install git:github.com/dmtrKovalenko/fff.nvim
+```
+
+Pin to a release:
+
+```bash
+pi install git:github.com/dmtrKovalenko/fff.nvim@v0.3.0
+```
+
 ### Local development / manual install
 
 ```bash
