@@ -2285,7 +2285,7 @@ function M.send_to_quickfix()
   local is_grep = M.state.mode == 'grep'
   M.close()
 
-  vim.fn.setqflist(qf_list, 'r')
+  vim.fn.setqflist(qf_list)
   vim.cmd('copen')
 
   local count = #qf_list
