@@ -839,11 +839,10 @@ function M.setup_keymaps()
   set_keymap('i', keymaps.cycle_previous_query, M.recall_query_from_history, input_opts)
   set_keymap('n', 'j', M.move_down, input_opts)
   set_keymap('n', 'k', M.move_up, input_opts)
+  set_keymap('n', keymaps.close, M.close, input_opts)
   set_keymap('n', keymaps.focus_list, M.focus_list_win, input_opts)
   set_keymap('n', keymaps.focus_preview, M.focus_preview_win, input_opts)
 
-  -- Input buffer: both modes
-  set_keymap({ 'i', 'n' }, keymaps.close, M.close, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.select, M.select, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.select_split, function() M.select('split') end, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.select_vsplit, function() M.select('vsplit') end, input_opts)
