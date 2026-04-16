@@ -842,7 +842,7 @@ function M.setup_keymaps()
   set_keymap('n', keymaps.focus_list, M.focus_list_win, input_opts)
   set_keymap('n', keymaps.focus_preview, M.focus_preview_win, input_opts)
 
-  if M.state.config.vim_mode then
+  if M.state.config.prompt_vim_mode then
     set_keymap('n', keymaps.close, M.close, input_opts)
   else
     set_keymap({ 'i', 'n' }, keymaps.close, M.close, input_opts)
@@ -899,7 +899,7 @@ function M.setup_keymaps()
     end,
   })
 
-  if M.state.config.vim_mode then
+  if M.state.config.prompt_vim_mode then
     vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
       buffer = M.state.input_buf,
       callback = function()
