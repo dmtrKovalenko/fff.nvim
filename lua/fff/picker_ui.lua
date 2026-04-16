@@ -904,9 +904,7 @@ function M.setup_keymaps()
       buffer = M.state.input_buf,
       callback = function()
         local prompt_len = #M.state.config.prompt
-        if vim.fn.col('.') <= prompt_len then
-          vim.fn.cursor(vim.fn.line('.'), prompt_len + 1)
-        end
+        if vim.fn.col('.') <= prompt_len then vim.fn.cursor(vim.fn.line('.'), prompt_len + 1) end
       end,
     })
   end
