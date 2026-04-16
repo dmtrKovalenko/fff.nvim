@@ -893,6 +893,16 @@ function M.setup_keymaps()
       vim.schedule(function() M.on_input_change() end)
     end,
   })
+
+  vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
+    buffer = M.state.input_buf,
+    callback = function()
+      local prompt_len = #M.state.config.prompt
+      if vim.fn.col('.') <= prompt_len then
+        vim.fn.cursor(vim.fn.line('.'), prompt_len + 1)
+      end
+    end,
+  })
 end
 
 function M.focus_input_win()
