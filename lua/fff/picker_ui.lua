@@ -839,9 +839,14 @@ function M.setup_keymaps()
   set_keymap('i', keymaps.cycle_previous_query, M.recall_query_from_history, input_opts)
   set_keymap('n', 'j', M.move_down, input_opts)
   set_keymap('n', 'k', M.move_up, input_opts)
-  set_keymap('n', keymaps.close, M.close, input_opts)
   set_keymap('n', keymaps.focus_list, M.focus_list_win, input_opts)
   set_keymap('n', keymaps.focus_preview, M.focus_preview_win, input_opts)
+
+  if M.state.config.vim_mode then
+    set_keymap('n', keymaps.close, M.close, input_opts)
+  else
+    set_keymap({ 'i', 'n' }, keymaps.close, M.close, input_opts)
+  end
 
   set_keymap({ 'i', 'n' }, keymaps.select, M.select, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.select_split, function() M.select('split') end, input_opts)
@@ -894,15 +899,17 @@ function M.setup_keymaps()
     end,
   })
 
-  vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
-    buffer = M.state.input_buf,
-    callback = function()
-      local prompt_len = #M.state.config.prompt
-      if vim.fn.col('.') <= prompt_len then
-        vim.fn.cursor(vim.fn.line('.'), prompt_len + 1)
-      end
-    end,
-  })
+  if M.state.config.vim_mode then
+    vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
+      buffer = M.state.input_buf,
+      callback = function()
+        local prompt_len = #M.state.config.prompt
+        if vim.fn.col('.') <= prompt_len then
+          vim.fn.cursor(vim.fn.line('.'), prompt_len + 1)
+        end
+      end,
+    })
+  end
 end
 
 function M.focus_input_win()
