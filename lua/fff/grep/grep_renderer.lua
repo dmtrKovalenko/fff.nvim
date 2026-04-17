@@ -48,8 +48,18 @@ local function render_match_line(item, ctx)
   local location = string.format(':%d:%d', item.line_number or 0, (item.col or 0) + 1)
   local separator = '  '
   -- vim.json.decode may return Blobs for strings with NUL bytes; coerce to string.
+  -- NOTE: Lua type() returns "string" for Vim Blobs, so we must use vim.fn.type() to detect them.
   local raw_content = item.line_content
-  if type(raw_content) ~= 'string' then raw_content = raw_content and tostring(raw_content) or '' end
+  if vim.fn.type(raw_content) == vim.v.t_blob then
+    local bytes = vim.fn.blob2list(raw_content)
+    local chars = {}
+    for _, b in ipairs(bytes) do
+      if b ~= 0 then chars[#chars + 1] = string.char(b) end
+    end
+    raw_content = table.concat(chars)
+  elseif type(raw_content) ~= 'string' then
+    raw_content = raw_content and tostring(raw_content) or ''
+  end
   local content = raw_content
 
   -- Indent + location + separator + content
