@@ -560,7 +560,9 @@ fn trigger_full_rescan(shared_picker: &SharedPicker, shared_frecency: &SharedFre
     // Spawn background warmup + bigram rebuild (mirrors the initial scan's
     // post-scan phase). The write lock is still held here but the spawned
     // thread re-acquires it later — safe because the guard drops at function end.
-    if shared_picker.need_complex_rebuild() {
+    // NOTE: must NOT call shared_picker.need_complex_rebuild() here — that would
+    // try to read-lock the same RwLock we already hold as write, causing a deadlock.
+    if picker.need_enable_mmap_cache() || picker.need_enable_content_indexing() {
         picker.spawn_post_rescan_rebuild(shared_picker.clone());
     }
 }
