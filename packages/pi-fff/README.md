@@ -116,24 +116,30 @@ Parameters:
 
 - `/fff-health` — show FFF status (indexed files, git info, frecency/history DB status)
 - `/fff-rescan` — trigger a file rescan
-- `/fff-mode both|tools-only` — switch mode and persist it (writes to `~/.pi/agent/fff/config.json`)
+- `/fff-mode <mode>` — switch mode (tool name change requires restart)
 
 ## Modes
 
-- `both` (default): tool overrides + `@` autocomplete replacement in UI
-- `tools-only`: only tool overrides; keep pi's default fd-backed `@` autocomplete
+- `tools-and-ui` (default): registers `fffind`, `ffgrep`, `fff-multi-grep` as additional tools + FFF-backed `@` autocomplete
+- `tools-only`: additional tools only; keep pi's default `@` autocomplete
+- `override`: replaces pi's built-in `find`, `grep` and adds `multi_grep` + FFF-backed `@` autocomplete
 
 Mode precedence:
 1. `--fff-mode <mode>` CLI flag
-2. `PI_FFF_MODE=<mode>` environment variable  
-3. Config file (`~/.pi/agent/fff/config.json`)
-4. default (`both`)
+2. `PI_FFF_MODE=<mode>` environment variable
+3. default (`tools-and-ui`)
+
+## Flags
+
+- `--fff-mode <mode>` — set mode (see above)
+- `--fff-frecency-db <path>` — path to frecency database (also: `FFF_FRECENCY_DB` env)
+- `--fff-history-db <path>` — path to query history database (also: `FFF_HISTORY_DB` env)
 
 ## Data
 
-FFF stores frecency and query history databases in `~/.pi/agent/fff/`:
-- `frecency.mdb` — file access frequency/recency
-- `history.mdb` — query-to-file selection history
+When database paths are provided, FFF stores:
+- frecency database — file access frequency/recency
+- history database — query-to-file selection history
 
 No project files are uploaded anywhere by this extension. It runs locally and only uses the configured LLM through pi itself.
 

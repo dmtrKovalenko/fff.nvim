@@ -36,7 +36,22 @@ const DEFAULT_FIND_LIMIT = 200;
 const GREP_MAX_LINE_LENGTH = 500;
 const MENTION_MAX_RESULTS = 20;
 
-type FffMode = "both" | "tools-only";
+type FffMode = "tools-and-ui" | "tools-only" | "override";
+
+const VALID_MODES: FffMode[] = ["tools-and-ui", "tools-only", "override"];
+
+interface ToolNames {
+  grep: string;
+  find: string;
+  multiGrep: string;
+}
+
+const FFF_TOOL_NAMES: ToolNames = { grep: "ffgrep", find: "fffind", multiGrep: "fff-multi-grep" };
+const OVERRIDE_TOOL_NAMES: ToolNames = { grep: "grep", find: "find", multiGrep: "multi_grep" };
+
+function resolveToolNames(mode: FffMode): ToolNames {
+  return mode === "override" ? OVERRIDE_TOOL_NAMES : FFF_TOOL_NAMES;
+}
 
 // ---------------------------------------------------------------------------
 // Cursor store — simple bounded Map for pagination cursors
@@ -76,7 +91,7 @@ function formatGrepOutput(result: GrepResult, limit: number): string {
   let currentFile = "";
 
   for (const match of items) {
-    if (match.relativePath !== currentFile) {
+    if (match.relativePath != currentFile) {
       currentFile = match.relativePath;
       if (lines.length > 0) lines.push("");
     }
@@ -223,7 +238,11 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   // Mode resolution: flag > env > default
   let currentMode: FffMode =
-    (pi.getFlag("fff-mode") as FffMode) ?? (process.env.PI_FFF_MODE as FffMode) ?? "both";
+    (pi.getFlag("fff-mode") as FffMode) ??
+    (process.env.PI_FFF_MODE as FffMode) ??
+    "tools-and-ui";
+
+  const toolNames = resolveToolNames(currentMode);
 
   // DB path resolution: flag > env > undefined (use fff-node defaults)
   const frecencyDbPath =
@@ -241,6 +260,10 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   function setMode(mode: FffMode): void {
     currentMode = mode;
+  }
+
+  function shouldEnableMentions(): boolean {
+    return currentMode !== "tools-only";
   }
 
   async function ensureFinder(cwd: string): Promise<FileFinder> {
@@ -308,7 +331,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       ) => void;
     };
   }) {
-    if (getMode() === "tools-only") {
+    if (!shouldEnableMentions()) {
       ctx.ui.setEditorComponent(undefined);
     } else {
       ctx.ui.setEditorComponent(
@@ -321,7 +344,8 @@ export default function fffExtension(pi: ExtensionAPI) {
   // --- Flags / lifecycle ---
 
   pi.registerFlag("fff-mode", {
-    description: "FFF mode: both or tools-only (overrides env when provided)",
+    description:
+      "FFF mode: tools-and-ui | tools-only | override",
     type: "string",
   });
 
@@ -412,8 +436,8 @@ export default function fffExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "ffgrep",
-    label: "ffgrep",
+    name: toolNames.grep,
+    label: toolNames.grep,
     description: `Search file contents for a pattern using FFF (fast, frecency-ranked, git-aware). Returns matching lines with file paths and line numbers. Respects .gitignore. Supports plain text, regex, and fuzzy search modes. Smart case by default. Output truncated to ${DEFAULT_GREP_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB.`,
     promptSnippet:
       "Search file contents for patterns (FFF: frecency-ranked, git-aware, respects .gitignore)",
@@ -480,7 +504,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       const pattern = args?.pattern ?? "";
       const path = args?.path ?? ".";
       let content =
-        theme.fg("toolTitle", theme.bold("ffgrep")) +
+        theme.fg("toolTitle", theme.bold(toolNames.grep)) +
         " " +
         theme.fg("accent", `/${pattern}/`) +
         theme.fg("toolOutput", ` in ${path}`);
@@ -514,8 +538,8 @@ export default function fffExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "fffind",
-    label: "fffind",
+    name: toolNames.find,
+    label: toolNames.find,
     description: `Fuzzy file search by name using FFF (fast, frecency-ranked, git-aware). Returns matching file paths relative to project root. Respects .gitignore. Supports fuzzy matching, path prefixes ('src/'), and glob constraints ('*.ts', '**/*.spec.ts'). Output truncated to ${DEFAULT_FIND_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB.`,
     promptSnippet:
       "Find files by name (FFF: fuzzy, frecency-ranked, git-aware, respects .gitignore)",
@@ -570,7 +594,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       const pattern = args?.pattern ?? "";
       const path = args?.path ?? ".";
       let content =
-        theme.fg("toolTitle", theme.bold("fffind")) +
+        theme.fg("toolTitle", theme.bold(toolNames.find)) +
         " " +
         theme.fg("accent", pattern) +
         theme.fg("toolOutput", ` in ${path}`);
@@ -614,14 +638,14 @@ export default function fffExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "fff-multi-grep",
-    label: "fff-multi-grep",
+    name: toolNames.multiGrep,
+    label: toolNames.multiGrep,
     description:
       "Search file contents for lines matching ANY of multiple patterns (OR logic). Uses SIMD-accelerated Aho-Corasick multi-pattern matching. Faster than regex alternation. Patterns are literal text -- never escape special characters. Use the constraints parameter for file filtering ('*.rs', 'src/', '!test/').",
     promptSnippet:
       "Multi-pattern OR search across file contents (FFF: SIMD-accelerated, frecency-ranked)",
     promptGuidelines: [
-      "Use fff-multi-grep when you need to find multiple identifiers at once (OR logic).",
+      `Use ${toolNames.multiGrep} when you need to find multiple identifiers at once (OR logic).`,
       "Include all naming conventions: snake_case, PascalCase, camelCase variants.",
       "Patterns are literal text. Never escape special characters.",
       "Use the constraints parameter for file type/path filtering, not inside patterns.",
@@ -683,7 +707,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       const patterns = args?.patterns ?? [];
       const constraints = args?.constraints;
       let content =
-        theme.fg("toolTitle", theme.bold("fff-multi-grep")) +
+        theme.fg("toolTitle", theme.bold(toolNames.multiGrep)) +
         " " +
         theme.fg("accent", patterns.map((p: string) => `"${p}"`).join(", "));
       if (constraints) content += theme.fg("toolOutput", ` (${constraints})`);
@@ -700,7 +724,8 @@ export default function fffExtension(pi: ExtensionAPI) {
   // --- commands ---
 
   pi.registerCommand("fff-mode", {
-    description: "Show or set FFF mode: /fff-mode [both | tools-only]",
+    description:
+      "Show or set FFF mode: /fff-mode [tools-and-ui | tools-only | override]",
     handler: async (args, ctx) => {
       const arg = (args || "").trim();
 
@@ -714,8 +739,11 @@ export default function fffExtension(pi: ExtensionAPI) {
       }
 
       // Validate and set mode
-      if (arg !== "both" && arg !== "tools-only") {
-        ctx.ui.notify("Usage: /fff-mode [both | tools-only]", "warning");
+      if (!VALID_MODES.includes(arg as FffMode)) {
+        ctx.ui.notify(
+          `Usage: /fff-mode [${VALID_MODES.join(" | ")}]`,
+          "warning",
+        );
         return;
       }
 
@@ -726,7 +754,11 @@ export default function fffExtension(pi: ExtensionAPI) {
       // Apply immediately using the shared function
       applyEditorMode(ctx);
 
-      ctx.ui.notify(`Mode changed: '${oldMode}' → '${newMode}'`, "info");
+      const note =
+        (oldMode === "override") !== (newMode === "override")
+          ? " (tool name change requires restart)"
+          : "";
+      ctx.ui.notify(`Mode changed: '${oldMode}' → '${newMode}'${note}`, "info");
     },
   });
 
