@@ -36,7 +36,8 @@ use fff::query_tracker::QueryTracker;
 use fff::{DbHealthChecker, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser};
 use fff::{SharedFrecency, SharedPicker};
 use ffi_types::{
-    FffFileItem, FffGrepMatch, FffGrepResult, FffResult, FffScanProgress, FffScore, FffSearchResult,
+    FffDirItem, FffDirSearchResult, FffFileItem, FffGrepMatch, FffGrepResult, FffMixedItem,
+    FffMixedSearchResult, FffResult, FffScanProgress, FffScore, FffSearchResult,
 };
 
 /// Opaque fff_handle holding all per-instance state.
@@ -109,12 +110,14 @@ fn default_i32(val: i32, default: i32) -> i32 {
 ///
 /// # Parameters
 ///
-/// * `base_path`          – directory to index (required)
-/// * `frecency_db_path`   – path to frecency LMDB database (NULL/empty to skip)
-/// * `history_db_path`    – path to query history LMDB database (NULL/empty to skip)
-/// * `use_unsafe_no_lock` – use MDB_NOLOCK for LMDB (useful in single-process setups)
-/// * `warmup_mmap_cache`  – pre-populate mmap caches after the initial scan
-/// * `ai_mode`            – enable AI-agent optimizations (auto-track frecency on modifications)
+/// * `base_path`                – directory to index (required)
+/// * `frecency_db_path`         – path to frecency LMDB database (NULL/empty to skip)
+/// * `history_db_path`          – path to query history LMDB database (NULL/empty to skip)
+/// * `use_unsafe_no_lock`       – use MDB_NOLOCK for LMDB (useful in single-process setups)
+/// * `enable_mmap_cache`        – pre-populate mmap caches after the initial scan
+/// * `enable_content_indexing`  – build content index after the initial scan
+/// * `watch`                    – start a background file-system watcher for live updates
+/// * `ai_mode`                  – enable AI-agent optimizations (auto-track frecency on modifications)
 ///
 /// ## Safety
 /// String parameters must be valid null-terminated UTF-8 or NULL.
@@ -124,7 +127,9 @@ pub unsafe extern "C" fn fff_create_instance(
     frecency_db_path: *const c_char,
     history_db_path: *const c_char,
     use_unsafe_no_lock: bool,
-    warmup_mmap_cache: bool,
+    enable_mmap_cache: bool,
+    enable_content_indexing: bool,
+    watch: bool,
     ai_mode: bool,
 ) -> *mut FffResult {
     let base_path_str = match unsafe { cstr_to_str(base_path) } {
@@ -185,10 +190,11 @@ pub unsafe extern "C" fn fff_create_instance(
         shared_frecency.clone(),
         fff::FilePickerOptions {
             base_path: base_path_str,
-            warmup_mmap_cache,
+            enable_mmap_cache,
+            enable_content_indexing,
+            watch,
             mode,
             cache_budget: None,
-            ..Default::default()
         },
     ) {
         return FffResult::err(&format!("Failed to init file picker: {}", e));
@@ -294,8 +300,7 @@ pub unsafe extern "C" fn fff_search(
     let parser = QueryParser::default();
     let parsed = parser.parse(query_str);
 
-    let results = FilePicker::fuzzy_search(
-        picker.get_files(),
+    let results = picker.fuzzy_search(
         &parsed,
         query_tracker_ref,
         FuzzySearchOptions {
@@ -311,8 +316,165 @@ pub unsafe extern "C" fn fff_search(
         },
     );
 
-    let search_result = FffSearchResult::from_core(&results);
+    let search_result = FffSearchResult::from_core(&results, picker);
     FffResult::ok_handle(search_result as *mut c_void)
+}
+
+/// Perform fuzzy search on indexed directories.
+///
+/// # Parameters
+///
+/// * `fff_handle`   – instance from `fff_create_instance`
+/// * `query`        – search query string
+/// * `current_file` – path of the currently open file for distance scoring (NULL/empty to skip)
+/// * `max_threads`  – maximum worker threads (0 = auto-detect)
+/// * `page_index`   – pagination offset (0 = first page)
+/// * `page_size`    – results per page (0 = default 100)
+///
+/// ## Safety
+/// * `fff_handle` must be a valid instance pointer from `fff_create_instance`.
+/// * `query` and `current_file` must be valid null-terminated UTF-8 strings or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_search_directories(
+    fff_handle: *mut c_void,
+    query: *const c_char,
+    current_file: *const c_char,
+    max_threads: u32,
+    page_index: u32,
+    page_size: u32,
+) -> *mut FffResult {
+    let inst = match unsafe { instance_ref(fff_handle) } {
+        Ok(i) => i,
+        Err(e) => return e,
+    };
+
+    let query_str = match unsafe { cstr_to_str(query) } {
+        Some(s) => s,
+        None => return FffResult::err("Query is null or invalid UTF-8"),
+    };
+
+    let current_file_str = unsafe { optional_cstr(current_file) };
+    let page_size = default_u32(page_size, 100) as usize;
+
+    let picker_guard = match inst.picker.read() {
+        Ok(g) => g,
+        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
+    };
+
+    let picker = match picker_guard.as_ref() {
+        Some(p) => p,
+        None => {
+            return FffResult::err("File picker not initialized. Call fff_create_instance first.");
+        }
+    };
+
+    let parser = QueryParser::new(fff_query_parser::DirSearchConfig);
+    let parsed = parser.parse(query_str);
+
+    let results = picker.fuzzy_search_directories(
+        &parsed,
+        FuzzySearchOptions {
+            max_threads: max_threads as usize,
+            current_file: current_file_str,
+            project_path: Some(picker.base_path()),
+            combo_boost_score_multiplier: 0,
+            min_combo_count: 0,
+            pagination: PaginationArgs {
+                offset: page_index as usize,
+                limit: page_size,
+            },
+        },
+    );
+
+    let dir_result = FffDirSearchResult::from_core(&results, picker);
+    FffResult::ok_handle(dir_result as *mut c_void)
+}
+
+/// Perform a mixed fuzzy search across both files and directories.
+///
+/// Returns a single flat list where files and directories are interleaved
+/// by total score in descending order. Each item has an `item_type` field
+/// (0 = file, 1 = directory).
+///
+/// # Parameters
+///
+/// * `fff_handle`              – instance from `fff_create_instance`
+/// * `query`                   – search query string
+/// * `current_file`            – path of the currently open file (NULL/empty to skip)
+/// * `max_threads`             – maximum worker threads (0 = auto-detect)
+/// * `page_index`              – pagination offset (0 = first page)
+/// * `page_size`               – results per page (0 = default 100)
+/// * `combo_boost_multiplier`  – score multiplier for combo matches (0 = default 100)
+/// * `min_combo_count`         – minimum combo count before boost applies (0 = default 3)
+///
+/// ## Safety
+/// * `fff_handle` must be a valid instance pointer from `fff_create_instance`.
+/// * `query` and `current_file` must be valid null-terminated UTF-8 strings or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_search_mixed(
+    fff_handle: *mut c_void,
+    query: *const c_char,
+    current_file: *const c_char,
+    max_threads: u32,
+    page_index: u32,
+    page_size: u32,
+    combo_boost_multiplier: i32,
+    min_combo_count: u32,
+) -> *mut FffResult {
+    let inst = match unsafe { instance_ref(fff_handle) } {
+        Ok(i) => i,
+        Err(e) => return e,
+    };
+
+    let query_str = match unsafe { cstr_to_str(query) } {
+        Some(s) => s,
+        None => return FffResult::err("Query is null or invalid UTF-8"),
+    };
+
+    let current_file_str = unsafe { optional_cstr(current_file) };
+    let page_size = default_u32(page_size, 100) as usize;
+    let min_combo_count = default_u32(min_combo_count, 3);
+    let combo_boost_multiplier = default_i32(combo_boost_multiplier, 100);
+
+    let picker_guard = match inst.picker.read() {
+        Ok(g) => g,
+        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
+    };
+
+    let picker = match picker_guard.as_ref() {
+        Some(p) => p,
+        None => {
+            return FffResult::err("File picker not initialized. Call fff_create_instance first.");
+        }
+    };
+
+    let qt_guard = match inst.query_tracker.read() {
+        Ok(q) => q,
+        Err(_) => return FffResult::err("Failed to acquire query tracker lock"),
+    };
+    let query_tracker_ref = qt_guard.as_ref();
+
+    let parser = QueryParser::new(fff_query_parser::MixedSearchConfig);
+    let parsed = parser.parse(query_str);
+
+    let results = picker.fuzzy_search_mixed(
+        &parsed,
+        query_tracker_ref,
+        FuzzySearchOptions {
+            max_threads: max_threads as usize,
+            current_file: current_file_str,
+            project_path: Some(picker.base_path()),
+            combo_boost_score_multiplier: combo_boost_multiplier,
+            min_combo_count,
+            pagination: PaginationArgs {
+                offset: page_index as usize,
+                limit: page_size,
+            },
+        },
+    );
+
+    let mixed_result = FffMixedSearchResult::from_core(&results, picker);
+    FffResult::ok_handle(mixed_result as *mut c_void)
 }
 
 /// Perform content search (grep) across indexed files.
@@ -391,10 +553,11 @@ pub unsafe extern "C" fn fff_live_grep(
         after_context: after_context as usize,
         classify_definitions,
         trim_whitespace: false,
+        abort_signal: None,
     };
 
     let result = picker.grep(&parsed, &options);
-    let grep_result = FffGrepResult::from_core(&result);
+    let grep_result = FffGrepResult::from_core(&result, picker);
     FffResult::ok_handle(grep_result as *mut c_void)
 }
 
@@ -493,20 +656,11 @@ pub unsafe extern "C" fn fff_multi_grep(
         after_context: after_context as usize,
         classify_definitions,
         trim_whitespace: false,
+        abort_signal: None,
     };
 
-    let overlay_guard = picker.bigram_overlay().map(|o| o.read());
-    let result = fff::multi_grep_search(
-        picker.get_files(),
-        &patterns,
-        constraint_refs,
-        &options,
-        picker.cache_budget(),
-        picker.bigram_index(),
-        overlay_guard.as_deref(),
-        None,
-    );
-    let grep_result = FffGrepResult::from_core(&result);
+    let result = picker.multi_grep(&patterns, constraint_refs, &options);
+    let grep_result = FffGrepResult::from_core(&result, picker);
     FffResult::ok_handle(grep_result as *mut c_void)
 }
 
@@ -553,6 +707,33 @@ pub unsafe extern "C" fn fff_is_scanning(fff_handle: *mut c_void) -> bool {
         .ok()
         .and_then(|guard| guard.as_ref().map(|p| p.is_scan_active()))
         .unwrap_or(false)
+}
+
+/// Get the base path of the file picker.
+///
+/// Returns an `FffResult` with a heap-allocated C string in the `handle`
+/// field. Free the string with `fff_free_string` after reading it.
+///
+/// ## Safety
+/// `fff_handle` must be a valid instance pointer from `fff_create_instance`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_get_base_path(fff_handle: *mut c_void) -> *mut FffResult {
+    let inst = match unsafe { instance_ref(fff_handle) } {
+        Ok(i) => i,
+        Err(e) => return e,
+    };
+
+    let guard = match inst.picker.read() {
+        Ok(g) => g,
+        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
+    };
+
+    let picker = match guard.as_ref() {
+        Some(p) => p,
+        None => return FffResult::err("File picker not initialized"),
+    };
+
+    FffResult::ok_string(&picker.base_path().to_string_lossy())
 }
 
 /// Get scan progress information.
@@ -653,13 +834,15 @@ pub unsafe extern "C" fn fff_restart_index(
         Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
     };
 
-    let (warmup_caches, mode) = if let Some(mut picker) = guard.take() {
-        let warmup = picker.need_warmup_mmap_cache();
+    let (warmup_caches, content_indexing, watch, mode) = if let Some(mut picker) = guard.take() {
+        let warmup = picker.need_enable_mmap_cache();
+        let ci = picker.need_enable_content_indexing();
+        let w = picker.need_watch();
         let mode = picker.mode();
         picker.stop_background_monitor();
-        (warmup, mode)
+        (warmup, ci, w, mode)
     } else {
-        (false, FFFMode::default())
+        (false, false, true, FFFMode::default())
     };
 
     drop(guard);
@@ -669,10 +852,11 @@ pub unsafe extern "C" fn fff_restart_index(
         inst.frecency.clone(),
         fff::FilePickerOptions {
             base_path: canonical_path.to_string_lossy().to_string(),
-            warmup_mmap_cache: warmup_caches,
+            enable_mmap_cache: warmup_caches,
+            enable_content_indexing: content_indexing,
+            watch,
             mode,
             cache_budget: None,
-            ..Default::default()
         },
     ) {
         Ok(()) => FffResult::ok_empty(),
@@ -1171,4 +1355,148 @@ pub unsafe extern "C" fn fff_free_string(s: *mut c_char) {
             drop(CString::from_raw(s));
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Directory search: free and accessor functions
+// ---------------------------------------------------------------------------
+
+/// Free a directory search result returned by `fff_search_directories`.
+///
+/// ## Safety
+/// `result` must be a valid pointer previously returned via `FffResult.handle`
+/// from `fff_search_directories`, or null (no-op).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_free_dir_search_result(result: *mut FffDirSearchResult) {
+    if result.is_null() {
+        return;
+    }
+
+    unsafe {
+        let result = Box::from_raw(result);
+        let count = result.count as usize;
+
+        if !result.items.is_null() {
+            let mut items = Vec::from_raw_parts(result.items, count, count);
+            for item in &mut items {
+                item.free_strings();
+            }
+        }
+        if !result.scores.is_null() {
+            let mut scores = Vec::from_raw_parts(result.scores, count, count);
+            for score in &mut scores {
+                score.free_strings();
+            }
+        }
+    }
+}
+
+/// Get a pointer to the `index`-th `FffDirItem` in a directory search result.
+///
+/// ## Safety
+/// `result` must be a valid `FffDirSearchResult` pointer from `fff_search_directories`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_dir_search_result_get_item(
+    result: *const FffDirSearchResult,
+    index: u32,
+) -> *const FffDirItem {
+    if result.is_null() {
+        return std::ptr::null();
+    }
+    let result = unsafe { &*result };
+    if index >= result.count || result.items.is_null() {
+        return std::ptr::null();
+    }
+    unsafe { result.items.add(index as usize) }
+}
+
+/// Get a pointer to the `index`-th `FffScore` in a directory search result.
+///
+/// ## Safety
+/// `result` must be a valid `FffDirSearchResult` pointer from `fff_search_directories`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_dir_search_result_get_score(
+    result: *const FffDirSearchResult,
+    index: u32,
+) -> *const FffScore {
+    if result.is_null() {
+        return std::ptr::null();
+    }
+    let result = unsafe { &*result };
+    if index >= result.count || result.scores.is_null() {
+        return std::ptr::null();
+    }
+    unsafe { result.scores.add(index as usize) }
+}
+
+// ---------------------------------------------------------------------------
+// Mixed search: free and accessor functions
+// ---------------------------------------------------------------------------
+
+/// Free a mixed search result returned by `fff_search_mixed`.
+///
+/// ## Safety
+/// `result` must be a valid pointer previously returned via `FffResult.handle`
+/// from `fff_search_mixed`, or null (no-op).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_free_mixed_search_result(result: *mut FffMixedSearchResult) {
+    if result.is_null() {
+        return;
+    }
+
+    unsafe {
+        let result = Box::from_raw(result);
+        let count = result.count as usize;
+
+        if !result.items.is_null() {
+            let mut items = Vec::from_raw_parts(result.items, count, count);
+            for item in &mut items {
+                item.free_strings();
+            }
+        }
+        if !result.scores.is_null() {
+            let mut scores = Vec::from_raw_parts(result.scores, count, count);
+            for score in &mut scores {
+                score.free_strings();
+            }
+        }
+    }
+}
+
+/// Get a pointer to the `index`-th `FffMixedItem` in a mixed search result.
+///
+/// ## Safety
+/// `result` must be a valid `FffMixedSearchResult` pointer from `fff_search_mixed`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_mixed_search_result_get_item(
+    result: *const FffMixedSearchResult,
+    index: u32,
+) -> *const FffMixedItem {
+    if result.is_null() {
+        return std::ptr::null();
+    }
+    let result = unsafe { &*result };
+    if index >= result.count || result.items.is_null() {
+        return std::ptr::null();
+    }
+    unsafe { result.items.add(index as usize) }
+}
+
+/// Get a pointer to the `index`-th `FffScore` in a mixed search result.
+///
+/// ## Safety
+/// `result` must be a valid `FffMixedSearchResult` pointer from `fff_search_mixed`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_mixed_search_result_get_score(
+    result: *const FffMixedSearchResult,
+    index: u32,
+) -> *const FffScore {
+    if result.is_null() {
+        return std::ptr::null();
+    }
+    let result = unsafe { &*result };
+    if index >= result.count || result.scores.is_null() {
+        return std::ptr::null();
+    }
+    unsafe { result.scores.add(index as usize) }
 }

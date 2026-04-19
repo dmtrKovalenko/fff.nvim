@@ -1,9 +1,9 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use fff::file_picker::{FFFMode, FilePicker};
-use fff::types::{ContentCacheBudget, FileItem, PaginationArgs};
+use fff::types::PaginationArgs;
 use fff::{
     FilePickerOptions, FuzzySearchOptions, GrepMode, GrepSearchOptions, QueryParser,
-    SharedFrecency, SharedPicker, build_bigram_index, grep,
+    SharedFrecency, SharedPicker,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -33,7 +33,7 @@ fn init_file_picker_internal(
         shared_frecency.clone(),
         FilePickerOptions {
             base_path: path.to_string(),
-            warmup_mmap_cache: false,
+            enable_mmap_cache: false,
             mode: FFFMode::Neovim,
             ..Default::default()
         },
@@ -104,18 +104,6 @@ fn wait_for_scan_completion(
     }
 }
 
-/// Get files from the shared picker
-fn get_files_snapshot(shared_picker: &SharedPicker) -> Result<Vec<FileItem>, String> {
-    let picker_guard = shared_picker
-        .read()
-        .map_err(|_| "Failed to acquire read lock")?;
-    if let Some(ref picker) = *picker_guard {
-        Ok(picker.get_files().to_vec())
-    } else {
-        Err("FilePicker not initialized".to_string())
-    }
-}
-
 /// Clean up shared state
 fn cleanup_shared_state(shared_picker: &SharedPicker) {
     if let Ok(mut picker_guard) = shared_picker.write() {
@@ -125,8 +113,8 @@ fn cleanup_shared_state(shared_picker: &SharedPicker) {
     }
 }
 
-/// Initialize FilePicker once and return files snapshot
-fn setup_once() -> Result<(Vec<FileItem>, SharedPicker, SharedFrecency), String> {
+/// Initialize FilePicker once and return shared state
+fn setup_once() -> Result<(SharedPicker, SharedFrecency), String> {
     init_tracing();
 
     let big_repo_path = PathBuf::from("./big-repo");
@@ -154,8 +142,7 @@ fn setup_once() -> Result<(Vec<FileItem>, SharedPicker, SharedFrecency), String>
         file_count
     );
 
-    let files = get_files_snapshot(&shared_picker)?;
-    Ok((files, shared_picker, shared_frecency))
+    Ok((shared_picker, shared_frecency))
 }
 
 /// Benchmark for indexing the big-repo directory
@@ -212,13 +199,16 @@ fn bench_indexing(c: &mut Criterion) {
 
 /// Benchmark for searching with various query patterns
 fn bench_search_queries(c: &mut Criterion) {
-    let (files, _sp, _sf) = match setup_once() {
+    let (sp, _sf) = match setup_once() {
         Ok(result) => result,
         Err(e) => {
             eprint!("Failed to setup picker {e:?}");
             return;
         }
     };
+
+    let guard = sp.read().unwrap();
+    let picker = guard.as_ref().unwrap();
 
     let mut group = c.benchmark_group("search");
     group.sample_size(100);
@@ -237,8 +227,7 @@ fn bench_search_queries(c: &mut Criterion) {
         let parsed = parser.parse(query);
         group.bench_with_input(BenchmarkId::new("query", name), &query, |b, &_query| {
             b.iter(|| {
-                let results = FilePicker::fuzzy_search(
-                    black_box(&files),
+                let results = picker.fuzzy_search(
                     black_box(&parsed),
                     None,
                     FuzzySearchOptions {
@@ -264,13 +253,16 @@ fn bench_search_queries(c: &mut Criterion) {
 
 /// Benchmark search with different thread counts
 fn bench_search_thread_scaling(c: &mut Criterion) {
-    let (files, _sp, _sf) = match setup_once() {
+    let (sp, _sf) = match setup_once() {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("⚠ Skipping thread scaling benchmarks: {}", e);
+            eprintln!("Skipping thread scaling benchmarks: {}", e);
             return;
         }
     };
+
+    let guard = sp.read().unwrap();
+    let picker = guard.as_ref().unwrap();
 
     let mut group = c.benchmark_group("thread_scaling");
     group.sample_size(100);
@@ -286,8 +278,7 @@ fn bench_search_thread_scaling(c: &mut Criterion) {
             &threads,
             |b, &threads| {
                 b.iter(|| {
-                    let results = FilePicker::fuzzy_search(
-                        black_box(&files),
+                    let results = picker.fuzzy_search(
                         black_box(&parsed),
                         None,
                         FuzzySearchOptions {
@@ -314,13 +305,16 @@ fn bench_search_thread_scaling(c: &mut Criterion) {
 
 /// Benchmark search with different result limits
 fn bench_search_result_limits(c: &mut Criterion) {
-    let (files, _sp, _sf) = match setup_once() {
+    let (sp, _sf) = match setup_once() {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("⚠ Skipping result limit benchmarks: {}", e);
+            eprintln!("Skipping result limit benchmarks: {}", e);
             return;
         }
     };
+
+    let guard = sp.read().unwrap();
+    let picker = guard.as_ref().unwrap();
 
     let mut group = c.benchmark_group("result_limits");
     group.sample_size(100);
@@ -333,8 +327,7 @@ fn bench_search_result_limits(c: &mut Criterion) {
     for limit in result_limits {
         group.bench_with_input(BenchmarkId::from_parameter(limit), &limit, |b, &limit| {
             b.iter(|| {
-                let results = FilePicker::fuzzy_search(
-                    black_box(&files),
+                let results = picker.fuzzy_search(
                     black_box(&parsed),
                     None,
                     FuzzySearchOptions {
@@ -344,10 +337,7 @@ fn bench_search_result_limits(c: &mut Criterion) {
 
                         combo_boost_score_multiplier: 100,
                         min_combo_count: 3,
-                        pagination: PaginationArgs {
-                            offset: 0,
-                            limit: limit,
-                        },
+                        pagination: PaginationArgs { offset: 0, limit },
                     },
                 );
                 results.total_matched
@@ -358,20 +348,23 @@ fn bench_search_result_limits(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark search algorithm performance scaling with file count
+/// Benchmark search algorithm performance with queries of varying selectivity
 fn bench_search_scalability(c: &mut Criterion) {
-    let (all_files, _sp, _sf) = match setup_once() {
+    let (sp, _sf) = match setup_once() {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("⚠ Skipping scalability benchmarks: {}", e);
+            eprintln!("Skipping scalability benchmarks: {}", e);
             return;
         }
     };
 
-    if all_files.len() < 1000 {
+    let guard = sp.read().unwrap();
+    let picker = guard.as_ref().unwrap();
+
+    if picker.get_files().len() < 1000 {
         eprintln!(
-            "⚠ Skipping scalability benchmark: need at least 1000 files, got {}",
-            all_files.len()
+            "Skipping scalability benchmark: need at least 1000 files, got {}",
+            picker.get_files().len()
         );
         return;
     }
@@ -379,21 +372,19 @@ fn bench_search_scalability(c: &mut Criterion) {
     let mut group = c.benchmark_group("search_scalability");
     group.sample_size(50);
 
-    let query = "controller";
     let parser = QueryParser::default();
-    let parsed = parser.parse(query);
-    let file_counts = vec![100, 1000, 5000, 10000, all_files.len().min(50000)];
+    let selectivity_queries = vec![
+        ("broad_a", "a"),
+        ("medium_mod", "mod"),
+        ("narrow_controller", "controller"),
+        ("very_narrow_user_auth", "user_authentication"),
+    ];
 
-    for count in file_counts {
-        if count > all_files.len() {
-            continue;
-        }
-
-        let subset = &all_files[..count];
-        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
+    for (name, query) in selectivity_queries {
+        let parsed = parser.parse(query);
+        group.bench_with_input(BenchmarkId::from_parameter(name), &name, |b, _| {
             b.iter(|| {
-                let results = FilePicker::fuzzy_search(
-                    black_box(subset),
+                let results = picker.fuzzy_search(
                     black_box(&parsed),
                     None,
                     FuzzySearchOptions {
@@ -419,13 +410,16 @@ fn bench_search_scalability(c: &mut Criterion) {
 
 /// Benchmark search performance with different ordering modes
 fn bench_search_ordering(c: &mut Criterion) {
-    let (files, _sp, _sf) = match setup_once() {
+    let (sp, _sf) = match setup_once() {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("⚠ Skipping ordering benchmarks: {}", e);
+            eprintln!("Skipping ordering benchmarks: {}", e);
             return;
         }
     };
+
+    let guard = sp.read().unwrap();
+    let picker = guard.as_ref().unwrap();
 
     let mut group = c.benchmark_group("ordering");
     group.sample_size(100);
@@ -437,8 +431,7 @@ fn bench_search_ordering(c: &mut Criterion) {
     // Benchmark normal order (descending)
     group.bench_function("normal_order", |b| {
         b.iter(|| {
-            let results = FilePicker::fuzzy_search(
-                black_box(&files),
+            let results = picker.fuzzy_search(
                 black_box(&parsed_controller),
                 None,
                 FuzzySearchOptions {
@@ -461,8 +454,7 @@ fn bench_search_ordering(c: &mut Criterion) {
     // Benchmark reverse order (ascending)
     group.bench_function("reverse_order", |b| {
         b.iter(|| {
-            let results = FilePicker::fuzzy_search(
-                black_box(&files),
+            let results = picker.fuzzy_search(
                 black_box(&parsed_controller),
                 None,
                 FuzzySearchOptions {
@@ -485,8 +477,7 @@ fn bench_search_ordering(c: &mut Criterion) {
     // Benchmark with large result set
     group.bench_function("normal_order_large", |b| {
         b.iter(|| {
-            let results = FilePicker::fuzzy_search(
-                black_box(&files),
+            let results = picker.fuzzy_search(
                 black_box(&parsed_mod),
                 None,
                 FuzzySearchOptions {
@@ -508,8 +499,7 @@ fn bench_search_ordering(c: &mut Criterion) {
 
     group.bench_function("reverse_order_large", |b| {
         b.iter(|| {
-            let results = FilePicker::fuzzy_search(
-                black_box(&files),
+            let results = picker.fuzzy_search(
                 black_box(&parsed_mod),
                 None,
                 FuzzySearchOptions {
@@ -532,8 +522,7 @@ fn bench_search_ordering(c: &mut Criterion) {
     // Benchmark with small result set
     group.bench_function("normal_order_small", |b| {
         b.iter(|| {
-            let results = FilePicker::fuzzy_search(
-                black_box(&files),
+            let results = picker.fuzzy_search(
                 black_box(&parsed_controller),
                 None,
                 FuzzySearchOptions {
@@ -555,8 +544,7 @@ fn bench_search_ordering(c: &mut Criterion) {
 
     group.bench_function("reverse_order_small", |b| {
         b.iter(|| {
-            let results = FilePicker::fuzzy_search(
-                black_box(&files),
+            let results = picker.fuzzy_search(
                 black_box(&parsed_controller),
                 None,
                 FuzzySearchOptions {
@@ -581,13 +569,16 @@ fn bench_search_ordering(c: &mut Criterion) {
 
 /// Benchmark pagination: first page vs deep page
 fn bench_pagination_performance(c: &mut Criterion) {
-    let (files, _sp, _sf) = match setup_once() {
+    let (sp, _sf) = match setup_once() {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("⚠ Skipping pagination benchmarks: {}", e);
+            eprintln!("Skipping pagination benchmarks: {}", e);
             return;
         }
     };
+
+    let guard = sp.read().unwrap();
+    let picker = guard.as_ref().unwrap();
 
     let mut group = c.benchmark_group("pagination");
     group.sample_size(100);
@@ -600,8 +591,7 @@ fn bench_pagination_performance(c: &mut Criterion) {
     // Benchmark first page (uses partial sort optimization)
     group.bench_function("page_0_size_40", |b| {
         b.iter(|| {
-            let results = FilePicker::fuzzy_search(
-                black_box(&files),
+            let results = picker.fuzzy_search(
                 black_box(&parsed),
                 None,
                 FuzzySearchOptions {
@@ -624,8 +614,7 @@ fn bench_pagination_performance(c: &mut Criterion) {
     // Benchmark 10th page (requires full sort, no optimization)
     group.bench_function("page_10_size_40", |b| {
         b.iter(|| {
-            let results = FilePicker::fuzzy_search(
-                black_box(&files),
+            let results = picker.fuzzy_search(
                 black_box(&parsed),
                 None,
                 FuzzySearchOptions {
@@ -648,8 +637,7 @@ fn bench_pagination_performance(c: &mut Criterion) {
     // Benchmark 50th page (even deeper pagination)
     group.bench_function("page_50_size_40", |b| {
         b.iter(|| {
-            let results = FilePicker::fuzzy_search(
-                black_box(&files),
+            let results = picker.fuzzy_search(
                 black_box(&parsed),
                 None,
                 FuzzySearchOptions {
@@ -672,9 +660,9 @@ fn bench_pagination_performance(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark grep search with bigram index prefiltering
+/// Benchmark grep search via the FilePicker public API
 fn bench_grep_search(c: &mut Criterion) {
-    let (files, _sp, _sf) = match setup_once() {
+    let (sp, _sf) = match setup_once() {
         Ok(result) => result,
         Err(e) => {
             eprintln!("Skipping grep benchmarks: {}", e);
@@ -682,16 +670,8 @@ fn bench_grep_search(c: &mut Criterion) {
         }
     };
 
-    let budget = ContentCacheBudget::new_for_repo(files.len());
-
-    eprintln!("  Building bigram index for {} files...", files.len());
-    let start = std::time::Instant::now();
-    let (bigram_filter, _overflow_indices) = build_bigram_index(&files, &budget);
-    eprintln!(
-        "  Bigram index built in {:.2}s ({} columns)",
-        start.elapsed().as_secs_f64(),
-        bigram_filter.columns_used(),
-    );
+    let guard = sp.read().unwrap();
+    let picker = guard.as_ref().unwrap();
 
     let mut group = c.benchmark_group("grep");
     group.sample_size(50);
@@ -708,6 +688,7 @@ fn bench_grep_search(c: &mut Criterion) {
         after_context: 0,
         classify_definitions: false,
         trim_whitespace: false,
+        abort_signal: None,
     };
 
     let test_queries = vec![
@@ -721,34 +702,9 @@ fn bench_grep_search(c: &mut Criterion) {
     for (name, query) in &test_queries {
         let parsed = grep_parser.parse(query);
 
-        // With bigram index
-        group.bench_with_input(BenchmarkId::new("with_bigram", name), query, |b, _| {
+        group.bench_with_input(BenchmarkId::new("grep", name), query, |b, _| {
             b.iter(|| {
-                let result = grep::grep_search(
-                    black_box(&files),
-                    black_box(&parsed),
-                    black_box(&options),
-                    &budget,
-                    Some(&bigram_filter),
-                    None,
-                    None,
-                );
-                result.matches.len()
-            });
-        });
-
-        // Without bigram index
-        group.bench_with_input(BenchmarkId::new("without_bigram", name), query, |b, _| {
-            b.iter(|| {
-                let result = grep::grep_search(
-                    black_box(&files),
-                    black_box(&parsed),
-                    black_box(&options),
-                    &budget,
-                    None,
-                    None,
-                    None,
-                );
+                let result = picker.grep(black_box(&parsed), black_box(&options));
                 result.matches.len()
             });
         });

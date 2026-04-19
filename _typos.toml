@@ -6,6 +6,9 @@ noice = "noice"
 fo = "fo"
 ba = "ba"
 ue = "ue"
+# some typos we use for tests
+comparsion = "comparsion"
+modfiers = "modfiers"
 
 [default]
 extend-ignore-re = [

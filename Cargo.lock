@@ -629,7 +629,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fff-c"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "fff-query-parser",
  "fff-search",
@@ -642,7 +642,7 @@ dependencies = [
 
 [[package]]
 name = "fff-grep"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "bstr",
  "memchr",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "fff-mcp"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "clap",
  "fff-query-parser",
@@ -666,8 +666,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fff-notify-debouncer-full"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4594f0ef1ad0bfcd112bbe4b397ef881f50442bc710356b86858d555848e4d09"
+dependencies = [
+ "file-id",
+ "log",
+ "notify 9.0.0-rc.3",
+ "notify-types",
+ "walkdir",
+]
+
+[[package]]
 name = "fff-nvim"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ahash",
  "blake3",
@@ -684,8 +697,8 @@ dependencies = [
  "mimalloc",
  "mlua",
  "neo_frizbee",
- "notify",
- "notify-debouncer-full 0.6.0",
+ "notify 8.2.0",
+ "notify-debouncer-full",
  "once_cell",
  "pathdiff",
  "rand",
@@ -700,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "fff-query-parser"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "criterion",
  "zlob",
@@ -708,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "fff-search"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ahash",
  "aho-corasick",
@@ -719,6 +732,7 @@ dependencies = [
  "dirs",
  "dunce",
  "fff-grep",
+ "fff-notify-debouncer-full",
  "fff-query-parser",
  "git2",
  "glidesort",
@@ -729,9 +743,9 @@ dependencies = [
  "libmimalloc-sys",
  "memchr",
  "memmap2",
+ "mimalloc",
  "neo_frizbee",
- "notify",
- "notify-debouncer-full 0.7.0",
+ "notify 9.0.0-rc.3",
  "once_cell",
  "parking_lot",
  "pathdiff",
@@ -1479,7 +1493,7 @@ dependencies = [
  "mlua_derive",
  "num-traits",
  "parking_lot",
- "rustc-hash 2.1.1",
+ "rustc-hash 2.1.2",
  "rustversion",
 ]
 
@@ -1508,9 +1522,9 @@ dependencies = [
 
 [[package]]
 name = "neo_frizbee"
-version = "0.9.1"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ad8072d52752b27cda31a8289ad0fa2d93fda78e17f284b0c05f9fdf06b942a"
+checksum = "2b216854d8c3752f8dbda56703c708de44bccb0542ca3924976c5977d6fb0724"
 dependencies = [
  "itertools 0.14.0",
  "raw-cpuid",
@@ -1557,6 +1571,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "notify"
+version = "9.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "783683ce6e1059e3747190a6c05688db21e07a846bf90babb351365f9133fe3e"
+dependencies = [
+ "bitflags 2.11.0",
+ "inotify",
+ "kqueue",
+ "libc",
+ "log",
+ "mio",
+ "notify-types",
+ "objc2-core-foundation",
+ "objc2-core-services",
+ "walkdir",
+ "windows-sys 0.61.2",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "notify-debouncer-full"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1564,20 +1598,7 @@ checksum = "375bd3a138be7bfeff3480e4a623df4cbfb55b79df617c055cd810ba466fa078"
 dependencies = [
  "file-id",
  "log",
- "notify",
- "notify-types",
- "walkdir",
-]
-
-[[package]]
-name = "notify-debouncer-full"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c02b49179cfebc9932238d04d6079912d26de0379328872846118a0fa0dbb302"
-dependencies = [
- "file-id",
- "log",
- "notify",
+ "notify 8.2.0",
  "notify-types",
  "walkdir",
 ]
@@ -1622,6 +1643,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a12a8ed07aefc768292f076dc3ac8c48f3781c8f2d5851dd3d98950e8c5a89f"
 dependencies = [
  "objc2-encode",
+]
+
+[[package]]
+name = "objc2-core-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
+dependencies = [
+ "bitflags 2.11.0",
+]
+
+[[package]]
+name = "objc2-core-services"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "583300ad934cba24ff5292aee751ecc070f7ca6b39a574cc21b7b5e588e06a0b"
+dependencies = [
+ "libc",
+ "objc2-core-foundation",
 ]
 
 [[package]]
@@ -2022,9 +2062,9 @@ checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
+checksum = "94300abf3f1ae2e2b8ffb7b58043de3d399c73fa6f4b73826402a5c457614dbe"
 
 [[package]]
 name = "rustix"
@@ -3055,6 +3095,12 @@ name = "writeable"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
 
 [[package]]
 name = "yoke"

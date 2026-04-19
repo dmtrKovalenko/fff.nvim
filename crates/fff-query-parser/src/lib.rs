@@ -45,7 +45,9 @@ pub mod glob_detect;
 pub mod location;
 mod parser;
 
-pub use config::{AiGrepConfig, FileSearchConfig, GrepConfig, ParserConfig};
+pub use config::{
+    AiGrepConfig, DirSearchConfig, FileSearchConfig, GrepConfig, MixedSearchConfig, ParserConfig,
+};
 pub use constraints::{Constraint, GitStatusFilter};
 pub use location::Location;
 pub use parser::{FFFQuery, FuzzyQuery, QueryParser};

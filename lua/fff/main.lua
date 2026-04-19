@@ -228,8 +228,8 @@ function M.open_file_under_cursor(open_cb)
 
   picker_ui.open_with_callback(full_path_with_suffix, function(files, _, location)
     if #files == 1 or require('fff.file_picker').get_file_score(1).exact_match then
-      if open_cb and type(open_cb) == 'function' then open_cb(files[1].path) end
-      vim.api.nvim_command(string.format('e %s', vim.fn.fnameescape(files[1].path)))
+      if open_cb and type(open_cb) == 'function' then open_cb(files[1].relative_path) end
+      vim.api.nvim_command(string.format('e %s', vim.fn.fnameescape(files[1].relative_path)))
 
       if location then vim.schedule(function() require('fff.location_utils').jump_to_location(location) end) end
 

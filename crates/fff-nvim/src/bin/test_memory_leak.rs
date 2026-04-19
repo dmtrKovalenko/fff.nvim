@@ -88,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         shared_frecency.clone(),
         fff::FilePickerOptions {
             base_path: base_path.clone(),
-            warmup_mmap_cache: false,
+            enable_mmap_cache: false,
             mode: FFFMode::Neovim,
             ..Default::default()
         },
@@ -144,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !files.is_empty() {
                 println!("Sample files:");
                 for (i, file) in files.iter().take(5).enumerate() {
-                    println!("  {}. {}", i + 1, file.relative_path());
+                    println!("  {}. {}", i + 1, file.relative_path(picker));
                 }
             }
             files.len()
@@ -200,8 +200,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let guard = shared_picker.read().unwrap();
             if let Some(ref picker) = *guard {
                 let parsed = parser.parse(query);
-                let search_result = FilePicker::fuzzy_search(
-                    picker.get_files(),
+                let search_result = picker.fuzzy_search(
                     &parsed,
                     None,
                     FuzzySearchOptions {
