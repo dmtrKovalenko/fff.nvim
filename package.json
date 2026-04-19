@@ -1,7 +1,9 @@
 {
   "private": true,
-  "workspaces": ["packages/fff-bun", "packages/fff-node"],
-
+  "workspaces": ["packages/fff-bun", "packages/fff-node", "packages/pi-fff"],
+  "pi": {
+    "extensions": ["./packages/pi-fff/src/index.ts"]
+  },
   "scripts": {
     "format": "biome format --write",
     "format:check": "biome format",

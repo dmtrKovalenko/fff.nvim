@@ -161,43 +161,10 @@ pub(crate) struct Args {
     pub(crate) healthcheck: bool,
 }
 
-/// Resolve default paths for frecency db, history db, and log file.
-/// Shares Neovim's standard data locations when they exist so the MCP
-/// server and fff.nvim plugin use the same databases.
+/// Resolve default paths for the log file.
+/// Database paths (frecency, history) must be explicitly provided via flags.
 fn resolve_defaults(args: &mut Args) {
-    let home = dirs_home();
-    let is_windows = cfg!(target_os = "windows");
-
-    let nvim_cache_dir = if is_windows {
-        format!("{}\\AppData\\Local\\nvim-data", home)
-    } else {
-        format!("{}/.cache/nvim", home)
-    };
-    let nvim_data_dir = if is_windows {
-        format!("{}\\AppData\\Local\\nvim-data", home)
-    } else {
-        format!("{}/.local/share/nvim", home)
-    };
-
-    let use_nvim_paths = std::path::Path::new(&nvim_cache_dir).exists()
-        || std::path::Path::new(&nvim_data_dir).exists();
-
-    if args.frecency_db_path.is_none() {
-        args.frecency_db_path = Some(if use_nvim_paths {
-            format!("{}/fff_nvim", nvim_cache_dir)
-        } else {
-            format!("{}/.fff/frecency.mdb", home)
-        });
-    }
-    if args.history_db_path.is_none() {
-        args.history_db_path = Some(if use_nvim_paths {
-            format!("{}/fff_queries", nvim_data_dir)
-        } else {
-            format!("{}/.fff/history.mdb", home)
-        });
-    }
-
-    // Ensure parent directories exist for database paths
+    // Ensure parent directories exist for database paths when provided
     for path in [&args.frecency_db_path, &args.history_db_path]
         .into_iter()
         .flatten()
@@ -208,6 +175,8 @@ fn resolve_defaults(args: &mut Args) {
     }
 
     if args.log_file.is_none() {
+        let home = dirs_home();
+        let is_windows = cfg!(target_os = "windows");
         args.log_file = Some(if is_windows {
             format!("{}\\AppData\\Local\\fff_mcp.log", home)
         } else {
@@ -263,17 +232,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let frecency_db_path = args.frecency_db_path.unwrap_or_default();
-
     let shared_picker = SharedPicker::default();
     let shared_frecency = SharedFrecency::default();
-    match FrecencyTracker::new(&frecency_db_path, false) {
-        Ok(tracker) => {
-            let _ = shared_frecency.init(tracker);
-            let _ = shared_frecency.spawn_gc(frecency_db_path, false);
-        }
-        Err(e) => {
-            eprintln!("Warning: Failed to init frecency db: {}", e);
+    if let Some(frecency_db_path) = args.frecency_db_path {
+        match FrecencyTracker::new(&frecency_db_path, false) {
+            Ok(tracker) => {
+                let _ = shared_frecency.init(tracker);
+                let _ = shared_frecency.spawn_gc(frecency_db_path, false);
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to init frecency db: {}", e);
+            }
         }
     }
 
