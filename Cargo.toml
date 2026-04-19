@@ -11,8 +11,8 @@ exclude = ["crates/fff-notify-debouncer-full"]
 resolver = "2"
 
 [workspace.dependencies]
-fff-grep = { version = "0.6.0", path = "crates/fff-grep" }
-fff-query-parser = { version = "0.6.0", path = "crates/fff-query-parser", default-features = false }
+fff-grep = { version = "0.6.1", path = "crates/fff-grep" }
+fff-query-parser = { version = "0.6.1", path = "crates/fff-query-parser", default-features = false }
 
 # Shared dependencies
 ahash = "0.8"
