@@ -46,8 +46,16 @@ interface ToolNames {
   multiGrep: string;
 }
 
-const FFF_TOOL_NAMES: ToolNames = { grep: "ffgrep", find: "fffind", multiGrep: "fff-multi-grep" };
-const OVERRIDE_TOOL_NAMES: ToolNames = { grep: "grep", find: "find", multiGrep: "multi_grep" };
+const FFF_TOOL_NAMES: ToolNames = {
+  grep: "ffgrep",
+  find: "fffind",
+  multiGrep: "fff-multi-grep",
+};
+const OVERRIDE_TOOL_NAMES: ToolNames = {
+  grep: "grep",
+  find: "find",
+  multiGrep: "multi_grep",
+};
 
 function resolveToolNames(mode: FffMode): ToolNames {
   return mode === "override" ? OVERRIDE_TOOL_NAMES : FFF_TOOL_NAMES;
@@ -344,8 +352,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   // --- Flags / lifecycle ---
 
   pi.registerFlag("fff-mode", {
-    description:
-      "FFF mode: tools-and-ui | tools-only | override",
+    description: "FFF mode: tools-and-ui | tools-only | override",
     type: "string",
   });
 
@@ -724,8 +731,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   // --- commands ---
 
   pi.registerCommand("fff-mode", {
-    description:
-      "Show or set FFF mode: /fff-mode [tools-and-ui | tools-only | override]",
+    description: "Show or set FFF mode: /fff-mode [tools-and-ui | tools-only | override]",
     handler: async (args, ctx) => {
       const arg = (args || "").trim();
 
@@ -740,10 +746,7 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       // Validate and set mode
       if (!VALID_MODES.includes(arg as FffMode)) {
-        ctx.ui.notify(
-          `Usage: /fff-mode [${VALID_MODES.join(" | ")}]`,
-          "warning",
-        );
+        ctx.ui.notify(`Usage: /fff-mode [${VALID_MODES.join(" | ")}]`, "warning");
         return;
       }
 
