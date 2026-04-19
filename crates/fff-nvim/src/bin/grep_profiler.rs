@@ -4,73 +4,25 @@
 /// Measures cold-cache, warm-cache, and incremental typing latencies to simulate
 /// real user interaction patterns.
 ///
-/// Uses direct WalkBuilder scanning (no background thread) for faster startup.
+/// Uses FilePicker::collect_files for synchronous scanning (no background thread).
 ///
 /// Usage:
 ///   cargo build --release --bin grep_profiler
 ///   ./target/release/grep_profiler [--path /path/to/repo]
-use fff::{
-    BigramFilter, FileItem,
-    grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query},
-    types::ContentCacheBudget,
-};
-use std::io::Read;
-use std::path::Path;
+use fff::file_picker::FilePicker;
+use fff::grep::{GrepMode, GrepSearchOptions, parse_grep_query};
 use std::time::{Duration, Instant};
 
-fn load_files(base_path: &Path) -> Vec<FileItem> {
-    use ignore::WalkBuilder;
-
-    let mut files = Vec::new();
-
-    WalkBuilder::new(base_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .ignore(true)
-        .follow_links(false)
-        .build()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-        .for_each(|entry| {
-            let path = entry.path().to_path_buf();
-            let relative = pathdiff::diff_paths(&path, base_path).unwrap_or_else(|| path.clone());
-            let relative_path = relative.to_string_lossy().into_owned();
-            let size = entry.metadata().ok().map_or(0, |m| m.len());
-            let is_binary = detect_binary(&path, size);
-
-            let path_string = path.to_string_lossy().into_owned();
-            let relative_start = (path_string.len() - relative_path.len()) as u16;
-            let filename_start = path_string
-                .rfind('/')
-                .map(|i| i + 1)
-                .unwrap_or(relative_start as usize) as u16;
-            files.push(FileItem::new_raw(
-                path_string,
-                relative_start,
-                filename_start,
-                size,
-                0,
-                None,
-                is_binary,
-            ));
-        });
-
-    files
-}
-
-fn detect_binary(path: &Path, size: u64) -> bool {
-    if size == 0 {
-        return false;
-    }
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut reader = std::io::BufReader::with_capacity(1024, file);
-    let mut buf = [0u8; 512];
-    let n = reader.read(&mut buf).unwrap_or(0);
-    buf[..n].contains(&0)
+fn create_picker(path: &std::path::Path) -> FilePicker {
+    let mut picker = FilePicker::new(fff::FilePickerOptions {
+        base_path: path.to_string_lossy().to_string(),
+        enable_mmap_cache: false,
+        mode: fff::FFFMode::Neovim,
+        ..Default::default()
+    })
+    .expect("Failed to create FilePicker");
+    picker.collect_files().expect("Failed to collect files");
+    picker
 }
 
 struct BenchStats {
@@ -121,20 +73,18 @@ impl BenchStats {
 }
 
 struct GrepBench<'a> {
-    files: &'a [FileItem],
+    picker: &'a FilePicker,
     options: GrepSearchOptions,
-    bigram_index: Option<&'a BigramFilter>,
 }
 
 impl<'a> GrepBench<'a> {
-    fn new(files: &'a [FileItem]) -> Self {
-        Self::with_mode(files, GrepMode::PlainText)
+    fn new(picker: &'a FilePicker) -> Self {
+        Self::with_mode(picker, GrepMode::PlainText)
     }
 
-    fn with_mode(files: &'a [FileItem], mode: GrepMode) -> Self {
+    fn with_mode(picker: &'a FilePicker, mode: GrepMode) -> Self {
         Self {
-            files,
-            bigram_index: None,
+            picker,
             options: GrepSearchOptions {
                 max_file_size: 10 * 1024 * 1024,
                 max_matches_per_file: 200,
@@ -147,28 +97,16 @@ impl<'a> GrepBench<'a> {
                 after_context: 0,
                 classify_definitions: false,
                 trim_whitespace: false,
+                abort_signal: None,
             },
         }
-    }
-
-    fn with_bigram(mut self, index: &'a BigramFilter) -> Self {
-        self.bigram_index = Some(index);
-        self
     }
 
     /// Run a single grep search, return (duration, match_count, files_searched)
     fn run_once(&self, query: &str) -> (Duration, usize, usize) {
         let parsed = parse_grep_query(query);
         let start = Instant::now();
-        let result = grep_search(
-            self.files,
-            &parsed,
-            &self.options,
-            &ContentCacheBudget::default(),
-            self.bigram_index,
-            None,
-            None,
-        );
+        let result = self.picker.grep(&parsed, &self.options);
         let elapsed = start.elapsed();
         (elapsed, result.matches.len(), result.total_files_searched)
     }
@@ -188,17 +126,6 @@ impl<'a> GrepBench<'a> {
 
         (stats, last_matches, last_files_searched)
     }
-}
-
-fn build_bigram(files: &mut [FileItem]) -> BigramFilter {
-    let budget = ContentCacheBudget::default();
-    let (index, binary_indices) = fff::build_bigram_index(files, &budget);
-
-    for &i in &binary_indices {
-        files[i].set_binary(true);
-    }
-
-    index
 }
 
 fn fmt_dur(d: Duration) -> String {
@@ -264,8 +191,9 @@ fn main() {
     // Direct file loading (no background thread)
     eprintln!("\n[1/7] Loading files...");
     let load_start = Instant::now();
-    let mut files = load_files(&canonical);
+    let picker = create_picker(&canonical);
     let load_time = load_start.elapsed();
+    let files = picker.get_files();
     let non_binary = files.iter().filter(|f| !f.is_binary()).count();
     let large_files = files.iter().filter(|f| f.size > 10 * 1024 * 1024).count();
     eprintln!(
@@ -276,7 +204,7 @@ fn main() {
         large_files,
     );
 
-    let bench = GrepBench::new(&files);
+    let bench = GrepBench::new(&picker);
 
     eprintln!("[2/7] Cold cache benchmarks (first search, mmap not yet loaded)");
     eprintln!("  Each query runs once with fresh FileItem mmaps.\n");
@@ -295,8 +223,8 @@ fn main() {
 
     for (name, query) in &cold_queries {
         // Re-load files to get fresh FileItems with no cached mmaps
-        let fresh_files = load_files(&canonical);
-        let fresh_bench = GrepBench::new(&fresh_files);
+        let fresh_picker = create_picker(&canonical);
+        let fresh_bench = GrepBench::new(&fresh_picker);
         let (stats, matches, files_searched) = fresh_bench.bench_query(query, 1);
         print_row(name, &stats, matches, files_searched, 1);
     }
@@ -335,32 +263,15 @@ fn main() {
         print_row(name, &stats, matches, files_searched, *iters);
     }
 
-    eprintln!("\n[3b/7] Building bigram index...");
-    let bigram_start = Instant::now();
-    let bigram_index = build_bigram(&mut files);
-    eprintln!(
-        "  Built in {:.2}s ({} columns, {:.1} MB)\n",
-        bigram_start.elapsed().as_secs_f64(),
-        bigram_index.file_count(),
-        bigram_index.heap_bytes() as f64 / (1024.0 * 1024.0),
-    );
-
-    eprintln!("[3c/7] Bigram-accelerated warm benchmarks (same queries, with bigram prefilter)");
-    print_header();
-
-    let bigram_bench = GrepBench::new(&files).with_bigram(&bigram_index);
-    for (name, query, iters) in &warm_queries {
-        let bigram_name = format!("bg_{}", name.strip_prefix("warm_").unwrap_or(name));
-        let (stats, matches, files_searched) = bigram_bench.bench_query(query, *iters);
-        print_row(&bigram_name, &stats, matches, files_searched, *iters);
-    }
+    // Bigram-related benchmarks are omitted: the bigram index is built
+    // asynchronously by the picker and is exercised through picker.grep().
 
     // ── Fuzzy grep benchmarks ─────────────────────────────────────────────
     eprintln!("\n[4/7] Fuzzy grep warm benchmarks");
     eprintln!("  Running 3 warmup iterations, then measuring.\n");
     print_header();
 
-    let fuzzy_bench = GrepBench::with_mode(&files, GrepMode::Fuzzy);
+    let fuzzy_bench = GrepBench::with_mode(&picker, GrepMode::Fuzzy);
 
     let fuzzy_queries: Vec<(&str, &str, usize)> = vec![
         ("fuzzy_exact", "mutex_lock", 15),
@@ -385,19 +296,6 @@ fn main() {
     for (name, query, iters) in &fuzzy_queries {
         let (stats, matches, files_searched) = fuzzy_bench.bench_query(query, *iters);
         print_row(name, &stats, matches, files_searched, *iters);
-    }
-
-    // ── Fuzzy + bigram prefilter benchmarks ─────────────────────────────
-    eprintln!("\n[4b/7] Fuzzy grep with bigram prefilter");
-    print_header();
-
-    let fuzzy_bigram_bench =
-        GrepBench::with_mode(&files, GrepMode::Fuzzy).with_bigram(&bigram_index);
-
-    for (name, query, iters) in &fuzzy_queries {
-        let bg_name = format!("bg_{}", name);
-        let (stats, matches, files_searched) = fuzzy_bigram_bench.bench_query(query, *iters);
-        print_row(&bg_name, &stats, matches, files_searched, *iters);
     }
 
     // ── Fuzzy incremental typing ────────────────────────────────────────
@@ -448,7 +346,7 @@ fn main() {
     eprintln!("[6/7] Incremental typing simulation (plain text)");
     eprintln!("  Simulates user typing character by character.\n");
 
-    let bench = GrepBench::new(&files);
+    let bench = GrepBench::new(&picker);
     let typing_sequences: Vec<(&str, Vec<&str>)> = vec![
         (
             "mutex_lock",
@@ -520,17 +418,11 @@ fn main() {
             after_context: 0,
             classify_definitions: false,
             trim_whitespace: false,
+            abort_signal: None,
         };
         let start = Instant::now();
-        let result = grep_search(
-            &files,
-            &parsed,
-            &opts,
-            &fff::ContentCacheBudget::unlimited(),
-            None,
-            None,
-            None,
-        );
+        let result = picker.grep(&parsed, &opts);
+
         let elapsed = start.elapsed();
         eprintln!(
             "    {:>6} | {:>12} | {:>8} | {:>6} | {:>12}",
@@ -549,14 +441,6 @@ fn main() {
     }
 
     eprintln!("\n=== Summary ===");
-    let mmap_count = files
-        .iter()
-        .filter(|f| {
-            f.get_content_for_search(&fff::ContentCacheBudget::unlimited())
-                .is_some()
-        })
-        .count();
-    eprintln!("  Files with cached mmap: {}", mmap_count);
     eprintln!("  Total indexed files: {}", files.len());
     eprintln!("  Non-binary files: {}", non_binary);
     eprintln!("  Files > 10MB (skipped): {}", large_files);

@@ -111,7 +111,6 @@ async function main() {
   console.log(`${DIM}Initializing index for: ${directory}${RESET}`);
   const createResult = FileFinder.create({
     basePath: directory,
-    warmupMmapCache: true,
   });
 
   if (!createResult.ok) {

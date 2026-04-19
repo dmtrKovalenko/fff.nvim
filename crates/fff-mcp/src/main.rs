@@ -136,6 +136,19 @@ pub(crate) struct Args {
     #[arg(long = "no-warmup")]
     no_warmup: bool,
 
+    /// Disable the content index built after the initial scan.
+    /// This makes grep calls slower but consumes less RAM (recommended to not turn off)
+    no_content_indexing: bool,
+
+    /// Explicitly enable content indexing even when `--no-warmup` is set.
+    #[arg(long = "content-indexing")]
+    content_indexing: bool,
+
+    /// Disable the background file-system watcher. Files are scanned once
+    /// at startup but not monitored for changes.
+    #[arg(long = "no-watch")]
+    no_watch: bool,
+
     /// Maximum number of files whose content is kept persistently in memory.
     /// Files beyond this limit are still searchable via temporary mmaps that
     /// are released after each grep. Defaults to 30 000.
@@ -264,18 +277,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Content indexing follows warmup by default (backward compat), unless
+    // the user explicitly opts in via --content-indexing or out via
+    // --no-content-indexing.
+    let enable_content_indexing = if args.content_indexing {
+        true
+    } else if args.no_content_indexing {
+        false
+    } else {
+        !args.no_warmup
+    };
+
     // Initialize file picker (spawns background scan + watcher)
     FilePicker::new_with_shared_state(
         shared_picker.clone(),
         shared_frecency.clone(),
         fff::FilePickerOptions {
             base_path,
-            warmup_mmap_cache: !args.no_warmup,
+            enable_mmap_cache: !args.no_warmup,
+            enable_content_indexing,
+            watch: !args.no_watch,
             mode: FFFMode::Ai,
             cache_budget: args
                 .max_cached_files
                 .map(fff::ContentCacheBudget::new_for_repo),
-            ..Default::default()
         },
     )
     .map_err(|e| format!("Failed to init file picker: {}", e))?;

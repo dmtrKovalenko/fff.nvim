@@ -96,7 +96,7 @@ describe("fff-node", { concurrency: 1 }, () => {
       const r = finder.fileSearch("Cargo.toml", { pageSize: 1 });
       assert.ok(r.ok);
       const item = r.value.items[0];
-      for (const f of ["relativePath", "path", "fileName", "gitStatus"]) {
+      for (const f of ["relativePath", "fileName", "gitStatus"]) {
         assert.equal(typeof item[f], "string", `${f} should be a string`);
       }
       for (const f of ["size", "modified"]) {

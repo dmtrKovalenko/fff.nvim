@@ -10,7 +10,7 @@
 --- produce N + K buffer lines (where K = number of virtual header rows), but
 --- the page_size contract with Rust stays item-based.
 ---
---- Selection always operates on item.path keys. Virtual rows have no identity
+--- Selection always operates on item.relative_path keys. Virtual rows have no identity
 --- of their own — they derive from the item they belong to.
 local M = {}
 

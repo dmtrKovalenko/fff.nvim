@@ -184,7 +184,7 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
 
   -- 6. Selection marker (per-occurrence in grep mode)
   if ctx.selected_items then
-    local key = string.format('%s:%d:%d', item.path, item.line_number or 0, item.col or 0)
+    local key = string.format('%s:%d:%d', item.relative_path, item.line_number or 0, item.col or 0)
     if ctx.selected_items[key] then
       vim.api.nvim_buf_set_extmark(buf, ns_id, row, 0, {
         sign_text = '▊',
@@ -204,8 +204,8 @@ end
 function M.render_line(item, ctx)
   -- Track file grouping across the render pass via ctx
   -- ctx._grep_last_file is reset each render (ctx is fresh per render_list call)
-  local is_new_group = (item.path ~= ctx._grep_last_file)
-  ctx._grep_last_file = item.path
+  local is_new_group = (item.relative_path ~= ctx._grep_last_file)
+  ctx._grep_last_file = item.relative_path
 
   local match_line = render_match_line(item, ctx)
 

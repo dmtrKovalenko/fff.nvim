@@ -64,7 +64,6 @@ typedef struct FffResult {
  * Free the entire result with `fff_free_search_result`.
  */
 typedef struct FffFileItem {
-  char *path;
   char *relative_path;
   char *file_name;
   char *git_status;
@@ -88,6 +87,7 @@ typedef struct FffScore {
   int32_t distance_penalty;
   int32_t current_file_penalty;
   int32_t combo_match_boost;
+  int32_t path_alignment_bonus;
   bool exact_match;
   char *match_type;
 } FffScore;
@@ -156,7 +156,6 @@ typedef struct FffMatchRange {
  * `FffGrepResult` with `fff_free_grep_result` to release everything.
  */
 typedef struct FffGrepMatch {
-  char *path;
   char *relative_path;
   char *file_name;
   char *git_status;
@@ -223,13 +222,115 @@ typedef struct FffGrepResult {
 
 /**
  * Scan progress returned by `fff_get_scan_progress`.
- *
  * The caller must free this with `fff_free_scan_progress`.
  */
 typedef struct FffScanProgress {
   uint64_t scanned_files_count;
   bool is_scanning;
+  bool is_watcher_ready;
+  bool is_warmup_complete;
 } FffScanProgress;
+
+/**
+ * A directory item returned by `fff_search_directories`.
+ *
+ * All string fields are heap-allocated and owned by the parent `FffDirSearchResult`.
+ * Free the entire result with `fff_free_dir_search_result`.
+ */
+typedef struct FffDirItem {
+  char *relative_path;
+  char *dir_name;
+  int32_t max_access_frecency;
+} FffDirItem;
+
+/**
+ * Directory search result returned by `fff_search_directories`.
+ *
+ * The caller must free this with `fff_free_dir_search_result`.
+ */
+typedef struct FffDirSearchResult {
+  /**
+   * Pointer to a heap-allocated array of `FffDirItem` (length = `count`).
+   */
+  struct FffDirItem *items;
+  /**
+   * Pointer to a heap-allocated array of `FffScore` (length = `count`).
+   */
+  struct FffScore *scores;
+  /**
+   * Number of items/scores in the arrays.
+   */
+  uint32_t count;
+  /**
+   * Total number of directories that matched the query.
+   */
+  uint32_t total_matched;
+  /**
+   * Total number of indexed directories.
+   */
+  uint32_t total_dirs;
+} FffDirSearchResult;
+
+/**
+ * A single item in a mixed (files + directories) search result.
+ *
+ * `item_type`: 0 = file, 1 = directory.
+ * All string fields are heap-allocated and owned by the parent `FffMixedSearchResult`.
+ */
+typedef struct FffMixedItem {
+  /**
+   * 0 = file, 1 = directory.
+   */
+  uint8_t item_type;
+  char *relative_path;
+  /**
+   * Filename for files, last directory segment for directories.
+   */
+  char *display_name;
+  char *git_status;
+  uint64_t size;
+  uint64_t modified;
+  int64_t access_frecency_score;
+  int64_t modification_frecency_score;
+  int64_t total_frecency_score;
+  bool is_binary;
+} FffMixedItem;
+
+/**
+ * Mixed search result returned by `fff_search_mixed`.
+ *
+ * The caller must free this with `fff_free_mixed_search_result`.
+ */
+typedef struct FffMixedSearchResult {
+  /**
+   * Pointer to a heap-allocated array of `FffMixedItem` (length = `count`).
+   */
+  struct FffMixedItem *items;
+  /**
+   * Pointer to a heap-allocated array of `FffScore` (length = `count`).
+   */
+  struct FffScore *scores;
+  /**
+   * Number of items/scores in the arrays.
+   */
+  uint32_t count;
+  /**
+   * Total number of items (files + dirs) that matched the query.
+   */
+  uint32_t total_matched;
+  /**
+   * Total number of indexed files.
+   */
+  uint32_t total_files;
+  /**
+   * Total number of indexed directories.
+   */
+  uint32_t total_dirs;
+  /**
+   * Location parsed from the query string.
+   */
+  struct FffLocation location;
+} FffMixedSearchResult;
 
 /**
  * Create a new file finder instance.
@@ -239,12 +340,14 @@ typedef struct FffScanProgress {
  *
  * # Parameters
  *
- * * `base_path`          – directory to index (required)
- * * `frecency_db_path`   – path to frecency LMDB database (NULL/empty to skip)
- * * `history_db_path`    – path to query history LMDB database (NULL/empty to skip)
- * * `use_unsafe_no_lock` – use MDB_NOLOCK for LMDB (useful in single-process setups)
- * * `warmup_mmap_cache`  – pre-populate mmap caches after the initial scan
- * * `ai_mode`            – enable AI-agent optimizations (auto-track frecency on modifications)
+ * * `base_path`                – directory to index (required)
+ * * `frecency_db_path`         – path to frecency LMDB database (NULL/empty to skip)
+ * * `history_db_path`          – path to query history LMDB database (NULL/empty to skip)
+ * * `use_unsafe_no_lock`       – use MDB_NOLOCK for LMDB (useful in single-process setups)
+ * * `enable_mmap_cache`        – pre-populate mmap caches after the initial scan
+ * * `enable_content_indexing`  – build content index after the initial scan
+ * * `watch`                    – start a background file-system watcher for live updates
+ * * `ai_mode`                  – enable AI-agent optimizations (auto-track frecency on modifications)
  *
  * ## Safety
  * String parameters must be valid null-terminated UTF-8 or NULL.
@@ -253,7 +356,9 @@ struct FffResult *fff_create_instance(const char *base_path,
                                       const char *frecency_db_path,
                                       const char *history_db_path,
                                       bool use_unsafe_no_lock,
-                                      bool warmup_mmap_cache,
+                                      bool enable_mmap_cache,
+                                      bool enable_content_indexing,
+                                      bool watch,
                                       bool ai_mode);
 
 /**
@@ -290,6 +395,60 @@ struct FffResult *fff_search(void *fff_handle,
                              uint32_t page_size,
                              int32_t combo_boost_multiplier,
                              uint32_t min_combo_count);
+
+/**
+ * Perform fuzzy search on indexed directories.
+ *
+ * # Parameters
+ *
+ * * `fff_handle`   – instance from `fff_create_instance`
+ * * `query`        – search query string
+ * * `current_file` – path of the currently open file for distance scoring (NULL/empty to skip)
+ * * `max_threads`  – maximum worker threads (0 = auto-detect)
+ * * `page_index`   – pagination offset (0 = first page)
+ * * `page_size`    – results per page (0 = default 100)
+ *
+ * ## Safety
+ * * `fff_handle` must be a valid instance pointer from `fff_create_instance`.
+ * * `query` and `current_file` must be valid null-terminated UTF-8 strings or NULL.
+ */
+struct FffResult *fff_search_directories(void *fff_handle,
+                                         const char *query,
+                                         const char *current_file,
+                                         uint32_t max_threads,
+                                         uint32_t page_index,
+                                         uint32_t page_size);
+
+/**
+ * Perform a mixed fuzzy search across both files and directories.
+ *
+ * Returns a single flat list where files and directories are interleaved
+ * by total score in descending order. Each item has an `item_type` field
+ * (0 = file, 1 = directory).
+ *
+ * # Parameters
+ *
+ * * `fff_handle`              – instance from `fff_create_instance`
+ * * `query`                   – search query string
+ * * `current_file`            – path of the currently open file (NULL/empty to skip)
+ * * `max_threads`             – maximum worker threads (0 = auto-detect)
+ * * `page_index`              – pagination offset (0 = first page)
+ * * `page_size`               – results per page (0 = default 100)
+ * * `combo_boost_multiplier`  – score multiplier for combo matches (0 = default 100)
+ * * `min_combo_count`         – minimum combo count before boost applies (0 = default 3)
+ *
+ * ## Safety
+ * * `fff_handle` must be a valid instance pointer from `fff_create_instance`.
+ * * `query` and `current_file` must be valid null-terminated UTF-8 strings or NULL.
+ */
+struct FffResult *fff_search_mixed(void *fff_handle,
+                                   const char *query,
+                                   const char *current_file,
+                                   uint32_t max_threads,
+                                   uint32_t page_index,
+                                   uint32_t page_size,
+                                   int32_t combo_boost_multiplier,
+                                   uint32_t min_combo_count);
 
 /**
  * Perform content search (grep) across indexed files.
@@ -381,6 +540,17 @@ struct FffResult *fff_scan_files(void *fff_handle);
 bool fff_is_scanning(void *fff_handle);
 
 /**
+ * Get the base path of the file picker.
+ *
+ * Returns an `FffResult` with a heap-allocated C string in the `handle`
+ * field. Free the string with `fff_free_string` after reading it.
+ *
+ * ## Safety
+ * `fff_handle` must be a valid instance pointer from `fff_create_instance`.
+ */
+struct FffResult *fff_get_base_path(void *fff_handle);
+
+/**
  * Get scan progress information.
  *
  * ## Safety
@@ -395,6 +565,14 @@ struct FffResult *fff_get_scan_progress(void *fff_handle);
  * `fff_handle` must be a valid instance pointer from `fff_create_instance`.
  */
 struct FffResult *fff_wait_for_scan(void *fff_handle, uint64_t timeout_ms);
+
+/**
+ * Wait for the background file watcher to be ready.
+ *
+ * ## Safety
+ * `fff_handle` must be a valid instance pointer from `fff_create_instance`.
+ */
+struct FffResult *fff_wait_for_watcher(void *fff_handle, uint64_t timeout_ms);
 
 /**
  * Restart indexing in a new directory.
@@ -535,5 +713,59 @@ void fff_free_result(struct FffResult *result_ptr);
  * `s` must be a valid C string allocated by this library.
  */
 void fff_free_string(char *s);
+
+/**
+ * Free a directory search result returned by `fff_search_directories`.
+ *
+ * ## Safety
+ * `result` must be a valid pointer previously returned via `FffResult.handle`
+ * from `fff_search_directories`, or null (no-op).
+ */
+void fff_free_dir_search_result(struct FffDirSearchResult *result);
+
+/**
+ * Get a pointer to the `index`-th `FffDirItem` in a directory search result.
+ *
+ * ## Safety
+ * `result` must be a valid `FffDirSearchResult` pointer from `fff_search_directories`.
+ */
+const struct FffDirItem *fff_dir_search_result_get_item(const struct FffDirSearchResult *result,
+                                                        uint32_t index);
+
+/**
+ * Get a pointer to the `index`-th `FffScore` in a directory search result.
+ *
+ * ## Safety
+ * `result` must be a valid `FffDirSearchResult` pointer from `fff_search_directories`.
+ */
+const struct FffScore *fff_dir_search_result_get_score(const struct FffDirSearchResult *result,
+                                                       uint32_t index);
+
+/**
+ * Free a mixed search result returned by `fff_search_mixed`.
+ *
+ * ## Safety
+ * `result` must be a valid pointer previously returned via `FffResult.handle`
+ * from `fff_search_mixed`, or null (no-op).
+ */
+void fff_free_mixed_search_result(struct FffMixedSearchResult *result);
+
+/**
+ * Get a pointer to the `index`-th `FffMixedItem` in a mixed search result.
+ *
+ * ## Safety
+ * `result` must be a valid `FffMixedSearchResult` pointer from `fff_search_mixed`.
+ */
+const struct FffMixedItem *fff_mixed_search_result_get_item(const struct FffMixedSearchResult *result,
+                                                            uint32_t index);
+
+/**
+ * Get a pointer to the `index`-th `FffScore` in a mixed search result.
+ *
+ * ## Safety
+ * `result` must be a valid `FffMixedSearchResult` pointer from `fff_search_mixed`.
+ */
+const struct FffScore *fff_mixed_search_result_get_score(const struct FffMixedSearchResult *result,
+                                                         uint32_t index);
 
 #endif  /* FFF_C_H */

@@ -23,20 +23,20 @@ use fff_search::file_picker::{FFFMode, FilePicker, FuzzySearchOptions};
 use fff_search::grep::{GrepMode, GrepSearchOptions, parse_grep_query};
 use fff_search::{FilePickerOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 
-/// Stress test: 50 base files, 3 rounds of edits + deletes. New files
+/// Stress test: 200 base files, 3 rounds of edits + deletes. New files
 /// are tracked but NOT verified via grep (see Group 3 for that bug).
 #[test]
 fn bigram_overlay_coherence_stress_base_edits_and_deletes() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    let initial_files = seed_files(base, 50);
+    let initial_files = seed_realistic_repo(base);
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
     wait_for_bigram(&shared_picker);
 
-    // Sanity: all 50 tokens findable.
+    // Sanity: all 200 tokens findable.
     {
         let guard = shared_picker.read().unwrap();
         let picker = guard.as_ref().unwrap();
@@ -55,7 +55,7 @@ fn bigram_overlay_coherence_stress_base_edits_and_deletes() {
     std::thread::sleep(Duration::from_millis(1100));
 
     for round in 0..3 {
-        // ── DELETE: remove first 5 live base files ──
+        // -- DELETE: remove first 5 live base files --
         let delete_count = 5.min(live_tokens.len());
         let to_delete: Vec<(String, String)> = live_tokens.drain(..delete_count).collect();
         for (name, token) in &to_delete {
@@ -72,7 +72,7 @@ fn bigram_overlay_coherence_stress_base_edits_and_deletes() {
             dead_tokens.push(token.clone());
         }
 
-        // ── EDIT: modify next 5 live base files ──
+        // -- EDIT: modify next 5 live base files --
         let edit_count = 5.min(live_tokens.len());
         for i in 0..edit_count {
             let (ref name, ref mut old_token) = live_tokens[i];
@@ -90,7 +90,7 @@ fn bigram_overlay_coherence_stress_base_edits_and_deletes() {
             *old_token = new_token;
         }
 
-        // ── VERIFY: all live base tokens findable, all dead tokens gone ──
+        // -- VERIFY: all live base tokens findable, all dead tokens gone --
         {
             let guard = shared_picker.read().unwrap();
             let picker = guard.as_ref().unwrap();
@@ -123,9 +123,9 @@ fn bigram_overlay_coherence_long_session_incremental_edits() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
+    let repo_files = seed_realistic_repo(base);
     let file_count = 20;
     let edits_per_file = 10;
-    seed_files(base, file_count);
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
@@ -133,19 +133,20 @@ fn bigram_overlay_coherence_long_session_incremental_edits() {
 
     std::thread::sleep(Duration::from_millis(1100));
 
-    let mut latest_tokens: Vec<String> = (0..file_count)
-        .map(|i| format!("SEED_TOKEN_{i:04}"))
+    let mut latest_tokens: Vec<String> = repo_files[..file_count]
+        .iter()
+        .map(|(_, token)| token.clone())
         .collect();
 
     for edit_round in 0..edits_per_file {
         for file_idx in 0..file_count {
-            let name = format!("file_{file_idx:04}.rs");
+            let (ref name, _) = repo_files[file_idx];
             let new_token = format!("LONG_EDIT_F{file_idx:04}_R{edit_round:04}");
-            write_file_with_token(base, &name, &new_token);
+            write_file_with_token(base, name, &new_token);
             {
                 let mut guard = shared_picker.write().unwrap();
                 let picker = guard.as_mut().unwrap();
-                picker.on_create_or_modify(base.join(&name));
+                picker.on_create_or_modify(base.join(name));
             }
             latest_tokens[file_idx] = new_token;
         }
@@ -156,9 +157,10 @@ fn bigram_overlay_coherence_long_session_incremental_edits() {
         let picker = guard.as_ref().unwrap();
 
         for (file_idx, token) in latest_tokens.iter().enumerate() {
+            let (ref name, _) = repo_files[file_idx];
             assert!(
                 grep_count(picker, token) >= 1,
-                "file_{file_idx:04}: latest token {token} should be findable"
+                "{name}: latest token {token} should be findable"
             );
         }
 
@@ -167,17 +169,17 @@ fn bigram_overlay_coherence_long_session_incremental_edits() {
             if file_idx >= file_count {
                 continue;
             }
-            let seed = format!("SEED_TOKEN_{file_idx:04}");
+            let (ref name, ref seed_token) = repo_files[file_idx];
             assert_eq!(
-                grep_count(picker, &seed),
+                grep_count(picker, seed_token),
                 0,
-                "file_{file_idx:04}: seed token should not be findable"
+                "{name}: seed token should not be findable"
             );
             let mid = format!("LONG_EDIT_F{file_idx:04}_R0003");
             assert_eq!(
                 grep_count(picker, &mid),
                 0,
-                "file_{file_idx:04}: intermediate token should not be findable"
+                "{name}: intermediate token should not be findable"
             );
         }
     }
@@ -191,7 +193,7 @@ fn bigram_overlay_coherence_resurrect_tombstoned_file() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    seed_files(base, 10);
+    let repo_files = seed_realistic_repo(base);
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
@@ -199,8 +201,8 @@ fn bigram_overlay_coherence_resurrect_tombstoned_file() {
 
     std::thread::sleep(Duration::from_millis(1100));
 
-    let target = "file_0003.rs";
-    let target_path = base.join(target);
+    let (ref target_name, ref target_seed_token) = repo_files[3];
+    let target_path = base.join(target_name);
 
     // Delete.
     fs::remove_file(&target_path).unwrap();
@@ -213,11 +215,11 @@ fn bigram_overlay_coherence_resurrect_tombstoned_file() {
     {
         let guard = shared_picker.read().unwrap();
         let picker = guard.as_ref().unwrap();
-        assert_eq!(grep_count(picker, "SEED_TOKEN_0003"), 0);
+        assert_eq!(grep_count(picker, target_seed_token), 0);
     }
 
     // Re-create with new content.
-    write_file_with_token(base, target, "RESURRECTED_TOKEN");
+    write_file_with_token(base, target_name, "RESURRECTED_TOKEN");
     {
         let mut guard = shared_picker.write().unwrap();
         let picker = guard.as_mut().unwrap();
@@ -232,7 +234,7 @@ fn bigram_overlay_coherence_resurrect_tombstoned_file() {
             "resurrected token should be findable"
         );
         assert_eq!(
-            grep_count(picker, "SEED_TOKEN_0003"),
+            grep_count(picker, target_seed_token),
             0,
             "old token should not be findable after resurrect"
         );
@@ -248,34 +250,7 @@ fn bigram_overlay_coherence_proves_contribution_for_modified_base() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    // Create files with DIVERSE content so bigram index builds effective
-    // discriminating columns (avoids ubiquitous/sparse column pruning).
-    fs::write(
-        base.join("alpha.rs"),
-        "fn alpha() { let x = calculate_velocity(params); }\n",
-    )
-    .unwrap();
-    fs::write(
-        base.join("beta.rs"),
-        "fn beta() { database_query(sql_string); }\n",
-    )
-    .unwrap();
-    fs::write(
-        base.join("gamma.rs"),
-        "fn gamma() { render_template(html_buffer); }\n",
-    )
-    .unwrap();
-    fs::write(
-        base.join("delta.rs"),
-        "fn delta() { network_request(endpoint_url); }\n",
-    )
-    .unwrap();
-    fs::write(
-        base.join("epsilon.rs"),
-        "fn epsilon() { parse_json_payload(raw_bytes); }\n",
-    )
-    .unwrap();
-
+    let repo_files = seed_realistic_repo(base);
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
@@ -283,18 +258,22 @@ fn bigram_overlay_coherence_proves_contribution_for_modified_base() {
 
     std::thread::sleep(Duration::from_millis(1100));
 
-    // Replace beta.rs with content containing a unique token that shares
-    // NO bigrams with its original content "database_query(sql_string)".
+    // Pick the 2nd file from the realistic repo to modify.
+    let (ref target_name, _) = repo_files[1];
+    let target_path = base.join(target_name);
+
+    // Replace with content containing a unique token that shares
+    // NO bigrams with the original thematic content.
     let unique = "XYZZY_PLUGH_WIZARDRY";
     fs::write(
-        base.join("beta.rs"),
+        &target_path,
         format!("fn beta() {{ println!(\"{unique}\"); }}\n"),
     )
     .unwrap();
     {
         let mut guard = shared_picker.write().unwrap();
         let picker = guard.as_mut().unwrap();
-        picker.on_create_or_modify(base.join("beta.rs"));
+        picker.on_create_or_modify(&target_path);
     }
 
     {
@@ -307,7 +286,7 @@ fn bigram_overlay_coherence_proves_contribution_for_modified_base() {
         let without_overlay = grep_without_overlay_count(picker, unique);
         assert_eq!(
             without_overlay, 0,
-            "without overlay, bigram should exclude beta.rs (stale bigrams)"
+            "without overlay, bigram should exclude the file (stale bigrams)"
         );
     }
 
@@ -320,13 +299,25 @@ fn bigram_overlay_coherence_rapid_create_delete_same_base_path() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    // volatile.rs is a BASE file (exists before index build).
-    fs::write(base.join("anchor.txt"), "anchor\n").unwrap();
+    let repo_files = seed_realistic_repo(base);
+
+    // volatile.rs is added ON TOP of the realistic repo as a base file.
     fs::write(base.join("volatile.rs"), "initial volatile content\n").unwrap();
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
     wait_for_bigram(&shared_picker);
+
+    // Sanity: a token from the realistic repo is findable.
+    {
+        let guard = shared_picker.read().unwrap();
+        let picker = guard.as_ref().unwrap();
+        let (_, ref token) = repo_files[0];
+        assert!(
+            grep_count(picker, token) >= 1,
+            "sanity: realistic repo token should be findable"
+        );
+    }
 
     std::thread::sleep(Duration::from_millis(1100));
 
@@ -398,7 +389,7 @@ fn bigram_overlay_coherence_rapid_create_delete_same_base_path() {
 /// (in only one file), so the index retains no columns and prefiltering
 /// is always bypassed — masking the bug.
 ///
-/// Here we seed 20 files with deliberately varied content so bigram
+/// The realistic repo seeds 200 files with 4 thematic groups so bigram
 /// columns have moderate cardinality (retained by the index), making
 /// the prefilter discriminating.
 #[test]
@@ -406,40 +397,7 @@ fn bigram_overlay_coherence_overflow_files_searchable_via_grep() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    // Varied content — each file has unique text with different bigram profiles.
-    let words = [
-        "calculate_velocity",
-        "database_migration",
-        "render_template",
-        "network_request",
-        "parse_json_payload",
-        "compress_archive",
-        "validate_schema",
-        "transform_matrix",
-        "schedule_pipeline",
-        "authenticate_user",
-        "encrypt_message",
-        "decode_packet",
-        "allocate_buffer",
-        "serialize_config",
-        "optimize_query",
-        "register_handler",
-        "dispatch_event",
-        "synchronize_state",
-        "initialize_module",
-        "aggregate_metrics",
-    ];
-    for (i, word) in words.iter().enumerate() {
-        let name = format!("module_{i:02}.rs");
-        let content = format!(
-            "pub fn {word}() -> Result<(), Error> {{\n    \
-             let data = process_{word}_input();\n    \
-             log::info!(\"executing {word}\");\n    \
-             Ok(())\n}}\n"
-        );
-        fs::write(base.join(&name), content).unwrap();
-    }
-
+    seed_realistic_repo(base);
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
@@ -454,7 +412,7 @@ fn bigram_overlay_coherence_overflow_files_searchable_via_grep() {
 
         // Sanity: a query with content from one file finds exactly that file.
         assert!(
-            grep_count(picker, "calculate_velocity") >= 1,
+            grep_count(picker, "REPO_TOKEN_0000") >= 1,
             "sanity: known content should be findable"
         );
     }
@@ -462,12 +420,12 @@ fn bigram_overlay_coherence_overflow_files_searchable_via_grep() {
     std::thread::sleep(Duration::from_millis(1100));
 
     // Add a new overflow file whose content has bigrams shared with
-    // existing files (e.g., "calculate" shares bigrams with module_00).
+    // existing files (e.g., "SELECT" shares bigrams with group A files).
     let new_path = base.join("overflow_new.rs");
     fs::write(
         &new_path,
         "pub fn recalculate_velocity_delta() {\n    \
-         let v = calculate_velocity();\n    \
+         let v = SELECT_transaction();\n    \
          println!(\"delta: {}\", v);\n}\n",
     )
     .unwrap();
@@ -510,7 +468,7 @@ fn bigram_overlay_coherence_mixed_tombstones_and_overflow() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    seed_files(base, 30);
+    let repo_files = seed_realistic_repo(base);
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
@@ -519,9 +477,12 @@ fn bigram_overlay_coherence_mixed_tombstones_and_overflow() {
     std::thread::sleep(Duration::from_millis(1100));
 
     // Delete first 15 base files.
-    for i in 0..15 {
-        let name = format!("file_{i:04}.rs");
-        let path = base.join(&name);
+    let deleted_tokens: Vec<String> = repo_files[..15]
+        .iter()
+        .map(|(_, token)| token.clone())
+        .collect();
+    for (name, _) in &repo_files[..15] {
+        let path = base.join(name);
         fs::remove_file(&path).unwrap();
         let mut guard = shared_picker.write().unwrap();
         let picker = guard.as_mut().unwrap();
@@ -545,21 +506,19 @@ fn bigram_overlay_coherence_mixed_tombstones_and_overflow() {
         let picker = guard.as_ref().unwrap();
 
         // Tombstones work: deleted tokens are gone.
-        for i in 0..15 {
-            let token = format!("SEED_TOKEN_{i:04}");
+        for token in &deleted_tokens {
             assert_eq!(
-                grep_count(picker, &token),
+                grep_count(picker, token),
                 0,
-                "deleted file_{i:04} token should not be findable"
+                "deleted token {token} should not be findable"
             );
         }
 
         // Surviving base files still findable.
-        for i in 15..30 {
-            let token = format!("SEED_TOKEN_{i:04}");
+        for (name, token) in &repo_files[15..] {
             assert!(
-                grep_count(picker, &token) >= 1,
-                "surviving file_{i:04} token should be findable"
+                grep_count(picker, token) >= 1,
+                "surviving {name} token should be findable"
             );
         }
 
@@ -580,7 +539,7 @@ fn bigram_overlay_coherence_full_stress_loop_with_overflow() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    let initial_files = seed_files(base, 50);
+    let initial_files = seed_realistic_repo(base);
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
@@ -593,7 +552,7 @@ fn bigram_overlay_coherence_full_stress_loop_with_overflow() {
     std::thread::sleep(Duration::from_millis(1100));
 
     for round in 0..3 {
-        // ── DELETE 5 base files ──
+        // -- DELETE 5 base files --
         let to_delete: Vec<_> = live_base.drain(..5).collect();
         for (name, token) in &to_delete {
             let path = base.join(name);
@@ -604,7 +563,7 @@ fn bigram_overlay_coherence_full_stress_loop_with_overflow() {
             dead_tokens.push(token.clone());
         }
 
-        // ── EDIT 5 base files ──
+        // -- EDIT 5 base files --
         for i in 0..5.min(live_base.len()) {
             let (ref name, ref mut old_token) = live_base[i];
             let new_token = format!("EDITED_R{round}_{i:04}");
@@ -616,7 +575,7 @@ fn bigram_overlay_coherence_full_stress_loop_with_overflow() {
             *old_token = new_token;
         }
 
-        // ── CREATE 5 overflow files ──
+        // -- CREATE 5 overflow files --
         for i in 0..5 {
             let name = format!("new_r{round}_{i:04}.rs");
             let token = format!("NEWFILE_R{round}_{i:04}");
@@ -627,7 +586,7 @@ fn bigram_overlay_coherence_full_stress_loop_with_overflow() {
             live_overflow.push((name, token));
         }
 
-        // ── VERIFY base files ──
+        // -- VERIFY base files --
         {
             let guard = shared_picker.read().unwrap();
             let picker = guard.as_ref().unwrap();
@@ -668,7 +627,7 @@ fn bigram_overlay_coherence_overflow_file_edit_and_delete() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    fs::write(base.join("base.txt"), "base file content\n").unwrap();
+    seed_realistic_repo(base);
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
@@ -741,10 +700,10 @@ fn bigram_overlay_coherence_overflow_file_edit_and_delete() {
     stop_picker(&shared_picker);
 }
 
-// ═══════════════════════════════════════════════════════════════════════
+// ===================================================================
 // Group 4: Rescan after git commit. Tests that `trigger_rescan` picks
 // up committed changes and that the file list is refreshed.
-// ═══════════════════════════════════════════════════════════════════════
+// ===================================================================
 
 /// After editing base files, committing, and rescanning, the new content
 /// should be searchable.
@@ -757,7 +716,8 @@ fn bigram_overlay_coherence_rescan_after_git_commit() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    seed_files(base, 30);
+    let repo_files = seed_realistic_repo(base);
+    let base_count = repo_files.len(); // 200
     git_init_and_commit(base);
 
     let (shared_picker, shared_frecency) = make_picker(base);
@@ -768,13 +728,13 @@ fn bigram_overlay_coherence_rescan_after_git_commit() {
     // Edit 10 base files and add 5 new files.
     let mut edited_tokens = Vec::new();
     for i in 0..10 {
-        let name = format!("file_{i:04}.rs");
+        let (ref name, _) = repo_files[i];
         let token = format!("PRE_COMMIT_EDIT_{i:04}");
-        write_file_with_token(base, &name, &token);
+        write_file_with_token(base, name, &token);
         {
             let mut guard = shared_picker.write().unwrap();
             let picker = guard.as_mut().unwrap();
-            picker.on_create_or_modify(base.join(&name));
+            picker.on_create_or_modify(base.join(name));
         }
         edited_tokens.push(token);
     }
@@ -807,15 +767,17 @@ fn bigram_overlay_coherence_rescan_after_git_commit() {
     // with it). Wait for the synchronous scan to finish.
     wait_for_scan(&shared_picker);
 
-    // Verify the file list is refreshed: all 35 files (30 + 5 new) should
+    // Verify the file list is refreshed: all base_count + 5 files should
     // be present as base files (not overflow, since they're committed).
     {
         let guard = shared_picker.read().unwrap();
         let picker = guard.as_ref().unwrap();
         assert_eq!(
             picker.get_files().len(),
-            35,
-            "post-rescan: should have 35 files (30 original + 5 new)"
+            base_count + 5,
+            "post-rescan: should have {} files ({} original + 5 new)",
+            base_count + 5,
+            base_count
         );
         // After rescan, new files are in the base (no overflow).
         assert_eq!(
@@ -860,19 +822,18 @@ fn bigram_overlay_coherence_rescan_after_git_commit() {
     stop_picker(&shared_picker);
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Group 5: Full lifecycle — seed, overlay edits, commit, rescan, more
+// ===================================================================
+// Group 5: Full lifecycle -- seed, overlay edits, commit, rescan, more
 // overlay edits. Tests the complete workflow.
-// ═══════════════════════════════════════════════════════════════════════
+// ===================================================================
 
-/// seed → index → overlay edits → commit → rescan → more overlay edits
+/// seed -> index -> overlay edits -> commit -> rescan -> more overlay edits
 #[test]
 fn bigram_overlay_coherence_full_lifecycle_seed_edit_commit_rescan_edit() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    let initial_count = 40;
-    seed_files(base, initial_count);
+    let repo_files = seed_realistic_repo(base);
     git_init_and_commit(base);
 
     let (shared_picker, shared_frecency) = make_picker(base);
@@ -880,32 +841,32 @@ fn bigram_overlay_coherence_full_lifecycle_seed_edit_commit_rescan_edit() {
 
     std::thread::sleep(Duration::from_millis(1100));
 
-    // ── Phase 1: Pre-commit overlay edits (base files only) ──
+    // -- Phase 1: Pre-commit overlay edits (base files only) --
     let mut phase1_tokens = Vec::new();
     for i in 0..10 {
-        let name = format!("file_{i:04}.rs");
+        let (ref name, _) = repo_files[i];
         let token = format!("PHASE1_EDIT_{i:04}");
-        write_file_with_token(base, &name, &token);
+        write_file_with_token(base, name, &token);
         {
             let mut guard = shared_picker.write().unwrap();
             let picker = guard.as_mut().unwrap();
-            picker.on_create_or_modify(base.join(&name));
+            picker.on_create_or_modify(base.join(name));
         }
         phase1_tokens.push(token);
     }
 
-    // Delete some files.
+    // Delete some files (pick indices near the end).
     let mut phase1_dead = Vec::new();
-    for i in 35..40 {
-        let name = format!("file_{i:04}.rs");
-        let path = base.join(&name);
+    for i in 195..200 {
+        let (ref name, ref token) = repo_files[i];
+        let path = base.join(name);
         fs::remove_file(&path).unwrap();
         {
             let mut guard = shared_picker.write().unwrap();
             let picker = guard.as_mut().unwrap();
             picker.remove_file_by_path(&path);
         }
-        phase1_dead.push(format!("SEED_TOKEN_{i:04}"));
+        phase1_dead.push(token.clone());
     }
 
     // Verify phase 1 (base file operations only).
@@ -927,7 +888,7 @@ fn bigram_overlay_coherence_full_lifecycle_seed_edit_commit_rescan_edit() {
         }
     }
 
-    // ── Phase 2: Commit and rescan ──
+    // -- Phase 2: Commit and rescan --
     git_add_and_commit(base, "phase 1 changes");
 
     {
@@ -963,16 +924,16 @@ fn bigram_overlay_coherence_full_lifecycle_seed_edit_commit_rescan_edit() {
 
     std::thread::sleep(Duration::from_millis(1100));
 
-    // ── Phase 3: More overlay edits after rescan ──
+    // -- Phase 3: More overlay edits after rescan --
     let mut phase3_tokens = Vec::new();
     for i in 0..5 {
-        let name = format!("file_{i:04}.rs");
+        let (ref name, _) = repo_files[i];
         let token = format!("PHASE3_EDIT_{i:04}");
-        write_file_with_token(base, &name, &token);
+        write_file_with_token(base, name, &token);
         {
             let mut guard = shared_picker.write().unwrap();
             let picker = guard.as_mut().unwrap();
-            picker.on_create_or_modify(base.join(&name));
+            picker.on_create_or_modify(base.join(name));
         }
         phase3_tokens.push(token);
     }
@@ -1011,9 +972,9 @@ fn bigram_overlay_coherence_full_lifecycle_seed_edit_commit_rescan_edit() {
     stop_picker(&shared_picker);
 }
 
-// ═══════════════════════════════════════════════════════════════════════
+// ===================================================================
 // Group 6: Nested directory operations.
-// ═══════════════════════════════════════════════════════════════════════
+// ===================================================================
 
 /// Files in nested directories should be editable via overlay.
 #[test]
@@ -1021,33 +982,17 @@ fn bigram_overlay_coherence_nested_directory_edits() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    let dirs = ["src", "src/core", "src/utils", "tests", "tests/integration"];
-    for dir in &dirs {
-        fs::create_dir_all(base.join(dir)).unwrap();
-    }
-
-    let mut initial_files = Vec::new();
-    for (i, dir) in dirs.iter().enumerate() {
-        for j in 0..5 {
-            let name = format!("{dir}/mod_{j}.rs");
-            let token = format!("DIR{i}_FILE{j}_TOKEN");
-            write_file_with_token(base, &name, &token);
-            initial_files.push((name, token));
-        }
-    }
-
+    let repo_files = seed_realistic_repo(base);
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
     wait_for_bigram(&shared_picker);
 
-    std::thread::sleep(Duration::from_millis(1100));
-
     // Verify all initial tokens findable.
     {
         let guard = shared_picker.read().unwrap();
         let picker = guard.as_ref().unwrap();
-        for (name, token) in &initial_files {
+        for (name, token) in &repo_files {
             assert!(
                 grep_count(picker, token) >= 1,
                 "initial token {token} ({name}) should be findable"
@@ -1055,16 +1000,19 @@ fn bigram_overlay_coherence_nested_directory_edits() {
         }
     }
 
-    // Edit one file per directory (base file modifications).
+    std::thread::sleep(Duration::from_millis(1100));
+
+    // Edit one file from each subdir group (the realistic repo rotates
+    // through 8 subdirs, so indices 0,1,2,...,7 cover all dirs).
     let mut edited = Vec::new();
-    for dir in &dirs {
-        let name = format!("{dir}/mod_0.rs");
-        let token = format!("NESTED_EDIT_{}", dir.replace('/', "_"));
-        write_file_with_token(base, &name, &token);
+    for i in 0..8 {
+        let (ref name, _) = repo_files[i];
+        let token = format!("NESTED_EDIT_{i:02}");
+        write_file_with_token(base, name, &token);
         {
             let mut guard = shared_picker.write().unwrap();
             let picker = guard.as_mut().unwrap();
-            picker.on_create_or_modify(base.join(&name));
+            picker.on_create_or_modify(base.join(name));
         }
         edited.push(token);
     }
@@ -1083,17 +1031,16 @@ fn bigram_overlay_coherence_nested_directory_edits() {
     stop_picker(&shared_picker);
 }
 
-// ═══════════════════════════════════════════════════════════════════════
+// ===================================================================
 // Group 7: Fuzzy file search. Verifies that fuzzy filename matching
 // works for base files, edited files, overflow files, and after rescan.
-// ═══════════════════════════════════════════════════════════════════════
+// ===================================================================
 
 /// Helper: run a fuzzy search and return matched file paths.
 fn fuzzy_search_paths(picker: &FilePicker, query: &str) -> Vec<String> {
     let parser = QueryParser::default();
     let parsed = parser.parse(query);
-    let result = FilePicker::fuzzy_search(
-        picker.get_files(),
+    let result = picker.fuzzy_search(
         &parsed,
         None,
         FuzzySearchOptions {
@@ -1108,7 +1055,7 @@ fn fuzzy_search_paths(picker: &FilePicker, query: &str) -> Vec<String> {
     result
         .items
         .iter()
-        .map(|f| f.path_str().to_string())
+        .map(|f| f.relative_path(picker))
         .collect()
 }
 
@@ -1118,7 +1065,10 @@ fn bigram_overlay_coherence_fuzzy_search_base_overflow_and_deleted() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    // Create files with distinctive names for fuzzy matching.
+    seed_realistic_repo(base);
+
+    // Create files with distinctive names for fuzzy matching ON TOP of
+    // the realistic repo.
     fs::write(base.join("controller_auth.rs"), "auth controller\n").unwrap();
     fs::write(base.join("controller_user.rs"), "user controller\n").unwrap();
     fs::write(base.join("model_invoice.rs"), "invoice model\n").unwrap();
@@ -1130,7 +1080,7 @@ fn bigram_overlay_coherence_fuzzy_search_base_overflow_and_deleted() {
     let (shared_picker, _shared_frecency) = make_picker(base);
     wait_for_bigram(&shared_picker);
 
-    // Fuzzy search for "controller" — should find both controller files.
+    // Fuzzy search for "controller" -- should find both controller files.
     {
         let guard = shared_picker.read().unwrap();
         let picker = guard.as_ref().unwrap();
@@ -1208,6 +1158,9 @@ fn bigram_overlay_coherence_fuzzy_search_after_rescan() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
+    seed_realistic_repo(base);
+
+    // Add distinctive router/middleware files ON TOP of the realistic repo.
     fs::write(base.join("router_api.rs"), "api router\n").unwrap();
     fs::write(base.join("router_web.rs"), "web router\n").unwrap();
     fs::write(base.join("middleware_cors.rs"), "cors middleware\n").unwrap();
@@ -1276,7 +1229,7 @@ fn bigram_overlay_coherence_fuzzy_and_grep_combined() {
     let tmp = TempDir::new().unwrap();
     let base = tmp.path();
 
-    seed_files(base, 30);
+    let repo_files = seed_realistic_repo(base);
     git_init_and_commit(base);
 
     let (shared_picker, _shared_frecency) = make_picker(base);
@@ -1285,11 +1238,12 @@ fn bigram_overlay_coherence_fuzzy_and_grep_combined() {
     std::thread::sleep(Duration::from_millis(1100));
 
     // Edit a base file.
-    write_file_with_token(base, "file_0005.rs", "COMBINED_EDIT_TOKEN");
+    let (ref edit_name, ref _edit_old_token) = repo_files[5];
+    write_file_with_token(base, edit_name, "COMBINED_EDIT_TOKEN");
     {
         let mut guard = shared_picker.write().unwrap();
         let picker = guard.as_mut().unwrap();
-        picker.on_create_or_modify(base.join("file_0005.rs"));
+        picker.on_create_or_modify(base.join(edit_name));
     }
 
     // Add an overflow file with a distinctive name.
@@ -1305,7 +1259,8 @@ fn bigram_overlay_coherence_fuzzy_and_grep_combined() {
     }
 
     // Delete a base file.
-    let del_path = base.join("file_0010.rs");
+    let (ref del_name, ref del_token) = repo_files[10];
+    let del_path = base.join(del_name);
     fs::remove_file(&del_path).unwrap();
     {
         let mut guard = shared_picker.write().unwrap();
@@ -1329,7 +1284,7 @@ fn bigram_overlay_coherence_fuzzy_and_grep_combined() {
         );
         // Grep: deleted file's content gone.
         assert_eq!(
-            grep_count(picker, "SEED_TOKEN_0010"),
+            grep_count(picker, del_token),
             0,
             "grep should not find deleted file content"
         );
@@ -1342,24 +1297,22 @@ fn bigram_overlay_coherence_fuzzy_and_grep_combined() {
         );
 
         // Fuzzy: deleted file not in results.
-        let fuzzy_del = fuzzy_search_paths(picker, "file_0010");
+        let fuzzy_del = fuzzy_search_paths(picker, del_name);
         assert!(
-            !fuzzy_del.iter().any(|p| p.contains("file_0010")),
+            !fuzzy_del.iter().any(|p| p.contains(del_name)),
             "fuzzy should not find deleted file"
         );
 
         // Fuzzy: edited file still findable by name.
-        let fuzzy_edit = fuzzy_search_paths(picker, "file_0005");
+        let fuzzy_edit = fuzzy_search_paths(picker, edit_name);
         assert!(
-            fuzzy_edit.iter().any(|p| p.contains("file_0005")),
+            fuzzy_edit.iter().any(|p| p.contains(edit_name)),
             "fuzzy should find edited file by name"
         );
     }
 
     stop_picker(&shared_picker);
 }
-
-// HELPERS  --------------------------
 
 fn grep_opts() -> GrepSearchOptions {
     GrepSearchOptions {
@@ -1374,6 +1327,7 @@ fn grep_opts() -> GrepSearchOptions {
         after_context: 0,
         classify_definitions: false,
         trim_whitespace: false,
+        abort_signal: None,
     }
 }
 
@@ -1481,7 +1435,8 @@ fn make_picker(base: &Path) -> (SharedPicker, SharedFrecency) {
         shared_frecency.clone(),
         FilePickerOptions {
             base_path: base.to_string_lossy().to_string(),
-            warmup_mmap_cache: true,
+            enable_mmap_cache: true,
+            enable_content_indexing: true,
             mode: FFFMode::Neovim,
             watch: false, // we drive events manually
             ..Default::default()
@@ -1500,14 +1455,238 @@ fn write_file_with_token(dir: &Path, name: &str, token: &str) {
     fs::write(dir.join(name), content).unwrap();
 }
 
-/// Generate many files with predictable tokens.
-fn seed_files(dir: &Path, count: usize) -> Vec<(String, String)> {
-    let mut files = Vec::with_capacity(count);
-    for i in 0..count {
-        let name = format!("file_{:04}.rs", i);
-        let token = format!("SEED_TOKEN_{:04}", i);
-        write_file_with_token(dir, &name, &token);
-        files.push((name, token));
+/// Create a realistic 200-file repository with subdirectories and diverse
+/// content. Files are split into 4 thematic groups (50 each) so that
+/// group-specific bigrams appear in ~25% of files, keeping the bigram
+/// index discriminating (columns retained for 3-90% of files).
+///
+/// Uses only leaf directories (no files in parent dirs that also have
+/// child dirs) so that the directory sort order is consistent with the
+/// binary search in `find_file_index`.
+///
+/// Returns `Vec<(relative_path, token)>` for all 200 files.
+fn seed_realistic_repo(dir: &Path) -> Vec<(String, String)> {
+    let subdirs = [
+        "src/core",
+        "src/models",
+        "src/net",
+        "src/utils",
+        "tests/integration",
+        "tests/unit",
+        "lib/helpers",
+        "lib/internal",
+    ];
+    for subdir in &subdirs {
+        fs::create_dir_all(dir.join(subdir)).unwrap();
     }
+
+    let groups: &[(&str, &[&str])] = &[
+        (
+            "database",
+            &[
+                "SELECT",
+                "INSERT",
+                "transaction",
+                "rollback",
+                "schema",
+                "migration",
+                "postgresql",
+                "foreign_key",
+                "primary_key",
+                "tablespace",
+                "index_column",
+                "constraint",
+                "aggregate",
+                "partition",
+                "replication",
+            ],
+        ),
+        (
+            "network",
+            &[
+                "socket",
+                "listen",
+                "handshake",
+                "bandwidth",
+                "latency",
+                "throughput",
+                "packet",
+                "firewall",
+                "proxy",
+                "gateway",
+                "protocol",
+                "ethernet",
+                "timeout",
+                "connection",
+                "certificate",
+            ],
+        ),
+        (
+            "graphics",
+            &[
+                "vertex",
+                "shader",
+                "fragment",
+                "rasterize",
+                "polygon",
+                "texture",
+                "framebuffer",
+                "quaternion",
+                "viewport",
+                "projection",
+                "tessellation",
+                "antialiasing",
+                "voxel",
+                "billboard",
+                "raytracing",
+            ],
+        ),
+        (
+            "audio",
+            &[
+                "waveform",
+                "amplitude",
+                "frequency",
+                "oscillator",
+                "synthesizer",
+                "reverb",
+                "envelope",
+                "spectrogram",
+                "samplerate",
+                "bitdepth",
+                "compressor",
+                "equalizer",
+                "decibel",
+                "harmonics",
+                "chorus",
+            ],
+        ),
+    ];
+
+    let mut files = Vec::with_capacity(200);
+
+    for (group_idx, (domain, words)) in groups.iter().enumerate() {
+        for file_in_group in 0..50 {
+            let idx = group_idx * 50 + file_in_group;
+            let subdir = subdirs[idx % subdirs.len()];
+            let relative_path = format!("{subdir}/repo_{idx:04}.rs");
+            let token = format!("REPO_TOKEN_{idx:04}");
+
+            let w1 = words[file_in_group % words.len()];
+            let w2 = words[(file_in_group + 3) % words.len()];
+            let w3 = words[(file_in_group + 7) % words.len()];
+            let w4 = words[(file_in_group + 11) % words.len()];
+
+            let content = format!(
+                "// {domain} module {idx}\n\
+                 pub fn {w1}_{idx}() -> Result<(), Error> {{\n\
+                     let ctx = {w2}_context();\n\
+                     {w3}_process(&ctx)?;\n\
+                     {w4}_finalize(&ctx)\n\
+                 }}\n\
+                 const MARKER: &str = \"{token}\";\n"
+            );
+            fs::write(dir.join(&relative_path), content).unwrap();
+            files.push((relative_path, token));
+        }
+    }
+
     files
+}
+
+fn fuzzy_grep_opts() -> GrepSearchOptions {
+    GrepSearchOptions {
+        mode: GrepMode::Fuzzy,
+        ..grep_opts()
+    }
+}
+
+fn fuzzy_grep_count(picker: &FilePicker, query: &str) -> usize {
+    let parsed = parse_grep_query(query);
+    picker.grep(&parsed, &fuzzy_grep_opts()).matches.len()
+}
+
+/// Overflow files must be searchable via fuzzy grep.
+///
+/// The fuzzy grep path uses bigram prefiltering which only covers base
+/// files. Overflow files (index >= base_count) must be appended to the
+/// search set unconditionally, same as the plain-text grep path does.
+///
+/// The realistic repo seeds 200 files split into 4 thematic groups so
+/// that group-specific bigrams land in ~25% of files -- right in the
+/// retention sweet spot.
+#[test]
+fn bigram_overlay_coherence_fuzzy_grep_finds_overflow_files() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path();
+
+    seed_realistic_repo(base);
+    git_init_and_commit(base);
+
+    let (shared_picker, _shared_frecency) = make_picker(base);
+    wait_for_bigram(&shared_picker);
+
+    {
+        let guard = shared_picker.read().unwrap();
+        let picker = guard.as_ref().unwrap();
+        assert!(
+            picker.bigram_index().is_some(),
+            "bigram index must be built"
+        );
+        let idx = picker.bigram_index().unwrap();
+        assert!(
+            idx.columns_used() > 10,
+            "index should retain enough columns to be discriminating, got {}",
+            idx.columns_used()
+        );
+    }
+
+    std::thread::sleep(Duration::from_millis(1100));
+
+    // Add overflow file using "graphics" vocabulary -- its bigrams ("vertex",
+    // "shader", etc.) appear in ~25% of base files, so the prefilter will
+    // produce a candidate set that covers group C files but NOT the overflow
+    // file (its index is beyond the bitset).
+    let new_path = base.join("overflow_graphics.rs");
+    fs::write(
+        &new_path,
+        "pub fn vertex_shader_overflow_marker() {\n    \
+         let mesh = tessellation_pipeline();\n    \
+         rasterize_fragment(&mesh);\n\
+         println!(\"rendered\");\n}\n",
+    )
+    .unwrap();
+    {
+        let mut guard = shared_picker.write().unwrap();
+        let picker = guard.as_mut().unwrap();
+        assert!(picker.on_create_or_modify(&new_path).is_some());
+        assert_eq!(picker.get_overflow_files().len(), 1);
+    }
+
+    // Plain text grep finds the overflow file (known to work).
+    {
+        let guard = shared_picker.read().unwrap();
+        let picker = guard.as_ref().unwrap();
+        assert!(
+            grep_count(picker, "vertex_shader_overflow_marker") >= 1,
+            "plain text grep should find overflow file content"
+        );
+    }
+
+    // Fuzzy grep: query uses "vertex_shader" -- bigrams "ve","er","rt","te","ex",
+    // "sh","ha","ad","de","er" overlap with group C base files. The prefilter
+    // will produce Some(candidates) covering those base files but the overflow
+    // file's index is beyond the bitset -> silently dropped.
+    {
+        let guard = shared_picker.read().unwrap();
+        let picker = guard.as_ref().unwrap();
+        assert!(
+            fuzzy_grep_count(picker, "vertex_shader") >= 1,
+            "BUG: fuzzy grep should find overflow file content but bigram \
+             prefiltering drops overflow files whose index exceeds the \
+             candidate bitset length"
+        );
+    }
+
+    stop_picker(&shared_picker);
 }

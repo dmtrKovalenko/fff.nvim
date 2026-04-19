@@ -1,4 +1,5 @@
-*fff.nvim.txt*         For Neovim >= 0.10.0         Last change: 2026 April 10
+*fff.nvim.txt*
+                            For Neovim >= 0.10.0    Last change: 2026 April 19
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -6,7 +7,7 @@ Table of Contents                                 *fff.nvim-table-of-contents*
   - MCP                                                         |fff.nvim-mcp|
   - Neovim guide                                       |fff.nvim-neovim-guide|
 1. Links                                                      |fff.nvim-links|
-FFFAI agents (MCP)   |   Neovim usersA fast file search for your AI and neovim, with memory built-in
+FFFAI agents (MCP)   |   Neovim usersA fast file search for your AI and neovim, with memory built-in
 
 
 
@@ -163,6 +164,7 @@ all available options:
         max_results = 100,
         max_threads = 4,
         lazy_sync = true, -- set to false if you want file indexing to start on open
+        prompt_vim_mode = false, -- set to true to enable vim-mode in the prompt: <Esc> leaves insert for normal mode bindings (also allows <leader>p or <leader>l to jump around) the second <Esc> closes the picker
         layout = {
           height = 0.8,
           width = 0.8,

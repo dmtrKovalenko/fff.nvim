@@ -1,18 +1,12 @@
-//! Constraint filtering engine for fff.
-//!
-//! This module provides the core constraint application logic that filters items
-//! based on parsed query constraints (extensions, path segments, globs, git status, etc.).
-//!
-//! The filtering is generic over the [`Constrainable`] trait, allowing reuse across
-//! different search modes (file picker, live grep, etc.).
+//! Constraint-based prefiltering for search queries.
 
 use ahash::AHashSet;
 use fff_query_parser::{Constraint, GitStatusFilter};
 use smallvec::SmallVec;
 
 use crate::git::is_modified_status;
+use crate::simd_path::ArenaPtr;
 
-/// Case-insensitive ASCII substring search without allocation.
 /// `needle` must already be lowercase.
 #[inline]
 fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
@@ -38,21 +32,12 @@ fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
     false
 }
 
-/// Minimum item count before switching to parallel iteration with rayon.
-/// Below this threshold, the overhead of thread pool dispatch outweighs the benefit.
 const PAR_THRESHOLD: usize = 10_000;
 
-/// Trait for items that can be filtered by constraints.
-/// Implement this for any searchable item type (files, grep results, etc.).
-pub trait Constrainable {
-    /// The file's relative path (e.g. "src/main.rs")
-    fn relative_path(&self) -> &str;
-
-    /// The file name component (e.g. "main.rs")
-    fn file_name(&self) -> &str;
-
-    /// The git status of this item, if available
+pub(crate) trait Constrainable {
+    fn write_file_name(&self, arena: ArenaPtr, out: &mut String);
     fn git_status(&self) -> Option<git2::Status>;
+    fn write_relative_path(&self, arena: ArenaPtr, out: &mut String);
 }
 
 /// Check if a relative path ends with the given suffix at a `/` boundary (case-insensitive).
@@ -66,56 +51,57 @@ pub trait Constrainable {
 /// - `path_ends_with_suffix("xlibswscale/input.c", "libswscale/input.c")` → false (no boundary)
 #[inline]
 pub fn path_ends_with_suffix(path: &str, suffix: &str) -> bool {
-    if path.len() < suffix.len() {
+    let path_bytes = path.as_bytes();
+    let suffix_bytes = suffix.as_bytes();
+    if path_bytes.len() < suffix_bytes.len() {
         return false;
     }
-    let start = path.len() - suffix.len();
-    if !path[start..].eq_ignore_ascii_case(suffix) {
+    let start = path_bytes.len() - suffix_bytes.len();
+    if !path_bytes[start..].eq_ignore_ascii_case(suffix_bytes) {
         return false;
     }
     // Exact match, or the character before is /
-    start == 0 || path.as_bytes()[start - 1] == b'/'
+    start == 0 || path_bytes[start - 1] == b'/'
 }
 
-/// Check if file extension matches (without allocation)
 #[inline]
 pub fn file_has_extension(file_name: &str, ext: &str) -> bool {
-    if file_name.len() <= ext.len() + 1 {
+    let name_bytes = file_name.as_bytes();
+    let ext_bytes = ext.as_bytes();
+    if name_bytes.len() <= ext_bytes.len() + 1 {
         return false;
     }
-    let start = file_name.len() - ext.len() - 1;
-    file_name.as_bytes().get(start) == Some(&b'.')
-        && file_name[start + 1..].eq_ignore_ascii_case(ext)
+    let start = name_bytes.len() - ext_bytes.len() - 1;
+    name_bytes.get(start) == Some(&b'.') && name_bytes[start + 1..].eq_ignore_ascii_case(ext_bytes)
 }
 
-/// Check if path contains segment (without allocation)
-/// Supports both single segments ("src") and multi-segment paths ("libswscale/aarch64").
-/// For "libswscale/aarch64", checks that these appear as consecutive path components.
+/// Supports multi-segment paths like "libswscale/aarch64" (consecutive components).
 #[inline]
 pub fn path_contains_segment(path: &str, segment: &str) -> bool {
     let path_bytes = path.as_bytes();
-    let segment_len = segment.len();
+    let segment_bytes = segment.as_bytes();
+    let segment_len = segment_bytes.len();
 
     // Check segment/ at start of path
-    if path.len() > segment_len
+    if path_bytes.len() > segment_len
         && path_bytes.get(segment_len) == Some(&b'/')
-        && path[..segment_len].eq_ignore_ascii_case(segment)
+        && path_bytes[..segment_len].eq_ignore_ascii_case(segment_bytes)
     {
         return true;
     }
 
     // Check /segment/ anywhere using byte scanning
-    if path.len() < segment_len + 2 {
+    if path_bytes.len() < segment_len + 2 {
         return false;
     }
 
-    for i in 0..path.len().saturating_sub(segment_len + 1) {
+    for i in 0..path_bytes.len().saturating_sub(segment_len + 1) {
         if path_bytes[i] == b'/' {
             let start = i + 1;
             let end = start + segment_len;
-            if end < path.len()
+            if end < path_bytes.len()
                 && path_bytes[end] == b'/'
-                && path[start..end].eq_ignore_ascii_case(segment)
+                && path_bytes[start..end].eq_ignore_ascii_case(segment_bytes)
             {
                 return true;
             }
@@ -124,8 +110,8 @@ pub fn path_contains_segment(path: &str, segment: &str) -> bool {
     false
 }
 
-/// Check if an item at given index matches a constraint (single-pass friendly, allocation-free)
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn item_matches_constraint_at_index<T: Constrainable>(
     item: &T,
     item_index: usize,
@@ -133,22 +119,35 @@ fn item_matches_constraint_at_index<T: Constrainable>(
     glob_results: &[(bool, AHashSet<usize>)],
     glob_idx: &mut usize,
     negate: bool,
+    arena: ArenaPtr,
+    fname_buf: &mut String,
+    path_buf: &mut String,
 ) -> bool {
     let matches = match constraint {
-        Constraint::Extension(ext) => file_has_extension(item.file_name(), ext),
+        Constraint::Extension(ext) => {
+            item.write_file_name(arena, fname_buf);
+            file_has_extension(fname_buf, ext)
+        }
         Constraint::Glob(_) => {
             let result = glob_results
                 .get(*glob_idx)
                 .map(|(is_neg, set)| {
                     let matched = set.contains(&item_index);
+
                     if *is_neg { !matched } else { matched }
                 })
                 .unwrap_or(true);
             *glob_idx += 1;
             return if negate { !result } else { result };
         }
-        Constraint::PathSegment(segment) => path_contains_segment(item.relative_path(), segment),
-        Constraint::FilePath(suffix) => path_ends_with_suffix(item.relative_path(), suffix),
+        Constraint::PathSegment(segment) => {
+            item.write_relative_path(arena, path_buf);
+            path_contains_segment(path_buf, segment)
+        }
+        Constraint::FilePath(suffix) => {
+            item.write_relative_path(arena, path_buf);
+            path_ends_with_suffix(path_buf, suffix)
+        }
         Constraint::GitStatus(status_filter) => match (item.git_status(), status_filter) {
             (Some(status), GitStatusFilter::Modified) => is_modified_status(status),
             (Some(status), GitStatusFilter::Untracked) => status.contains(git2::Status::WT_NEW),
@@ -171,11 +170,17 @@ fn item_matches_constraint_at_index<T: Constrainable>(
                 glob_results,
                 glob_idx,
                 !negate,
+                arena,
+                fname_buf,
+                path_buf,
             );
         }
 
         // only works with negation
-        Constraint::Text(text) => contains_ascii_ci(item.relative_path(), text),
+        Constraint::Text(text) => {
+            item.write_relative_path(arena, path_buf);
+            contains_ascii_ci(path_buf, text)
+        }
 
         // Parts and Exclude are handled at a higher level
         Constraint::Parts(_) | Constraint::Exclude(_) | Constraint::FileType(_) => true,
@@ -184,15 +189,12 @@ fn item_matches_constraint_at_index<T: Constrainable>(
     if negate { !matches } else { matches }
 }
 
-/// Apply constraint-based prefiltering in a single pass over all items.
 /// Returns `None` if no constraints are present, `Some(filtered)` otherwise.
-/// Multiple extension constraints (*.rs *.ts) are combined with OR logic.
-/// All other constraints are combined with AND logic.
-///
-/// Uses parallel iteration via rayon when the item count exceeds [`PAR_THRESHOLD`].
-pub fn apply_constraints<'a, T: Constrainable + Sync>(
+/// Extension constraints use OR logic; all others use AND.
+pub(crate) fn apply_constraints<'a, T: Constrainable + Sync>(
     items: &'a [T],
     constraints: &[Constraint<'_>],
+    arena: ArenaPtr,
 ) -> Option<Vec<&'a T>> {
     if constraints.is_empty() {
         return None;
@@ -215,32 +217,24 @@ pub fn apply_constraints<'a, T: Constrainable + Sync>(
         .any(|c| matches!(c, Constraint::Glob(_) | Constraint::Not(_)));
 
     let glob_results = if has_globs {
-        let paths: Vec<&str> = items.iter().map(|f| f.relative_path()).collect();
-        precompute_glob_matches(&other_constraints, &paths)
+        // Build a single contiguous buffer of all relative paths + offset table.
+        // One allocation for the buffer, one for offsets — NOT one String per file.
+        let mut path_buf = Vec::<u8>::new();
+        let mut offsets = Vec::<(usize, usize)>::with_capacity(items.len());
+        let mut tmp = String::with_capacity(64);
+        for item in items.iter() {
+            let start = path_buf.len();
+            item.write_relative_path(arena, &mut tmp);
+            path_buf.extend_from_slice(tmp.as_bytes());
+            offsets.push((start, path_buf.len() - start));
+        }
+        let path_refs: Vec<&str> = offsets
+            .iter()
+            .map(|&(off, len)| unsafe { std::str::from_utf8_unchecked(&path_buf[off..off + len]) })
+            .collect();
+        precompute_glob_matches(&other_constraints, &path_refs)
     } else {
         Vec::new()
-    };
-
-    let matches_constraints = |i: usize, item: &T| -> bool {
-        if !extensions.is_empty()
-            && !extensions
-                .iter()
-                .any(|ext| file_has_extension(item.file_name(), ext))
-        {
-            return false;
-        }
-
-        let mut glob_idx = 0;
-        other_constraints.iter().all(|constraint| {
-            item_matches_constraint_at_index(
-                item,
-                i,
-                constraint,
-                &glob_results,
-                &mut glob_idx,
-                false,
-            )
-        })
     };
 
     let filtered: Vec<&T> = if items.len() >= PAR_THRESHOLD {
@@ -248,14 +242,74 @@ pub fn apply_constraints<'a, T: Constrainable + Sync>(
         items
             .par_iter()
             .enumerate()
-            .filter(|(i, item)| matches_constraints(*i, item))
-            .map(|(_, item)| item)
+            .map_init(
+                || (String::with_capacity(64), String::with_capacity(64)),
+                |(fname_buf, path_buf), (i, item)| {
+                    if !extensions.is_empty() {
+                        item.write_file_name(arena, fname_buf);
+                        if !extensions
+                            .iter()
+                            .any(|ext| file_has_extension(fname_buf, ext))
+                        {
+                            return None;
+                        }
+                    }
+
+                    let mut glob_idx = 0;
+                    if other_constraints.iter().all(|constraint| {
+                        item_matches_constraint_at_index(
+                            item,
+                            i,
+                            constraint,
+                            &glob_results,
+                            &mut glob_idx,
+                            false,
+                            arena,
+                            fname_buf,
+                            path_buf,
+                        )
+                    }) {
+                        Some(item)
+                    } else {
+                        None
+                    }
+                },
+            )
+            .flatten()
             .collect()
     } else {
+        let mut fname_buf = String::with_capacity(64);
+        let mut path_buf = String::with_capacity(64);
+
         items
             .iter()
             .enumerate()
-            .filter(|(i, item)| matches_constraints(*i, item))
+            .filter(|&(i, item)| {
+                if !extensions.is_empty() {
+                    item.write_file_name(arena, &mut fname_buf);
+                    if !extensions
+                        .iter()
+                        .any(|ext| file_has_extension(&fname_buf, ext))
+                    {
+                        return false;
+                    }
+                }
+
+                let mut glob_idx = 0;
+                other_constraints.iter().all(|constraint| {
+                    item_matches_constraint_at_index(
+                        item,
+                        i,
+                        constraint,
+                        &glob_results,
+                        &mut glob_idx,
+                        false,
+                        arena,
+                        &mut fname_buf,
+                        &mut path_buf,
+                    )
+                })
+            })
             .map(|(_, item)| item)
             .collect()
     };
@@ -468,5 +522,34 @@ mod tests {
         // Simple path
         assert!(path_ends_with_suffix("src/main.rs", "src/main.rs"));
         assert!(path_ends_with_suffix("crates/src/main.rs", "src/main.rs"));
+    }
+
+    #[test]
+    fn test_path_ends_with_suffix_unicode_apostrophe_mismatch() {
+        assert!(!path_ends_with_suffix(
+            "dir/\u{2019}bar/file.txt",
+            "'bar/file.txt"
+        ));
+    }
+
+    #[test]
+    fn test_path_ends_with_suffix_unicode_space_mismatch() {
+        assert!(!path_ends_with_suffix(
+            "dir/\u{202f}am/file.txt",
+            " am/file.txt"
+        ));
+    }
+
+    #[test]
+    fn test_path_contains_segment_unicode_no_panic() {
+        assert!(!path_contains_segment(
+            "Library/Cloud/Project\u{2019}s Folder/books.ttl",
+            "Project's Folder"
+        ));
+    }
+
+    #[test]
+    fn test_file_has_extension_unicode_no_panic() {
+        assert!(!file_has_extension("cat\u{00e9}.rs", "s"));
     }
 }

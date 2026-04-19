@@ -34,6 +34,15 @@ impl SharedPicker {
         Ok(self.0.write())
     }
 
+    /// Return `true` if this is an instance of the picker that requires a complicated post-scan
+    /// indexing/cache warmup job. The indexing is not crazy but it takes time.
+    pub fn need_complex_rebuild(&self) -> bool {
+        let guard = self.0.read();
+        guard
+            .as_ref()
+            .is_some_and(|p| p.need_enable_mmap_cache() || p.need_enable_content_indexing())
+    }
+
     /// Block until the background filesystem scan finishes.
     /// Returns `true` if scan completed, `false` on timeout.
     pub fn wait_for_scan(&self, timeout: Duration) -> bool {

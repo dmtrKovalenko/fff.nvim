@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         shared_frecency.clone(),
         fff::FilePickerOptions {
             base_path: base_path.clone(),
-            warmup_mmap_cache: false,
+            enable_mmap_cache: false,
             mode: FFFMode::default(),
             ..Default::default()
         },
@@ -59,7 +59,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get initial file count from shared state
     let initial_count = {
         let guard = shared_picker.read().unwrap();
-        let files = guard.as_ref().unwrap().get_files();
+        let picker = guard.as_ref().unwrap();
+        let files = picker.get_files();
         println!("Initial file count: {}", files.len());
 
         if !files.is_empty() {
@@ -68,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "  {}. {} ({})",
                     i + 1,
-                    file.relative_path(),
+                    file.relative_path(picker),
                     format_git_status(file.git_status)
                 );
             }
@@ -107,10 +108,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Show some recently added files
                 let guard = shared_picker.read().unwrap();
-                let files = guard.as_ref().unwrap().get_files();
+                let picker = guard.as_ref().unwrap();
+                let files = picker.get_files();
                 let newest_files = files.iter().rev().take(added.min(3));
                 for file in newest_files {
-                    println!("   ➕ {}", file.relative_path());
+                    println!("   ➕ {}", file.relative_path(picker));
                 }
             } else {
                 let removed = last_count - current_count;
@@ -151,11 +153,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if iteration % 40 == 0 {
             let timestamp = chrono::Local::now().format("%H:%M:%S");
             let guard = shared_picker.read().unwrap();
-            let files = guard.as_ref().unwrap().get_files();
+            let picker_ref = guard.as_ref().unwrap();
             let parser = QueryParser::default();
             let parsed = parser.parse("rs");
-            let search_results = FilePicker::fuzzy_search(
-                files,
+            let search_results = picker_ref.fuzzy_search(
                 &parsed,
                 None,
                 FuzzySearchOptions {
@@ -186,7 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "   {}. {} (score: {})",
                     i + 1,
-                    file.relative_path(),
+                    file.relative_path(picker_ref),
                     score.total
                 );
             }
