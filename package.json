@@ -4,7 +4,6 @@
   "pi": {
     "extensions": ["./packages/pi-fff/src/index.ts"]
   },
-
   "scripts": {
     "format": "biome format --write",
     "format:check": "biome format",

@@ -411,8 +411,8 @@ export default function fffExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "grep",
-    label: "grep (fff)",
+    name: "ffgrep",
+    label: "ffgrep",
     description: `Search file contents for a pattern using FFF (fast, frecency-ranked, git-aware). Returns matching lines with file paths and line numbers. Respects .gitignore. Supports plain text, regex, and fuzzy search modes. Smart case by default. Output truncated to ${DEFAULT_GREP_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB.`,
     promptSnippet:
       "Search file contents for patterns (FFF: frecency-ranked, git-aware, respects .gitignore)",
@@ -479,7 +479,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       const pattern = args?.pattern ?? "";
       const path = args?.path ?? ".";
       let content =
-        theme.fg("toolTitle", theme.bold("grep")) +
+        theme.fg("toolTitle", theme.bold("ffgrep")) +
         " " +
         theme.fg("accent", `/${pattern}/`) +
         theme.fg("toolOutput", ` in ${path}`);
@@ -513,8 +513,8 @@ export default function fffExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "find",
-    label: "find (fff)",
+    name: "fffind",
+    label: "fffind",
     description: `Fuzzy file search by name using FFF (fast, frecency-ranked, git-aware). Returns matching file paths relative to project root. Respects .gitignore. Supports fuzzy matching, path prefixes ('src/'), and glob constraints ('*.ts', '**/*.spec.ts'). Output truncated to ${DEFAULT_FIND_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB.`,
     promptSnippet:
       "Find files by name (FFF: fuzzy, frecency-ranked, git-aware, respects .gitignore)",
@@ -569,7 +569,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       const pattern = args?.pattern ?? "";
       const path = args?.path ?? ".";
       let content =
-        theme.fg("toolTitle", theme.bold("find")) +
+        theme.fg("toolTitle", theme.bold("fffind")) +
         " " +
         theme.fg("accent", pattern) +
         theme.fg("toolOutput", ` in ${path}`);
@@ -613,14 +613,14 @@ export default function fffExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "multi_grep",
-    label: "multi_grep (fff)",
+    name: "fff-multi-grep",
+    label: "fff-multi-grep",
     description:
       "Search file contents for lines matching ANY of multiple patterns (OR logic). Uses SIMD-accelerated Aho-Corasick multi-pattern matching. Faster than regex alternation. Patterns are literal text -- never escape special characters. Use the constraints parameter for file filtering ('*.rs', 'src/', '!test/').",
     promptSnippet:
       "Multi-pattern OR search across file contents (FFF: SIMD-accelerated, frecency-ranked)",
     promptGuidelines: [
-      "Use multi_grep when you need to find multiple identifiers at once (OR logic).",
+      "Use fff-multi-grep when you need to find multiple identifiers at once (OR logic).",
       "Include all naming conventions: snake_case, PascalCase, camelCase variants.",
       "Patterns are literal text. Never escape special characters.",
       "Use the constraints parameter for file type/path filtering, not inside patterns.",
@@ -682,7 +682,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       const patterns = args?.patterns ?? [];
       const constraints = args?.constraints;
       let content =
-        theme.fg("toolTitle", theme.bold("multi_grep")) +
+        theme.fg("toolTitle", theme.bold("fff-multi-grep")) +
         " " +
         theme.fg("accent", patterns.map((p: string) => `"${p}"`).join(", "));
       if (constraints) content += theme.fg("toolOutput", ` (${constraints})`);

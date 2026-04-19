@@ -6,9 +6,9 @@ A [pi](https://github.com/badlogic/pi-mono) extension that replaces the built-in
 
 | Built-in tool | pi-fff replacement | Improvement |
 |---|---|---|
-| `find` (spawns `fd`) | `find` (FFF `fileSearch`) | Fuzzy matching, frecency ranking, git-aware, pre-indexed |
-| `grep` (spawns `rg`) | `grep` (FFF `grep`) | SIMD-accelerated, frecency-ordered, mmap-cached, no subprocess |
-| *(none)* | `multi_grep` (FFF `multiGrep`) | OR-logic multi-pattern search via Aho-Corasick |
+| `find` (spawns `fd`) | `fffind` (FFF `fileSearch`) | Fuzzy matching, frecency ranking, git-aware, pre-indexed |
+| `grep` (spawns `rg`) | `ffgrep` (FFF `grep`) | SIMD-accelerated, frecency-ordered, mmap-cached, no subprocess |
+| *(none)* | `fff-multi-grep` (FFF `multiGrep`) | OR-logic multi-pattern search via Aho-Corasick |
 | `@` file autocomplete (fd-backed) | `@` file autocomplete (FFF-backed, default) | Fuzzy ranking from FFF index/frecency |
 
 ### Key advantages over built-in tools
@@ -75,11 +75,11 @@ Or test directly:
 pi -e /path/to/fff.nvim/packages/pi-fff/src/index.ts
 ```
 
-This extension overrides pi's built-in `find` and `grep` tools by registering tools with the same names.
+This extension registers FFF-powered tools (`fffind`, `ffgrep`, `fff-multi-grep`) alongside pi's built-in tools.
 
 ## Tools
 
-### `grep` (overrides built-in)
+### `ffgrep`
 
 Search file contents. Smart case, plain text by default, regex optional.
 
@@ -92,7 +92,7 @@ Parameters:
 - `limit` — max matches (default: 100)
 - `cursor` — pagination cursor from previous result
 
-### `find` (overrides built-in)
+### `fffind`
 
 Fuzzy file name search. Frecency-ranked.
 
@@ -101,7 +101,7 @@ Parameters:
 - `path` — directory constraint
 - `limit` — max results (default: 200)
 
-### `multi_grep` (new)
+### `fff-multi-grep`
 
 OR-logic multi-pattern content search. SIMD-accelerated Aho-Corasick.
 
