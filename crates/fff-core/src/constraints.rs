@@ -70,7 +70,10 @@ pub fn path_ends_with_suffix(path: &str, suffix: &str) -> bool {
         return false;
     }
     let start = path.len() - suffix.len();
-    if !path[start..].eq_ignore_ascii_case(suffix) {
+    let Some(path_suffix) = path.get(start..) else {
+        return false;
+    };
+    if !path_suffix.eq_ignore_ascii_case(suffix) {
         return false;
     }
     // Exact match, or the character before is /
@@ -356,6 +359,25 @@ fn match_glob_pattern(pattern: &str, paths: &[&str]) -> AHashSet<usize> {
 mod tests {
     use super::*;
 
+    struct TestItem {
+        relative_path: &'static str,
+        file_name: &'static str,
+    }
+
+    impl Constrainable for TestItem {
+        fn relative_path(&self) -> &str {
+            self.relative_path
+        }
+
+        fn file_name(&self) -> &str {
+            self.file_name
+        }
+
+        fn git_status(&self) -> Option<git2::Status> {
+            None
+        }
+    }
+
     #[test]
     fn test_file_has_extension() {
         assert!(file_has_extension("file.rs", "rs"));
@@ -468,5 +490,44 @@ mod tests {
         // Simple path
         assert!(path_ends_with_suffix("src/main.rs", "src/main.rs"));
         assert!(path_ends_with_suffix("crates/src/main.rs", "src/main.rs"));
+    }
+
+    #[test]
+    fn test_path_ends_with_suffix_does_not_panic_on_unicode_suffix() {
+        assert!(!path_ends_with_suffix("유니코드_파일_테스트.csv", "트.c"));
+        assert!(path_ends_with_suffix(
+            "data/유니코드_파일_테스트.csv",
+            "유니코드_파일_테스트.csv"
+        ));
+    }
+
+    #[test]
+    fn test_path_contains_segment_does_not_panic_on_unicode_segment() {
+        assert!(!path_contains_segment("문서/notes.txt", "문x"));
+        assert!(path_contains_segment("프로젝트/문서/notes.txt", "문서"));
+    }
+
+    #[test]
+    fn test_apply_constraints_file_path_with_unicode_suffix() {
+        let item = TestItem {
+            relative_path: "data/유니코드_파일_테스트.csv",
+            file_name: "유니코드_파일_테스트.csv",
+        };
+
+        let exact = [Constraint::FilePath("유니코드_파일_테스트.csv")];
+        let mismatch = [Constraint::FilePath("트.c")];
+
+        let exact_items = [item];
+        let exact_matches = apply_constraints(&exact_items, &exact).expect("constraints applied");
+        assert_eq!(exact_matches.len(), 1);
+
+        let mismatch_item = TestItem {
+            relative_path: "data/유니코드_파일_테스트.csv",
+            file_name: "유니코드_파일_테스트.csv",
+        };
+        let mismatch_items = [mismatch_item];
+        let mismatch_matches =
+            apply_constraints(&mismatch_items, &mismatch).expect("constraints applied");
+        assert!(mismatch_matches.is_empty());
     }
 }
