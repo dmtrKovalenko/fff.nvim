@@ -640,3 +640,263 @@ pub unsafe extern "C" fn fff_grep_result_get_regex_fallback_error(
     }
     unsafe { (*r).regex_fallback_error }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::ptr;
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn make_file_item(path: &str, name: &str) -> FffFileItem {
+        FffFileItem {
+            relative_path: CString::new(path).unwrap().into_raw(),
+            file_name: CString::new(name).unwrap().into_raw(),
+            git_status: ptr::null_mut(),
+            size: 1024,
+            modified: 1_700_000_000,
+            access_frecency_score: 10,
+            modification_frecency_score: 20,
+            total_frecency_score: 30,
+            is_binary: false,
+        }
+    }
+
+    unsafe fn free_file_item(item: &mut FffFileItem) {
+        unsafe {
+            if !item.relative_path.is_null() {
+                drop(CString::from_raw(item.relative_path));
+            }
+            if !item.file_name.is_null() {
+                drop(CString::from_raw(item.file_name));
+            }
+            if !item.git_status.is_null() {
+                drop(CString::from_raw(item.git_status));
+            }
+        }
+    }
+
+    fn make_grep_match(path: &str, line: &str) -> FffGrepMatch {
+        FffGrepMatch {
+            relative_path: CString::new(path).unwrap().into_raw(),
+            file_name: CString::new("file.rs").unwrap().into_raw(),
+            git_status: ptr::null_mut(),
+            line_content: CString::new(line).unwrap().into_raw(),
+            match_ranges: ptr::null_mut(),
+            context_before: ptr::null_mut(),
+            context_after: ptr::null_mut(),
+            size: 512,
+            modified: 1_600_000_000,
+            total_frecency_score: 5,
+            access_frecency_score: 6,
+            modification_frecency_score: 7,
+            line_number: 42,
+            byte_offset: 100,
+            col: 8,
+            match_ranges_count: 0,
+            context_before_count: 0,
+            context_after_count: 0,
+            fuzzy_score: 0,
+            has_fuzzy_score: false,
+            is_binary: false,
+            is_definition: true,
+        }
+    }
+
+    unsafe fn free_grep_match(m: &mut FffGrepMatch) {
+        unsafe {
+            if !m.relative_path.is_null() {
+                drop(CString::from_raw(m.relative_path));
+            }
+            if !m.file_name.is_null() {
+                drop(CString::from_raw(m.file_name));
+            }
+            if !m.line_content.is_null() {
+                drop(CString::from_raw(m.line_content));
+            }
+        }
+    }
+
+    fn make_search_result(count: u32, total: u32, files: u32) -> FffSearchResult {
+        FffSearchResult {
+            items: ptr::null_mut(),
+            scores: ptr::null_mut(),
+            count,
+            total_matched: total,
+            total_files: files,
+            location: crate::ffi_types::FffLocation {
+                tag: 0,
+                line: 0,
+                col: 0,
+                end_line: 0,
+                end_col: 0,
+            },
+        }
+    }
+
+    fn make_grep_result() -> FffGrepResult {
+        FffGrepResult {
+            items: ptr::null_mut(),
+            count: 3,
+            total_matched: 10,
+            total_files_searched: 50,
+            total_files: 200,
+            filtered_file_count: 80,
+            next_file_offset: 51,
+            regex_fallback_error: ptr::null_mut(),
+        }
+    }
+
+    // ── null-guard tests: every function returns its zero-value on NULL ───────
+
+    #[test]
+    fn null_file_item_returns_null_or_zero() {
+        let null: *const FffFileItem = ptr::null();
+        unsafe {
+            assert!(fff_file_item_get_relative_path(null).is_null());
+            assert!(fff_file_item_get_file_name(null).is_null());
+            assert!(fff_file_item_get_git_status(null).is_null());
+            assert_eq!(fff_file_item_get_size(null), 0);
+            assert_eq!(fff_file_item_get_modified(null), 0);
+            assert_eq!(fff_file_item_get_access_frecency_score(null), 0);
+            assert_eq!(fff_file_item_get_modification_frecency_score(null), 0);
+            assert_eq!(fff_file_item_get_total_frecency_score(null), 0);
+            assert!(!fff_file_item_get_is_binary(null));
+        }
+    }
+
+    #[test]
+    fn null_grep_match_returns_null_or_zero() {
+        let null: *const FffGrepMatch = ptr::null();
+        unsafe {
+            assert!(fff_grep_match_get_relative_path(null).is_null());
+            assert!(fff_grep_match_get_file_name(null).is_null());
+            assert!(fff_grep_match_get_git_status(null).is_null());
+            assert!(fff_grep_match_get_line_content(null).is_null());
+            assert_eq!(fff_grep_match_get_line_number(null), 0);
+            assert_eq!(fff_grep_match_get_byte_offset(null), 0);
+            assert_eq!(fff_grep_match_get_col(null), 0);
+            assert_eq!(fff_grep_match_get_size(null), 0);
+            assert_eq!(fff_grep_match_get_modified(null), 0);
+            assert_eq!(fff_grep_match_get_total_frecency_score(null), 0);
+            assert_eq!(fff_grep_match_get_access_frecency_score(null), 0);
+            assert_eq!(fff_grep_match_get_modification_frecency_score(null), 0);
+            assert_eq!(fff_grep_match_get_match_ranges_count(null), 0);
+            assert_eq!(fff_grep_match_get_context_before_count(null), 0);
+            assert_eq!(fff_grep_match_get_context_after_count(null), 0);
+            assert!(!fff_grep_match_get_has_fuzzy_score(null));
+            assert_eq!(fff_grep_match_get_fuzzy_score(null), 0);
+            assert!(!fff_grep_match_get_is_binary(null));
+            assert!(!fff_grep_match_get_is_definition(null));
+            assert!(fff_grep_match_get_context_before(null, 0).is_null());
+            assert!(fff_grep_match_get_context_after(null, 0).is_null());
+            assert!(fff_grep_match_get_match_range(null, 0).is_null());
+        }
+    }
+
+    #[test]
+    fn null_search_result_returns_zero() {
+        let null: *const FffSearchResult = ptr::null();
+        unsafe {
+            assert_eq!(fff_search_result_get_count(null), 0);
+            assert_eq!(fff_search_result_get_total_matched(null), 0);
+            assert_eq!(fff_search_result_get_total_files(null), 0);
+        }
+    }
+
+    #[test]
+    fn null_grep_result_returns_zero_or_null() {
+        let null: *const FffGrepResult = ptr::null();
+        unsafe {
+            assert_eq!(fff_grep_result_get_count(null), 0);
+            assert_eq!(fff_grep_result_get_total_matched(null), 0);
+            assert_eq!(fff_grep_result_get_total_files_searched(null), 0);
+            assert_eq!(fff_grep_result_get_total_files(null), 0);
+            assert_eq!(fff_grep_result_get_filtered_file_count(null), 0);
+            assert_eq!(fff_grep_result_get_next_file_offset(null), 0);
+            assert!(fff_grep_result_get_regex_fallback_error(null).is_null());
+        }
+    }
+
+    // ── data correctness tests ────────────────────────────────────────────────
+
+    #[test]
+    fn file_item_getters_return_correct_values() {
+        let mut item = make_file_item("src/main.rs", "main.rs");
+        let p = &item as *const FffFileItem;
+        unsafe {
+            let path = std::ffi::CStr::from_ptr(fff_file_item_get_relative_path(p));
+            assert_eq!(path.to_str().unwrap(), "src/main.rs");
+
+            let name = std::ffi::CStr::from_ptr(fff_file_item_get_file_name(p));
+            assert_eq!(name.to_str().unwrap(), "main.rs");
+
+            assert!(fff_file_item_get_git_status(p).is_null());
+            assert_eq!(fff_file_item_get_size(p), 1024);
+            assert_eq!(fff_file_item_get_modified(p), 1_700_000_000);
+            assert_eq!(fff_file_item_get_access_frecency_score(p), 10);
+            assert_eq!(fff_file_item_get_modification_frecency_score(p), 20);
+            assert_eq!(fff_file_item_get_total_frecency_score(p), 30);
+            assert!(!fff_file_item_get_is_binary(p));
+
+            free_file_item(&mut item);
+        }
+    }
+
+    #[test]
+    fn grep_match_getters_return_correct_values() {
+        let mut m = make_grep_match("src/lib.rs", "fn hello()");
+        let p = &m as *const FffGrepMatch;
+        unsafe {
+            let path = std::ffi::CStr::from_ptr(fff_grep_match_get_relative_path(p));
+            assert_eq!(path.to_str().unwrap(), "src/lib.rs");
+
+            let line = std::ffi::CStr::from_ptr(fff_grep_match_get_line_content(p));
+            assert_eq!(line.to_str().unwrap(), "fn hello()");
+
+            assert_eq!(fff_grep_match_get_line_number(p), 42);
+            assert_eq!(fff_grep_match_get_byte_offset(p), 100);
+            assert_eq!(fff_grep_match_get_col(p), 8);
+            assert_eq!(fff_grep_match_get_size(p), 512);
+            assert_eq!(fff_grep_match_get_modified(p), 1_600_000_000);
+            assert_eq!(fff_grep_match_get_total_frecency_score(p), 5);
+            assert_eq!(fff_grep_match_get_access_frecency_score(p), 6);
+            assert_eq!(fff_grep_match_get_modification_frecency_score(p), 7);
+            assert_eq!(fff_grep_match_get_match_ranges_count(p), 0);
+            assert!(!fff_grep_match_get_has_fuzzy_score(p));
+            assert!(!fff_grep_match_get_is_binary(p));
+            assert!(fff_grep_match_get_is_definition(p));
+
+            free_grep_match(&mut m);
+        }
+    }
+
+    #[test]
+    fn search_result_getters_return_correct_values() {
+        let r = make_search_result(5, 20, 100);
+        let p = &r as *const FffSearchResult;
+        unsafe {
+            assert_eq!(fff_search_result_get_count(p), 5);
+            assert_eq!(fff_search_result_get_total_matched(p), 20);
+            assert_eq!(fff_search_result_get_total_files(p), 100);
+        }
+    }
+
+    #[test]
+    fn grep_result_getters_return_correct_values() {
+        let r = make_grep_result();
+        let p = &r as *const FffGrepResult;
+        unsafe {
+            assert_eq!(fff_grep_result_get_count(p), 3);
+            assert_eq!(fff_grep_result_get_total_matched(p), 10);
+            assert_eq!(fff_grep_result_get_total_files_searched(p), 50);
+            assert_eq!(fff_grep_result_get_total_files(p), 200);
+            assert_eq!(fff_grep_result_get_filtered_file_count(p), 80);
+            assert_eq!(fff_grep_result_get_next_file_offset(p), 51);
+            assert!(fff_grep_result_get_regex_fallback_error(p).is_null());
+        }
+    }
+}
