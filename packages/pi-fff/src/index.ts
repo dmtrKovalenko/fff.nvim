@@ -8,7 +8,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   CustomEditor,
-  getAgentDir,
   truncateHead,
   DEFAULT_MAX_BYTES,
   formatSize,
@@ -20,18 +19,17 @@ import {
 } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { FileFinder } from "@ff-labs/fff-node";
-import type { GrepCursor, GrepMode, GrepResult, SearchResult } from "@ff-labs/fff-node";
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import type {
+  GrepCursor,
+  GrepMode,
+  GrepResult,
+  SearchResult,
+  MixedItem,
+} from "@ff-labs/fff-node";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-const FFF_DB_DIR = join(getAgentDir(), "fff");
-const FRECENCY_DB_PATH = join(FFF_DB_DIR, "frecency.mdb");
-const HISTORY_DB_PATH = join(FFF_DB_DIR, "history.mdb");
-const CONFIG_PATH = join(FFF_DB_DIR, "config.json");
 
 const DEFAULT_GREP_LIMIT = 100;
 const DEFAULT_FIND_LIMIT = 200;
@@ -223,32 +221,19 @@ export default function fffExtension(pi: ExtensionAPI) {
   let finderCwd: string | null = null;
   let activeCwd = process.cwd();
 
-  // Config file helpers
-  function readConfigMode(): FffMode {
-    try {
-      if (!existsSync(CONFIG_PATH)) return "both";
-      const parsed = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-      return parsed.mode === "tools-only" ? "tools-only" : "both";
-    } catch {
-      return "both";
-    }
-  }
-
-  function writeConfigMode(mode: FffMode): void {
-    try {
-      writeFileSync(CONFIG_PATH, JSON.stringify({ mode }, null, 2), "utf8");
-    } catch {
-      // ignore
-    }
-  }
-
-  // Mode resolution: flag > env > config > default
+  // Mode resolution: flag > env > default
   let currentMode: FffMode =
-    (pi.getFlag("fff-mode") as FffMode) ??
-    (process.env.PI_FFF_MODE as FffMode) ??
-    readConfigMode();
+    (pi.getFlag("fff-mode") as FffMode) ?? (process.env.PI_FFF_MODE as FffMode) ?? "both";
 
-  mkdirSync(FFF_DB_DIR, { recursive: true });
+  // DB path resolution: flag > env > undefined (use fff-node defaults)
+  const frecencyDbPath =
+    (pi.getFlag("fff-frecency-db") as string | undefined) ??
+    process.env.FFF_FRECENCY_DB ??
+    undefined;
+  const historyDbPath =
+    (pi.getFlag("fff-history-db") as string | undefined) ??
+    process.env.FFF_HISTORY_DB ??
+    undefined;
 
   function getMode(): FffMode {
     return currentMode;
@@ -256,7 +241,6 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   function setMode(mode: FffMode): void {
     currentMode = mode;
-    writeConfigMode(mode);
   }
 
   async function ensureFinder(cwd: string): Promise<FileFinder> {
@@ -269,8 +253,8 @@ export default function fffExtension(pi: ExtensionAPI) {
 
     const result = FileFinder.create({
       basePath: cwd,
-      frecencyDbPath: FRECENCY_DB_PATH,
-      historyDbPath: HISTORY_DB_PATH,
+      frecencyDbPath,
+      historyDbPath,
       aiMode: true,
     });
 
@@ -298,16 +282,23 @@ export default function fffExtension(pi: ExtensionAPI) {
     const f = await ensureFinder(activeCwd);
     if (signal.aborted) return [];
 
-    const result = f.fileSearch(query, { pageSize: MENTION_MAX_RESULTS });
+    const result = f.mixedSearch(query, { pageSize: MENTION_MAX_RESULTS });
     if (!result.ok) return [];
 
-    return result.value.items
-      .slice(0, MENTION_MAX_RESULTS)
-      .map((item: { relativePath: string; fileName: string }) => ({
-        value: buildAtCompletionValue(item.relativePath),
-        label: item.fileName,
-        description: item.relativePath,
-      }));
+    return result.value.items.slice(0, MENTION_MAX_RESULTS).map((mixed: MixedItem) => {
+      if (mixed.type === "directory") {
+        return {
+          value: buildAtCompletionValue(mixed.item.relativePath),
+          label: mixed.item.dirName,
+          description: mixed.item.relativePath,
+        };
+      }
+      return {
+        value: buildAtCompletionValue(mixed.item.relativePath),
+        label: mixed.item.fileName,
+        description: mixed.item.relativePath,
+      };
+    });
   }
 
   function applyEditorMode(ctx: {
@@ -331,6 +322,16 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   pi.registerFlag("fff-mode", {
     description: "FFF mode: both or tools-only (overrides env when provided)",
+    type: "string",
+  });
+
+  pi.registerFlag("fff-frecency-db", {
+    description: "Path to the frecency database (overrides FFF_FRECENCY_DB env)",
+    type: "string",
+  });
+
+  pi.registerFlag("fff-history-db", {
+    description: "Path to the query history database (overrides FFF_HISTORY_DB env)",
     type: "string",
   });
 
