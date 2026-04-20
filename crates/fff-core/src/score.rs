@@ -287,7 +287,7 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
         FuzzyQuery::Text(t) if t.len() >= 2 => std::slice::from_ref(t),
         FuzzyQuery::Parts(parts) if !parts.is_empty() => parts.as_slice(),
         _ => {
-            return score_dirs_by_frecency(&working_dirs, context, arena);
+            return score_dirs_by_frecency(&working_dirs, context);
         }
     };
 
@@ -296,8 +296,9 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
         .copied()
         .filter(|p| p.len() >= 2)
         .collect();
+
     if valid_parts.is_empty() {
-        return score_dirs_by_frecency(&working_dirs, context, arena);
+        return score_dirs_by_frecency(&working_dirs, context);
     }
 
     let has_uppercase = valid_parts
@@ -397,13 +398,10 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
     sort_and_paginate_dirs(results, context)
 }
 
-/// Return dirs ranked by frecency only (no fuzzy query).
 fn score_dirs_by_frecency<'a>(
     dirs: &[&'a DirItem],
     context: &ScoringContext,
-    _arena: ArenaPtr,
 ) -> (Vec<&'a DirItem>, Vec<Score>, usize) {
-    // Include all directories, not just those with frecency > 0
     let results: Vec<(&DirItem, Score)> = dirs
         .iter()
         .map(|&dir| {
@@ -413,6 +411,7 @@ fn score_dirs_by_frecency<'a>(
                 match_type: "frecency",
                 ..Default::default()
             };
+
             (dir, score)
         })
         .collect();
@@ -915,7 +914,7 @@ mod tests {
         let items: Vec<FileItem> = specs
             .iter()
             .map(|(p, _, _)| {
-                let fname = p.rfind('/').map(|i| i + 1).unwrap_or(0) as u16;
+                let fname = p.rfind(std::path::is_separator).map(|i| i + 1).unwrap_or(0) as u16;
                 FileItem::new_raw(fname, 0, 0, None, false)
             })
             .collect();
@@ -926,7 +925,10 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, &(_, score, modified))| {
-                let filename_start = path_strings[i].rfind('/').map(|j| j + 1).unwrap_or(0) as u16;
+                let filename_start = path_strings[i]
+                    .rfind(std::path::is_separator)
+                    .map(|j| j + 1)
+                    .unwrap_or(0) as u16;
                 let mut file = FileItem::new_raw(filename_start, 0, modified, None, false);
                 file.set_path(strings[i].clone());
                 let score_obj = Score {
@@ -1114,7 +1116,7 @@ mod filename_bonus_tests {
         let items: Vec<FileItem> = paths
             .iter()
             .map(|p| {
-                let fname = p.rfind('/').map(|i| i + 1).unwrap_or(0) as u16;
+                let fname = p.rfind(std::path::is_separator).map(|i| i + 1).unwrap_or(0) as u16;
                 FileItem::new_raw(fname, 0, 0, None, false)
             })
             .collect();
@@ -1134,7 +1136,7 @@ mod filename_bonus_tests {
         let items: Vec<FileItem> = specs
             .iter()
             .map(|(p, _)| {
-                let fname = p.rfind('/').map(|i| i + 1).unwrap_or(0) as u16;
+                let fname = p.rfind(std::path::is_separator).map(|i| i + 1).unwrap_or(0) as u16;
                 FileItem::new_raw(fname, 0, 0, None, false)
             })
             .collect();
@@ -1361,7 +1363,7 @@ mod typo_resistance_tests {
         let items: Vec<FileItem> = paths
             .iter()
             .map(|p| {
-                let fname = p.rfind('/').map(|i| i + 1).unwrap_or(0) as u16;
+                let fname = p.rfind(std::path::is_separator).map(|i| i + 1).unwrap_or(0) as u16;
                 FileItem::new_raw(fname, 0, 0, None, false)
             })
             .collect();

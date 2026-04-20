@@ -363,7 +363,10 @@ mod tests {
     use super::*;
 
     fn make_file_item(path: &str) -> crate::types::FileItem {
-        let filename_start = path.rfind('/').map(|i| i + 1).unwrap_or(0) as u16;
+        let filename_start = path
+            .rfind(std::path::is_separator)
+            .map(|i| i + 1)
+            .unwrap_or(0) as u16;
         crate::types::FileItem::new_raw(filename_start, 0, 0, None, false)
     }
 

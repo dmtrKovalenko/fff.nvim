@@ -756,7 +756,10 @@ impl FileItem {
         git_status: Option<git2::Status>,
         is_binary: bool,
     ) -> (Self, ArenaPtr) {
-        let filename_start = rel_path.rfind('/').map(|i| i + 1).unwrap_or(0) as u16;
+        let filename_start = rel_path
+            .rfind(std::path::is_separator)
+            .map(|i| i + 1)
+            .unwrap_or(0) as u16;
         let mut item = Self::new_raw(filename_start, size, modified, git_status, is_binary);
         let paths = [rel_path.to_string()];
         let (store, strings) = crate::simd_path::build_chunked_path_store_from_strings(

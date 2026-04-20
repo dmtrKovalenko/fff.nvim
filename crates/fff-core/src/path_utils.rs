@@ -1,25 +1,4 @@
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-
-/// Normalize path separators to forward slashes for consistent internal representation.
-/// On Windows, paths from the filesystem use backslashes which break rfind('/') lookups.
-/// This function ensures all internal path strings use '/' as separator.
-#[cfg(windows)]
-#[inline]
-pub fn normalize_path_separator(path: Cow<'_, str>) -> Cow<'static, str> {
-    if path.contains('\\') {
-        Cow::Owned(path.replace('\\', "/"))
-    } else {
-        Cow::Owned(path.into_owned())
-    }
-}
-
-#[cfg(not(windows))]
-#[inline]
-pub fn normalize_path_separator(path: Cow<'_, str>) -> Cow<'static, str> {
-    // On Unix, paths already use forward slashes - just extend lifetime
-    Cow::Owned(path.into_owned())
-}
 
 #[cfg(windows)]
 pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
@@ -59,23 +38,15 @@ pub fn calculate_distance_penalty(current_file: Option<&str>, candidate_dir: &st
         return 0;
     };
 
-    // Extract the directory from current_file (everything before the last '/')
-    let current_dir = match current_path.rfind('/') {
-        Some(pos) => &current_path[..pos],
-        None => "",
-    };
+    let current_dir = Path::new(current_path).parent().unwrap_or(Path::new(""));
+    let candidate = Path::new(candidate_dir);
 
-    // Strip trailing separator from candidate_dir
-    let candidate_dir = candidate_dir.strip_suffix('/').unwrap_or(candidate_dir);
-
-    if current_dir == candidate_dir {
+    if current_dir == candidate {
         return 0;
     }
 
-    // Count components and common prefix length by walking iterators in lockstep.
-    // No Vec allocation — just iterate and count.
-    let mut current_parts = current_dir.split('/').filter(|s| !s.is_empty());
-    let mut candidate_parts = candidate_dir.split('/').filter(|s| !s.is_empty());
+    let mut current_parts = current_dir.components();
+    let mut candidate_parts = candidate.components();
 
     let mut common_len = 0usize;
     let mut current_total = 0usize;
@@ -87,18 +58,15 @@ pub fn calculate_distance_penalty(current_file: Option<&str>, candidate_dir: &st
                 if a == b {
                     common_len += 1;
                 } else {
-                    // Diverged — count remaining current parts
                     current_total += current_parts.count();
                     break;
                 }
             }
             (Some(_), None) => {
-                // current is deeper
                 current_total += 1 + current_parts.count();
                 break;
             }
             (None, _) => {
-                // current is at or above candidate
                 break;
             }
         }
