@@ -403,9 +403,9 @@ fn score_dirs_by_frecency<'a>(
     context: &ScoringContext,
     _arena: ArenaPtr,
 ) -> (Vec<&'a DirItem>, Vec<Score>, usize) {
+    // Include all directories, not just those with frecency > 0
     let results: Vec<(&DirItem, Score)> = dirs
         .iter()
-        .filter(|d| d.max_access_frecency() > 0)
         .map(|&dir| {
             let score = Score {
                 total: dir.max_access_frecency(),

@@ -1,4 +1,25 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+
+/// Normalize path separators to forward slashes for consistent internal representation.
+/// On Windows, paths from the filesystem use backslashes which break rfind('/') lookups.
+/// This function ensures all internal path strings use '/' as separator.
+#[cfg(windows)]
+#[inline]
+pub fn normalize_path_separator(path: Cow<'_, str>) -> Cow<'static, str> {
+    if path.contains('\\') {
+        Cow::Owned(path.replace('\\', "/"))
+    } else {
+        Cow::Owned(path.into_owned())
+    }
+}
+
+#[cfg(not(windows))]
+#[inline]
+pub fn normalize_path_separator(path: Cow<'_, str>) -> Cow<'static, str> {
+    // On Unix, paths already use forward slashes - just extend lifetime
+    Cow::Owned(path.into_owned())
+}
 
 #[cfg(windows)]
 pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {

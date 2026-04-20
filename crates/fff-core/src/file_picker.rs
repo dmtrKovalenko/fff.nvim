@@ -205,7 +205,7 @@ impl FileSync {
 
         // Strip base_path prefix to get the relative path.
         let rel_path = match path.strip_prefix(base_path) {
-            Ok(r) => r.to_string_lossy(),
+            Ok(r) => crate::path_utils::normalize_path_separator(r.to_string_lossy()),
             Err(_) => return Err(0),
         };
 
@@ -308,10 +308,9 @@ impl FileItem {
         git_status: Option<Status>,
         metadata: Option<&std::fs::Metadata>,
     ) -> (Self, String) {
-        let relative_path = pathdiff::diff_paths(&path, base_path)
-            .unwrap_or_else(|| path.clone())
-            .to_string_lossy()
-            .into_owned();
+        let path_buf = pathdiff::diff_paths(&path, base_path).unwrap_or_else(|| path.clone());
+        let relative_path =
+            crate::path_utils::normalize_path_separator(path_buf.to_string_lossy()).into_owned();
 
         let (size, modified) = match metadata {
             Some(metadata) => {
@@ -362,7 +361,8 @@ impl FileItem {
         let is_binary = is_known_binary_extension(path);
 
         let rel = pathdiff::diff_paths(path, base_path).unwrap_or_else(|| path.to_path_buf());
-        let rel_str = rel.to_string_lossy().into_owned();
+        let rel_str =
+            crate::path_utils::normalize_path_separator(rel.to_string_lossy()).into_owned();
         let fname_offset = rel_str.rfind('/').map(|i| i + 1).unwrap_or(0) as u16;
 
         let item = Self::new_raw(fname_offset, size, modified, git_status, is_binary);
