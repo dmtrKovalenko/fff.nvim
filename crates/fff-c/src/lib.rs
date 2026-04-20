@@ -29,6 +29,7 @@ use std::time::Duration;
 use fff::shared::SharedQueryTracker;
 
 mod ffi_types;
+mod accessors;
 
 use fff::file_picker::FilePicker;
 use fff::frecency::FrecencyTracker;
