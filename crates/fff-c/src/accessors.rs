@@ -57,9 +57,7 @@ pub unsafe extern "C" fn fff_file_item_get_relative_path(
 /// ## Safety
 /// `item` must be a valid `FffFileItem` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_file_item_get_file_name(
-    item: *const FffFileItem,
-) -> *const c_char {
+pub unsafe extern "C" fn fff_file_item_get_file_name(item: *const FffFileItem) -> *const c_char {
     if item.is_null() {
         return ptr::null();
     }
@@ -74,9 +72,7 @@ pub unsafe extern "C" fn fff_file_item_get_file_name(
 /// ## Safety
 /// `item` must be a valid `FffFileItem` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_file_item_get_git_status(
-    item: *const FffFileItem,
-) -> *const c_char {
+pub unsafe extern "C" fn fff_file_item_get_git_status(item: *const FffFileItem) -> *const c_char {
     if item.is_null() {
         return ptr::null();
     }
@@ -113,9 +109,7 @@ pub unsafe extern "C" fn fff_file_item_get_modified(item: *const FffFileItem) ->
 /// ## Safety
 /// `item` must be a valid `FffFileItem` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_file_item_get_total_frecency_score(
-    item: *const FffFileItem,
-) -> i64 {
+pub unsafe extern "C" fn fff_file_item_get_total_frecency_score(item: *const FffFileItem) -> i64 {
     if item.is_null() {
         return 0;
     }
@@ -127,9 +121,7 @@ pub unsafe extern "C" fn fff_file_item_get_total_frecency_score(
 /// ## Safety
 /// `item` must be a valid `FffFileItem` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_file_item_get_access_frecency_score(
-    item: *const FffFileItem,
-) -> i64 {
+pub unsafe extern "C" fn fff_file_item_get_access_frecency_score(item: *const FffFileItem) -> i64 {
     if item.is_null() {
         return 0;
     }
@@ -171,9 +163,7 @@ pub unsafe extern "C" fn fff_file_item_get_is_binary(item: *const FffFileItem) -
 /// ## Safety
 /// `m` must be a valid `FffGrepMatch` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_grep_match_get_relative_path(
-    m: *const FffGrepMatch,
-) -> *const c_char {
+pub unsafe extern "C" fn fff_grep_match_get_relative_path(m: *const FffGrepMatch) -> *const c_char {
     if m.is_null() {
         return ptr::null();
     }
@@ -187,9 +177,7 @@ pub unsafe extern "C" fn fff_grep_match_get_relative_path(
 /// ## Safety
 /// `m` must be a valid `FffGrepMatch` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_grep_match_get_file_name(
-    m: *const FffGrepMatch,
-) -> *const c_char {
+pub unsafe extern "C" fn fff_grep_match_get_file_name(m: *const FffGrepMatch) -> *const c_char {
     if m.is_null() {
         return ptr::null();
     }
@@ -204,9 +192,7 @@ pub unsafe extern "C" fn fff_grep_match_get_file_name(
 /// ## Safety
 /// `m` must be a valid `FffGrepMatch` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_grep_match_get_git_status(
-    m: *const FffGrepMatch,
-) -> *const c_char {
+pub unsafe extern "C" fn fff_grep_match_get_git_status(m: *const FffGrepMatch) -> *const c_char {
     if m.is_null() {
         return ptr::null();
     }
@@ -220,9 +206,7 @@ pub unsafe extern "C" fn fff_grep_match_get_git_status(
 /// ## Safety
 /// `m` must be a valid `FffGrepMatch` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_grep_match_get_line_content(
-    m: *const FffGrepMatch,
-) -> *const c_char {
+pub unsafe extern "C" fn fff_grep_match_get_line_content(m: *const FffGrepMatch) -> *const c_char {
     if m.is_null() {
         return ptr::null();
     }
@@ -286,9 +270,7 @@ pub unsafe extern "C" fn fff_grep_match_get_size(m: *const FffGrepMatch) -> u64 
 /// ## Safety
 /// `m` must be a valid `FffGrepMatch` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_grep_match_get_total_frecency_score(
-    m: *const FffGrepMatch,
-) -> i64 {
+pub unsafe extern "C" fn fff_grep_match_get_total_frecency_score(m: *const FffGrepMatch) -> i64 {
     if m.is_null() {
         return 0;
     }
@@ -301,9 +283,7 @@ pub unsafe extern "C" fn fff_grep_match_get_total_frecency_score(
 /// ## Safety
 /// `m` must be a valid `FffGrepMatch` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fff_grep_match_get_access_frecency_score(
-    m: *const FffGrepMatch,
-) -> i64 {
+pub unsafe extern "C" fn fff_grep_match_get_access_frecency_score(m: *const FffGrepMatch) -> i64 {
     if m.is_null() {
         return 0;
     }
