@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
 import { findBinary } from "./download";
 import { FileFinder } from "./index";
 import { getLibExtension, getLibFilename, getTriple } from "./platform";
@@ -277,6 +279,54 @@ describe("FileFinder - Full Lifecycle", () => {
       const search3 = finder.fileSearch("Cargo");
       expect(search3.ok).toBe(true);
     }
+  });
+});
+
+describe("FileFinder - Directory Search", () => {
+  let finder: FileFinder;
+  const tmpDir = path.join(testDir, "__test_dirs__");
+  const sep = path.sep;
+
+  beforeAll(() => {
+    fs.mkdirSync(path.join(tmpDir, "alpha", "nested"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "beta"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "alpha", "file.txt"), "x");
+    fs.writeFileSync(path.join(tmpDir, "alpha", "nested", "deep.txt"), "x");
+    fs.writeFileSync(path.join(tmpDir, "beta", "file.txt"), "x");
+
+    const result = FileFinder.create({ basePath: testDir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      finder = result.value;
+    }
+    finder.waitForScan(5000);
+  });
+
+  afterAll(() => {
+    finder?.destroy();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("known directories are returned with correct paths", () => {
+    const result = finder.directorySearch("__test_dirs__");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const paths = result.value.items.map((i) => i.relativePath);
+    expect(paths).toContain(`__test_dirs__${sep}alpha${sep}`);
+    expect(paths).toContain(`__test_dirs__${sep}beta${sep}`);
+    expect(paths).toContain(`__test_dirs__${sep}alpha${sep}nested${sep}`);
+  });
+
+  test("nested directory uses native separators and correct dirName", () => {
+    const result = finder.directorySearch("nested");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const nested = result.value.items.find((i) => i.relativePath.includes("nested"));
+    expect(nested).toBeDefined();
+    expect(nested!.relativePath).toBe(`__test_dirs__${sep}alpha${sep}nested${sep}`);
+    expect(nested!.dirName).toBe(`nested${sep}`);
   });
 });
 
