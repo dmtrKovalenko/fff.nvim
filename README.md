@@ -170,6 +170,7 @@ require('fff').setup({
       -- 'middle': always uses dots (a/./b, a/../b, a/.../b)
       -- 'end': truncates from the end (home/user/projects)
       path_shorten_strategy = 'middle_number',
+      anchor = 'center', -- picker placement: 'center', 'top_left', 'top', 'top_right', 'left', 'right', 'bottom_left', 'bottom', 'bottom_right'
     },
     preview = {
       enabled = true,

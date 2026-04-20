@@ -115,33 +115,109 @@ local function compute_layout(config)
   local width = math.floor(terminal_width * width_ratio)
   local height = math.floor(terminal_height * height_ratio)
 
-  local col_ratio_default = 0.5 - (width_ratio / 2)
-  local col_ratio = col_ratio_default
+  -- Account for chrome (statusline, tabline, cmdheight) for edge-anchored positions
+  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  local has_statusline = vim.o.laststatus > 0
+  local top_edge = has_tabline and 1 or 0
+  local bottom_edge = terminal_height - vim.o.cmdheight - (has_statusline and 1 or 0)
+  local usable_height = bottom_edge - top_edge
+  height = math.min(height, usable_height)
+
+  -- Anchor controls default placement; manual col/row overrides still work
+  local anchor = utils.resolve_config_value(
+    config.layout.anchor,
+    terminal_width,
+    terminal_height,
+    function(v)
+      return utils.is_one_of(v, {
+        'center',
+        'top_left',
+        'top',
+        'top_right',
+        'left',
+        'right',
+        'bottom_left',
+        'bottom',
+        'bottom_right',
+      })
+    end,
+    'center',
+    'layout.anchor'
+  )
+
+  -- Compute default positions as direct pixel values.
+  -- Edge-flush anchors compensate for offsets added by calculate_layout_dimensions:
+  --   col: -1 for left (internal +1 on list_col makes it flush)
+  --        -2 for right (internal +1 plus the preview window's independent right border)
+  --   row: -1 for top/bottom (internal +1 on rows; bottom also accounts for chrome via bottom_edge)
+  local center_col = math.floor((terminal_width - width) / 2)
+  local center_row = top_edge + math.floor((usable_height - height) / 2)
+  local anchor_positions = {
+    center = {
+      col = center_col,
+      row = center_row,
+    },
+    top_left = {
+      col = -1,
+      row = top_edge - 1,
+    },
+    top = {
+      col = center_col,
+      row = top_edge - 1,
+    },
+    top_right = {
+      col = terminal_width - width - 2,
+      row = top_edge - 1,
+    },
+    left = {
+      col = -1,
+      row = center_row,
+    },
+    right = {
+      col = terminal_width - width - 2,
+      row = center_row,
+    },
+    bottom_left = {
+      col = -1,
+      row = bottom_edge - height - 1,
+    },
+    bottom = {
+      col = center_col,
+      row = bottom_edge - height - 1,
+    },
+    bottom_right = {
+      col = terminal_width - width - 2,
+      row = bottom_edge - height - 1,
+    },
+  }
+
+  local pos = anchor_positions[anchor] or anchor_positions.center
+  local col = pos.col
+  local row = pos.row
+
+  -- Allow manual ratio overrides (backwards compat)
   if config.layout.col ~= nil then
-    col_ratio = utils.resolve_config_value(
+    local col_ratio = utils.resolve_config_value(
       config.layout.col,
       terminal_width,
       terminal_height,
       utils.is_valid_ratio,
-      col_ratio_default,
+      col / terminal_width,
       'layout.col'
     )
+    col = math.floor(terminal_width * col_ratio)
   end
-  local row_ratio_default = 0.5 - (height_ratio / 2)
-  local row_ratio = row_ratio_default
   if config.layout.row ~= nil then
-    row_ratio = utils.resolve_config_value(
+    local row_ratio = utils.resolve_config_value(
       config.layout.row,
       terminal_width,
       terminal_height,
       utils.is_valid_ratio,
-      row_ratio_default,
+      row / terminal_height,
       'layout.row'
     )
+    row = math.floor(terminal_height * row_ratio)
   end
-
-  local col = math.floor(terminal_width * col_ratio)
-  local row = math.floor(terminal_height * row_ratio)
 
   local prompt_position = get_prompt_position()
   local preview_position = get_preview_position()
