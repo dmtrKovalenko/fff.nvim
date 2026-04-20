@@ -101,9 +101,10 @@ fn load_files(base_path: &Path) -> Vec<FileItem> {
             let path_string = path.to_string_lossy().into_owned();
             let relative_start = (path_string.len() - relative_path.len()) as u16;
             let filename_start = path_string
-                .rfind('/')
+                .rfind(std::path::is_separator)
                 .map(|i| i + 1)
                 .unwrap_or(relative_start as usize) as u16;
+
             files.push(FileItem::new_raw(
                 path_string,
                 relative_start,
