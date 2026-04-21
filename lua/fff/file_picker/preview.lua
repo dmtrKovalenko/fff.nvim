@@ -799,7 +799,7 @@ function M.update_file_info_buffer(file, bufnr, file_index)
     return false
   end
 
-  local info = M.get_file_info(file.path)
+  local info = M.get_file_info(file.relative_path)
   if not info then
     set_buffer_lines(bufnr, { 'File info unavailable' })
     return false

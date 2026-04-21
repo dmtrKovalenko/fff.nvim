@@ -1,5 +1,4 @@
-use fff::FFFQuery;
-use fff::FileItem;
+use fff::file_picker::FilePicker;
 /// FFF vs ripgrep comparison benchmark
 ///
 /// Demonstrates why a persistent in-process search engine (fff) is fundamentally
@@ -21,8 +20,7 @@ use fff::FileItem;
 /// Usage:
 ///   cargo build --release --bin grep_vs_rg
 ///   ./target/release/grep_vs_rg [--path /path/to/repo] [--iters 5]
-use fff::grep::{GrepSearchOptions, grep_search, parse_grep_query};
-use std::io::Read;
+use fff::grep::{GrepSearchOptions, parse_grep_query};
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -30,57 +28,16 @@ use std::time::{Duration, Instant};
 /// Number of times each query is repeated (overridable with --iters).
 const DEFAULT_ITERS: usize = 5;
 
-fn load_files(base_path: &Path) -> Vec<FileItem> {
-    use ignore::WalkBuilder;
-
-    let mut files = Vec::new();
-    WalkBuilder::new(base_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .ignore(true)
-        .follow_links(false)
-        .build()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-        .for_each(|entry| {
-            let path = entry.path().to_path_buf();
-            let relative = pathdiff::diff_paths(&path, base_path).unwrap_or_else(|| path.clone());
-            let relative_path = relative.to_string_lossy().into_owned();
-            let size = entry.metadata().ok().map_or(0, |m| m.len());
-            let is_binary = detect_binary(&path, size);
-
-            let path_string = path.to_string_lossy().into_owned();
-            let relative_start = (path_string.len() - relative_path.len()) as u16;
-            let filename_start = path_string
-                .rfind('/')
-                .map(|i| i + 1)
-                .unwrap_or(relative_start as usize) as u16;
-            files.push(FileItem::new_raw(
-                path_string,
-                relative_start,
-                filename_start,
-                size,
-                0,
-                None,
-                is_binary,
-            ));
-        });
-    files
-}
-
-fn detect_binary(path: &Path, size: u64) -> bool {
-    if size == 0 {
-        return false;
-    }
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut reader = std::io::BufReader::with_capacity(1024, file);
-    let mut buf = [0u8; 512];
-    let n = reader.read(&mut buf).unwrap_or(0);
-    buf[..n].contains(&0)
+fn create_picker(path: &Path) -> FilePicker {
+    let mut picker = FilePicker::new(fff::FilePickerOptions {
+        base_path: path.to_string_lossy().to_string(),
+        enable_mmap_cache: false,
+        mode: fff::FFFMode::Neovim,
+        ..Default::default()
+    })
+    .expect("Failed to create FilePicker");
+    picker.collect_files().expect("Failed to collect files");
+    picker
 }
 
 /// Telescope's default vimgrep_arguments applied to any rg command.
@@ -186,7 +143,7 @@ fn run_rg_page(
         }
     }
 
-    // Kill rg immediately — this is what telescope does when the picker
+    // Kill rg immediately --- this is what telescope does when the picker
     // closes or the query changes (plenary.job:shutdown).
     let _ = child.kill();
     let _ = child.wait();
@@ -200,7 +157,7 @@ fn bytecount(bytes: &[u8], needle: u8) -> usize {
 }
 
 /// fff full: collects all GrepMatch structs (what the UI uses).
-fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
+fn run_fff_full(picker: &FilePicker, query: &str) -> (usize, Duration) {
     let parsed = parse_grep_query(query);
     let options = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
@@ -214,52 +171,16 @@ fn run_fff_full(files: &[FileItem], query: &str) -> (usize, Duration) {
         after_context: 0,
         classify_definitions: false,
         trim_whitespace: false,
+        abort_signal: None,
     };
     let start = Instant::now();
-    let result = grep_search(
-        files,
-        &parsed,
-        &options,
-        &fff::ContentCacheBudget::zero(),
-        None,
-        None,
-        None,
-    );
-    let elapsed = start.elapsed();
-    (result.matches.len(), elapsed)
-}
-
-#[allow(dead_code)]
-fn benchmark_fff_smart_case(files: &[FileItem], parsed: &FFFQuery<'_>) -> (usize, Duration) {
-    let options = GrepSearchOptions {
-        max_file_size: 10 * 1024 * 1024,
-        max_matches_per_file: usize::MAX,
-        smart_case: true,
-        file_offset: 0,
-        page_limit: 5000,
-        mode: Default::default(),
-        time_budget_ms: 0,
-        before_context: 0,
-        after_context: 0,
-        classify_definitions: false,
-        trim_whitespace: false,
-    };
-    let start = Instant::now();
-    let result = grep_search(
-        files,
-        parsed,
-        &options,
-        &fff::ContentCacheBudget::unlimited(),
-        None,
-        None,
-        None,
-    );
+    let result = picker.grep(&parsed, &options);
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
 
 /// fff paginated: first 50 results only (real UI scenario).
-fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
+fn run_fff_page(picker: &FilePicker, query: &str) -> (usize, Duration) {
     let parsed = parse_grep_query(query);
     let options = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
@@ -273,17 +194,10 @@ fn run_fff_page(files: &[FileItem], query: &str) -> (usize, Duration) {
         after_context: 0,
         classify_definitions: false,
         trim_whitespace: false,
+        abort_signal: None,
     };
     let start = Instant::now();
-    let result = grep_search(
-        files,
-        &parsed,
-        &options,
-        &fff::ContentCacheBudget::unlimited(),
-        None,
-        None,
-        None,
-    );
+    let result = picker.grep(&parsed, &options);
     let elapsed = start.elapsed();
     (result.matches.len(), elapsed)
 }
@@ -372,13 +286,14 @@ fn main() {
     eprintln!();
 
     eprintln!("[1/5] Indexing files...");
-    let files = load_files(&canonical);
+    let picker = create_picker(&canonical);
+    let files = picker.get_files();
     let non_binary = files.iter().filter(|f| !f.is_binary()).count();
     eprintln!("  {} files ({} searchable)\n", files.len(), non_binary);
 
     eprintln!("[2/5] Warming caches (fff mmap + OS page cache)...");
     for q in &["return", "mutex", "struct", "include", "if", "int"] {
-        let _ = run_fff_page(&files, q);
+        let _ = run_fff_page(&picker, q);
         let _ = run_rg_count(&canonical, q, true, threads);
     }
     eprintln!("  mmap cache: warmed\n");
@@ -421,7 +336,7 @@ fn main() {
     for (name, query, ci) in &queries {
         let q = *query;
         let ci = *ci;
-        let fs = run_n(|| run_fff_full(&files, q), iters);
+        let fs = run_n(|| run_fff_full(&picker, q), iters);
         let rs = run_n(|| run_rg_lines(&canonical, q, ci, threads), iters);
 
         eprintln!(
@@ -449,11 +364,11 @@ fn main() {
     );
 
     eprintln!(
-        "\n[5/5] First-page latency — the real UI scenario ({} iters, showing min)",
+        "\n[5/5] First-page latency --- the real UI scenario ({} iters, showing min)",
         iters
     );
     eprintln!("  fff: paginated search (50 matches) from warm mmap cache");
-    eprintln!("  rg:  telescope-style (spawn, stream 50 lines, kill) — per-keystroke cost\n");
+    eprintln!("  rg:  telescope-style (spawn, stream 50 lines, kill) --- per-keystroke cost\n");
     eprintln!(
         "  {:<22} | {:>9} {:>10} | {:>9} {:>10} | {:>7}",
         "Query", "fff min", "matches", "rg min", "matches", "fff/rg"
@@ -469,7 +384,7 @@ fn main() {
     for (name, query, ci) in &queries {
         let q = *query;
         let ci = *ci;
-        let fs = run_n(|| run_fff_page(&files, q), iters);
+        let fs = run_n(|| run_fff_page(&picker, q), iters);
         let rs = run_n(|| run_rg_page(&canonical, q, ci, 50, threads), iters);
 
         eprintln!(

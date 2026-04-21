@@ -73,8 +73,7 @@
 //! let parser = QueryParser::default();
 //! let query = parser.parse("lib.rs");
 //!
-//! let results = FilePicker::fuzzy_search(
-//!     picker.get_files(),
+//! let results = picker.fuzzy_search(
 //!     &query,
 //!     qt_guard.as_ref(),
 //!     FuzzySearchOptions {
@@ -86,7 +85,7 @@
 //! );
 //!
 //! assert!(results.total_matched > 0);
-//! assert!(results.items.first().unwrap().as_path().ends_with("lib.rs"));
+//! assert!(results.items.first().unwrap().relative_path(picker).ends_with("lib.rs"));
 //!
 //! let _ = std::fs::remove_dir_all(&tmp);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
@@ -102,6 +101,8 @@ mod score;
 mod sort_buffer;
 // this is pub only for benchmarks
 pub mod case_insensitive_memmem;
+
+pub(crate) mod simd_path;
 
 /// Core file picker: filesystem indexing, background watching, and fuzzy search.
 ///

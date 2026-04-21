@@ -464,8 +464,6 @@ fn decompose_alternation(alts: &[Hir]) -> HirInfo {
     }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────
-
 fn expand_class(class: &Class) -> Option<SmallVec<[u8; MAX_CLASS_EXPAND]>> {
     let mut bytes: SmallVec<[u8; MAX_CLASS_EXPAND]> = SmallVec::new();
     match class {

@@ -30,12 +30,24 @@ export interface InitOptions {
   /** Use unsafe no-lock mode for databases (optional, defaults to false) */
   useUnsafeNoLock?: boolean;
   /**
-   * Pre-populate mmap caches for all files after the initial scan completes.
-   * When enabled, the first grep search will be as fast as subsequent ones
-   * at the cost of a longer scan time and higher initial memory usage.
+   * Disable mmap cache warmup after the initial scan. When mmap cache is
+   * enabled (the default), the first grep search is as fast as subsequent
+   * ones at the cost of background resources spent on awarming up the cache
+   */
+  disableMmapCache?: boolean;
+  /**
+   * Disable the content index built after the initial scan.
+   * Content indexing enables faster content-aware filtering during grep.
+   * When omitted, follows `disableMmapCache` for backward compatibility.
+   * (default: follows `disableMmapCache`)
+   */
+  disableContentIndexing?: boolean;
+  /**
+   * Disable the background file-system watcher. When the watcher is
+   * disabled, files are scanned once but not monitored for changes.
    * (default: false)
    */
-  warmupMmapCache?: boolean;
+  disableWatch?: boolean;
   /** enables optimizations for AI agent assistants. Provide as true if running via mcp/agent */
   aiMode?: boolean;
 }
@@ -62,8 +74,6 @@ export interface SearchOptions {
  * A file item in search results
  */
 export interface FileItem {
-  /** Absolute path to the file */
-  path: string;
   /** Path relative to the indexed directory */
   relativePath: string;
   /** File name only */
@@ -133,6 +143,72 @@ export interface SearchResult {
   /** Total number of indexed files */
   totalFiles: number;
   /** Location parsed from query (e.g., "file.ts:42:10") */
+  location?: Location;
+}
+
+/**
+ * A directory item in search results
+ */
+export interface DirItem {
+  /** Path relative to the indexed directory (e.g., "src/components/") */
+  relativePath: string;
+  /** Last path segment (e.g., "components/" for "src/components/") */
+  dirName: string;
+  /** Maximum access frecency score among direct child files */
+  maxAccessFrecency: number;
+}
+
+/**
+ * Search options for directory search (subset of SearchOptions)
+ */
+export interface DirSearchOptions {
+  /** Maximum threads for parallel search (0 = auto) */
+  maxThreads?: number;
+  /** Current file path (for distance scoring) */
+  currentFile?: string;
+  /** Page index for pagination (default: 0) */
+  pageIndex?: number;
+  /** Page size for pagination (default: 100) */
+  pageSize?: number;
+}
+
+/**
+ * Search result from fuzzy directory search
+ */
+export interface DirSearchResult {
+  /** Matched directory items */
+  items: DirItem[];
+  /** Corresponding scores for each item */
+  scores: Score[];
+  /** Total number of directories that matched */
+  totalMatched: number;
+  /** Total number of indexed directories */
+  totalDirs: number;
+}
+
+/**
+ * A single item in a mixed (files + directories) search result
+ */
+export type MixedItem =
+  | { type: "file"; item: FileItem }
+  | { type: "directory"; item: DirItem };
+
+/**
+ * Search result from mixed (files + directories) fuzzy search.
+ * Items are interleaved by total score in descending order.
+ */
+export interface MixedSearchResult {
+  /** Matched items (files and directories interleaved by score) */
+  items: MixedItem[];
+  /** Corresponding scores for each item */
+  scores: Score[];
+  /** Total number of items (files + dirs) that matched */
+  totalMatched: number;
+  /** Total number of indexed files */
+  totalFiles: number;
+  /** Total number of indexed directories */
+  totalDirs: number;
+  /** Location parsed from query */
   location?: Location;
 }
 
@@ -271,8 +347,6 @@ export interface GrepOptions {
  * A single grep match with file and line information
  */
 export interface GrepMatch {
-  /** Absolute path to the file */
-  path: string;
   /** Path relative to the indexed directory */
   relativePath: string;
   /** File name only */

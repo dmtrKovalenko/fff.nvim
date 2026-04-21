@@ -1,6 +1,6 @@
 [package]
 name = "fff-c"
-version = "0.5.2"
+version = "0.6.1"
 edition = "2024"
 description = "Raw C api of FFF file finder"
 license = "MIT"
@@ -17,7 +17,7 @@ mimalloc.workspace = true
 tracing.workspace = true
 git2.workspace = true
 
-fff = { package = "fff-search", path = "../fff-core" , version = "0.5.1" }
-fff-query-parser = { path = "../fff-query-parser" , version = "0.5.2" }
+fff = { package = "fff-search", path = "../fff-core" , version = "0.6.1" }
+fff-query-parser = { path = "../fff-query-parser" , version = "0.6.1" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

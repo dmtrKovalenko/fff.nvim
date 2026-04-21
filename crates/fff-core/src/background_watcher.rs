@@ -5,7 +5,7 @@ use crate::shared::{SharedFrecency, SharedPicker};
 use crate::sort_buffer::sort_with_buffer;
 use git2::Repository;
 use notify::event::{AccessKind, AccessMode};
-use notify::{Config, EventKind, RecursiveMode};
+use notify::{Config, EventKind, EventKindMask, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, DebouncedEvent, NoCache, new_debouncer_opt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,6 +37,10 @@ pub struct BackgroundWatcher {
 
 const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_PATHS_THRESHOLD: usize = 1024;
+/// On macOS, each `watch()` call creates a separate FSEventStream. When the
+/// number of directories exceeds this threshold we fall back to a single
+/// recursive watch to avoid exhausting the per-process stream limit.
+const MAX_MACOS_NONRECURSIVE_WATCHES: usize = 4096;
 /// Minimum seconds between frecency tracks of the same file in AI mode.
 /// Prevents score inflation from rapid burst edits by AI agents.
 const AI_MODE_COOLDOWN_SECS: u64 = 5 * 60;
@@ -58,7 +62,8 @@ impl BackgroundWatcher {
 
         let (watch_tx, watch_rx) = mpsc::channel::<PathBuf>();
 
-        // Clone shared state for the owner thread
+        // Clone shared state for the owner thread (needed for injecting
+        // files that existed before a watch was registered on their directory).
         let owner_picker = shared_picker.clone();
         let owner_git_workdir = git_workdir.clone();
 
@@ -95,9 +100,13 @@ impl BackgroundWatcher {
                                 warn!("Failed to watch new directory {}: {}", dir.display(), e);
                             }
                         }
-                        // Files/dirs created before the watch was set up won't
-                        // generate inotify events. Scan and inject them now.
-                        scan_new_directory(&dir, &mut debouncer, &owner_picker, &owner_git_workdir);
+
+                        // Files created before the watch was registered don't
+                        // generate events. Do a flat (non-recursive) read_dir
+                        // to inject any files that already exist. Subdirectories
+                        // are not descended — they get their own watches via
+                        // future Create events from this directory's watch.
+                        inject_existing_files(&dir, &owner_picker, &owner_git_workdir);
                     }
                     std::thread::park_timeout(Duration::from_secs(1));
                 }
@@ -128,10 +137,19 @@ impl BackgroundWatcher {
         watch_dirs: Vec<PathBuf>,
         watch_tx: mpsc::Sender<PathBuf>,
     ) -> Result<Debouncer, Error> {
-        // do not follow symlinks as then notifiers spawns a bunch of events for symlinked
-        // files that could be git ignored, we have to property differentiate those and if
-        // the file was edited through a
-        let config = Config::default().with_follow_symlinks(false);
+        let config = Config::default()
+            // do not follow symlinks as then notifiers spawns a bunch of events for symlinked
+            // files that could be git ignored, we have to property differentiate those and if
+            // the file was edited through a
+            .with_follow_symlinks(false)
+            // only the actual modification events, ignore the open syscals that we can generate by
+            // our own grep calls and preview window rendering
+            .with_event_kinds(EventKindMask::CORE);
+
+        // Decide the watching strategy up-front so the event handler closure
+        // knows whether it needs to request dynamic directory watches.
+        let use_recursive =
+            cfg!(target_os = "macos") && watch_dirs.len() > MAX_MACOS_NONRECURSIVE_WATCHES;
 
         let git_workdir_for_handler = git_workdir.clone();
         let mut debouncer = new_debouncer_opt(
@@ -140,37 +158,23 @@ impl BackgroundWatcher {
             {
                 move |result: DebounceEventResult| match result {
                     Ok(events) => {
-                        // Detect newly created directories and request NonRecursive
-                        // watches on them so we see files created inside.
-                        // Skip gitignored directories (e.g. node_modules/) to
-                        // avoid re-inflating the inotify watch set.
-                        let repo = git_workdir_for_handler
-                            .as_ref()
-                            .and_then(|p| Repository::open(p).ok());
-                        for debounced_event in &events {
-                            if matches!(
-                                debounced_event.event.kind,
-                                EventKind::Create(_)
-                                    | EventKind::Modify(notify::event::ModifyKind::Name(_))
-                            ) {
-                                for path in &debounced_event.event.paths {
-                                    if path.is_dir()
-                                        && !is_git_file(path)
-                                        && !is_path_ignored(path, &repo)
-                                    {
-                                        let _ = watch_tx.send(path.clone());
-                                    }
-                                }
-                            }
-                        }
-
-                        handle_debounced_events(
+                        let new_dirs = handle_debounced_events(
                             events,
                             &git_workdir_for_handler,
                             &shared_picker,
                             &shared_frecency,
                             mode,
                         );
+
+                        // In NonRecursive mode, register watches for newly
+                        // discovered directories so future file events in them
+                        // are captured. In Recursive mode the single stream
+                        // already covers new subdirectories.
+                        if !use_recursive {
+                            for dir in new_dirs {
+                                let _ = watch_tx.send(dir);
+                            }
+                        }
                     }
                     Err(errors) => {
                         error!("File watcher errors: {:?}", errors);
@@ -185,36 +189,65 @@ impl BackgroundWatcher {
             config,
         )?;
 
-        // Watch all directories NonRecursively. The watch_dirs are derived from
-        // the already-scanned file list so they respect .gitignore at every depth.
-        // On Linux (inotify) RecursiveMode::Recursive creates one watch per subdirectory
-        // including gitignored ones like node_modules/, which wastes kernel resources.
-        // NonRecursive watches only the directories that actually contain indexed files.
+        // Watching strategy:
         //
-        // New directories created at runtime are detected via Create events on the
-        // parent and dynamically added by the owner thread via the watch_tx channel.
-        debouncer.watch(base_path.as_path(), RecursiveMode::NonRecursive)?;
+        // For small-to-medium repos we watch each indexed directory individually
+        // (NonRecursive). This avoids receiving events for gitignored paths like
+        // node_modules/ and keeps the event volume low.
+        //
+        // On macOS, each `watch()` call creates a separate FSEventStream. Large
+        // repos (e.g. Chromium with 487K+ files) can have tens of thousands of
+        // directories, which exhausts the per-process FSEvents stream limit and
+        // causes "unable to start FSEvent stream" errors. When the directory
+        // count exceeds the threshold we fall back to a single Recursive watch
+        // on the base path. FSEvents handles this efficiently with one kernel
+        // stream for the entire subtree. Gitignored paths are already filtered
+        // in the event handler via `should_include_file()`.
+        //
+        // On Linux (inotify), RecursiveMode::Recursive creates one kernel watch
+        // per subdirectory *including* gitignored ones, wasting file descriptors.
+        // The per-directory NonRecursive approach is always used on Linux.
+        //
+        // New directories created at runtime are detected via Create events on
+        // the parent and dynamically added by the owner thread via watch_tx.
 
-        for dir in &watch_dirs {
-            match debouncer.watch(dir.as_path(), RecursiveMode::NonRecursive) {
-                Ok(()) => {}
-                Err(e) => {
-                    // Non-fatal: directory may have been removed between discovery and watch
-                    warn!("Failed to watch directory {}: {}", dir.display(), e);
+        if use_recursive {
+            debouncer.watch(base_path.as_path(), RecursiveMode::Recursive)?;
+            info!(
+                "File watcher initialized with single recursive watch on {} \
+                 ({} directories exceeded threshold of {})",
+                base_path.display(),
+                watch_dirs.len(),
+                MAX_MACOS_NONRECURSIVE_WATCHES,
+            );
+        } else {
+            debouncer.watch(base_path.as_path(), RecursiveMode::NonRecursive)?;
+
+            for dir in &watch_dirs {
+                match debouncer.watch(dir.as_path(), RecursiveMode::NonRecursive) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        // Non-fatal: directory may have been removed between discovery and watch
+                        warn!("Failed to watch directory {}: {}", dir.display(), e);
+                    }
                 }
             }
+
+            info!(
+                "File watcher initialized for {} directories (NonRecursive) under {}",
+                watch_dirs.len(),
+                base_path.display()
+            );
         }
 
         // The .git directory is excluded from the file list but we still need
         // to observe changes that affect git status (staging, unstaging,
         // committing, branch switches, merges, etc.).
+        // When using recursive mode the base watch already covers .git/,
+        // but these targeted watches are cheap (at most 3 extra streams)
+        // and ensure we catch status changes even if the recursive backend
+        // coalesces or delays .git events.
         watch_git_status_paths(&mut debouncer, git_workdir.as_ref());
-
-        info!(
-            "File watcher initialized for {} directories (NonRecursive) under {}",
-            watch_dirs.len(),
-            base_path.display()
-        );
 
         Ok(debouncer)
     }
@@ -246,13 +279,14 @@ fn handle_debounced_events(
     shared_picker: &SharedPicker,
     shared_frecency: &SharedFrecency,
     mode: FFFMode,
-) {
+) -> Vec<PathBuf> {
     // this will be called very often, we have to minimiy the lock time for file picker
     let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
     let mut need_full_rescan = false;
     let mut need_full_git_rescan = false;
     let mut paths_to_remove = Vec::new();
     let mut paths_to_add_or_modify = Vec::new();
+    let mut new_dirs_to_watch = Vec::new();
     let mut affected_paths_count = 0usize;
 
     for debounced_event in &events {
@@ -315,6 +349,13 @@ fn handle_debounced_events(
 
             if is_removal || !path.exists() {
                 paths_to_remove.push(path.as_path());
+            } else if path.is_dir() {
+                // New directory — collect it so the caller can register a
+                // watcher. No filesystem scanning: files that arrive later
+                // will be handled by the newly registered watch.
+                if !is_path_ignored(path, &repo) {
+                    new_dirs_to_watch.push(path.to_path_buf());
+                }
             } else {
                 // For additions/modifications, still filter gitignored files.
                 if should_include_file(path, &repo) {
@@ -342,7 +383,7 @@ fn handle_debounced_events(
     if need_full_rescan {
         info!(?affected_paths_count, "Triggering full rescan");
         trigger_full_rescan(shared_picker, shared_frecency);
-        return;
+        return Vec::new();
     }
 
     // It's important to get the allocated sort
@@ -352,9 +393,10 @@ fn handle_debounced_events(
     paths_to_add_or_modify.dedup_by(|a, b| a.as_os_str().eq(b.as_os_str()));
 
     info!(
-        "Event processing summary: {} to remove, {} to add/modify",
+        "Event processing summary: {} to remove, {} to add/modify, {} new dirs",
         paths_to_remove.len(),
-        paths_to_add_or_modify.len()
+        paths_to_add_or_modify.len(),
+        new_dirs_to_watch.len()
     );
 
     // Apply file index updates (add/remove) unconditionally — these must
@@ -375,19 +417,12 @@ fn handle_debounced_events(
 
                 let mut files_to_update = Vec::with_capacity(paths_to_add_or_modify.len());
                 for path in &paths_to_add_or_modify {
-                    let result = picker.on_create_or_modify(path);
-                    match result {
-                        Some(file) => {
-                            debug!(
-                                "on_create_or_modify({:?}) -> Some({})",
-                                path,
-                                file.path_str()
-                            );
-                            files_to_update.push(PathBuf::from(file.path_str()));
-                        }
-                        None => {
-                            error!("on_create_or_modify({:?}) -> None (file not added!)", path);
-                        }
+                    let added = picker.on_create_or_modify(path).is_some();
+                    if added {
+                        debug!("on_create_or_modify({:?}) -> Some", path);
+                        files_to_update.push(path.to_path_buf());
+                    } else {
+                        error!("on_create_or_modify({:?}) -> None (file not added!)", path);
                     }
                 }
                 info!(
@@ -399,11 +434,11 @@ fn handle_debounced_events(
 
             let Ok(mut guard) = shared_picker.write() else {
                 error!("Failed to acquire file picker write lock");
-                return;
+                return new_dirs_to_watch;
             };
             let Some(ref mut picker) = *guard else {
                 error!("File picker not initialized");
-                return;
+                return new_dirs_to_watch;
             };
             apply_changes(picker)
         } else {
@@ -458,7 +493,7 @@ fn handle_debounced_events(
     // Git status updates require a repository.
     let Some(repo) = repo.as_ref() else {
         debug!("No git repo available, skipping git status updates");
-        return;
+        return new_dirs_to_watch;
     };
 
     if need_full_git_rescan {
@@ -468,7 +503,7 @@ fn handle_debounced_events(
         if let Err(e) = result {
             error!("Failed to refresh git status: {:?}", e);
         }
-        return;
+        return new_dirs_to_watch;
     }
 
     if !files_to_update_git_status.is_empty() {
@@ -481,7 +516,7 @@ fn handle_debounced_events(
             Ok(status) => status,
             Err(e) => {
                 tracing::error!(?e, "Failed to query git status");
-                return;
+                return new_dirs_to_watch;
             }
         };
 
@@ -497,6 +532,8 @@ fn handle_debounced_events(
             error!("Failed to acquire picker lock for git status update");
         }
     }
+
+    new_dirs_to_watch
 }
 
 fn trigger_full_rescan(shared_picker: &SharedPicker, shared_frecency: &SharedFrecency) {
@@ -516,9 +553,59 @@ fn trigger_full_rescan(shared_picker: &SharedPicker, shared_frecency: &SharedFre
     };
     if let Err(e) = picker.trigger_rescan(shared_frecency) {
         error!("Failed to trigger full rescan: {:?}", e);
-    } else {
-        info!("Full filesystem rescan completed successfully");
+        return;
     }
+    info!("Full filesystem rescan completed successfully");
+
+    // Spawn background warmup + bigram rebuild (mirrors the initial scan's
+    // post-scan phase). The write lock is still held here but the spawned
+    // thread re-acquires it later — safe because the guard drops at function end.
+    // NOTE: must NOT call shared_picker.need_complex_rebuild() here — that would
+    // try to read-lock the same RwLock we already hold as write, causing a deadlock.
+    if picker.need_enable_mmap_cache() || picker.need_enable_content_indexing() {
+        picker.spawn_post_rescan_rebuild(shared_picker.clone());
+    }
+}
+
+/// After registering a watch on a newly created directory, list its
+/// immediate children and add any files to the picker.
+fn inject_existing_files(dir: &Path, shared_picker: &SharedPicker, git_workdir: &Option<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
+    let mut files_to_add = Vec::new();
+
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|ft| ft.is_file()) {
+            let path = entry.path();
+            if should_include_file(&path, &repo) {
+                files_to_add.push(path);
+            }
+        }
+    }
+
+    if files_to_add.is_empty() {
+        return;
+    }
+
+    let Ok(mut guard) = shared_picker.write() else {
+        return;
+    };
+    let Some(ref mut picker) = *guard else {
+        return;
+    };
+
+    for path in &files_to_add {
+        picker.on_create_or_modify(path);
+    }
+
+    debug!(
+        "Injected {} existing files from new directory {}",
+        files_to_add.len(),
+        dir.display(),
+    );
 }
 
 fn should_include_file(path: &Path, repo: &Option<Repository>) -> bool {
@@ -542,69 +629,6 @@ fn is_non_code_directory(path: &Path) -> bool {
     crate::ignore::is_non_code_directory(path)
 }
 
-/// After adding a NonRecursive watch on a newly created directory, scan it for
-/// files and subdirectories that were created before the watch was set up.
-/// This closes the race where `mkdir foo && echo > foo/bar.txt` both happen
-/// before the owner thread adds a watch on `foo/`.
-fn scan_new_directory(
-    dir: &Path,
-    debouncer: &mut Debouncer,
-    shared_picker: &SharedPicker,
-    git_workdir: &Option<PathBuf>,
-) {
-    let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
-    let mut files_to_add = Vec::new();
-
-    collect_new_entries(dir, &repo, debouncer, &mut files_to_add);
-
-    if files_to_add.is_empty() {
-        return;
-    }
-
-    let Ok(mut guard) = shared_picker.write() else {
-        return;
-    };
-    let Some(ref mut picker) = *guard else {
-        return;
-    };
-
-    for path in &files_to_add {
-        picker.on_create_or_modify(path);
-    }
-    info!(
-        "Scanned new directory {}: added {} files",
-        dir.display(),
-        files_to_add.len(),
-    );
-}
-
-fn collect_new_entries(
-    dir: &Path,
-    repo: &Option<Repository>,
-    debouncer: &mut Debouncer,
-    files: &mut Vec<PathBuf>,
-) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-
-        if file_type.is_dir() {
-            if !is_git_file(&path) && !is_path_ignored(&path, repo) {
-                let _ = debouncer.watch(&path, RecursiveMode::NonRecursive);
-                collect_new_entries(&path, repo, debouncer, files);
-            }
-        } else if file_type.is_file() && should_include_file(&path, repo) {
-            files.push(path);
-        }
-    }
-}
-
 #[inline]
 fn is_path_ignored(path: &Path, repo: &Option<Repository>) -> bool {
     match repo.as_ref() {
@@ -619,7 +643,7 @@ fn is_git_file(path: &Path) -> bool {
         .any(|component| component.as_os_str() == ".git")
 }
 
-pub fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) -> bool {
+fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) -> bool {
     let Some(repo) = repo.as_ref() else {
         return false;
     };

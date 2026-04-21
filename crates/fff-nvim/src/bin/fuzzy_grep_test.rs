@@ -1,4 +1,3 @@
-use fff::FileItem;
 /// Fuzzy grep quality test against ~/dev/lightsource
 ///
 /// Runs queries through the fuzzy grep pipeline and prints results
@@ -7,92 +6,42 @@ use fff::FileItem;
 /// Usage:
 ///   cargo run --release --bin fuzzy_grep_test              # runs default test queries
 ///   cargo run --release --bin fuzzy_grep_test -- "query"   # runs a single user query
-use fff::grep::{GrepMode, GrepSearchOptions, grep_search, parse_grep_query};
-use std::io::Read;
+use fff::file_picker::FilePicker;
+use fff::grep::{GrepMode, GrepSearchOptions, parse_grep_query};
 use std::path::Path;
 use std::time::Instant;
 
-fn load_files(base_path: &Path) -> Vec<FileItem> {
-    use ignore::WalkBuilder;
-
-    let mut files = Vec::new();
-
-    WalkBuilder::new(base_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .ignore(true)
-        .follow_links(false)
-        .build()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-        .for_each(|entry| {
-            let path = entry.path().to_path_buf();
-            let relative = pathdiff::diff_paths(&path, base_path).unwrap_or_else(|| path.clone());
-            let relative_path = relative.to_string_lossy().into_owned();
-            let size = entry.metadata().ok().map_or(0, |m| m.len());
-            let is_binary = detect_binary(&path, size);
-
-            let path_string = path.to_string_lossy().into_owned();
-            let relative_start = (path_string.len() - relative_path.len()) as u16;
-            let filename_start = path_string
-                .rfind('/')
-                .map(|i| i + 1)
-                .unwrap_or(relative_start as usize) as u16;
-            files.push(FileItem::new_raw(
-                path_string,
-                relative_start,
-                filename_start,
-                size,
-                0,
-                None,
-                is_binary,
-            ));
-        });
-
-    files
+fn create_picker(path: &Path) -> FilePicker {
+    let mut picker = FilePicker::new(fff::FilePickerOptions {
+        base_path: path.to_string_lossy().to_string(),
+        enable_mmap_cache: false,
+        mode: fff::FFFMode::Neovim,
+        ..Default::default()
+    })
+    .expect("Failed to create FilePicker");
+    picker.collect_files().expect("Failed to collect files");
+    picker
 }
 
-fn detect_binary(path: &Path, size: u64) -> bool {
-    if size == 0 {
-        return false;
-    }
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut reader = std::io::BufReader::with_capacity(1024, file);
-    let mut buf = [0u8; 512];
-    let n = reader.read(&mut buf).unwrap_or(0);
-    buf[..n].contains(&0)
-}
-
-fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
+fn run_fuzzy_query(picker: &FilePicker, query: &str, label: &str) {
     let options = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
         smart_case: true,
         file_offset: 0,
-        page_limit: 100, // Get plenty of results
+        page_limit: 100,
         mode: GrepMode::Fuzzy,
-        time_budget_ms: 0, // No time limit — search all files
+        time_budget_ms: 0,
         before_context: 0,
         after_context: 0,
         classify_definitions: false,
         trim_whitespace: false,
+        abort_signal: None,
     };
 
     let parsed = parse_grep_query(query);
     let start = Instant::now();
-    let result = grep_search(
-        files,
-        &parsed,
-        &options,
-        &fff::ContentCacheBudget::default(),
-        None,
-        None,
-        None,
-    );
+    let result = picker.grep(&parsed, &options);
     let elapsed = start.elapsed();
 
     eprintln!("══════════════════════════════════════════════════════════════");
@@ -116,7 +65,7 @@ fn run_fuzzy_query(files: &[FileItem], query: &str, label: &str) {
         if m.file_index != current_file_idx {
             current_file_idx = m.file_index;
             let file = &result.files[m.file_index];
-            eprintln!("\n  ┌─ {}", file.relative_path());
+            eprintln!("\n  ┌─ {}", file.relative_path(picker));
         }
 
         // Truncate long lines for display
@@ -204,7 +153,8 @@ fn main() {
 
     eprintln!("Loading files...");
     let load_start = Instant::now();
-    let files = load_files(&canonical);
+    let picker = create_picker(&canonical);
+    let files = picker.get_files();
     let non_binary = files.iter().filter(|f| !f.is_binary()).count();
     eprintln!(
         "Loaded {} files ({} non-binary) in {:.2}s\n",
@@ -215,17 +165,17 @@ fn main() {
 
     if queries.is_empty() {
         // Run default test queries
-        run_fuzzy_query(&files, "shcema", "transposition of 'schema'");
-        run_fuzzy_query(&files, "SortedMap", "should match SortedArrayMap");
+        run_fuzzy_query(&picker, "shcema", "transposition of 'schema'");
+        run_fuzzy_query(&picker, "SortedMap", "should match SortedArrayMap");
         run_fuzzy_query(
-            &files,
+            &picker,
             "struct SortedMap",
             "should NOT match SourcingProjectMetadataParts",
         );
     } else {
         // Run user-provided queries
         for query in &queries {
-            run_fuzzy_query(&files, query, "user query");
+            run_fuzzy_query(&picker, query, "user query");
         }
     }
 

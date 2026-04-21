@@ -1,7 +1,5 @@
 use fff::file_picker::{FFFMode, FilePicker};
-use fff::{
-    FileItem, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker,
-};
+use fff::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
 use std::time::{Duration, Instant};
 
 /// Wait for background scan to complete
@@ -16,18 +14,6 @@ fn wait_for_scan(shared_picker: &SharedPicker, timeout_secs: u64) -> Result<usiz
         .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
     if let Some(ref picker) = *picker_guard {
         Ok(picker.get_files().len())
-    } else {
-        Err("FilePicker not initialized".to_string())
-    }
-}
-
-/// Get files snapshot from shared state
-fn get_files(shared_picker: &SharedPicker) -> Result<Vec<FileItem>, String> {
-    let picker_guard = shared_picker
-        .read()
-        .map_err(|e| format!("Failed to acquire read lock: {}", e))?;
-    if let Some(ref picker) = *picker_guard {
-        Ok(picker.get_files().to_vec())
     } else {
         Err("FilePicker not initialized".to_string())
     }
@@ -56,7 +42,7 @@ fn main() {
         shared_frecency.clone(),
         fff::FilePickerOptions {
             base_path: canonical_path.to_string_lossy().to_string(),
-            warmup_mmap_cache: false,
+            enable_mmap_cache: false,
             mode: FFFMode::Neovim,
             ..Default::default()
         },
@@ -70,7 +56,8 @@ fn main() {
     let file_count = wait_for_scan(&shared_picker, 120).expect("Failed to wait for scan");
     eprintln!("✓ Indexed {} files\n", file_count);
 
-    let files = get_files(&shared_picker).expect("Failed to get files");
+    let picker_guard = shared_picker.read().expect("Failed to acquire read lock");
+    let picker = picker_guard.as_ref().expect("FilePicker not initialized");
 
     // Test queries representing different search patterns
     let test_queries = vec![
@@ -100,8 +87,7 @@ fn main() {
 
         for _ in 0..iterations {
             let parsed = parser.parse(query);
-            let results = FilePicker::fuzzy_search(
-                &files,
+            let results = picker.fuzzy_search(
                 &parsed,
                 None,
                 FuzzySearchOptions {

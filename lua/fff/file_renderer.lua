@@ -230,7 +230,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   end
 
   -- 8. Selection
-  if ctx.selected_files and ctx.selected_files[item.path] then
+  if ctx.selected_files and ctx.selected_files[item.relative_path] then
     local selection_hl = is_cursor and ctx.config.hl.selected_active or ctx.config.hl.selected
     vim.api.nvim_buf_set_extmark(buf, ns_id, line_idx - 1, 0, {
       sign_text = '▊',

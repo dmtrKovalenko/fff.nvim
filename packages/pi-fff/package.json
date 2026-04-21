@@ -1,0 +1,53 @@
+{
+  "name": "@ff-labs/pi-fff",
+  "public": true,
+  "version": "0.6.0",
+  "description": "pi extension: FFF-powered fuzzy file and content search",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
+    "directory": "packages/pi-fff"
+  },
+  "homepage": "https://github.com/dmtrKovalenko/fff.nvim/tree/main/packages/pi-fff",
+  "bugs": {
+    "url": "https://github.com/dmtrKovalenko/fff.nvim/issues"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "fff",
+    "search",
+    "grep",
+    "fuzzy-search",
+    "ai-agent"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "files": [
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ff-labs/fff-node": "*"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  }
+}

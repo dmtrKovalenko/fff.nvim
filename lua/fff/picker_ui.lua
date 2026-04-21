@@ -115,33 +115,109 @@ local function compute_layout(config)
   local width = math.floor(terminal_width * width_ratio)
   local height = math.floor(terminal_height * height_ratio)
 
-  local col_ratio_default = 0.5 - (width_ratio / 2)
-  local col_ratio = col_ratio_default
+  -- Account for chrome (statusline, tabline, cmdheight) for edge-anchored positions
+  local has_tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  local has_statusline = vim.o.laststatus > 0
+  local top_edge = has_tabline and 1 or 0
+  local bottom_edge = terminal_height - vim.o.cmdheight - (has_statusline and 1 or 0)
+  local usable_height = bottom_edge - top_edge
+  height = math.min(height, usable_height)
+
+  -- Anchor controls default placement; manual col/row overrides still work
+  local anchor = utils.resolve_config_value(
+    config.layout.anchor,
+    terminal_width,
+    terminal_height,
+    function(v)
+      return utils.is_one_of(v, {
+        'center',
+        'top_left',
+        'top',
+        'top_right',
+        'left',
+        'right',
+        'bottom_left',
+        'bottom',
+        'bottom_right',
+      })
+    end,
+    'center',
+    'layout.anchor'
+  )
+
+  -- Compute default positions as direct pixel values.
+  -- Edge-flush anchors compensate for offsets added by calculate_layout_dimensions:
+  --   col: -1 for left (internal +1 on list_col makes it flush)
+  --        -2 for right (internal +1 plus the preview window's independent right border)
+  --   row: -1 for top/bottom (internal +1 on rows; bottom also accounts for chrome via bottom_edge)
+  local center_col = math.floor((terminal_width - width) / 2)
+  local center_row = top_edge + math.floor((usable_height - height) / 2)
+  local anchor_positions = {
+    center = {
+      col = center_col,
+      row = center_row,
+    },
+    top_left = {
+      col = -1,
+      row = top_edge - 1,
+    },
+    top = {
+      col = center_col,
+      row = top_edge - 1,
+    },
+    top_right = {
+      col = terminal_width - width - 2,
+      row = top_edge - 1,
+    },
+    left = {
+      col = -1,
+      row = center_row,
+    },
+    right = {
+      col = terminal_width - width - 2,
+      row = center_row,
+    },
+    bottom_left = {
+      col = -1,
+      row = bottom_edge - height - 1,
+    },
+    bottom = {
+      col = center_col,
+      row = bottom_edge - height - 1,
+    },
+    bottom_right = {
+      col = terminal_width - width - 2,
+      row = bottom_edge - height - 1,
+    },
+  }
+
+  local pos = anchor_positions[anchor] or anchor_positions.center
+  local col = pos.col
+  local row = pos.row
+
+  -- Allow manual ratio overrides (backwards compat)
   if config.layout.col ~= nil then
-    col_ratio = utils.resolve_config_value(
+    local col_ratio = utils.resolve_config_value(
       config.layout.col,
       terminal_width,
       terminal_height,
       utils.is_valid_ratio,
-      col_ratio_default,
+      col / terminal_width,
       'layout.col'
     )
+    col = math.floor(terminal_width * col_ratio)
   end
-  local row_ratio_default = 0.5 - (height_ratio / 2)
-  local row_ratio = row_ratio_default
   if config.layout.row ~= nil then
-    row_ratio = utils.resolve_config_value(
+    local row_ratio = utils.resolve_config_value(
       config.layout.row,
       terminal_width,
       terminal_height,
       utils.is_valid_ratio,
-      row_ratio_default,
+      row / terminal_height,
       'layout.row'
     )
+    row = math.floor(terminal_height * row_ratio)
   end
-
-  local col = math.floor(terminal_width * col_ratio)
-  local row = math.floor(terminal_height * row_ratio)
 
   local prompt_position = get_prompt_position()
   local preview_position = get_preview_position()
@@ -842,8 +918,13 @@ function M.setup_keymaps()
   set_keymap('n', keymaps.focus_list, M.focus_list_win, input_opts)
   set_keymap('n', keymaps.focus_preview, M.focus_preview_win, input_opts)
 
-  -- Input buffer: both modes
-  set_keymap({ 'i', 'n' }, keymaps.close, M.close, input_opts)
+  if M.state.config.prompt_vim_mode then
+    set_keymap('n', keymaps.close, M.close, input_opts)
+    set_keymap('i', '<C-c>', M.close, input_opts)
+  else
+    set_keymap({ 'i', 'n' }, keymaps.close, M.close, input_opts)
+  end
+
   set_keymap({ 'i', 'n' }, keymaps.select, M.select, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.select_split, function() M.select('split') end, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.select_vsplit, function() M.select('vsplit') end, input_opts)
@@ -894,6 +975,16 @@ function M.setup_keymaps()
       vim.schedule(function() M.on_input_change() end)
     end,
   })
+
+  if M.state.config.prompt_vim_mode then
+    vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
+      buffer = M.state.input_buf,
+      callback = function()
+        local prompt_len = #M.state.config.prompt
+        if vim.fn.col('.') <= prompt_len then vim.fn.cursor(vim.fn.line('.'), prompt_len + 1) end
+      end,
+    })
+  end
 end
 
 function M.focus_input_win()
@@ -1326,7 +1417,7 @@ function M.update_preview_smart()
   end
 
   -- Same file: update immediately (just scrolling/re-highlighting, no file I/O)
-  if M.state.last_preview_file == item.path then
+  if M.state.last_preview_file == item.relative_path then
     M.update_preview()
     return
   end
@@ -1629,7 +1720,7 @@ end
 function M.update_preview_title(item, location)
   if not M.state.preview_win or not vim.api.nvim_win_is_valid(M.state.preview_win) then return end
 
-  local relative_path = item.relative_path or item.path
+  local relative_path = item.relative_path
   local max_title_width = vim.api.nvim_win_get_width(M.state.preview_win)
 
   -- Append :line for grep mode or grep suggestions
@@ -1752,10 +1843,10 @@ function M.update_preview()
 
   local location_changed = not vim.deep_equal(M.state.last_preview_location, effective_location)
 
-  if M.state.last_preview_file == item.path and not location_changed then return end
+  if M.state.last_preview_file == item.relative_path and not location_changed then return end
 
   -- Same file, different location: just scroll and re-highlight instead of reloading
-  if M.state.last_preview_file == item.path and location_changed then
+  if M.state.last_preview_file == item.relative_path and location_changed then
     M.state.last_preview_location = effective_location and vim.deepcopy(effective_location) or nil
     preview.state.location = effective_location
     -- Update title with new line number for grep/suggestion mode
@@ -1770,7 +1861,7 @@ function M.update_preview()
 
   preview.clear()
 
-  M.state.last_preview_file = item.path
+  M.state.last_preview_file = item.relative_path
   M.state.last_preview_location = effective_location and vim.deepcopy(effective_location) or nil
 
   M.update_preview_title(item, effective_location)
@@ -1778,7 +1869,7 @@ function M.update_preview()
   if M.state.file_info_buf then preview.update_file_info_buffer(item, M.state.file_info_buf, M.state.cursor) end
 
   preview.set_preview_window(M.state.preview_win)
-  preview.preview(item.path, M.state.preview_buf, effective_location, item.is_binary)
+  preview.preview(item.relative_path, M.state.preview_buf, effective_location, item.is_binary)
 end
 
 --- Clear preview
@@ -2157,7 +2248,9 @@ end
 --- Format: "path:line:col" — uniquely identifies one match entry.
 ---@param item table Grep match item with path, line_number, col
 ---@return string
-local function grep_item_key(item) return string.format('%s:%d:%d', item.path, item.line_number or 0, item.col or 0) end
+local function grep_item_key(item)
+  return string.format('%s:%d:%d', item.relative_path, item.line_number or 0, item.col or 0)
+end
 
 --- Toggle selection for the current item.
 --- In grep mode, selection is per-occurrence (individual match line).
@@ -2170,7 +2263,7 @@ function M.toggle_select()
 
   ---@diagnostic disable-next-line: need-check-nil
   local item = items[M.state.cursor]
-  if not item or not item.path then return end
+  if not item or not item.relative_path then return end
 
   local was_selected
 
@@ -2185,11 +2278,11 @@ function M.toggle_select()
     end
   else
     -- Per-file selection for normal file mode
-    was_selected = M.state.selected_files[item.path]
+    was_selected = M.state.selected_files[item.relative_path]
     if was_selected then
-      M.state.selected_files[item.path] = nil
+      M.state.selected_files[item.relative_path] = nil
     else
-      M.state.selected_files[item.path] = true
+      M.state.selected_files[item.relative_path] = true
     end
   end
 
@@ -2222,10 +2315,10 @@ function M.send_to_quickfix()
       -- Use explicitly selected items (survives page changes)
       for _, item in pairs(M.state.selected_items) do
         table.insert(qf_list, {
-          filename = item.path,
+          filename = item.relative_path,
           lnum = item.line_number or 1,
           col = (item.col or 0) + 1,
-          text = item.line_content or vim.fn.fnamemodify(item.path, ':.'),
+          text = item.line_content or vim.fn.fnamemodify(item.relative_path, ':.'),
         })
       end
     else
@@ -2241,12 +2334,12 @@ function M.send_to_quickfix()
       end
 
       for _, item in ipairs(all_items) do
-        if item and item.path then
+        if item and item.relative_path then
           table.insert(qf_list, {
-            filename = item.path,
+            filename = item.relative_path,
             lnum = item.line_number or 1,
             col = (item.col or 0) + 1,
-            text = item.line_content or vim.fn.fnamemodify(item.path, ':.'),
+            text = item.line_content or vim.fn.fnamemodify(item.relative_path, ':.'),
           })
         end
       end
@@ -2262,7 +2355,7 @@ function M.send_to_quickfix()
       end
     else
       for _, item in ipairs(M.state.filtered_items) do
-        if item and item.path then table.insert(paths, item.path) end
+        if item and item.relative_path then table.insert(paths, item.relative_path) end
       end
     end
 
@@ -2285,7 +2378,7 @@ function M.send_to_quickfix()
   local is_grep = M.state.mode == 'grep'
   M.close()
 
-  vim.fn.setqflist(qf_list, 'r')
+  vim.fn.setqflist(qf_list)
   vim.cmd('copen')
 
   local count = #qf_list
@@ -2309,7 +2402,7 @@ function M.select(action)
   -- These can surface from Rust's fs::canonicalize on Windows when LongPathsEnabled is set.
   -- Neovim cannot open paths with this prefix. The Rust side uses dunce::canonicalize to avoid
   -- producing these, but we strip defensively here as well.
-  local path = item.path
+  local path = item.relative_path
   if vim.startswith(path, '\\\\?\\') then path = path:sub(5) end
 
   local relative_path = vim.fn.fnamemodify(path, ':.')
@@ -2379,7 +2472,7 @@ function M.select(action)
         if mode == 'grep' then
           pcall(fff.track_grep_query, query)
         else
-          pcall(fff.track_query_completion, query, item.path)
+          pcall(fff.track_query_completion, query, item.relative_path)
         end
       end
     end

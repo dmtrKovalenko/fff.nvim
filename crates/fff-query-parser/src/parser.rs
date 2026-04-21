@@ -174,8 +174,8 @@ impl<'a> FFFQuery<'a> {
     /// with the leading `\` stripped, since the backslash is only an escape
     /// signal to the parser and should not appear in the final pattern.
     ///
-    /// `FuzzyQuery::Empty` → empty string  
-    /// `FuzzyQuery::Text("foo")` → `"foo"`  
+    /// `FuzzyQuery::Empty` → empty string
+    /// `FuzzyQuery::Text("foo")` → `"foo"`
     /// `FuzzyQuery::Parts(["a", "\\*.rs", "b"])` → `"a *.rs b"`
     pub fn grep_text(&self) -> String {
         match &self.fuzzy_query {
@@ -365,7 +365,7 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
                     "type" if config.enable_type_filter() => {
                         return Some(Constraint::FileType(value));
                     }
-                    "status" | "gi" | "g" | "st" if config.enable_git_status() => {
+                    "status" | "st" | "g" | "git" if config.enable_git_status() => {
                         return parse_git_status(value);
                     }
                     _ => {}
@@ -583,6 +583,29 @@ mod tests {
                 ));
             }
             _ => panic!("Expected Not(GitStatus) constraint"),
+        }
+    }
+
+    #[test]
+    fn test_negation_git_status_all_key_aliases() {
+        let parser = QueryParser::new(FileSearchConfig);
+        for key in ["status", "st", "g", "git"] {
+            let query = format!("!{key}:modified foo");
+            let result = parser.parse(&query);
+            assert_eq!(
+                result.constraints.len(),
+                1,
+                "!{key}:modified should produce exactly one constraint"
+            );
+            match &result.constraints[0] {
+                Constraint::Not(inner) => assert!(
+                    matches!(**inner, Constraint::GitStatus(GitStatusFilter::Modified)),
+                    "!{key}:modified expected Not(GitStatus(Modified)), got Not({inner:?})"
+                ),
+                other => {
+                    panic!("!{key}:modified expected Not(GitStatus), got {other:?}")
+                }
+            }
         }
     }
 

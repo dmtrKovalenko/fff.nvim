@@ -187,6 +187,15 @@ impl ParserConfig for GrepConfig {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AiGrepConfig;
 
+/// Configuration for directory and mixed search modes.
+///
+/// Disables path segment parsing so that trailing `/` is kept as fuzzy text
+/// (e.g. `fff-core/` fuzzy-matches directory paths instead of becoming a
+/// `PathSegment("fff-core")` constraint with an empty query). Extension and
+/// filename constraints are also disabled since they don't apply to directories.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DirSearchConfig;
+
 impl ParserConfig for AiGrepConfig {
     fn enable_path_segments(&self) -> bool {
         true
@@ -230,5 +239,37 @@ impl ParserConfig for AiGrepConfig {
         } else {
             None
         }
+    }
+}
+
+impl ParserConfig for DirSearchConfig {
+    fn enable_path_segments(&self) -> bool {
+        false
+    }
+
+    fn enable_extension(&self) -> bool {
+        false
+    }
+
+    fn enable_type_filter(&self) -> bool {
+        false
+    }
+
+    fn enable_git_status(&self) -> bool {
+        false
+    }
+}
+
+/// Configuration for mixed (files + directories) search.
+///
+/// Like `DirSearchConfig`, disables path segment parsing so trailing `/`
+/// triggers dirs-only mode instead of becoming a constraint. Keeps git
+/// status and extension filters enabled since files are part of the results.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MixedSearchConfig;
+
+impl ParserConfig for MixedSearchConfig {
+    fn enable_path_segments(&self) -> bool {
+        false
     }
 }

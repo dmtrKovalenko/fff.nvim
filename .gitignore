@@ -15,6 +15,7 @@ result
 # all the perf like utility files
 *.data
 node_modules/
+crates/fff-notify-debouncer-full/
 
 dist/
 scripts/benchmark-results/

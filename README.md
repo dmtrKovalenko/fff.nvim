@@ -219,6 +219,7 @@ require('fff').setup({
     max_results = 100,
     max_threads = 4,
     lazy_sync = true, -- set to false if you want file indexing to start on open
+    prompt_vim_mode = false, -- set to true to enable vim-mode in the prompt: <Esc> leaves insert for normal mode bindings (also allows <leader>p or <leader>l to jump around) the second <Esc> closes the picker
     layout = {
       height = 0.8,
       width = 0.8,
@@ -236,6 +237,7 @@ require('fff').setup({
       -- 'middle': always uses dots (a/./b, a/../b, a/.../b)
       -- 'end': truncates from the end (home/user/projects)
       path_shorten_strategy = 'middle_number',
+      anchor = 'center', -- picker placement: 'center', 'top_left', 'top', 'top_right', 'left', 'right', 'bottom_left', 'bottom', 'bottom_right'
     },
     preview = {
       enabled = true,

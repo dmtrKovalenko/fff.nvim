@@ -33,7 +33,8 @@ fn modified_file_findable_via_overlay() {
         shared_frecency.clone(),
         FilePickerOptions {
             base_path: base.to_string_lossy().to_string(),
-            warmup_mmap_cache: true,
+            enable_mmap_cache: true,
+            enable_content_indexing: true,
             mode: FFFMode::Neovim,
             ..Default::default()
         },
@@ -182,7 +183,8 @@ fn deleted_file_excluded_via_overlay() {
         shared_frecency.clone(),
         FilePickerOptions {
             base_path: base.to_string_lossy().to_string(),
-            warmup_mmap_cache: true,
+            enable_mmap_cache: true,
+            enable_content_indexing: true,
             mode: FFFMode::Neovim,
             ..Default::default()
         },
@@ -250,7 +252,8 @@ fn new_file_findable_after_add() {
         shared_frecency.clone(),
         FilePickerOptions {
             base_path: base.to_string_lossy().to_string(),
-            warmup_mmap_cache: true,
+            enable_mmap_cache: true,
+            enable_content_indexing: true,
             mode: FFFMode::Neovim,
             ..Default::default()
         },
@@ -283,7 +286,7 @@ fn new_file_findable_after_add() {
         let overflow = picker.get_overflow_files();
         assert_eq!(overflow.len(), 1, "Should have 1 overflow file");
         assert!(
-            overflow[0].as_path().ends_with("newcomer.txt"),
+            overflow[0].relative_path(picker).ends_with("newcomer.txt"),
             "Overflow file should be newcomer.txt"
         );
     }
@@ -319,7 +322,8 @@ fn modified_file_findable_via_regex_overlay() {
         shared_frecency.clone(),
         FilePickerOptions {
             base_path: base.to_string_lossy().to_string(),
-            warmup_mmap_cache: true,
+            enable_mmap_cache: true,
+            enable_content_indexing: true,
             mode: FFFMode::Neovim,
             ..Default::default()
         },
@@ -384,6 +388,7 @@ fn grep_opts() -> GrepSearchOptions {
         after_context: 0,
         classify_definitions: false,
         trim_whitespace: false,
+        abort_signal: None,
     }
 }
 

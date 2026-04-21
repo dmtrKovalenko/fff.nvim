@@ -1,6 +1,6 @@
 [package]
 name = "fff-nvim"
-version = "0.5.2"
+version = "0.6.1"
 edition = "2024"
 
 [lib]
@@ -60,10 +60,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff = { package = "fff-search", path = "../fff-core", version = "0.5.1", features = [
+fff = { package = "fff-search", path = "../fff-core", version = "0.6.1", features = [
 	"mimalloc-collect",
 ] }
-fff-query-parser = { path = "../fff-query-parser", version = "0.5.2" }
+fff-query-parser = { path = "../fff-query-parser", version = "0.6.1" }
 
 # External dependencies
 blake3 = "1.8.2"
@@ -91,6 +91,10 @@ tempfile = "3.8"
 
 [[bench]]
 name = "indexing_and_search"
+harness = false
+
+[[bench]]
+name = "grep_bench"
 harness = false
 
 [[bench]]

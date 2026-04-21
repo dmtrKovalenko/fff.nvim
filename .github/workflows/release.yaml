@@ -571,3 +571,16 @@ jobs:
           npm install
           npm run build
           npm publish --tag "$TAG" --access public || echo "Failed to publish @ff-labs/fff-node (may already exist)"
+
+      - name: Publish pi-fff package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.npm_tag }}"
+
+          echo "Publishing @ff-labs/pi-fff@${VERSION} with tag ${TAG}..."
+          make set-npm-version PKG=packages/pi-fff VERSION="$VERSION"
+
+          cd packages/pi-fff
+          npm publish --tag "$TAG" --access public || echo "Failed to publish @ff-labs/pi-fff (may already exist)"

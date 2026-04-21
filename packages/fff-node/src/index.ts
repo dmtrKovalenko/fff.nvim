@@ -54,6 +54,9 @@ export {
 
 export type {
   DbHealth,
+  DirItem,
+  DirSearchOptions,
+  DirSearchResult,
   FileItem,
   GrepCursor,
   GrepMatch,
@@ -63,6 +66,8 @@ export type {
   HealthCheck,
   InitOptions,
   Location,
+  MixedItem,
+  MixedSearchResult,
   MultiGrepOptions,
   Result,
   ScanProgress,

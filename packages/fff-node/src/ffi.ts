@@ -46,10 +46,14 @@ import {
 } from "ffi-rs";
 import { findBinary } from "./binary.js";
 import type {
+  DirItem,
+  DirSearchResult,
   FileItem,
   GrepMatch,
   GrepResult,
   Location,
+  MixedItem,
+  MixedSearchResult,
   Result,
   Score,
   SearchResult,
@@ -326,7 +330,9 @@ export function ffiCreate(
   frecencyDbPath: string,
   historyDbPath: string,
   useUnsafeNoLock: boolean,
-  warmupMmapCache: boolean,
+  enableMmapCache: boolean,
+  enableContentIndexing: boolean,
+  watch: boolean,
   aiMode: boolean,
 ): Result<NativeHandle> {
   loadLibrary();
@@ -338,10 +344,21 @@ export function ffiCreate(
       DataType.String, // frecency_db_path
       DataType.String, // history_db_path
       DataType.Boolean, // use_unsafe_no_lock
-      DataType.Boolean, // warmup_mmap_cache
+      DataType.Boolean, // enable_mmap_cache
+      DataType.Boolean, // enable_content_indexing
+      DataType.Boolean, // watch
       DataType.Boolean, // ai_mode
     ],
-    [basePath, frecencyDbPath, historyDbPath, useUnsafeNoLock, warmupMmapCache, aiMode],
+    [
+      basePath,
+      frecencyDbPath,
+      historyDbPath,
+      useUnsafeNoLock,
+      enableMmapCache,
+      enableContentIndexing,
+      watch,
+      aiMode,
+    ],
   );
 
   const success = structData.success !== 0;
@@ -381,7 +398,6 @@ export function ffiDestroy(handle: NativeHandle): void {
 // ---------------------------------------------------------------------------
 
 const FFF_FILE_ITEM_STRUCT = {
-  path: DataType.External,
   relative_path: DataType.External,
   file_name: DataType.External,
   git_status: DataType.External,
@@ -394,7 +410,6 @@ const FFF_FILE_ITEM_STRUCT = {
 };
 
 interface FffFileItemRaw {
-  path: JsExternal;
   relative_path: JsExternal;
   file_name: JsExternal;
   git_status: JsExternal;
@@ -459,9 +474,94 @@ interface FffSearchResultRaw {
   location_end_col: number;
 }
 
+// FffDirItem struct (#[repr(C)]): char* (8) + char* (8) + i32 (4) + 4 padding = 24 bytes
+const FFF_DIR_ITEM_STRUCT = {
+  relative_path: DataType.External,
+  dir_name: DataType.External,
+  max_access_frecency: DataType.I32,
+};
+
+interface FffDirItemRaw {
+  relative_path: JsExternal;
+  dir_name: JsExternal;
+  max_access_frecency: number;
+}
+
+const FFF_DIR_SEARCH_RESULT_STRUCT = {
+  items: DataType.External,
+  scores: DataType.External,
+  count: DataType.U32,
+  total_matched: DataType.U32,
+  total_dirs: DataType.U32,
+};
+
+interface FffDirSearchResultRaw {
+  items: JsExternal;
+  scores: JsExternal;
+  count: number;
+  total_matched: number;
+  total_dirs: number;
+}
+
+// FffMixedItem struct (#[repr(C)]): u8 (1) + 7 padding + char* (8) + char* (8) + char* (8)
+//   + u64 (8) + u64 (8) + i64 (8) + i64 (8) + i64 (8) + bool (1) + 7 padding = 80 bytes
+const FFF_MIXED_ITEM_STRUCT = {
+  item_type: DataType.U8,
+  relative_path: DataType.External,
+  display_name: DataType.External,
+  git_status: DataType.External,
+  size: DataType.U64,
+  modified: DataType.U64,
+  access_frecency_score: DataType.I64,
+  modification_frecency_score: DataType.I64,
+  total_frecency_score: DataType.I64,
+  is_binary: DataType.U8,
+};
+
+interface FffMixedItemRaw {
+  item_type: number;
+  relative_path: JsExternal;
+  display_name: JsExternal;
+  git_status: JsExternal;
+  size: number;
+  modified: number;
+  access_frecency_score: number;
+  modification_frecency_score: number;
+  total_frecency_score: number;
+  is_binary: number;
+}
+
+const FFF_MIXED_SEARCH_RESULT_STRUCT = {
+  items: DataType.External,
+  scores: DataType.External,
+  count: DataType.U32,
+  total_matched: DataType.U32,
+  total_files: DataType.U32,
+  total_dirs: DataType.U32,
+  // FffLocation inlined (flattened)
+  location_tag: DataType.U8,
+  location_line: DataType.I32,
+  location_col: DataType.I32,
+  location_end_line: DataType.I32,
+  location_end_col: DataType.I32,
+};
+
+interface FffMixedSearchResultRaw {
+  items: JsExternal;
+  scores: JsExternal;
+  count: number;
+  total_matched: number;
+  total_files: number;
+  total_dirs: number;
+  location_tag: number;
+  location_line: number;
+  location_col: number;
+  location_end_line: number;
+  location_end_col: number;
+}
+
 // FffGrepMatch (144 bytes) — ordered by alignment: ptrs, u64s, u32s, u16, bools
 const FFF_GREP_MATCH_STRUCT = {
-  path: DataType.External,
   relative_path: DataType.External,
   file_name: DataType.External,
   git_status: DataType.External,
@@ -487,7 +587,6 @@ const FFF_GREP_MATCH_STRUCT = {
 };
 
 interface FffGrepMatchRaw {
-  path: JsExternal;
   relative_path: JsExternal;
   file_name: JsExternal;
   git_status: JsExternal;
@@ -550,7 +649,6 @@ interface FffMatchRangeRaw {
 
 function readFileItemFromRaw(raw: FffFileItemRaw): FileItem {
   return {
-    path: readCString(raw.path) ?? "",
     relativePath: readCString(raw.relative_path) ?? "",
     fileName: readCString(raw.file_name) ?? "",
     gitStatus: readCString(raw.git_status) ?? "",
@@ -574,6 +672,42 @@ function readScoreFromRaw(raw: FffScoreRaw): Score {
     comboMatchBoost: raw.combo_match_boost,
     exactMatch: raw.exact_match !== 0,
     matchType: readCString(raw.match_type) ?? "",
+  };
+}
+
+function readDirItemFromRaw(raw: FffDirItemRaw): DirItem {
+  return {
+    relativePath: readCString(raw.relative_path) ?? "",
+    dirName: readCString(raw.dir_name) ?? "",
+    maxAccessFrecency: raw.max_access_frecency,
+  };
+}
+
+function readMixedItemFromRaw(raw: FffMixedItemRaw): MixedItem {
+  if (raw.item_type === 1) {
+    // Directory
+    return {
+      type: "directory",
+      item: {
+        relativePath: readCString(raw.relative_path) ?? "",
+        dirName: readCString(raw.display_name) ?? "",
+        maxAccessFrecency: Number(raw.access_frecency_score),
+      },
+    };
+  }
+  // File (item_type === 0)
+  return {
+    type: "file",
+    item: {
+      relativePath: readCString(raw.relative_path) ?? "",
+      fileName: readCString(raw.display_name) ?? "",
+      gitStatus: readCString(raw.git_status) ?? "",
+      size: Number(raw.size),
+      modified: Number(raw.modified),
+      accessFrecencyScore: Number(raw.access_frecency_score),
+      modificationFrecencyScore: Number(raw.modification_frecency_score),
+      totalFrecencyScore: Number(raw.total_frecency_score),
+    },
   };
 }
 
@@ -647,7 +781,6 @@ function readGrepMatchFromRaw(raw: FffGrepMatchRaw): GrepMatch {
   }
 
   const match: GrepMatch = {
-    path: readCString(raw.path) ?? "",
     relativePath: readCString(raw.relative_path) ?? "",
     fileName: readCString(raw.file_name) ?? "",
     gitStatus: readCString(raw.git_status) ?? "",
@@ -839,6 +972,178 @@ function parseSearchResult(rawPtr: JsExternal): Result<SearchResult> {
 }
 
 /**
+ * Parse an FffDirSearchResult from `FffResult.handle`, then free native memory.
+ */
+function parseDirSearchResult(rawPtr: JsExternal): Result<DirSearchResult> {
+  loadLibrary();
+
+  // Read FffResult envelope
+  const [envelope] = restorePointer({
+    retType: [FFF_RESULT_STRUCT],
+    paramsValue: wrapPointer([rawPtr]),
+  }) as unknown as [FffResultRaw];
+
+  const success = envelope.success !== 0;
+
+  if (!success) {
+    const errorMsg = readCString(envelope.error) || "Unknown error";
+    freeResult(rawPtr);
+    return err(errorMsg);
+  }
+
+  const handlePtr = envelope.handle;
+  // Free the FffResult envelope (does NOT free handle)
+  freeResult(rawPtr);
+
+  if (isNullPointer(handlePtr)) {
+    return err("fff_search_directories returned null search result");
+  }
+
+  // Read FffDirSearchResult struct
+  const [sr] = restorePointer({
+    retType: [FFF_DIR_SEARCH_RESULT_STRUCT],
+    paramsValue: wrapPointer([handlePtr]),
+  }) as unknown as [FffDirSearchResultRaw];
+
+  const count = sr.count;
+
+  // Read items and scores via accessor functions
+  const items: DirItem[] = [];
+  const scores: Score[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const rawItem = callAccessor<FffDirItemRaw>(
+      "fff_dir_search_result_get_item",
+      handlePtr,
+      i,
+      FFF_DIR_ITEM_STRUCT,
+    );
+    items.push(readDirItemFromRaw(rawItem));
+
+    const rawScore = callAccessor<FffScoreRaw>(
+      "fff_dir_search_result_get_score",
+      handlePtr,
+      i,
+      FFF_SCORE_STRUCT,
+    );
+    scores.push(readScoreFromRaw(rawScore));
+  }
+
+  // Free native dir search result
+  load({
+    library: LIBRARY_KEY,
+    funcName: "fff_free_dir_search_result",
+    retType: DataType.Void,
+    paramsType: [DataType.External],
+    paramsValue: [handlePtr],
+  });
+
+  return {
+    ok: true,
+    value: {
+      items,
+      scores,
+      totalMatched: sr.total_matched,
+      totalDirs: sr.total_dirs,
+    },
+  };
+}
+
+/**
+ * Parse an FffMixedSearchResult from `FffResult.handle`, then free native memory.
+ */
+function parseMixedSearchResult(rawPtr: JsExternal): Result<MixedSearchResult> {
+  loadLibrary();
+
+  // Read FffResult envelope
+  const [envelope] = restorePointer({
+    retType: [FFF_RESULT_STRUCT],
+    paramsValue: wrapPointer([rawPtr]),
+  }) as unknown as [FffResultRaw];
+
+  const success = envelope.success !== 0;
+
+  if (!success) {
+    const errorMsg = readCString(envelope.error) || "Unknown error";
+    freeResult(rawPtr);
+    return err(errorMsg);
+  }
+
+  const handlePtr = envelope.handle;
+  // Free the FffResult envelope (does NOT free handle)
+  freeResult(rawPtr);
+
+  if (isNullPointer(handlePtr)) {
+    return err("fff_search_mixed returned null search result");
+  }
+
+  // Read FffMixedSearchResult struct
+  const [sr] = restorePointer({
+    retType: [FFF_MIXED_SEARCH_RESULT_STRUCT],
+    paramsValue: wrapPointer([handlePtr]),
+  }) as unknown as [FffMixedSearchResultRaw];
+
+  const count = sr.count;
+
+  // Read location
+  let location: Location | undefined;
+  if (sr.location_tag === 1) {
+    location = { type: "line", line: sr.location_line };
+  } else if (sr.location_tag === 2) {
+    location = { type: "position", line: sr.location_line, col: sr.location_col };
+  } else if (sr.location_tag === 3) {
+    location = {
+      type: "range",
+      start: { line: sr.location_line, col: sr.location_col },
+      end: { line: sr.location_end_line, col: sr.location_end_col },
+    };
+  }
+
+  // Read items and scores via accessor functions
+  const items: MixedItem[] = [];
+  const scores: Score[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const rawItem = callAccessor<FffMixedItemRaw>(
+      "fff_mixed_search_result_get_item",
+      handlePtr,
+      i,
+      FFF_MIXED_ITEM_STRUCT,
+    );
+    items.push(readMixedItemFromRaw(rawItem));
+
+    const rawScore = callAccessor<FffScoreRaw>(
+      "fff_mixed_search_result_get_score",
+      handlePtr,
+      i,
+      FFF_SCORE_STRUCT,
+    );
+    scores.push(readScoreFromRaw(rawScore));
+  }
+
+  // Free native mixed search result
+  load({
+    library: LIBRARY_KEY,
+    funcName: "fff_free_mixed_search_result",
+    retType: DataType.Void,
+    paramsType: [DataType.External],
+    paramsValue: [handlePtr],
+  });
+
+  const result: MixedSearchResult = {
+    items,
+    scores,
+    totalMatched: sr.total_matched,
+    totalFiles: sr.total_files,
+    totalDirs: sr.total_dirs,
+  };
+  if (location) {
+    result.location = location;
+  }
+  return { ok: true, value: result };
+}
+
+/**
  * Perform fuzzy search.
  */
 export function ffiSearch(
@@ -881,6 +1186,83 @@ export function ffiSearch(
   }) as JsExternal;
 
   return parseSearchResult(rawPtr);
+}
+
+/**
+ * Perform fuzzy directory search.
+ */
+export function ffiSearchDirectories(
+  handle: NativeHandle,
+  query: string,
+  currentFile: string | null,
+  maxThreads: number,
+  pageIndex: number,
+  pageSize: number,
+): Result<DirSearchResult> {
+  loadLibrary();
+
+  const rawPtr = load({
+    library: LIBRARY_KEY,
+    funcName: "fff_search_directories",
+    retType: DataType.External,
+    paramsType: [
+      DataType.External, // handle
+      DataType.String, // query
+      DataType.String, // current_file
+      DataType.U32, // max_threads
+      DataType.U32, // page_index
+      DataType.U32, // page_size
+    ],
+    paramsValue: [handle, query, currentFile ?? "", maxThreads, pageIndex, pageSize],
+    freeResultMemory: false,
+  }) as JsExternal;
+
+  return parseDirSearchResult(rawPtr);
+}
+
+/**
+ * Perform mixed (files + directories) fuzzy search.
+ */
+export function ffiSearchMixed(
+  handle: NativeHandle,
+  query: string,
+  currentFile: string,
+  maxThreads: number,
+  pageIndex: number,
+  pageSize: number,
+  comboBoostMultiplier: number,
+  minComboCount: number,
+): Result<MixedSearchResult> {
+  loadLibrary();
+
+  const rawPtr = load({
+    library: LIBRARY_KEY,
+    funcName: "fff_search_mixed",
+    retType: DataType.External,
+    paramsType: [
+      DataType.External, // handle
+      DataType.String, // query
+      DataType.String, // current_file
+      DataType.U32, // max_threads
+      DataType.U32, // page_index
+      DataType.U32, // page_size
+      DataType.I32, // combo_boost_multiplier
+      DataType.U32, // min_combo_count
+    ],
+    paramsValue: [
+      handle,
+      query,
+      currentFile,
+      maxThreads,
+      pageIndex,
+      pageSize,
+      comboBoostMultiplier,
+      minComboCount,
+    ],
+    freeResultMemory: false,
+  }) as JsExternal;
+
+  return parseMixedSearchResult(rawPtr);
 }
 
 /**
@@ -1016,6 +1398,13 @@ export function ffiIsScanning(handle: NativeHandle): boolean {
     paramsType: [DataType.External],
     paramsValue: [handle],
   }) as boolean;
+}
+
+/**
+ * Get the base path of the file picker.
+ */
+export function ffiGetBasePath(handle: NativeHandle): Result<string | null> {
+  return callStringResult("fff_get_base_path", [DataType.External], [handle]);
 }
 
 // FffScanProgress struct definition
