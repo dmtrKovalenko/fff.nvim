@@ -58,16 +58,32 @@ pub fn path_ends_with_suffix(path: &str, suffix: &str) -> bool {
     }
 
     let start = path.len() - suffix.len();
-    let Some(path_suffix) = path.get(start..) else {
-        return false;
-    };
 
-    if !path_suffix.eq_ignore_ascii_case(suffix) {
+    // Must land on a char boundary — multi-byte UTF-8 can make
+    // `path.len() - suffix.len()` land inside a char.
+    if !path.is_char_boundary(start) {
         return false;
     }
 
-    // Exact match, or the character before is /
-    start == 0 || path_bytes[start - 1] == b'/'
+    if !path[start..].eq_ignore_ascii_case(suffix) {
+        return false;
+    }
+
+    // Exact match, or the character before is '/'.
+    // `start` is a char boundary but `start - 1` may be inside a multi-byte
+    // char, so scan backward to find the preceding ASCII byte.
+    if start == 0 {
+        return true;
+    }
+    let mut i = start;
+    while i > 0 {
+        i -= 1;
+        // ASCII bytes (0..128) are single-byte UTF-8 code units
+        if path_bytes[i] < 128 {
+            return path_bytes[i] == b'/';
+        }
+    }
+    false
 }
 
 #[inline]
@@ -78,6 +94,11 @@ pub fn file_has_extension(file_name: &str, ext: &str) -> bool {
         return false;
     }
     let start = name_bytes.len() - ext_bytes.len() - 1;
+    // `.` is ASCII (single byte), so `start` must be a char boundary.
+    // If it lands inside a multi-byte char the extension can't match.
+    if start > 0 && !file_name.is_char_boundary(start) {
+        return false;
+    }
     name_bytes.get(start) == Some(&b'.') && name_bytes[start + 1..].eq_ignore_ascii_case(ext_bytes)
 }
 
@@ -91,6 +112,7 @@ pub fn path_contains_segment(path: &str, segment: &str) -> bool {
     // Check segment/ at start of path
     if path_bytes.len() > segment_len
         && path_bytes.get(segment_len) == Some(&b'/')
+        && path.is_char_boundary(segment_len)
         && path_bytes[..segment_len].eq_ignore_ascii_case(segment_bytes)
     {
         return true;
@@ -107,6 +129,8 @@ pub fn path_contains_segment(path: &str, segment: &str) -> bool {
             let end = start + segment_len;
             if end < path_bytes.len()
                 && path_bytes[end] == b'/'
+                && path.is_char_boundary(start)
+                && path.is_char_boundary(end)
                 && path_bytes[start..end].eq_ignore_ascii_case(segment_bytes)
             {
                 return true;
@@ -416,18 +440,21 @@ fn match_glob_pattern(pattern: &str, paths: &[&str]) -> AHashSet<usize> {
 mod tests {
     use super::*;
 
+    #[derive(Clone)]
     struct TestItem {
         relative_path: &'static str,
         file_name: &'static str,
     }
 
     impl Constrainable for TestItem {
-        fn relative_path(&self) -> &str {
-            self.relative_path
+        fn write_file_name(&self, _arena: ArenaPtr, out: &mut String) {
+            out.clear();
+            out.push_str(self.file_name);
         }
 
-        fn file_name(&self) -> &str {
-            self.file_name
+        fn write_relative_path(&self, _arena: ArenaPtr, out: &mut String) {
+            out.clear();
+            out.push_str(self.relative_path);
         }
 
         fn git_status(&self) -> Option<git2::Status> {
@@ -550,56 +577,34 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn test_path_ends_with_suffix_does_not_panic_on_unicode_suffix() {
         assert!(!path_ends_with_suffix("유니코드_파일_테스트.csv", "트.c"));
         assert!(path_ends_with_suffix(
             "data/유니코드_파일_테스트.csv",
             "유니코드_파일_테스트.csv"
-=======
-    fn test_path_ends_with_suffix_unicode_apostrophe_mismatch() {
-        assert!(!path_ends_with_suffix(
-            "dir/\u{2019}bar/file.txt",
-            "'bar/file.txt"
->>>>>>> origin/main
         ));
     }
 
     #[test]
-<<<<<<< HEAD
-    fn test_path_contains_segment_does_not_panic_on_unicode_segment() {
-        assert!(!path_contains_segment("문서/notes.txt", "문x"));
-        assert!(path_contains_segment("프로젝트/문서/notes.txt", "문서"));
+    fn test_path_ends_with_suffix_unicode_apostrophe_mismatch() {
+        assert!(!path_ends_with_suffix(
+            "dir/\u{2019}bar/file.txt",
+            "'bar/file.txt"
+        ));
     }
 
     #[test]
-    fn test_apply_constraints_file_path_with_unicode_suffix() {
-        let item = TestItem {
-            relative_path: "data/유니코드_파일_테스트.csv",
-            file_name: "유니코드_파일_테스트.csv",
-        };
-
-        let exact = [Constraint::FilePath("유니코드_파일_테스트.csv")];
-        let mismatch = [Constraint::FilePath("트.c")];
-
-        let exact_items = [item];
-        let exact_matches = apply_constraints(&exact_items, &exact).expect("constraints applied");
-        assert_eq!(exact_matches.len(), 1);
-
-        let mismatch_item = TestItem {
-            relative_path: "data/유니코드_파일_테스트.csv",
-            file_name: "유니코드_파일_테스트.csv",
-        };
-        let mismatch_items = [mismatch_item];
-        let mismatch_matches =
-            apply_constraints(&mismatch_items, &mismatch).expect("constraints applied");
-        assert!(mismatch_matches.is_empty());
-=======
     fn test_path_ends_with_suffix_unicode_space_mismatch() {
         assert!(!path_ends_with_suffix(
             "dir/\u{202f}am/file.txt",
             " am/file.txt"
         ));
+    }
+
+    #[test]
+    fn test_path_contains_segment_does_not_panic_on_unicode_segment() {
+        assert!(!path_contains_segment("문서/notes.txt", "문x"));
+        assert!(path_contains_segment("프로젝트/문서/notes.txt", "문서"));
     }
 
     #[test]
@@ -613,6 +618,62 @@ mod tests {
     #[test]
     fn test_file_has_extension_unicode_no_panic() {
         assert!(!file_has_extension("cat\u{00e9}.rs", "s"));
->>>>>>> origin/main
+    }
+
+    #[test]
+    fn test_file_has_extension_unicode_filename() {
+        assert!(file_has_extension("운영-가이드.md", "md"));
+        assert!(file_has_extension("테스트.csv", "csv"));
+        assert!(!file_has_extension("테스트.csv", "md"));
+    }
+
+    #[test]
+    fn test_apply_constraints_file_path_with_unicode_suffix() {
+        let arena_ptr = ArenaPtr(std::ptr::null());
+
+        let item = TestItem {
+            relative_path: "data/유니코드_파일_테스트.csv",
+            file_name: "유니코드_파일_테스트.csv",
+        };
+
+        let exact = [Constraint::FilePath("유니코드_파일_테스트.csv")];
+        let mismatch = [Constraint::FilePath("트.c")];
+
+        let exact_items = [item.clone()];
+        let exact_matches =
+            apply_constraints(&exact_items, &exact, arena_ptr).expect("constraints applied");
+        assert_eq!(exact_matches.len(), 1);
+
+        let mismatch_items = [item];
+        let mismatch_matches =
+            apply_constraints(&mismatch_items, &mismatch, arena_ptr).expect("constraints applied");
+        assert!(mismatch_matches.is_empty());
+    }
+
+    #[test]
+    fn test_unicode_path_no_panic_real_korean_cases() {
+        // Real Korean paths that caused panics
+        let path1 = "Downloads/(커리큘럼) hermes agent_정승현님 - 1차 커리큘럼 (강사님 작성).csv";
+        let path2 = "hermes-agent-lecture-materials/세부_커리큘럼_최종.csv";
+        let path3 = "projects/fastcampus-hermes-agent-curriculum/chapters/part-02-Hermes-설치-및-기본-사용/section-02-doctor로-설치-상태-검증/research/03-fix가-자동-수정하는-것과-못하는-것.md";
+
+        // These must not panic regardless of segment/suffix used
+        assert!(!path_contains_segment(path1, "작성"));
+        assert!(!path_ends_with_suffix(path1, "작성.csv"));
+        assert!(!path_contains_segment(path2, "최종"));
+        assert!(!path_ends_with_suffix(path2, "최종.csv"));
+        assert!(!path_contains_segment(path3, "수정"));
+        assert!(!path_ends_with_suffix(path3, "것.md"));
+
+        // Positive cases should still work
+        assert!(path_contains_segment(
+            path2,
+            "hermes-agent-lecture-materials"
+        ));
+        assert!(path_ends_with_suffix(
+            path1,
+            "(커리큘럼) hermes agent_정승현님 - 1차 커리큘럼 (강사님 작성).csv"
+        ));
+        assert!(path_ends_with_suffix(path2, "세부_커리큘럼_최종.csv"));
     }
 }
