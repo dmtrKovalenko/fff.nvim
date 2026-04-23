@@ -159,8 +159,9 @@ function M.search_and_show(query)
 
   for i, file in ipairs(files) do
     if i <= 15 then
-      local icon = file.extension ~= '' and '.' .. file.extension or '📄'
-      local frecency = file.frecency_score > 0 and ' ⭐' .. file.frecency_score or ''
+      local file_extension = vim.fn.fnamemodify(file.name, ':e')
+      local icon = file_extension ~= '' and '.' .. file_extension or '📄'
+      local frecency = file.total_frecency_score > 0 and ' ⭐' .. file.total_frecency_score or ''
       print('  ' .. i .. '. ' .. icon .. ' ' .. file.relative_path .. frecency)
     end
   end
