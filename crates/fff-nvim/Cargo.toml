@@ -1,6 +1,6 @@
 [package]
 name = "fff-nvim"
-version = "0.6.1"
+version = "0.6.4"
 edition = "2024"
 
 [lib]
@@ -60,10 +60,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff = { package = "fff-search", path = "../fff-core", version = "0.6.1", features = [
+fff = { package = "fff-search", path = "../fff-core", version = "0.6.4", features = [
 	"mimalloc-collect",
 ] }
-fff-query-parser = { path = "../fff-query-parser", version = "0.6.1" }
+fff-query-parser = { path = "../fff-query-parser", version = "0.6.4" }
 
 # External dependencies
 blake3 = "1.8.2"
@@ -74,7 +74,7 @@ git2 = { workspace = true }
 glidesort = "0.1"
 heed = "0.22.0"
 ignore = "0.4.22"
-mimalloc = "0.1.47"
+mimalloc = { version = "0.1.47", features = ["local_dynamic_tls"] }
 mlua = { version = "0.11.1", features = ["module", "luajit"] }
 neo_frizbee = { workspace = true }
 notify = "8.1.0"

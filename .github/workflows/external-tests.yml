@@ -30,11 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
-
+      - uses: actions/setup-node@v6
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1.15.4
@@ -96,21 +96,19 @@ jobs:
 
       - name: Run bun tests
         shell: bash
-        if: ${{ matrix.os == 'macos-latest' }}
+        if: ${{ matrix.os != 'windows-latest' }}
         run: make test-bun
 
       - name: Install Node.js
         if: ${{ matrix.os != 'ubuntu-latest' }}
         uses: actions/setup-node@v6
         with:
-          node-version: "24"
+          node-version: "25"
 
-      - name: Install node deps
-        if: ${{ matrix.os != 'ubuntu-latest' }}
+      - name: Install node dependencies
         shell: bash
-        run: npm install
+        run: cd packages/fff-node && npm install
 
       - name: Run node tests
-        if: ${{ matrix.os != 'ubuntu-latest' }}
         shell: bash
         run: make test-node

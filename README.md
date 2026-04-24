@@ -1,26 +1,16 @@
-<p align="center">
-  <h1 align="center">FFF</h1>
+<img alt="FFF" src="./assets/logo-orange.png" width="300">
+
+<p>
+  <i>A file search toolkit for humans and AI agents. Really fast.</i>
 </p>
 
-<p align="center">
-  <a href="#mcp"><strong>AI agents (MCP)</strong></a> &nbsp;&nbsp;|&nbsp;&nbsp; <a href="#neovim-guide"><strong>Neovim users</strong></a>
-</p>
+Typo-resistant path and content search, frecency-ranked file access, a background watcher, and a lightweight in-memory content index. Way faster than CLIs like ripgrep and fzf in any long-running process that searches more than once.
 
-<p align="center">
-  <i>A fast file search for your AI and neovim, with memory built-in</i>
-</p>
-
-<p align="center" style="text-decoration: none; border: none;">
-	<a href="https://github.com/dmtrKovalenko/fff.nvim/stargazers" style="text-decoration: none">
-		<img alt="Stars" src="https://img.shields.io/github/stars/dmtrKovalenko/fff.nvim?style=for-the-badge&logo=starship&color=C9CBFF&logoColor=D9E0EE&labelColor=302D41"></a>
-	<a href="https://github.com/dmtrKovalenko/fff.nvim/issues" style="text-decoration: none">
-		<img alt="Issues" src="https://img.shields.io/github/issues/dmtrKovalenko/fff.nvim?style=for-the-badge&logo=bilibili&color=F5E0DC&logoColor=D9E0EE&labelColor=302D41"></a>
-	<a href="https://github.com/dmtrKovalenko/fff.nvim/contributors" style="text-decoration: none"> <img alt="Contributors" src="https://img.shields.io/github/contributors/dmtrKovalenko/fff.nvim?color=%23DDB6F2&label=CONTRIBUTORS&logo=git&style=for-the-badge&logoColor=D9E0EE&labelColor=302D41"/></a>
-</p>
+Originally started as [Neovim plugin](#neovim-plugin) people loved, but it turned out that plenty of AI harnesses and code editors need the same thing: accurate, fast file search as a library. That is what fff is.
 
 ---
 
-**FFF** stands for ~~freakin fast fuzzy file finder~~ (pick 3) and it is an opinionated fuzzy file picker for your AI agent and Neovim. Just for file search, but we do the file search really fff well.
+Pick what you are interested in:
 
 ## Why This Fork?
 
@@ -41,9 +31,10 @@ This fork extends [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.
 
 ---
 
-## Features
-
-FFF is a tool for grepping, fuzzy file matching, globbing, and multigrepping with a strong focus on performance and useful search results. For humans - provides an unbelievable typo-resistant experience, for AI agents - implements the fastest file search with additional free memory suggesting the best search results based on various factors like frecency, git status, file size, definition matches, and more.
+<details id="mcp-server">
+<summary>
+<h2>MCP server</h2>
+</summary>
 
 - Works out of the box with no additional configuration
 - [Typo resistant fuzzy search](https://github.com/saghen/frizbee)
@@ -51,41 +42,96 @@ FFF is a tool for grepping, fuzzy file matching, globbing, and multigrepping wit
 - Separate file index maintained by a dedicated backend allows <10 milliseconds search time for 50k files codebase
 - **Buffer picker** - quickly switch between open buffers (similar to fzf.vim's `:Buffers`)
 - **Colors picker** - browse and switch colorschemes with live preview (similar to fzf.vim's `:Colors`)
+- **Git files picker** - browse files with git status (similar to fzf.vim's `:GFiles?`)
 - Display images in previews (for now requires snacks.nvim)
 - Smart in a plenty of different ways hopefully helpful for your workflow
 - This plugin initializes itself lazily by default
 
-## MCP
+Works with Claude Code, Codex, OpenCode, Cursor, Cline, and any MCP-capable client. Fewer grep roundtrips, less wasted context, faster answers.
 
-FFF is an amazing way to reduce the time and tokens by giving your AI agent a bit of memory built-in to their file search tools. It makes your AI harness to find the code faster and spend less tokens by doing less roundtrips and reading less useless files.
+![Benchmark chart comparing FFF against the built-in AI file-search tools](./chart.png)
 
-![Chart showing the superiority of fff.nvim over builtin claude code tools](./chart.png)
-
-You can install FFF as a dependency for your AI agent using a simple bash script:
+### One-line install
 
 ```bash
 curl -L https://dmtrkovalenko.dev/install-fff-mcp.sh | bash
 ```
 
-> The installation script is here [./install-mcp.sh](./install-mcp.sh) if you want to review it before running.
+The script lives at [`install-mcp.sh`](./install-mcp.sh) if you want to read it first.
 
-It will print out the instructions on how to connect it to your `Claude Code`, `Codex`, `OpenCode`, etc. Once you have it connected just ask your agent to "use fff".
-Here is an example addition to `CLAUDE.md` that works perfectly:
+It prints the exact wiring instructions for your client. Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
 
-```sh
-# CLAUDE.md
-For any file search or grep in the current git indexed directory use fff tools
+### Recommended agent prompt
+
+Drop this into your project's `CLAUDE.md` or equivalent:
+
+```markdown
+For any file search or grep in the current git-indexed directory, use fff tools.
 ```
 
-## Neovim guide
+### What changes
 
-Here is some demo on the linux repository (100k files, 8GB) but you better fill it yourself and see the magic
+- Frecency memory. Files you actually open rank higher next time. Warm-up from git touch history runs automatically.
+- Definition-first hinting. Lines that look like code definitions are classified on the Rust side, no regex overhead in your prompt.
+- Smart-case with auto-fuzzy fallback. `IsOffTheRecord` finds snake_case variants; zero-match queries retry as fuzzy and surface the best approximate hits.
+- Git-aware annotations. Modified, untracked, and staged files are tagged so the agent reaches for what you are actively changing.
+
+Source: [`crates/fff-mcp/`](./crates/fff-mcp/).
+
+</details>
+
+The MCP server gives any agent a file search tool that is faster and more token-efficient than the built-in one.
+
+<details id="pi-extension">
+<summary>
+<h2>Pi agent extension</h2>
+</summary>
+
+### Install
+
+```bash
+pi install npm:@ff-labs/pi-fff
+```
+
+### Modes
+
+Three operating modes, switchable at runtime with `/fff-mode`:
+
+| Mode                     | What it does                                                                      |
+| ------------------------ | --------------------------------------------------------------------------------- |
+| `tools-and-ui` (default) | Adds `ffgrep` and `fffind` tools, replaces `@`-mention autocomplete with FFF.     |
+| `tools-only`             | Only tool injection. Keeps pi's native editor autocomplete.                       |
+| `override`               | Replaces pi's built-in `grep`, `find`, and `multi_grep` with FFF implementations. |
+
+Env vars: `PI_FFF_MODE`, `FFF_FRECENCY_DB`, `FFF_HISTORY_DB`. Flags: `--fff-mode`, `--fff-frecency-db`, `--fff-history-db`.
+
+### Agent-facing tools
+
+- `ffgrep`. Content search. Accepts `path`, `exclude` (comma, space, or array; leading `!` optional), `caseSensitive`, `context`, and cursor pagination. Auto-detects regex, falls back to fuzzy on zero exact matches, rejects `.*`-style wildcard-only patterns up front.
+- `fffind`. Path and filename search. Matches the whole repo-relative path, not just the filename. Frecency-aware. The weak-match detector flags scattered fuzzy noise before it floods the agent's context.
+
+### Commands
+
+- `/fff-mode [tools-and-ui | tools-only | override]`. Show or switch the mode.
+- `/fff-health`. Picker, frecency, and git integration status.
+- `/fff-rescan`. Force a rescan.
+
+Source: [`packages/pi-fff/`](./packages/pi-fff/).
+
+</details>
+
+The Pi extension swaps pi's native tools for FFF implementations and feeds the interactive editor's `@`-mention autocomplete from the frecency-ranked index.
+
+<details id="neovim-plugin">
+<summary>
+<h2>Neovim plugin</h2>
+</summary>
+
+Demo on the Linux kernel repo (100k files, 8GB):
 
 https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 
 ### Installation
-
-FFF.nvim requires neovim 0.10.0 or higher
 
 #### lazy.nvim
 
@@ -93,62 +139,33 @@ FFF.nvim requires neovim 0.10.0 or higher
 {
   'dmtrKovalenko/fff.nvim',
   build = function()
-    -- this will download prebuild binary or try to use existing rustup toolchain to build from source
-    -- (if you are using lazy you can use gb for rebuilding a plugin if needed)
+    -- downloads a prebuilt binary or falls back to cargo build
     require("fff.download").download_or_build_binary()
   end,
-  -- if you are using nixos
+  -- for nixos:
   -- build = "nix run .#release",
-  opts = { -- (optional)
+  opts = {
     debug = {
-      enabled = true,     -- we expect your collaboration at least during the beta
-      show_scores = true, -- to help us optimize the scoring system, feel free to share your scores!
+      enabled = true,
+      show_scores = true,
     },
   },
-  -- No need to lazy-load with lazy.nvim.
-  -- This plugin initializes itself lazily.
-  lazy = false,
+  lazy = false, -- the plugin lazy-initialises itself
   keys = {
-    {
-      "ff", -- try it if you didn't it is a banger keybinding for a picker
-      function() require('fff').find_files() end,
-      desc = 'FFFind files',
-    },
-    {
-      "<leader>b",
-      function() require('fff').buffers() end,
-      desc = 'FFF Buffers',
-    },
-    {
-      "<leader>c",
-      function() require('fff').colors() end,
-      desc = 'FFF Colors',
-    },
-    {
-      "<leader>g",
-      function() require('fff').git_files() end,
-      desc = 'FFF Git Files',
-    },
-    {
-      "fg",
-      function() require('fff').live_grep() end,
-      desc = 'LiFFFe grep',
-    },
-    {
-      "fz",
-      function() require('fff').live_grep({
-        grep = {
-          modes = { 'fuzzy', 'plain' }
-        }
-      }) end,
+    { "ff", function() require('fff').find_files() end, desc = 'FFFind files' },
+    { "<leader>b", function() require('fff').buffers() end, desc = 'FFF Buffers' },
+    { "<leader>c", function() require('fff').colors() end, desc = 'FFF Colors' },
+    { "<leader>g", function() require('fff').git_files() end, desc = 'FFF Git Files' },
+    { "fg", function() require('fff').live_grep() end, desc = 'LiFFFe grep' },
+    { "fz",
+      function() require('fff').live_grep({ grep = { modes = { 'fuzzy', 'plain' } } }) end,
       desc = 'Live fffuzy grep',
     },
-    {
-      "fc",
+    { "fc",
       function() require('fff').live_grep({ query = vim.fn.expand("<cword>") }) end,
       desc = 'Search current word',
     },
-  }
+  },
 }
 ```
 
@@ -161,206 +178,128 @@ vim.api.nvim_create_autocmd('PackChanged', {
   callback = function(ev)
     local name, kind = ev.data.spec.name, ev.data.kind
     if name == 'fff.nvim' and (kind == 'install' or kind == 'update') then
-      if not ev.data.active then
-        vim.cmd.packadd('fff.nvim')
-      end
+      if not ev.data.active then vim.cmd.packadd('fff.nvim') end
       require('fff.download').download_or_build_binary()
     end
   end,
 })
 
--- the plugin will automatically lazy load
 vim.g.fff = {
-  lazy_sync = true, -- start syncing only when the picker is open
-  debug = {
-    enabled = true,
-    show_scores = true,
-  },
+  lazy_sync = true,
+  debug = { enabled = true, show_scores = true },
 }
 
-vim.keymap.set(
-  'n',
-  'ff',
-  function() require('fff').find_files() end,
-  { desc = 'FFFind files' }
-)
-
-vim.keymap.set(
-  'n',
-  '<leader>b',
-  function() require('fff').buffers() end,
-  { desc = 'FFF Buffers' }
-)
-
-vim.keymap.set(
-  'n',
-  '<leader>c',
-  function() require('fff').colors() end,
-  { desc = 'FFF Colors' }
-)
-
-vim.keymap.set(
-  'n',
-  '<leader>g',
-  function() require('fff').git_files() end,
-  { desc = 'FFF Git Files' }
-)
+vim.keymap.set('n', 'ff', function() require('fff').find_files() end, { desc = 'FFFind files' })
+vim.keymap.set('n', '<leader>b', function() require('fff').buffers() end, { desc = 'FFF Buffers' })
+vim.keymap.set('n', '<leader>c', function() require('fff').colors() end, { desc = 'FFF Colors' })
+vim.keymap.set('n', '<leader>g', function() require('fff').git_files() end, { desc = 'FFF Git Files' })
 ```
+
+### Public API
+
+```lua
+require('fff').find_files()                        -- find files in current repo
+require('fff').live_grep()                         -- live content grep
+require('fff').scan_files()                        -- force rescan
+require('fff').refresh_git_status()                -- refresh git status
+require('fff').find_files_in_dir(path)             -- find in a specific dir
+require('fff').change_indexing_directory(new_path) -- change root
+```
+
+### Commands
+
+- `:FFFScan`. Rescan files.
+- `:FFFRefreshGit`. Refresh git status.
+- `:FFFClearCache [all|frecency|files]`. Clear caches.
+- `:FFFHealth`. Health check.
+- `:FFFDebug [on|off|toggle]`. Toggle the scoring display.
+- `:FFFOpenLog`. Open `~/.local/state/nvim/log/fff.log`.
 
 ### Configuration
 
-FFF.nvim comes with sensible defaults. Here's the complete configuration with all available options:
+Defaults are sensible. Override only what you care about.
 
 ```lua
 require('fff').setup({
-    base_path = vim.fn.getcwd(),
-    prompt = '🪿 ',
-    title = 'FFFiles',
-    max_results = 100,
-    max_threads = 4,
-    lazy_sync = true, -- set to false if you want file indexing to start on open
-    prompt_vim_mode = false, -- set to true to enable vim-mode in the prompt: <Esc> leaves insert for normal mode bindings (also allows <leader>p or <leader>l to jump around) the second <Esc> closes the picker
-    layout = {
-      height = 0.8,
-      width = 0.8,
-      prompt_position = 'bottom', -- or 'top'
-      preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
-      preview_size = 0.5,
-      flex = { -- set to false to disable flex layout
-        size = 130, -- column threshold: if screen width >= size, use preview_position; otherwise use wrap
-        wrap = 'top', -- position to use when screen is narrower than size
-      },
-      show_scrollbar = true, -- Show scrollbar for pagination
-      -- How to shorten long directory paths in the file list:
-      -- 'middle_number' (default): uses dots for 1-3 hidden (a/./b, a/../b, a/.../b)
-      --                            and numbers for 4+ (a/.4./b, a/.5./b)
-      -- 'middle': always uses dots (a/./b, a/../b, a/.../b)
-      -- 'end': truncates from the end (home/user/projects)
-      path_shorten_strategy = 'middle_number',
-      anchor = 'center', -- picker placement: 'center', 'top_left', 'top', 'top_right', 'left', 'right', 'bottom_left', 'bottom', 'bottom_right'
+  base_path = vim.fn.getcwd(),
+  prompt = '> ',
+  title = 'FFFiles',
+  max_results = 100,
+  max_threads = 4,
+  lazy_sync = true,
+  prompt_vim_mode = false,
+  layout = {
+    height = 0.8,
+    width = 0.8,
+    prompt_position = 'bottom',   -- or 'top'
+    preview_position = 'right',   -- 'left' | 'right' | 'top' | 'bottom'
+    preview_size = 0.5,
+    flex = { size = 130, wrap = 'top' },
+    show_scrollbar = true,
+    path_shorten_strategy = 'middle_number', -- 'middle_number' | 'middle' | 'end'
+    anchor = 'center',
+  },
+  preview = {
+    enabled = true,
+    max_size = 10 * 1024 * 1024,
+    chunk_size = 8192,
+    binary_file_threshold = 1024,
+    imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
+    line_numbers = false,
+    cursorlineopt = 'both',
+    wrap_lines = false,
+    filetypes = {
+      svg = { wrap_lines = true },
+      markdown = { wrap_lines = true },
+      text = { wrap_lines = true },
     },
-    preview = {
-      enabled = true,
-      max_size = 10 * 1024 * 1024, -- Do not try to read files larger than 10MB
-      chunk_size = 8192, -- Bytes per chunk for dynamic loading (8kb - fits ~100-200 lines)
-      binary_file_threshold = 1024, -- amount of bytes to scan for binary content (set 0 to disable)
-      imagemagick_info_format_str = '%m: %wx%h, %[colorspace], %q-bit',
-      line_numbers = false,
-      cursorlineopt = 'both', -- the cursorlineopt used for lines in grep file previews, see :h cursorlineopt
-      wrap_lines = false,
-      filetypes = {
-        svg = { wrap_lines = true },
-        markdown = { wrap_lines = true },
-        text = { wrap_lines = true },
-      },
-    },
-    keymaps = {
-      close = '<Esc>',
-      select = '<CR>',
-      select_split = '<C-s>',
-      select_vsplit = '<C-v>',
-      select_tab = '<C-t>',
-      -- you can assign multiple keys to any action
-      move_up = { '<Up>', '<C-p>' },
-      move_down = { '<Down>', '<C-n>' },
-      preview_scroll_up = '<C-u>',
-      preview_scroll_down = '<C-d>',
-      toggle_debug = '<F2>',
-      -- grep mode: cycle between plain text, regex, and fuzzy search
-      cycle_grep_modes = '<S-Tab>',
-      -- goes to the previous query in history
-      cycle_previous_query = '<C-Up>',
-      -- multi-select keymaps for quickfix
-      toggle_select = '<Tab>',
-      send_to_quickfix = '<C-q>',
-      -- this are specific for the normal mode (you can exit it using any other keybind like jj)
-      focus_list = '<leader>l',
-      focus_preview = '<leader>p',
-    },
-    hl = {
-      border = 'FloatBorder',
-      normal = 'Normal',
-      cursor = 'CursorLine',  -- Falls back to 'Visual' if CursorLine is not defined
-      matched = 'IncSearch',
-      title = 'Title',
-      prompt = 'Question',
-      frecency = 'Number',
-      debug = 'Comment',
-      combo_header = 'Number',
-      scrollbar = 'Comment',
-      directory_path = 'Comment',
-      -- Multi-select highlights
-      selected = 'FFFSelected',
-      selected_active = 'FFFSelectedActive',
-      -- Git text highlights for file names
-      git_staged = 'FFFGitStaged',
-      git_modified = 'FFFGitModified',
-      git_deleted = 'FFFGitDeleted',
-      git_renamed = 'FFFGitRenamed',
-      git_untracked = 'FFFGitUntracked',
-      git_ignored = 'FFFGitIgnored',
-      -- Git sign/border highlights
-      git_sign_staged = 'FFFGitSignStaged',
-      git_sign_modified = 'FFFGitSignModified',
-      git_sign_deleted = 'FFFGitSignDeleted',
-      git_sign_renamed = 'FFFGitSignRenamed',
-      git_sign_untracked = 'FFFGitSignUntracked',
-      git_sign_ignored = 'FFFGitSignIgnored',
-      -- Git sign selected highlights
-      git_sign_staged_selected = 'FFFGitSignStagedSelected',
-      git_sign_modified_selected = 'FFFGitSignModifiedSelected',
-      git_sign_deleted_selected = 'FFFGitSignDeletedSelected',
-      git_sign_renamed_selected = 'FFFGitSignRenamedSelected',
-      git_sign_untracked_selected = 'FFFGitSignUntrackedSelected',
-      git_sign_ignored_selected = 'FFFGitSignIgnoredSelected',
-      -- Grep highlights
-      grep_match = 'IncSearch',               -- Highlight for matched text in grep results
-      grep_line_number = 'LineNr',            -- Highlight for :line:col location
-      grep_regex_active = 'DiagnosticInfo',   -- Highlight for keybind + label when regex is on
-      grep_plain_active = 'Comment',        -- Highlight for keybind + label when regex is off
-      grep_fuzzy_active = 'DiagnosticHint',   -- Highlight for keybind + label when fuzzy is on
-      -- Cross-mode suggestion highlights
-      suggestion_header = 'WarningMsg', -- Highlight for the "No results found. Suggested..." banner
-    },
-    -- Store file open frecency
-    frecency = {
-      enabled = true,
-      db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
-    },
-    -- Store successfully opened queries with respective matches
-    history = {
-      enabled = true,
-      db_path = vim.fn.stdpath('data') .. '/fff_queries',
-      min_combo_count = 3, -- Minimum selections before combo boost applies (3 = boost starts on 3rd selection)
-      combo_boost_score_multiplier = 100, -- Score multiplier for combo matches (files repeatedly opened with same query)
-    },
-    -- Git integration
-    git = {
-      status_text_color = false, -- Apply git status colors to filename text (default: false, only sign column)
-    },
-    debug = {
-      enabled = false, -- Show file info panel in preview
-      show_scores = false, -- Show scores inline in the UI
-    },
-    logging = {
-      enabled = true,
-      log_file = vim.fn.stdpath('log') .. '/fff.log',
-      log_level = 'info',
-    },
-    -- find_files settings
-    file_picker = {
-      current_file_label = '(current)',
-    },
-    -- grep settings
-    grep = {
-      max_file_size = 10 * 1024 * 1024, -- Skip files larger than 10MB
-      max_matches_per_file = 100, -- Maximum matches per file (set 0 to unlimited)
-      smart_case = true, -- Case-insensitive unless query has uppercase
-      time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
-      modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
-      trim_whitespace = false, -- Strip leading whitespace from matched lines
-    },
-  })
+  },
+  keymaps = {
+    close = '<Esc>',
+    select = '<CR>',
+    select_split = '<C-s>',
+    select_vsplit = '<C-v>',
+    select_tab = '<C-t>',
+    move_up = { '<Up>', '<C-p>' },
+    move_down = { '<Down>', '<C-n>' },
+    preview_scroll_up = '<C-u>',
+    preview_scroll_down = '<C-d>',
+    toggle_debug = '<F2>',
+    cycle_grep_modes = '<S-Tab>',
+    cycle_previous_query = '<C-Up>',
+    toggle_select = '<Tab>',
+    send_to_quickfix = '<C-q>',
+    focus_list = '<leader>l',
+    focus_preview = '<leader>p',
+  },
+  frecency = {
+    enabled = true,
+    db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
+  },
+  history = {
+    enabled = true,
+    db_path = vim.fn.stdpath('data') .. '/fff_queries',
+    min_combo_count = 3,
+    combo_boost_score_multiplier = 100,
+  },
+  git = {
+    status_text_color = false, -- true to color filenames by git status
+  },
+  grep = {
+    max_file_size = 10 * 1024 * 1024,
+    max_matches_per_file = 100,
+    smart_case = true,
+    time_budget_ms = 150,
+    modes = { 'plain', 'regex', 'fuzzy' },
+    trim_whitespace = false,
+  },
+  debug = { enabled = false, show_scores = false },
+  logging = {
+    enabled = true,
+    log_file = vim.fn.stdpath('log') .. '/fff.log',
+    log_level = 'info',
+  },
+})
 ```
 
 ### Key Features
@@ -378,23 +317,6 @@ require('fff').refresh_git_status()                 -- Refresh git status for th
 require('fff').find_files_in_dir(path)              -- Find files in a specific directory
 require('fff').change_indexing_directory(new_path)  -- Change the base directory for the file picker
 ```
-
-just jump to the definition and see what other APIs are exposed we have a plenty
-
-#### Commands
-
-FFF.nvim provides several commands for interacting with the file picker:
-
-- `:FFFFind [path|query]` - Open file picker. Optional: provide directory path or search query
-- `:FFFBuffers` - Open buffer picker to browse and switch between open buffers
-- `:Colors` - Open colors picker to browse and switch colorschemes with live preview
-- `:GFiles` - Open git files picker to browse git status files (similar to fzf.vim :GFiles?)
-- `:FFFScan` - Manually trigger a rescan of files in the current directory
-- `:FFFRefreshGit` - Manually refresh git status for all files
-- `:FFFClearCache [all|frecency|files]` - Clear various caches
-- `:FFFHealth` - Check FFF health status and dependencies
-- `:FFFDebug [on|off|toggle]` - Toggle debug scores display
-- `:FFFOpenLog` - Open the FFF log file in a new tab
 
 #### Buffer Picker
 
@@ -484,10 +406,6 @@ The git files picker (`:GFiles`) provides a fast way to browse files with git st
 vim.keymap.set('n', '<leader>g', function() require('fff').git_files() end, { desc = 'FFF Git Files' })
 ```
 
-**Usage:**
-
-Simply run `:GFiles` to open the git files picker. It will show all files that have changed according to `git status`. The picker displays git status for each file using visual indicators and colors.
-
 #### Multiple Key Bindings
 
 You can assign multiple key combinations to the same action:
@@ -519,172 +437,281 @@ Select multiple files and send them to Neovim's quickfix list (keymaps are confi
 - `<Tab>` - Toggle selection for the current file (shows thick border `▊` in signcolumn)
 - `<C-q>` - Send selected files to quickfix list and close picker
 
-#### Live Grep Search Modes
+### Live grep modes
 
-Live grep supports three search modes, cycled with `<S-Tab>`:
+`<S-Tab>` cycles between `plain`, `regex`, and `fuzzy`. The list is configurable via `grep.modes`, and single-mode setups hide the indicator entirely.
 
-- **Plain text** (default) - The query is matched literally. Special regex characters like `.`, `*`, `(`, `)`, `$` have no special meaning. This is the safest mode for searching code containing regex metacharacters.
-- **Regex** - The query is interpreted as a regular expression. Supports character classes (`[a-z]`), quantifiers (`+`, `*`, `{n}`), alternation (`foo|bar`), anchors (`^`, `$`), word boundaries (`\b`), and more.
-- **Fuzzy** - The query is fuzzy matched using Smith-Waterman scoring. Accommodates typos and scattered characters (e.g., "mtxlk" matches "mutex_lock"). Results are filtered by a quality threshold to avoid overly fuzzy matches.
-
-The current mode is shown on the right side of the input field (e.g., `plain`, `regex`, `fuzzy`) with color-coded highlighting.
-
-You can customize which modes are available and their cycling order globally in your configuration, or per-call when invoking `live_grep()`.
-
-**Global configuration:**
+Per-call override:
 
 ```lua
-require('fff').setup({
-  grep = {
-    modes = { 'plain', 'regex' }, -- Only plain and regex, no fuzzy
-  }
-})
+require('fff').live_grep({ grep = { modes = { 'fuzzy', 'plain' } } })
+require('fff').live_grep({ query = 'search term' }) -- pre-fill
 ```
 
-**Per-call configuration:**
+### Constraints
 
-```lua
--- Only fuzzy and plain modes for this specific grep
-require('fff').live_grep({
-  grep = {
-    modes = { 'fuzzy', 'plain' },
-  }
-})
+Both find and grep accept these tokens to refine a query:
 
--- Single mode (hides mode indicator completely)
-require('fff').live_grep({
-  grep = {
-    modes = { 'fuzzy' },
-  }
-})
+- `git:modified`. One of `modified`, `staged`, `deleted`, `renamed`, `untracked`, `ignored`.
+- `test/`. Any deeply nested children of `test/`.
+- `!something`, `!test/`, `!git:modified`. Exclusion.
+- `./**/*.{rs,lua}`. Any valid glob, powered by [zlob](https://github.com/dmtrKovalenko/zlob).
 
--- Pre-fill the search with an initial query
-require('fff').live_grep({ query = 'search term' })
-```
+Grep-only:
 
-When only one mode is configured, the mode indicator is hidden completely and the cycle keybind does nothing.
+- `*.md`, `*.{c,h}`. Extension filter.
+- `src/main.rs`. Grep inside a single file.
 
-#### Constraints
+Mix freely: `git:modified src/**/*.rs !src/**/mod.rs user controller`.
 
-There are a number of constraints you can use to refine your search in both grep and file search mode:
+### Multi-select and quickfix
 
-- `git:modified` - show only modified files (one of `modified`, `staged`, `deleted`, `renamed`, `untracked`, `ignored`)
-- `test/` - any deeply nested children of any test/ dir
-- `!something` - exclude results matching something
-- `!test/`, `!git:modified` - combining with any other constraint works as negation
-- `./**/*.{rs,lua}` - any valid glob expression via [the fastest globbing library](https://github.com/dmtrKovalenko/zlob)
+- `<Tab>`. Toggle selection (shows a thick `▊` in the signcolumn).
+- `<C-q>`. Send selected files to the quickfix list and close the picker.
 
-For grep only:
+### Git status highlighting
 
-- `*.md`, `*.{c,h}` - extension filtering
-- `src/main.rs` - grep in a single file
+Sign-column indicators are on by default. To color filename text by git status, set `git.status_text_color = true` and adjust the `hl.git_*` groups. See `:help fff.nvim` for the full list.
 
-In addition to that, all constraints can be combined together like:
+### File filtering
 
-```
-git:modified src/**/*.rs !src/**/mod.rs user controller
-```
-
-This will find all the files that qualify the constraints and:
-
-- match **both** user and controller (for file mode)
-- match "user controller" (for grep mode)
-
-#### Cross-Mode Suggestions
-
-When a search returns no results, FFF automatically queries the opposite search mode and displays the results as suggestions:
-
-- **File search with no matches** → shows suggested **content matches** (grep results) for the same query
-- **Grep search with no matches** → shows suggested **file name matches** for the same query
-
-Suggestions are clearly labeled with a "No results found. Suggested ..." banner (highlighted with `hl.suggestion_header`). You can navigate and select suggestion items just like normal results — selecting a grep suggestion will open the file at the matching line.
-
-#### Git Status Highlighting
-
-FFF integrates with git to show file status through sign column indicators (enabled by default) and optional filename text coloring.
-
-**Sign Column Indicators** (enabled by default) - Border characters shown in the sign column:
-
-```lua
-hl = {
-  git_sign_staged = 'FFFGitSignStaged',
-  git_sign_modified = 'FFFGitSignModified',
-  git_sign_deleted = 'FFFGitSignDeleted',
-  git_sign_renamed = 'FFFGitSignRenamed',
-  git_sign_untracked = 'FFFGitSignUntracked',
-  git_sign_ignored = 'FFFGitSignIgnored',
-}
-```
-
-**Text Highlights** (opt-in) - Apply colors to filenames based on git status:
-
-To enable git status text coloring, set `git.status_text_color = true`:
-
-```lua
-require('fff').setup({
-  git = {
-    status_text_color = true, -- Enable git status colors on filename text
-  },
-  hl = {
-    git_staged = 'FFFGitStaged',       -- Files staged for commit
-    git_modified = 'FFFGitModified',   -- Modified unstaged files
-    git_deleted = 'FFFGitDeleted',     -- Deleted files
-    git_renamed = 'FFFGitRenamed',     -- Renamed files
-    git_untracked = 'FFFGitUntracked', -- New untracked files
-    git_ignored = 'FFFGitIgnored',     -- Git-ignored files
-  }
-})
-```
-
-The plugin provides sensible default highlight groups that link to common git highlight groups (e.g., GitSignsAdd, GitSignsChange). You can override these with your own custom highlight groups to match your colorscheme.
-
-**Example - Custom Bright Colors for Text:**
-
-```lua
-vim.api.nvim_set_hl(0, 'CustomGitModified', { fg = '#FFA500' })
-vim.api.nvim_set_hl(0, 'CustomGitUntracked', { fg = '#00FF00' })
-
-require('fff').setup({
-  git = {
-    status_text_color = true,
-  },
-  hl = {
-    git_modified = 'CustomGitModified',
-    git_untracked = 'CustomGitUntracked',
-  }
-})
-```
-
-#### File Filtering
-
-FFF.nvim respects `.gitignore` patterns automatically. To filter files from the picker without modifying `.gitignore`, create a `.ignore` file in your project root:
+FFF honours `.gitignore`. For picker-only ignores that do not touch git, add a sibling `.ignore` file:
 
 ```gitignore
-# Exclude all markdown files
 *.md
-
-# Exclude specific subdirectory
 docs/archive/**/*.md
 ```
 
-Run `:FFFScan` to force a rescan if needed.
+Run `:FFFScan` to force a rescan.
 
 ### Troubleshooting
 
-#### Health Check
+- `:FFFHealth` verifies picker init, optional dependencies, and DB connectivity.
+- `:FFFOpenLog` opens the log file.
 
-Run `:FFFHealth` to check the status of FFF.nvim and its dependencies. This will verify:
+</details>
 
-- File picker initialization status
-- Optional dependencies (git, image preview tools)
-- Database connectivity
+The best file search picker for neovim. Period. Faster and more intuitive queries, frecency ranking, definition classification and much more.
 
-#### Viewing Logs
+<details id="node-sdk">
+<summary>
+<h2>Node & Bun SDK</h2>
+</summary>
 
-If you encounter issues, check the log file:
-
+```bash
+npm install @ff-labs/fff-node
+# or
+bun add @ff-labs/fff-node
 ```
-:FFFOpenLog
+
+```ts
+import { FileFinder } from "@ff-labs/fff-node";
+
+const finder = FileFinder.create({ basePath: process.cwd(), aiMode: true });
+if (!finder.ok) throw new Error(finder.error);
+await finder.value.waitForScan(10_000);
+
+const files = finder.value.fileSearch("incognito profile", { pageSize: 20 });
+const hits = finder.value.grep("GetOffTheRecordProfile", {
+  mode: "plain",
+  smartCase: true,
+  beforeContext: 1,
+  afterContext: 1,
+  classifyDefinitions: true,
+});
+
+finder.value.destroy();
 ```
 
-Or manually open the log file at `~/.local/state/nvim/log/fff.log` (default location).
+Every method returns a `Result<T>` (`{ ok: true, value } | { ok: false, error }`). Full type reference: [`packages/fff-node/src/types.ts`](./packages/fff-node/src/types.ts).
+
+</details>
+
+TypeScript wrapper over the C library for nodejs and bun. Build custom agent tools, CLIs, or IDE integrations on top of FFF.
+
+<details id="rust-crate">
+<summary>
+<h2>Rust crate</h2>
+</summary>
+
+### Add the dependency
+
+FFF is written in Rust, so this is the lowest-overhead way to use it.
+
+```toml
+[dependencies]
+fff-search = "0.6"
+```
+
+Full API documentation: [docs.rs/fff-search](https://docs.rs/fff-search/latest/fff_search/).
+
+</details>
+
+Native rust crate that is performing all the search. Stable and well documented.
+
+<details id="c-library">
+<summary>
+<h2>C library</h2>
+</summary>
+
+### Build
+
+```bash
+# Builds only the C cdylib (fastest):
+make build-c-lib
+
+# or directly with cargo:
+cargo build --release -p fff-c --features zlob
+```
+
+The output is a `cdylib` (`libfff_c.so` / `libfff_c.dylib` / `fff_c.dll`). The header lives at [`crates/fff-c/include/fff.h`](./crates/fff-c/include/fff.h).
+
+Prebuilt binaries for every version, including every commit on main, are on the [releases page](https://github.com/dmtrKovalenko/fff.nvim/releases). The same binaries also ship inside the `@ff-labs/fff-bin-*` npm packages.
+
+### Install
+
+```bash
+# System-wide (needs sudo):
+sudo make install
+
+# User-local, no sudo:
+make install PREFIX=$HOME/.local
+
+# Staged install for packagers:
+make install DESTDIR=/tmp/pkgroot PREFIX=/usr
+```
+
+Drops `libfff_c.{so,dylib,dll}` into `$(PREFIX)/lib` and the header into `$(PREFIX)/include/fff.h`. Remove with `make uninstall`, which honours the same `PREFIX` and `DESTDIR`.
+
+Link against it after install:
+
+```bash
+cc my_app.c -lfff_c -o my_app
+```
+
+Ensure `$(PREFIX)/lib` is on your runtime library search path (`LD_LIBRARY_PATH` on Linux, `DYLD_LIBRARY_PATH` on macOS, or an entry in `/etc/ld.so.conf.d/`).
+
+### Minimal example
+
+```c
+#include <fff.h>
+#include <stdio.h>
+
+int main(void) {
+    FffResult *res = fff_create_instance(
+        ".",        // base_path
+        "",         // frecency_db_path (empty = default)
+        "",         // history_db_path
+        false,      // use_unsafe_no_lock
+        true,       // enable_mmap_cache
+        true,       // enable_content_indexing
+        true,       // watch
+        false       // ai_mode
+    );
+    if (!res->success) {
+        fprintf(stderr, "init failed: %s\n", res->error);
+        fff_free_result(res);
+        return 1;
+    }
+    void *handle = res->handle;
+    fff_free_result(res);
+
+    // Search
+    FffResult *search = fff_search(handle, "main.rs", "", 0, 0, 20, 100, 3);
+    // ... read FffSearchResult from search->handle, then fff_free_search_result()
+
+    fff_destroy(handle);
+    return 0;
+}
+```
+
+### Notes
+
+- Every function returning `FffResult*` allocates with Rust's `Box`. Free with `fff_free_result`, do not use malloc's free
+- Payloads (search results, grep results, scan progress) have their own dedicated free functions listed in the header.
+- C strings returned in the `handle` field (e.g. from `fff_get_base_path`) are freed with `fff_free_string`.
+
+Source: [`crates/fff-c/`](./crates/fff-c/).
+
+</details>
+
+Stable C ABI. Bind from C/C++, Zig, Go via cgo, Python via ctypes, or anything with C FFI.
+
+---
+
+## What is FFF and why use it over ripgrep or fzf?
+
+FFF is a file search library, not a CLI. Ripgrep and fzf are great tools, but they are command-line programs: every call forks a new process, re-reads `.gitignore`, re-stats directories, and rebuilds whatever state it needs in memory before it can answer. That is fine when you grep once from a shell. It is bad when an editor or an AI agent wants to run hundreds of searches per session.
+
+FFF keeps the index and the file cache resident in one long-lived process and exposes the same Rust core through four thin layers: a native crate (`fff-search`), a C library (`libfff_c`), a Node/Bun SDK (`@ff-labs/fff-node`), and an MCP server. You call `FileFinder.create()` once, then every subsequent search hits warm memory. On a 500k-file Chromium checkout, that is the difference between 3-9 **SECONDS** per ripgrep spawn and sub-10 ms per FFF query.
+
+Algorithm for fuzzy matching is much more comprehensive than fzf's algorithm it is **typo-resistant** and we provide a query language with additional constraint parsing for prefiltering e.g. "*.rs !test/ shcema" is a perfectly valid query for fff, but fzf wouldn't find anything even for a single typo in "shcema".
+
+### Why a programmatic API matters
+
+- No process spawn. Every call stays in-process and avoids the fork, exec, argv parsing, and stdout pipe setup that dominates short `rg` invocations.
+- One FS walk, metadata collection, and parse of `.gitignore`. The ignore walker runs once at scan time and the result is reused for every search.
+- Results come back as typed objects, not text you have to re-parse. The SDK gives you `{ relativePath, lineNumber, lineContent, gitStatus, totalFrecencyScore, isDefinition, ... }` directly.
+- Cursor pagination that survives across calls. Ripgrep has no concept of "page 2 of these matches"; FFF does.
+- A long-lived process opens up optimisations that a one-shot CLI cannot apply: warm caches, incremental re-indexing, cross-query frecency, and shared SIMD state.
+
+### What the core actually does
+
+- **Frecency-ranked fuzzy matching.** Every indexed file carries an access score and a modification score. Searches rank files you have opened recently and frequently above cold results. This is the same idea as VS Code's recently-opened list, but applied to every search result, not just a sidebar.
+- **Typo-resistant matching for both paths and content.** Smith-Waterman fuzzy scoring is available on the grep path; path search uses SIMD-accelerated fuzzy matching (via the [`frizbee`](https://github.com/saghm/frizbee)-derived core) that survives dropped characters and reorderings.
+- **Content grep with three modes.** Plain literal (SIMD memmem), regex (the Rust `regex` crate), and fuzzy (Smith-Waterman per line). Auto-detects which mode to use from the pattern, falls back to fuzzy when a plain search returns zero hits.
+- **Multi-pattern OR search.** SIMD Aho-Corasick for "find any of these 20 identifiers at once", which is faster than regex alternation and a lot faster than 20 separate ripgrep runs.
+- **Background file watcher.** The index updates as files change. You never pay for a rescan on the hot path.
+- **Git status awareness.** Modified, staged, untracked, and ignored states are cached and returned with every result, so callers can sort or filter them without shelling out to git. The watcher talks to libgit2 directly instead of spawning the `git` CLI.
+- **Definition classifier.** A byte-level scanner on the Rust side tags lines that start with `struct`, `fn`, `class`, `def`, `impl`, and friends.
+
+### Performance choices that matter
+
+- Efficient memory allocator and memory allocation strategy (see next paragraph). By default we use `mimaloc`
+- Parallel multi thread search pipeline that is not contaganted by the orchistration logic
+- SIMD first algorithms for everything. Efficinet & non-allocating sorting.
+- Platform specific optimizations for FS ([getdents64](https://linux.die.net/man/2/getdents64), NTFS api on windows and others)
+- Lightweight on the flight content index for realtime even typo resistant grep
+- Memory mapped content cache. We store some of the files in virtual memory (the amount is limited)
+- Single contiguous arena storage of string chunks. Significantly reduces the amount of memory to work with and dramatically increases CPU cache hits.
+
+### Memory allocation
+
+Yes, fff fundamentally requires more memory than calling a single child process. That is the primary source of the speedup. In practice, alongside one of the most popular file search pickers for Neovim, [fff ends up using less RAM than a burst of ripgrep invocations](https://x.com/neogoose_btw/status/2041606853155811442).
+
+
+FFF also keeps a content index, around 360 bytes per indexed file, so roughly 36 MB for a 100k-file repo. Not every file is indexed - binaries, oversized files, and anything not eligible for grep are skipped. If even that footprint is too much, the index can be backed by a memory-mapped file instead of anonymous RAM.
+
+### What this means in practice
+
+If you are building an agent, an IDE extension, a pre-commit check, or any long-running tool that searches the same repository many times, calling FFF as a library is dramatically cheaper than shelling out to ripgrep. The tradeoff is real memory: FFF keeps the index in RAM and warms the content cache. On a 14k-file repo that costs about 26 MB resident. On a 500k-file repo like Chromium, expect a few hundred MB. In exchange, every single search is enriched with git status, frecency ranking, file metadata, timestamps of last access and edit and so on.
+
+If you are running one grep from a terminal, `rg` is still the right tool. If you run dozens of them inside the same process, FFF will pay for itself starting from the second call. If you work on AI agent fff will finish preparation work before your AI will have a chance to call it.
+
+### How it compares
+
+- **ripgrep**: FFF uses the same underlying regex engine and more advanced plain text matching algorithms. Stores content index and file tree. Main wins on repeated-search workloads. Loses on "grep once from bash and exit."
+- **fzf**: FFF's path search is fuzzy like fzf, but it is also frecency-aware and git-aware, and ships a more typo-tolerant algorithm. fzf is a pure match-and-filter tool; FFF ranks results by how often you actually open them.
+- **Telescope / fzf-lua / snacks.picker**: FFF ships its own Neovim picker with the same ranking the MCP server and SDK use. The picker is optional; the core is the same.
+- **Tantivy or other full-text search engines**: different class of tool. Tantivy indexes documents for query-time scoring at scale. FFF is scoped to one repository and optimised for sub-10 ms response. It does not persist an inverted index on disk.
+
+---
+
+## Repository layout
+
+- `crates/fff-search`, `crates/fff-grep`, `crates/fff-query-parser` - Rust core.
+- `crates/fff-c` - C FFI used by every language binding.
+- `crates/fff-nvim` - Lua/mlua bindings for the Neovim plugin.
+- `crates/fff-mcp` - MCP server binary.
+- `packages/fff-node` - Node.js SDK (`@ff-labs/fff-node`).
+- `packages/fff-bun` - Bun SDK (`@ff-labs/fff-node`).
+- `packages/pi-fff` - pi extension (`@ff-labs/pi-fff`).
+- `lua/` - Neovim-side plugin code.
+
+## Contributing
+
+Bug reports and pull requests welcome. Agentic coding tools are welcome to be used, but human review is mandatory.
+
+## License
+
+[MIT](./LICENSE) & open source forever.

@@ -10,6 +10,26 @@ local list_renderer = require('fff.list_renderer')
 local scrollbar = require('fff.scrollbar')
 local rust = require('fff.rust')
 
+--- Base path of picker can change that's why we can not rely on relative
+--- path for reading/opening files. This function resolves correct absolute path
+--- @param relative_path string|nil
+--- @return string|nil
+local function canonicalize_fff_path(relative_path)
+  if not relative_path or relative_path == '' then return nil end
+  local path = relative_path
+  -- Strip Windows long-path prefix (\\?\) — Neovim cannot open these.
+  if vim.startswith(path, '\\\\?\\') then path = path:sub(5) end
+  -- Already absolute: don't re-anchor.
+  if vim.fn.fnamemodify(path, ':p') == path then return path end
+  local base = conf.get().base_path
+  if not base or base == '' then return path end
+  return vim.fs.normalize(base .. '/' .. path)
+end
+
+--- @param item table|nil
+--- @return string|nil
+local function resolve_item_path(item) return item and canonicalize_fff_path(item.relative_path) or nil end
+
 local BORDER_PRESETS = {
   single = { '┌', '─', '┐', '│', '┘', '─', '└', '│' },
   double = { '╔', '═', '╗', '║', '╝', '═', '╚', '║' },
@@ -1869,7 +1889,7 @@ function M.update_preview()
   if M.state.file_info_buf then preview.update_file_info_buffer(item, M.state.file_info_buf, M.state.cursor) end
 
   preview.set_preview_window(M.state.preview_win)
-  preview.preview(item.relative_path, M.state.preview_buf, effective_location, item.is_binary)
+  preview.preview(resolve_item_path(item), M.state.preview_buf, effective_location, item.is_binary)
 end
 
 --- Clear preview
@@ -2314,12 +2334,15 @@ function M.send_to_quickfix()
     if has_selections then
       -- Use explicitly selected items (survives page changes)
       for _, item in pairs(M.state.selected_items) do
-        table.insert(qf_list, {
-          filename = item.relative_path,
-          lnum = item.line_number or 1,
-          col = (item.col or 0) + 1,
-          text = item.line_content or vim.fn.fnamemodify(item.relative_path, ':.'),
-        })
+        local abs = resolve_item_path(item)
+        if abs then
+          table.insert(qf_list, {
+            filename = abs,
+            lnum = item.line_number or 1,
+            col = (item.col or 0) + 1,
+            text = item.line_content or vim.fn.fnamemodify(abs, ':.'),
+          })
+        end
       end
     else
       -- No selections: run an exhaustive search to get all matches
@@ -2334,12 +2357,13 @@ function M.send_to_quickfix()
       end
 
       for _, item in ipairs(all_items) do
-        if item and item.relative_path then
+        local abs = resolve_item_path(item)
+        if abs then
           table.insert(qf_list, {
-            filename = item.relative_path,
+            filename = abs,
             lnum = item.line_number or 1,
             col = (item.col or 0) + 1,
-            text = item.line_content or vim.fn.fnamemodify(item.relative_path, ':.'),
+            text = item.line_content or vim.fn.fnamemodify(abs, ':.'),
           })
         end
       end
@@ -2348,14 +2372,16 @@ function M.send_to_quickfix()
     -- Normal file mode: per-file entries at line 1
     local paths = {}
 
-    -- Collect from explicit selections, or fall back to all visible items
+    -- Collect from explicit selections, or fall back to all visible items.
+    -- selected_files is keyed by relative_path; filtered_items carries relative_path too.
     if next(M.state.selected_files) then
-      for path, _ in pairs(M.state.selected_files) do
-        table.insert(paths, path)
+      for relative_path, _ in pairs(M.state.selected_files) do
+        table.insert(paths, canonicalize_fff_path(relative_path))
       end
     else
       for _, item in ipairs(M.state.filtered_items) do
-        if item and item.relative_path then table.insert(paths, item.relative_path) end
+        local abs = resolve_item_path(item)
+        if abs then table.insert(paths, abs) end
       end
     end
 
@@ -2398,14 +2424,12 @@ function M.select(action)
 
   action = action or 'edit'
 
-  -- Strip Windows long path prefix (\\?\) if present.
-  -- These can surface from Rust's fs::canonicalize on Windows when LongPathsEnabled is set.
-  -- Neovim cannot open paths with this prefix. The Rust side uses dunce::canonicalize to avoid
-  -- producing these, but we strip defensively here as well.
-  local path = item.relative_path
-  if vim.startswith(path, '\\\\?\\') then path = path:sub(5) end
-
-  local relative_path = vim.fn.fnamemodify(path, ':.')
+  -- Anchor against the indexer's base_path (may differ from cwd), then rephrase
+  -- as cwd-relative for a nicer buffer name when possible. When outside cwd,
+  -- fnamemodify(':.') leaves the absolute path intact.
+  local abs_path = resolve_item_path(item)
+  if not abs_path then return end
+  local relative_path = vim.fn.fnamemodify(abs_path, ':.')
   local location = M.state.location -- Capture location before closing
   local query = M.state.query -- Capture query before closing for tracking
   local mode = M.state.mode -- Capture mode before closing for tracking

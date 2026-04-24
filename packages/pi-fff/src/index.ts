@@ -99,7 +99,7 @@ function formatGrepOutput(result: GrepResult, limit: number): string {
   let currentFile = "";
 
   for (const match of items) {
-    if (match.relativePath != currentFile) {
+    if (match.relativePath !== currentFile) {
       currentFile = match.relativePath;
       if (lines.length > 0) lines.push("");
     }

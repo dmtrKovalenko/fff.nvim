@@ -1,6 +1,6 @@
 [package]
 name = "fff-search"
-version = "0.6.1"
+version = "0.6.4"
 edition = "2024"
 license = "MIT"
 authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
@@ -71,8 +71,8 @@ toml = "0.8"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zlob = { workspace = true, optional = true }
-libmimalloc-sys = { version = "0.1", optional = true, features = ["extended"] }
-mimalloc = { version = "0.1", optional = true }
+libmimalloc-sys = { version = "0.1", optional = true, features = ["extended", "local_dynamic_tls"] }
+mimalloc = { version = "0.1", optional = true, features = ["local_dynamic_tls"] }
 # Platform-specific: dunce for Windows to avoid \\?\ extended path prefix
 [target.'cfg(windows)'.dependencies]
 dunce = { workspace = true }

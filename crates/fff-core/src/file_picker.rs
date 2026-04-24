@@ -1459,11 +1459,13 @@ impl FilePicker {
                         let files = picker.sync_data.files();
                         let ptr = files.as_ptr();
                         let len = files.len();
+                        let base_count = picker.sync_data.base_count;
                         let budget = Arc::clone(&picker.cache_budget);
                         let static_files: &[FileItem] =
                             unsafe { std::slice::from_raw_parts(ptr, len) };
                         (
                             static_files,
+                            base_count,
                             budget,
                             picker.base_path().to_path_buf(),
                             picker.arena_base_ptr(),
@@ -1474,7 +1476,7 @@ impl FilePicker {
                 None
             };
 
-            if let Some((files, budget, bp, arena)) = files_snapshot {
+            if let Some((files, base_count, budget, bp, arena)) = files_snapshot {
                 // Warmup mmap caches.
                 if do_warmup && !cancelled.load(Ordering::Acquire) {
                     let t = std::time::Instant::now();
@@ -1490,11 +1492,18 @@ impl FilePicker {
                 // Build bigram index (lock-free).
                 if do_content_indexing && !cancelled.load(Ordering::Acquire) {
                     let t = std::time::Instant::now();
+                    // Index ONLY base files — overflow files are searched
+                    // unconditionally by the grep overflow loop, so
+                    // `BigramFilter::file_count` must equal
+                    // `BigramOverlay::base_file_count` for the candidate
+                    // bitset to never carry overflow-range bits.
+                    let base_files = &files[..base_count.min(files.len())];
                     info!(
                         "Rescan: starting bigram index build for {} files...",
-                        files.len()
+                        base_files.len()
                     );
-                    let (index, content_binary) = build_bigram_index(files, &budget, &bp, arena);
+                    let (index, content_binary) =
+                        build_bigram_index(base_files, &budget, &bp, arena);
                     info!(
                         "Rescan: bigram index ready in {:.2}s",
                         t.elapsed().as_secs_f64()
@@ -1510,7 +1519,8 @@ impl FilePicker {
                             }
                         }
 
-                        let base_count = picker.sync_data.base_count;
+                        // Use the same `base_count` the filter was built with
+                        // so `file_count == base_file_count` is guaranteed.
                         picker.sync_data.bigram_index = Some(Arc::new(index));
                         picker.sync_data.bigram_overlay = Some(Arc::new(parking_lot::RwLock::new(
                             BigramOverlay::new(base_count),
@@ -1778,7 +1788,7 @@ fn spawn_scan_and_watcher(
             // completing and the warmup + bigram phase finishing because
             // `post_scan_busy` prevents concurrent rescans from replacing
             // sync_data while we hold the raw pointer.
-            let files_snapshot: Option<(&[FileItem], Arc<ContentCacheBudget>, ArenaPtr)> =
+            let files_snapshot: Option<(&[FileItem], usize, Arc<ContentCacheBudget>, ArenaPtr)> =
                 if !cancelled.load(Ordering::Acquire) {
                     let guard = shared_picker.read().ok();
                     guard.and_then(|guard| {
@@ -1786,6 +1796,7 @@ fn spawn_scan_and_watcher(
                             let files = picker.sync_data.files();
                             let ptr = files.as_ptr();
                             let len = files.len();
+                            let base_count = picker.sync_data.base_count;
                             let budget = Arc::clone(&picker.cache_budget);
                             let arena = picker.arena_base_ptr();
                             // SAFETY: post_scan_busy flag blocks trigger_rescan and
@@ -1793,7 +1804,7 @@ fn spawn_scan_and_watcher(
                             // so the Vec backing this slice stays alive.
                             let static_files: &[FileItem] =
                                 unsafe { std::slice::from_raw_parts(ptr, len) };
-                            (static_files, budget, arena)
+                            (static_files, base_count, budget, arena)
                         })
                     })
                 } else {
@@ -1803,7 +1814,7 @@ fn spawn_scan_and_watcher(
             // both of this is using a custom soft lock not guaranteed by compiler
             // this is required to keep the picker functioning if someone opened a really crazy
             // e.g  10m files directory but potentially unsafe
-            if let Some((files, budget, arena)) = files_snapshot {
+            if let Some((files, base_count, budget, arena)) = files_snapshot {
                 if enable_mmap_cache && !cancelled.load(Ordering::Acquire) {
                     let warmup_start = std::time::Instant::now();
                     warmup_mmaps(files, &budget, &base_path, arena);
@@ -1816,8 +1827,16 @@ fn spawn_scan_and_watcher(
                 }
 
                 if enable_content_indexing && !cancelled.load(Ordering::Acquire) {
+                    // Index ONLY base files. Any overflow files present in
+                    // the snapshot (from watcher events that landed before
+                    // this snapshot was taken) are intentionally excluded:
+                    // grep handles them via the unconditional overflow-
+                    // append loop, and the filter's `file_count` must match
+                    // the overlay's `base_file_count` so the candidate
+                    // bitset can't carry bits for overflow-range indices.
+                    let base_files = &files[..base_count.min(files.len())];
                     let (index, content_binary) =
-                        build_bigram_index(files, &budget, &base_path, arena);
+                        build_bigram_index(base_files, &budget, &base_path, arena);
 
                     if let Ok(mut guard) = shared_picker.write()
                         && let Some(ref mut picker) = *guard
@@ -1828,7 +1847,6 @@ fn spawn_scan_and_watcher(
                             }
                         }
 
-                        let base_count = picker.sync_data.base_count;
                         picker.sync_data.bigram_index = Some(Arc::new(index));
                         picker.sync_data.bigram_overlay = Some(Arc::new(parking_lot::RwLock::new(
                             BigramOverlay::new(base_count),

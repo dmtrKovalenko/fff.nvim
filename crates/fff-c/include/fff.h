@@ -290,9 +290,22 @@ typedef struct FffMixedItem {
   char *git_status;
   uint64_t size;
   uint64_t modified;
+  /**
+   * The access frecency score for files, or max access frecency among all the immediate
+   * children for directories.
+   */
   int64_t access_frecency_score;
+  /**
+   * Always 0 for directories
+   */
   int64_t modification_frecency_score;
+  /**
+   * Always 0 for directories
+   */
   int64_t total_frecency_score;
+  /**
+   * Always 0 for directories
+   */
   bool is_binary;
 } FffMixedItem;
 
@@ -333,24 +346,14 @@ typedef struct FffMixedSearchResult {
 } FffMixedSearchResult;
 
 /**
- * Create a new file finder instance.
+ * Create a new file finder instance (legacy signature).
  *
- * Returns an opaque pointer that must be passed to all other `fff_*` calls
- * and eventually freed with `fff_destroy`.
- *
- * # Parameters
- *
- * * `base_path`                – directory to index (required)
- * * `frecency_db_path`         – path to frecency LMDB database (NULL/empty to skip)
- * * `history_db_path`          – path to query history LMDB database (NULL/empty to skip)
- * * `use_unsafe_no_lock`       – use MDB_NOLOCK for LMDB (useful in single-process setups)
- * * `enable_mmap_cache`        – pre-populate mmap caches after the initial scan
- * * `enable_content_indexing`  – build content index after the initial scan
- * * `watch`                    – start a background file-system watcher for live updates
- * * `ai_mode`                  – enable AI-agent optimizations (auto-track frecency on modifications)
+ * @deprecated prefer `fff_create_instance2`, which also exposes log file and
+ * cache-budget configuration. This function delegates to `fff_create_instance2`
+ * with NULL log paths and auto cache budget, so behaviour is unchanged.
  *
  * ## Safety
- * String parameters must be valid null-terminated UTF-8 or NULL.
+ * See `fff_create_instance2`.
  */
 struct FffResult *fff_create_instance(const char *base_path,
                                       const char *frecency_db_path,
@@ -360,6 +363,52 @@ struct FffResult *fff_create_instance(const char *base_path,
                                       bool enable_content_indexing,
                                       bool watch,
                                       bool ai_mode);
+
+/**
+ * Create a new file finder instance (v2, with full options).
+ *
+ * Returns an opaque pointer that must be passed to all other `fff_*` calls
+ * and eventually freed with `fff_destroy`.
+ *
+ * # Parameters
+ *
+ * * `base_path`                   – directory to index (required)
+ * * `frecency_db_path`            – frecency LMDB database path (NULL/empty to skip)
+ * * `history_db_path`             – query history LMDB database path (NULL/empty to skip)
+ * * `use_unsafe_no_lock`          – use MDB_NOLOCK for LMDB (useful in single-process setups)
+ * * `enable_mmap_cache`           – pre-populate mmap caches after the initial scan
+ * * `enable_content_indexing`     – build content index after the initial scan
+ * * `watch`                       – start a background file-system watcher for live updates
+ * * `ai_mode`                     – enable AI-agent optimizations
+ * * `log_file_path`               – tracing log file path (NULL/empty to skip).
+ *   Only the first successful call in a process installs the subscriber;
+ *   subsequent calls are no-ops at the log layer.
+ * * `log_level`                   – `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`
+ *   (NULL/empty defaults to `"info"`). Ignored when `log_file_path` is not set.
+ * * `cache_budget_max_files`      – content cache file-count cap (0 = auto)
+ * * `cache_budget_max_bytes`      – content cache byte cap (0 = auto)
+ * * `cache_budget_max_file_size`  – per-file byte cap (0 = auto)
+ *
+ * When all three `cache_budget_*` values are 0 the budget is auto-computed
+ * from repo size after the initial scan. Otherwise an explicit budget is
+ * used: any field left at 0 falls back to its `unlimited()` default.
+ *
+ * ## Safety
+ * String parameters must be valid null-terminated UTF-8 or NULL.
+ */
+struct FffResult *fff_create_instance2(const char *base_path,
+                                       const char *frecency_db_path,
+                                       const char *history_db_path,
+                                       bool use_unsafe_no_lock,
+                                       bool enable_mmap_cache,
+                                       bool enable_content_indexing,
+                                       bool watch,
+                                       bool ai_mode,
+                                       const char *log_file_path,
+                                       const char *log_level,
+                                       uint64_t cache_budget_max_files,
+                                       uint64_t cache_budget_max_bytes,
+                                       uint64_t cache_budget_max_file_size);
 
 /**
  * Destroy a file finder instance and free all its resources.
@@ -767,5 +816,395 @@ const struct FffMixedItem *fff_mixed_search_result_get_item(const struct FffMixe
  */
 const struct FffScore *fff_mixed_search_result_get_score(const struct FffMixedSearchResult *result,
                                                          uint32_t index);
+
+/**
+ * Returns the relative path of a file item (e.g. `"src/main.rs"`).
+ *
+ * Returns null if `item` is null. The returned pointer is valid for the
+ * lifetime of the owning `FffSearchResult`; do not free it directly.
+ *
+ * ## Safety
+ * `item` must be a valid `FffFileItem` pointer or null.
+ */
+const char *fff_file_item_get_relative_path(const struct FffFileItem *item);
+
+/**
+ * Returns the file-name component of a file item (e.g. `"main.rs"`).
+ *
+ * Returns null if `item` is null. Do not free the returned pointer.
+ *
+ * ## Safety
+ * `item` must be a valid `FffFileItem` pointer or null.
+ */
+const char *fff_file_item_get_file_name(const struct FffFileItem *item);
+
+/**
+ * Returns the git status string for a file item (e.g. `"M "`, `"??"`)
+ * or null if git is unavailable, the file is untracked, or `item` is null.
+ *
+ * Do not free the returned pointer.
+ *
+ * ## Safety
+ * `item` must be a valid `FffFileItem` pointer or null.
+ */
+const char *fff_file_item_get_git_status(const struct FffFileItem *item);
+
+/**
+ * Returns the file size in bytes. Returns `0` if `item` is null.
+ *
+ * ## Safety
+ * `item` must be a valid `FffFileItem` pointer or null.
+ */
+uint64_t fff_file_item_get_size(const struct FffFileItem *item);
+
+/**
+ * Returns the last-modified time as seconds since the UNIX epoch.
+ * Returns `0` if `item` is null.
+ *
+ * ## Safety
+ * `item` must be a valid `FffFileItem` pointer or null.
+ */
+uint64_t fff_file_item_get_modified(const struct FffFileItem *item);
+
+/**
+ * Returns the combined frecency score. Returns `0` if `item` is null.
+ *
+ * ## Safety
+ * `item` must be a valid `FffFileItem` pointer or null.
+ */
+int64_t fff_file_item_get_total_frecency_score(const struct FffFileItem *item);
+
+/**
+ * Returns the access-based frecency score. Returns `0` if `item` is null.
+ *
+ * ## Safety
+ * `item` must be a valid `FffFileItem` pointer or null.
+ */
+int64_t fff_file_item_get_access_frecency_score(const struct FffFileItem *item);
+
+/**
+ * Returns the modification-based frecency score. Returns `0` if `item` is null.
+ *
+ * ## Safety
+ * `item` must be a valid `FffFileItem` pointer or null.
+ */
+int64_t fff_file_item_get_modification_frecency_score(const struct FffFileItem *item);
+
+/**
+ * Returns `true` if the file was detected as binary. Returns `false` if `item` is null.
+ *
+ * ## Safety
+ * `item` must be a valid `FffFileItem` pointer or null.
+ */
+bool fff_file_item_get_is_binary(const struct FffFileItem *item);
+
+/**
+ * Returns the relative path of the file containing this grep match.
+ *
+ * Returns null if `m` is null. Do not free the returned pointer.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+const char *fff_grep_match_get_relative_path(const struct FffGrepMatch *m);
+
+/**
+ * Returns the file-name component of the file containing this grep match.
+ *
+ * Returns null if `m` is null. Do not free the returned pointer.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+const char *fff_grep_match_get_file_name(const struct FffGrepMatch *m);
+
+/**
+ * Returns the git status string for the matched file (e.g. `"M "`, `"??"`)
+ * or null if git is unavailable, the file is untracked, or `m` is null.
+ *
+ * Do not free the returned pointer.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+const char *fff_grep_match_get_git_status(const struct FffGrepMatch *m);
+
+/**
+ * Returns the full text content of the matched line.
+ *
+ * Returns null if `m` is null. Do not free the returned pointer.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+const char *fff_grep_match_get_line_content(const struct FffGrepMatch *m);
+
+/**
+ * Returns the 1-based line number of the match within its file.
+ * Returns `0` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+uint64_t fff_grep_match_get_line_number(const struct FffGrepMatch *m);
+
+/**
+ * Returns the 0-based column of the match start within its line.
+ * Returns `0` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+uint32_t fff_grep_match_get_col(const struct FffGrepMatch *m);
+
+/**
+ * Returns the byte offset of the match start from the beginning of the file.
+ * Returns `0` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+uint64_t fff_grep_match_get_byte_offset(const struct FffGrepMatch *m);
+
+/**
+ * Returns the file size in bytes for the matched file. Returns `0` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+uint64_t fff_grep_match_get_size(const struct FffGrepMatch *m);
+
+/**
+ * Returns the combined frecency score for the matched file.
+ * Returns `0` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+int64_t fff_grep_match_get_total_frecency_score(const struct FffGrepMatch *m);
+
+/**
+ * Returns the access-based frecency score for the matched file.
+ * Returns `0` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+int64_t fff_grep_match_get_access_frecency_score(const struct FffGrepMatch *m);
+
+/**
+ * Returns the modification-based frecency score for the matched file.
+ * Returns `0` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+int64_t fff_grep_match_get_modification_frecency_score(const struct FffGrepMatch *m);
+
+/**
+ * Returns the last-modified time as seconds since the UNIX epoch for the matched file.
+ * Returns `0` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+uint64_t fff_grep_match_get_modified(const struct FffGrepMatch *m);
+
+/**
+ * Returns the number of highlight ranges in this match. Returns `0` if `m` is null.
+ *
+ * Use with [`fff_grep_match_get_match_range`] to iterate the highlight spans.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+uint32_t fff_grep_match_get_match_ranges_count(const struct FffGrepMatch *m);
+
+/**
+ * Returns a pointer to the `index`-th [`FffMatchRange`] highlight span.
+ *
+ * Returns null if `m` is null, `index >= match_ranges_count`, or the
+ * ranges array is null. The returned pointer is valid until the owning
+ * `FffGrepResult` is freed; do not free it directly.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+const struct FffMatchRange *fff_grep_match_get_match_range(const struct FffGrepMatch *m,
+                                                           uint32_t index);
+
+/**
+ * Returns the number of context lines captured before the match.
+ * Returns `0` if `m` is null.
+ *
+ * Use with [`fff_grep_match_get_context_before`] to read each line.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+uint32_t fff_grep_match_get_context_before_count(const struct FffGrepMatch *m);
+
+/**
+ * Returns the `index`-th context line before the match.
+ *
+ * Returns null if `m` is null, `index >= context_before_count`, or the
+ * context array is null. Do not free the returned pointer.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+const char *fff_grep_match_get_context_before(const struct FffGrepMatch *m, uint32_t index);
+
+/**
+ * Returns the number of context lines captured after the match.
+ * Returns `0` if `m` is null.
+ *
+ * Use with [`fff_grep_match_get_context_after`] to read each line.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+uint32_t fff_grep_match_get_context_after_count(const struct FffGrepMatch *m);
+
+/**
+ * Returns the `index`-th context line after the match.
+ *
+ * Returns null if `m` is null, `index >= context_after_count`, or the
+ * context array is null. Do not free the returned pointer.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+const char *fff_grep_match_get_context_after(const struct FffGrepMatch *m, uint32_t index);
+
+/**
+ * Returns the fuzzy match score. Returns `0` if `m` is null or no fuzzy
+ * score is present.
+ *
+ * Always check [`fff_grep_match_get_has_fuzzy_score`] first; `0` is
+ * ambiguous without that flag.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+uint16_t fff_grep_match_get_fuzzy_score(const struct FffGrepMatch *m);
+
+/**
+ * Returns `true` if this match carries a valid fuzzy score.
+ * Returns `false` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+bool fff_grep_match_get_has_fuzzy_score(const struct FffGrepMatch *m);
+
+/**
+ * Returns `true` if the match was identified as a symbol definition.
+ * Returns `false` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+bool fff_grep_match_get_is_definition(const struct FffGrepMatch *m);
+
+/**
+ * Returns `true` if the matched file was detected as binary.
+ * Returns `false` if `m` is null.
+ *
+ * ## Safety
+ * `m` must be a valid `FffGrepMatch` pointer or null.
+ */
+bool fff_grep_match_get_is_binary(const struct FffGrepMatch *m);
+
+/**
+ * Returns the number of items in the result. Returns `0` if `r` is null.
+ *
+ * ## Safety
+ * `r` must be a valid `FffSearchResult` pointer or null.
+ */
+uint32_t fff_search_result_get_count(const struct FffSearchResult *r);
+
+/**
+ * Returns the total number of files that matched before the result was
+ * truncated to the page size. Returns `0` if `r` is null.
+ *
+ * ## Safety
+ * `r` must be a valid `FffSearchResult` pointer or null.
+ */
+uint32_t fff_search_result_get_total_matched(const struct FffSearchResult *r);
+
+/**
+ * Returns the total number of indexed files considered during search.
+ * Returns `0` if `r` is null.
+ *
+ * ## Safety
+ * `r` must be a valid `FffSearchResult` pointer or null.
+ */
+uint32_t fff_search_result_get_total_files(const struct FffSearchResult *r);
+
+/**
+ * Returns the number of matches in the result. Returns `0` if `r` is null.
+ *
+ * ## Safety
+ * `r` must be a valid `FffGrepResult` pointer or null.
+ */
+uint32_t fff_grep_result_get_count(const struct FffGrepResult *r);
+
+/**
+ * Returns the total number of matches found across all pages.
+ * Returns `0` if `r` is null.
+ *
+ * ## Safety
+ * `r` must be a valid `FffGrepResult` pointer or null.
+ */
+uint32_t fff_grep_result_get_total_matched(const struct FffGrepResult *r);
+
+/**
+ * Returns the number of files actually opened and searched in this call.
+ * Returns `0` if `r` is null.
+ *
+ * ## Safety
+ * `r` must be a valid `FffGrepResult` pointer or null.
+ */
+uint32_t fff_grep_result_get_total_files_searched(const struct FffGrepResult *r);
+
+/**
+ * Returns the total number of indexed files before any filtering.
+ * Returns `0` if `r` is null.
+ *
+ * ## Safety
+ * `r` must be a valid `FffGrepResult` pointer or null.
+ */
+uint32_t fff_grep_result_get_total_files(const struct FffGrepResult *r);
+
+/**
+ * Returns the number of files eligible for search after path/type filtering.
+ * Returns `0` if `r` is null.
+ *
+ * ## Safety
+ * `r` must be a valid `FffGrepResult` pointer or null.
+ */
+uint32_t fff_grep_result_get_filtered_file_count(const struct FffGrepResult *r);
+
+/**
+ * Returns the file offset for the next page, or `0` if all files have been
+ * searched or `r` is null. Pass this value as `file_offset` to a subsequent
+ * `fff_live_grep` or `fff_multi_grep` call to continue pagination.
+ *
+ * ## Safety
+ * `r` must be a valid `FffGrepResult` pointer or null.
+ */
+uint32_t fff_grep_result_get_next_file_offset(const struct FffGrepResult *r);
+
+/**
+ * Returns the regex compilation error string if the engine fell back to
+ * literal matching, or null if there was no error or `r` is null.
+ *
+ * Do not free the returned pointer.
+ *
+ * ## Safety
+ * `r` must be a valid `FffGrepResult` pointer or null.
+ */
+const char *fff_grep_result_get_regex_fallback_error(const struct FffGrepResult *r);
 
 #endif  /* FFF_C_H */

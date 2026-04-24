@@ -1,14 +1,49 @@
 PLENARY_DIR ?= ../plenary.nvim
 
-.PHONY: build test test-rust test-lua test-version test-bun test-node prepare-bun prepare-node set-npm-version header
+PREFIX ?= /usr/local
+LIBDIR ?= $(PREFIX)/lib
+INCLUDEDIR ?= $(PREFIX)/include
+
+.PHONY: build build-c-lib install uninstall test test-rust test-lua test-version test-bun test-node prepare-bun prepare-node set-npm-version header
 
 all: format test lint
 
 build:
 	cargo build --release --features zlob
 
+build-c-lib:
+	cargo build --release -p fff-c --features zlob
+
 header:
 	cbindgen --config crates/fff-c/cbindgen.toml --crate fff-c --output crates/fff-c/include/fff.h
+
+# Install the C library and header under $(PREFIX) (default /usr/local).
+# Override PREFIX for user-local installs, e.g. `make install PREFIX=$$HOME/.local`.
+# DESTDIR is honoured for packagers.
+install: build-c-lib
+	install -d $(DESTDIR)$(LIBDIR)
+	install -d $(DESTDIR)$(INCLUDEDIR)
+	install -m 0644 crates/fff-c/include/fff.h $(DESTDIR)$(INCLUDEDIR)/fff.h
+	@if [ -f target/release/libfff_c.dylib ]; then \
+		install -m 0755 target/release/libfff_c.dylib $(DESTDIR)$(LIBDIR)/libfff_c.dylib; \
+		echo "Installed $(DESTDIR)$(LIBDIR)/libfff_c.dylib"; \
+	fi
+	@if [ -f target/release/libfff_c.so ]; then \
+		install -m 0755 target/release/libfff_c.so $(DESTDIR)$(LIBDIR)/libfff_c.so; \
+		echo "Installed $(DESTDIR)$(LIBDIR)/libfff_c.so"; \
+	fi
+	@if [ -f target/release/fff_c.dll ]; then \
+		install -m 0755 target/release/fff_c.dll $(DESTDIR)$(LIBDIR)/fff_c.dll; \
+		echo "Installed $(DESTDIR)$(LIBDIR)/fff_c.dll"; \
+	fi
+	@echo "Installed header $(DESTDIR)$(INCLUDEDIR)/fff.h"
+
+uninstall:
+	rm -f $(DESTDIR)$(LIBDIR)/libfff_c.dylib
+	rm -f $(DESTDIR)$(LIBDIR)/libfff_c.so
+	rm -f $(DESTDIR)$(LIBDIR)/fff_c.dll
+	rm -f $(DESTDIR)$(INCLUDEDIR)/fff.h
+	@echo "Removed fff-c from $(DESTDIR)$(PREFIX)"
 
 test-setup:
 	@if [ ! -d "$(PLENARY_DIR)" ]; then \
@@ -21,7 +56,7 @@ test-rust:
 
 test-lua: test-setup build
 	nvim --headless -u tests/minimal_init.lua \
-		-c "PlenaryBustedFile tests/fff_core_spec.lua" 2>&1
+		-c "PlenaryBustedDirectory tests/ {minimal_init = 'tests/minimal_init.lua'}" 2>&1
 
 test-version: test-setup
 	nvim --headless -u tests/minimal_init.lua \

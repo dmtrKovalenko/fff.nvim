@@ -334,11 +334,16 @@ export function ffiCreate(
   enableContentIndexing: boolean,
   watch: boolean,
   aiMode: boolean,
+  logFilePath: string,
+  logLevel: string,
+  cacheBudgetMaxFiles: number,
+  cacheBudgetMaxBytes: number,
+  cacheBudgetMaxFileSize: number,
 ): Result<NativeHandle> {
   loadLibrary();
 
   const { rawPtr, struct: structData } = callRaw(
-    "fff_create_instance",
+    "fff_create_instance2",
     [
       DataType.String, // base_path
       DataType.String, // frecency_db_path
@@ -348,6 +353,11 @@ export function ffiCreate(
       DataType.Boolean, // enable_content_indexing
       DataType.Boolean, // watch
       DataType.Boolean, // ai_mode
+      DataType.String, // log_file_path
+      DataType.String, // log_level
+      DataType.U64, // cache_budget_max_files
+      DataType.U64, // cache_budget_max_bytes
+      DataType.U64, // cache_budget_max_file_size
     ],
     [
       basePath,
@@ -358,6 +368,11 @@ export function ffiCreate(
       enableContentIndexing,
       watch,
       aiMode,
+      logFilePath,
+      logLevel,
+      cacheBudgetMaxFiles,
+      cacheBudgetMaxBytes,
+      cacheBudgetMaxFileSize,
     ],
   );
 
@@ -367,7 +382,7 @@ export function ffiCreate(
     if (success) {
       const handle = structData.handle;
       if (isNullPointer(handle)) {
-        return err("fff_create_instance returned null handle");
+        return err("fff_create_instance2 returned null handle");
       }
       return { ok: true, value: handle };
     } else {

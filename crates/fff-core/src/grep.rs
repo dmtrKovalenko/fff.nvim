@@ -2069,7 +2069,9 @@ pub(crate) fn grep_search<'a>(
                 while bits != 0 {
                     let bit = bits.trailing_zeros() as usize;
                     let file_idx = base + bit;
-                    if file_idx < files.len() {
+                    // Stop at the overflow boundary: the loop below walks
+                    // every overflow file, so counting them here too would duplicate.
+                    if file_idx < overflow_start {
                         let f = unsafe { files.get_unchecked(file_idx) };
                         if !f.is_binary() && f.size <= options.max_file_size {
                             result.push(f);
@@ -2474,6 +2476,143 @@ mod tests {
             result3.matches.len(),
             0,
             "Empty patterns should find nothing"
+        );
+    }
+
+    /// Regression test for issue #407: Live grep returns duplicate results
+    /// when the bigram candidate bitset has trailing bits set beyond
+    /// `base_file_count`. The bitset is rounded up to a multiple of 64 bits
+    /// so any trailing bit that happens to be set (e.g. from overlay data)
+    /// would previously map to an overflow file index, which was then also
+    /// unconditionally appended by the overflow loop, producing duplicates.
+    #[test]
+    fn test_grep_no_duplicates_with_overflow_trailing_bits() {
+        use crate::bigram_filter::{BigramIndexBuilder, BigramOverlay};
+        use crate::file_picker::{FilePicker, FilePickerOptions};
+        use std::io::Write;
+        use std::sync::atomic::AtomicBool;
+
+        let dir = tempfile::tempdir().unwrap();
+
+        // Five base files: only three contain the pattern "unicorn".
+        // We need some files WITHOUT the pattern so the bigrams for
+        // "unicorn" aren't treated as ubiquitous (≥90% of files) and
+        // dropped from the index during compress().
+        let base_contents: &[(&str, &str)] = &[
+            ("a.txt", "hello unicorn world"),
+            ("b.txt", "another unicorn line"),
+            ("c.txt", "one more unicorn here"),
+            ("d.txt", "nothing special in here"),
+            ("e.txt", "just some random content"),
+        ];
+        for (name, content) in base_contents {
+            let mut f = std::fs::File::create(dir.path().join(name)).unwrap();
+            writeln!(f, "{}", content).unwrap();
+        }
+
+        let mut picker = FilePicker::new(FilePickerOptions {
+            base_path: dir.path().to_str().unwrap().into(),
+            watch: false,
+            ..Default::default()
+        })
+        .unwrap();
+        picker.collect_files().unwrap();
+        assert_eq!(picker.get_files().len(), 5);
+
+        // Manually build a bigram index over the 5 base files.
+        let base_count = 5usize;
+        let consec_builder = BigramIndexBuilder::new(base_count);
+        let skip_builder = BigramIndexBuilder::new(base_count);
+        for (i, (_, content)) in base_contents.iter().enumerate() {
+            consec_builder.add_file_content(&skip_builder, i, content.as_bytes());
+        }
+        let mut index = consec_builder.compress(Some(0));
+        index.set_skip_index(skip_builder.compress(Some(0)));
+        picker.set_bigram_index(index, BigramOverlay::new(base_count));
+
+        // Add three overflow files (new after the bigram index was built),
+        // all containing "unicorn".
+        for name in ["f.txt", "g.txt", "h.txt"] {
+            let path = dir.path().join(name);
+            let mut f = std::fs::File::create(&path).unwrap();
+            writeln!(f, "overflow unicorn entry").unwrap();
+            drop(f);
+            picker.on_create_or_modify(&path);
+        }
+        assert_eq!(picker.get_files().len(), 8);
+
+        // Inject a trailing bit into the overlay at a file index that
+        // corresponds to an overflow file (i.e. >= base_file_count=5 but
+        // < bitset_word_size=64). Without the fix, the bigram-candidate
+        // merge would set this bit in the bitset, and the bitset loop would
+        // push files[6] while the overflow loop also appends files[5..]
+        // which includes files[6], producing a duplicate.
+        let overflow_rel = "g.txt"; // middle overflow file
+        let overflow_abs = picker
+            .get_files()
+            .iter()
+            .position(|f| f.relative_path(&picker) == overflow_rel)
+            .expect("overflow file should be present");
+        assert!(overflow_abs >= base_count);
+        assert!(
+            overflow_abs < 64,
+            "index must fit in the single bitset word"
+        );
+
+        if let Some(overlay) = picker.bigram_overlay() {
+            overlay
+                .write()
+                .modify_file(overflow_abs, b"overflow unicorn entry");
+        }
+
+        // Run a grep for "unicorn": six files match
+        // (a, b, c in base + f, g, h in overflow).
+        let query = super::parse_grep_query("unicorn");
+        let options = super::GrepSearchOptions {
+            max_file_size: 10 * 1024 * 1024,
+            max_matches_per_file: 0,
+            smart_case: true,
+            file_offset: 0,
+            page_limit: 100,
+            mode: super::GrepMode::PlainText,
+            time_budget_ms: 0,
+            before_context: 0,
+            after_context: 0,
+            classify_definitions: false,
+            trim_whitespace: false,
+            abort_signal: Some(std::sync::Arc::new(AtomicBool::new(false))),
+        };
+        let result = picker.grep(&query, &options);
+
+        // Collect the matched relative paths via the returned files list.
+        let mut paths: Vec<String> = result
+            .files
+            .iter()
+            .map(|f| f.relative_path(&picker))
+            .collect();
+        paths.sort();
+
+        // Every file (base + overflow) should match exactly once.
+        let mut dedup = paths.clone();
+        dedup.dedup();
+        assert_eq!(
+            dedup, paths,
+            "grep must not return duplicate results (issue #407): {:?}",
+            paths
+        );
+        assert_eq!(
+            paths,
+            vec!["a.txt", "b.txt", "c.txt", "f.txt", "g.txt", "h.txt"],
+        );
+
+        // And the match count must equal the number of files (one line per
+        // file). A duplicate entry in files_to_search would double-count
+        // matches for the duplicated file.
+        assert_eq!(
+            result.matches.len(),
+            6,
+            "expected exactly one match per file, got {}",
+            result.matches.len()
         );
     }
 }

@@ -127,7 +127,7 @@ fn raw_notify_nonrecursive_detects_deletion() {
     );
 }
 
-/// Same test but with MULTIPLE NonRecursive watches (base + src + .git + .git/refs)
+/// Same test but with MULTIPLE NonRecursive watches (base + src + .git)
 /// to match what fff actually does. Each watch() call stops/restarts the FSEvents stream.
 #[test]
 fn raw_notify_multi_nonrecursive_detects_deletion() {
@@ -157,9 +157,6 @@ fn raw_notify_multi_nonrecursive_detects_deletion() {
         .unwrap();
     watcher
         .watch(&dir.join(".git"), RecursiveMode::NonRecursive)
-        .unwrap();
-    watcher
-        .watch(&dir.join(".git/refs"), RecursiveMode::Recursive)
         .unwrap();
 
     // Let the watcher stabilize
@@ -263,9 +260,6 @@ fn debounced_nonrecursive_detects_deletion() {
         .unwrap();
     debouncer
         .watch(&dir.join(".git"), RecursiveMode::NonRecursive)
-        .unwrap();
-    debouncer
-        .watch(&dir.join(".git/refs"), RecursiveMode::Recursive)
         .unwrap();
 
     // Longer stabilization — each watch() restarts the FSEvents stream

@@ -9,6 +9,7 @@ ue = "ue"
 # some typos we use for tests
 comparsion = "comparsion"
 modfiers = "modfiers"
+shcema = "shcema"
 
 [default]
 extend-ignore-re = [

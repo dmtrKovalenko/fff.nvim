@@ -722,6 +722,31 @@ impl ContentCacheBudget {
         }
     }
 
+    /// Build a budget from caller-supplied overrides.
+    ///
+    /// Each argument is a cap; `0` means "use the library default for that
+    /// cap" (inherits from [`Self::default`], which is `new_for_repo(30_000)`).
+    /// Returns `None` when every cap is `0`, signalling to the picker that it
+    /// should auto-size the budget from the final scanned file count rather
+    /// than applying an explicit override.
+    pub fn from_overrides(max_files: usize, max_bytes: u64, max_file_size: u64) -> Option<Self> {
+        if max_files == 0 && max_bytes == 0 && max_file_size == 0 {
+            return None;
+        }
+
+        let mut budget = Self::default();
+        if max_files > 0 {
+            budget.max_files = max_files;
+        }
+        if max_bytes > 0 {
+            budget.max_bytes = max_bytes;
+        }
+        if max_file_size > 0 {
+            budget.max_file_size = max_file_size;
+        }
+        Some(budget)
+    }
+
     pub fn reset(&self) {
         self.cached_count.store(0, Ordering::Relaxed);
         self.cached_bytes.store(0, Ordering::Relaxed);

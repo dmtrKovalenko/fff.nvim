@@ -51,6 +51,26 @@ export interface InitOptions {
   disableWatch?: boolean;
   /** enables optimizations for AI agent assistants. Provide as true if running via mcp/agent */
   aiMode?: boolean;
+  /**
+   * Path to the tracing log file. When set, the shared FFF tracing subscriber
+   * is installed on first init and file output is written here. Omit to leave
+   * logging uninitialized.
+   */
+  logFilePath?: string;
+  /**
+   * Log level for the tracing subscriber: "trace", "debug", "info", "warn",
+   * or "error". Defaults to "info". Ignored when `logFilePath` is not set.
+   */
+  logLevel?: "trace" | "debug" | "info" | "warn" | "error";
+  /**
+   * Override for the content cache file-count cap. When omitted, the picker
+   * auto-sizes the budget from the final scanned file count.
+   */
+  cacheBudgetMaxFiles?: number;
+  /** Override for the content cache byte cap. See `cacheBudgetMaxFiles`. */
+  cacheBudgetMaxBytes?: number;
+  /** Override for the per-file byte cap in the content cache. */
+  cacheBudgetMaxFileSize?: number;
 }
 
 /**

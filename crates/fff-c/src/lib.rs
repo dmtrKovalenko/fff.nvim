@@ -104,24 +104,14 @@ fn default_i32(val: i32, default: i32) -> i32 {
     if val == 0 { default } else { val }
 }
 
-/// Create a new file finder instance.
+/// Create a new file finder instance (legacy signature).
 ///
-/// Returns an opaque pointer that must be passed to all other `fff_*` calls
-/// and eventually freed with `fff_destroy`.
-///
-/// # Parameters
-///
-/// * `base_path`                – directory to index (required)
-/// * `frecency_db_path`         – path to frecency LMDB database (NULL/empty to skip)
-/// * `history_db_path`          – path to query history LMDB database (NULL/empty to skip)
-/// * `use_unsafe_no_lock`       – use MDB_NOLOCK for LMDB (useful in single-process setups)
-/// * `enable_mmap_cache`        – pre-populate mmap caches after the initial scan
-/// * `enable_content_indexing`  – build content index after the initial scan
-/// * `watch`                    – start a background file-system watcher for live updates
-/// * `ai_mode`                  – enable AI-agent optimizations (auto-track frecency on modifications)
+/// @deprecated prefer `fff_create_instance2`, which also exposes log file and
+/// cache-budget configuration. This function delegates to `fff_create_instance2`
+/// with NULL log paths and auto cache budget, so behaviour is unchanged.
 ///
 /// ## Safety
-/// String parameters must be valid null-terminated UTF-8 or NULL.
+/// See `fff_create_instance2`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fff_create_instance(
     base_path: *const c_char,
@@ -133,10 +123,82 @@ pub unsafe extern "C" fn fff_create_instance(
     watch: bool,
     ai_mode: bool,
 ) -> *mut FffResult {
+    unsafe {
+        fff_create_instance2(
+            base_path,
+            frecency_db_path,
+            history_db_path,
+            use_unsafe_no_lock,
+            enable_mmap_cache,
+            enable_content_indexing,
+            watch,
+            ai_mode,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            0,
+            0,
+        )
+    }
+}
+
+/// Create a new file finder instance (v2, with full options).
+///
+/// Returns an opaque pointer that must be passed to all other `fff_*` calls
+/// and eventually freed with `fff_destroy`.
+///
+/// # Parameters
+///
+/// * `base_path`                   – directory to index (required)
+/// * `frecency_db_path`            – frecency LMDB database path (NULL/empty to skip)
+/// * `history_db_path`             – query history LMDB database path (NULL/empty to skip)
+/// * `use_unsafe_no_lock`          – use MDB_NOLOCK for LMDB (useful in single-process setups)
+/// * `enable_mmap_cache`           – pre-populate mmap caches after the initial scan
+/// * `enable_content_indexing`     – build content index after the initial scan
+/// * `watch`                       – start a background file-system watcher for live updates
+/// * `ai_mode`                     – enable AI-agent optimizations
+/// * `log_file_path`               – tracing log file path (NULL/empty to skip).
+///   Only the first successful call in a process installs the subscriber;
+///   subsequent calls are no-ops at the log layer.
+/// * `log_level`                   – `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`
+///   (NULL/empty defaults to `"info"`). Ignored when `log_file_path` is not set.
+/// * `cache_budget_max_files`      – content cache file-count cap (0 = auto)
+/// * `cache_budget_max_bytes`      – content cache byte cap (0 = auto)
+/// * `cache_budget_max_file_size`  – per-file byte cap (0 = auto)
+///
+/// When all three `cache_budget_*` values are 0 the budget is auto-computed
+/// from repo size after the initial scan. Otherwise an explicit budget is
+/// used: any field left at 0 falls back to its `unlimited()` default.
+///
+/// ## Safety
+/// String parameters must be valid null-terminated UTF-8 or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_create_instance2(
+    base_path: *const c_char,
+    frecency_db_path: *const c_char,
+    history_db_path: *const c_char,
+    use_unsafe_no_lock: bool,
+    enable_mmap_cache: bool,
+    enable_content_indexing: bool,
+    watch: bool,
+    ai_mode: bool,
+    log_file_path: *const c_char,
+    log_level: *const c_char,
+    cache_budget_max_files: u64,
+    cache_budget_max_bytes: u64,
+    cache_budget_max_file_size: u64,
+) -> *mut FffResult {
     let base_path_str = match unsafe { cstr_to_str(base_path) } {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => return FffResult::err("base_path is null or empty"),
     };
+
+    if let Some(log_path) = unsafe { optional_cstr(log_file_path) } {
+        let level = unsafe { optional_cstr(log_level) };
+        if let Err(e) = fff::log::init_tracing(log_path, level) {
+            return FffResult::err(&format!("Failed to init tracing: {}", e));
+        }
+    }
 
     let frecency_path = unsafe { optional_cstr(frecency_db_path) }.map(|s| s.to_string());
     let history_path = unsafe { optional_cstr(history_db_path) }.map(|s| s.to_string());
@@ -185,6 +247,12 @@ pub unsafe extern "C" fn fff_create_instance(
         FFFMode::Neovim
     };
 
+    let cache_budget = fff::ContentCacheBudget::from_overrides(
+        cache_budget_max_files as usize,
+        cache_budget_max_bytes,
+        cache_budget_max_file_size,
+    );
+
     // Initialize file picker (writes directly into shared_picker)
     if let Err(e) = FilePicker::new_with_shared_state(
         shared_picker.clone(),
@@ -195,7 +263,7 @@ pub unsafe extern "C" fn fff_create_instance(
             enable_content_indexing,
             watch,
             mode,
-            cache_budget: None,
+            cache_budget,
         },
     ) {
         return FffResult::err(&format!("Failed to init file picker: {}", e));

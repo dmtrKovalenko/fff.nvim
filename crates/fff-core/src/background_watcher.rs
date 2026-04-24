@@ -650,24 +650,26 @@ fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) 
 
     let git_dir = repo.path();
 
-    if let Ok(rel) = changed.strip_prefix(git_dir) {
-        if rel.starts_with("objects") || rel.starts_with("logs") || rel.starts_with("hooks") {
-            return false;
-        }
-        if rel == Path::new("index") || rel == Path::new("index.lock") {
+    if let Ok(path_in_git_dir) = changed.strip_prefix(git_dir) {
+        // Only react to changes that rewrite the worktree state: commits,
+        // staging, checkouts, merges, conflict resolution. Ref-only updates
+        // under refs/ (fetch, push, tag writes, pack-refs) do not change
+        // which files are modified/untracked, so we deliberately skip them —
+        // watching refs/ recursively would cost one inotify watch per ref
+        // namespace on repos with many branches/remotes.
+        if path_in_git_dir == Path::new("index") || path_in_git_dir == Path::new("index.lock") {
             return true;
         }
-        if rel == Path::new("HEAD") {
+        if path_in_git_dir == Path::new("HEAD") {
             return true;
         }
-        if rel.starts_with("refs") || rel == Path::new("packed-refs") {
-            return true;
-        }
-        if rel == Path::new("info/exclude") || rel == Path::new("info/sparse-checkout") {
+        if path_in_git_dir == Path::new("info/exclude")
+            || path_in_git_dir == Path::new("info/sparse-checkout")
+        {
             return true;
         }
 
-        if let Some(fname) = rel.file_name().and_then(|f| f.to_str())
+        if let Some(fname) = path_in_git_dir.file_name().and_then(|f| f.to_str())
             && matches!(fname, "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD")
         {
             return true;
@@ -695,18 +697,13 @@ fn watch_git_status_paths(debouncer: &mut Debouncer, git_workdir: Option<&PathBu
     }
 
     // Watch .git/ non-recursively to catch top-level files:
-    // index, index.lock, HEAD, packed-refs, MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD
+    // index, index.lock, HEAD, MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD.
+    // We intentionally do NOT watch refs/ — individual ref updates don't
+    // affect worktree status, and a recursive watch there blows up inotify
+    // watch counts on repos with many branches/remotes/tags.
     if let Err(e) = debouncer.watch(&git_dir, RecursiveMode::NonRecursive) {
         warn!("Failed to watch .git directory: {}", e);
         return;
-    }
-
-    // Watch refs/ recursively to catch branch/tag changes
-    let refs_dir = git_dir.join("refs");
-    if refs_dir.is_dir()
-        && let Err(e) = debouncer.watch(&refs_dir, RecursiveMode::Recursive)
-    {
-        warn!("Failed to watch .git/refs: {}", e);
     }
 
     // Watch info/ non-recursively for exclude and sparse-checkout

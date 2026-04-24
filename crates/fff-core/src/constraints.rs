@@ -362,15 +362,19 @@ fn collect_glob_indices<'a>(
     constraint: &Constraint<'a>,
     paths: &[&str],
     results: &mut Vec<(bool, AHashSet<usize>)>,
-    is_negated: bool,
+    _is_negated: bool,
 ) {
     match constraint {
         Constraint::Glob(pattern) => {
             let indices = match_glob_pattern(pattern, paths);
-            results.push((is_negated, indices));
+            // Negation is handled by the `negate` parameter in
+            // `item_matches_constraint_at_index`, NOT here.  Storing
+            // `is_negated=true` caused a double-negation bug when the
+            // Glob arm also applied `negate`.
+            results.push((false, indices));
         }
         Constraint::Not(inner) => {
-            collect_glob_indices(inner, paths, results, !is_negated);
+            collect_glob_indices(inner, paths, results, true);
         }
         _ => {}
     }
@@ -675,5 +679,39 @@ mod tests {
             "(커리큘럼) hermes agent_정승현님 - 1차 커리큘럼 (강사님 작성).csv"
         ));
         assert!(path_ends_with_suffix(path2, "세부_커리큘럼_최종.csv"));
+    }
+
+    #[test]
+    fn test_negated_glob_excludes_matching_files() {
+        let arena_ptr = ArenaPtr(std::ptr::null());
+
+        let items = vec![
+            TestItem {
+                relative_path: "src/main.rs",
+                file_name: "main.rs",
+            },
+            TestItem {
+                relative_path: "src/lib.ts",
+                file_name: "lib.ts",
+            },
+            TestItem {
+                relative_path: "include/fff.h",
+                file_name: "fff.h",
+            },
+        ];
+
+        // Not(Glob("**/*.rs")) should exclude .rs files
+        let constraints = vec![Constraint::Not(Box::new(Constraint::Glob("**/*.rs")))];
+        let result = apply_constraints(&items, &constraints, arena_ptr).unwrap();
+        let paths: Vec<&str> = result.iter().map(|i| i.relative_path).collect();
+        assert!(
+            !paths.contains(&"src/main.rs"),
+            "rs file should be excluded"
+        );
+        assert!(paths.contains(&"src/lib.ts"), "ts file should be included");
+        assert!(
+            paths.contains(&"include/fff.h"),
+            "h file should be included"
+        );
     }
 }

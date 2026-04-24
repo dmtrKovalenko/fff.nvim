@@ -53,14 +53,6 @@ function formatGitStatus(status: string): string {
   }
 }
 
-function formatScore(score: number): string {
-  const s = String(score);
-  if (score >= 100) return `${GREEN}${s}${RESET}`;
-  if (score >= 50) return `${YELLOW}${s}${RESET}`;
-  if (score > 0) return `${DIM}${s}${RESET}`;
-  return `${DIM}0${RESET}`;
-}
-
 /** Pad a plain string first, then wrap with ANSI color. */
 function padColor(
   value: string,

@@ -44,7 +44,7 @@ function grepModeToU8(mode?: string): number {
 }
 
 const ffiDefinition = {
-  fff_create_instance: {
+  fff_create_instance2: {
     args: [
       FFIType.cstring, // base_path
       FFIType.cstring, // frecency_db_path
@@ -54,6 +54,11 @@ const ffiDefinition = {
       FFIType.bool, // enable_content_indexing
       FFIType.bool, // watch
       FFIType.bool, // ai_mode
+      FFIType.cstring, // log_file_path
+      FFIType.cstring, // log_level
+      FFIType.u64, // cache_budget_max_files
+      FFIType.u64, // cache_budget_max_bytes
+      FFIType.u64, // cache_budget_max_file_size
     ],
     returns: FFIType.ptr,
   },
@@ -425,9 +430,14 @@ export function ffiCreate(
   enableContentIndexing: boolean,
   watch: boolean,
   aiMode: boolean,
+  logFilePath: string,
+  logLevel: string,
+  cacheBudgetMaxFiles: bigint,
+  cacheBudgetMaxBytes: bigint,
+  cacheBudgetMaxFileSize: bigint,
 ): Result<NativeHandle> {
   const library = loadLibrary();
-  const resultPtr = library.symbols.fff_create_instance(
+  const resultPtr = library.symbols.fff_create_instance2(
     ptr(encodeString(basePath)),
     ptr(encodeString(frecencyDbPath)),
     ptr(encodeString(historyDbPath)),
@@ -436,6 +446,11 @@ export function ffiCreate(
     enableContentIndexing,
     watch,
     aiMode,
+    ptr(encodeString(logFilePath)),
+    ptr(encodeString(logLevel)),
+    cacheBudgetMaxFiles,
+    cacheBudgetMaxBytes,
+    cacheBudgetMaxFileSize,
   );
 
   if (resultPtr === null) {
@@ -496,7 +511,6 @@ const FI_MODIFIED = 32; // u64         (8)
 const FI_ACCESS = 40; // i64         (8)
 const FI_MODFR = 48; // i64         (8)
 const FI_TOTAL_FR = 56; // i64         (8)
-const _FI_BINARY = 64; // bool        (1 + 7 pad)
 const FI_SIZE_OF = 72;
 
 // FffScore (48 bytes)
@@ -620,8 +634,6 @@ function parseSearchResult(resultPtr: Pointer | null): Result<SearchResult> {
 // FffDirSearchResult byte offsets (must match #[repr(C)] layout on 64-bit)
 // { items: *mut, scores: *mut, count: u32, total_matched: u32, total_dirs: u32 }
 // ---------------------------------------------------------------------------
-const DSR_ITEMS = 0; // *mut FffDirItem  (8)
-const DSR_SCORES = 8; // *mut FffScore    (8)
 const DSR_COUNT = 16; // u32              (4)
 const DSR_MATCHED = 20; // u32              (4)
 const DSR_TOTAL_DIRS = 24; // u32              (4)
@@ -689,8 +701,6 @@ function parseDirSearchResult(resultPtr: Pointer | null): Result<DirSearchResult
 // FffMixedSearchResult byte offsets (must match #[repr(C)] layout on 64-bit)
 // { items: *mut, scores: *mut, count: u32, total_matched: u32, total_files: u32, total_dirs: u32, location: FffLocation }
 // ---------------------------------------------------------------------------
-const MSR_ITEMS = 0; // *mut FffMixedItem (8)
-const MSR_SCORES = 8; // *mut FffScore     (8)
 const MSR_COUNT = 16; // u32               (4)
 const MSR_MATCHED = 20; // u32               (4)
 const MSR_TOTAL_FILES = 24; // u32               (4)
@@ -712,7 +722,6 @@ const MI_MODIFIED = 40; // u64         (8)
 const MI_ACCESS = 48; // i64         (8)
 const MI_MODFR = 56; // i64         (8)
 const MI_TOTAL_FR = 64; // i64         (8)
-const MI_BINARY = 72; // bool        (1 + 7 pad)
 
 /**
  * Read an FffMixedItem struct at the given raw address and return a MixedItem.
@@ -857,7 +866,6 @@ const GM_FUZZY_SCORE = 128;
 // 1-byte
 const GM_HAS_FUZZY = 130;
 const GM_IS_BINARY = 131;
-const _GM_IS_DEF = 132;
 
 // struct size: pad to 8-byte alignment → 136
 const GM_SIZE_OF = 136;

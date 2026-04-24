@@ -12,6 +12,11 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    zig-overlay = {
+      url = "github:mitchellh/zig-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -21,6 +26,7 @@
       crane,
       flake-utils,
       rust-overlay,
+      zig-overlay,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -30,6 +36,10 @@
           inherit system;
           overlays = [ (import rust-overlay) ];
         };
+
+        # zlob requires Zig >= 0.16, but nixpkgs tops out at 0.15. Pull from
+        # mitchellh/zig-overlay which ships every released version.
+        zig = zig-overlay.packages.${system}."0.16.0";
 
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
@@ -45,12 +55,23 @@
           src = craneLib.cleanCargoSource ./.;
           strictDeps = true;
 
-          nativeBuildInputs = [ pkgs.pkg-config pkgs.perl pkgs.zig pkgs.llvmPackages.libclang.lib ];
+          nativeBuildInputs = [ pkgs.pkg-config pkgs.perl zig pkgs.llvmPackages.libclang.lib ];
           buildInputs = with pkgs; [
             # Add additional build inputs here
             openssl
           ];
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+
+          # Zig 0.16 insists on writing to its global cache even when the
+          # zlob build.rs passes --global-cache-dir. In the nix sandbox $HOME
+          # is /homeless-shelter (unwritable), so redirect to $TMPDIR before
+          # the build phase runs.
+          preBuild = ''
+            export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
+            export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-local-cache"
+            export XDG_CACHE_HOME="$TMPDIR/cache"
+            mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR" "$XDG_CACHE_HOME"
+          '';
         };
 
         my-crate = craneLib.buildPackage (

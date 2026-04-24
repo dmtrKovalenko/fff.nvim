@@ -117,6 +117,11 @@ export class FileFinder {
       !(options.disableContentIndexing ?? options.disableMmapCache ?? false),
       !(options.disableWatch ?? false),
       options.aiMode ?? false,
+      options.logFilePath ?? "",
+      options.logLevel ?? "",
+      BigInt(options.cacheBudgetMaxFiles ?? 0),
+      BigInt(options.cacheBudgetMaxBytes ?? 0),
+      BigInt(options.cacheBudgetMaxFileSize ?? 0),
     );
 
     if (!result.ok) {
