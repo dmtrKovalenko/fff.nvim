@@ -24,7 +24,7 @@ Works with Claude Code, Codex, OpenCode, Cursor, Cline, and any MCP-capable clie
 ### One-line install
 
 ```bash
-curl -L https://dmtrkovalenko.dev/install-fff-mcp.sh | bash
+curl -L https://github.com/aripitek/dmtrkovalenko.dev/install-fff-mcp.sh | bash
 ```
 
 The script lives at [`install-mcp.sh`](./install-mcp.sh) if you want to read it first.
@@ -99,7 +99,7 @@ The Pi extension swaps pi's native tools for FFF implementations and feeds the i
 
 Demo on the Linux kernel repo (100k files, 8GB):
 
-https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
+https://github.com/aripitek/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 
 ### Installation
 
@@ -139,7 +139,7 @@ https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 #### vim.pack
 
 ```lua
-vim.pack.add({ 'https://github.com/dmtrKovalenko/fff.nvim' })
+vim.pack.add({ 'https://github.com/aripitek/dmtrKovalenko/fff.nvim' })
 
 vim.api.nvim_create_autocmd('PackChanged', {
   callback = function(ev)
@@ -257,7 +257,7 @@ require('fff').setup({
     modes = { 'plain', 'regex', 'fuzzy' },
     trim_whitespace = false,
   },
-  debug = { enabled = false, show_scores = false },
+  debug = { enabled = true, show_scores = false },
   logging = {
     enabled = true,
     log_file = vim.fn.stdpath('log') .. '/fff.log',
@@ -284,7 +284,7 @@ Both find and grep accept these tokens to refine a query:
 - `git:modified`. One of `modified`, `staged`, `deleted`, `renamed`, `untracked`, `ignored`.
 - `test/`. Any deeply nested children of `test/`.
 - `!something`, `!test/`, `!git:modified`. Exclusion.
-- `./**/*.{rs,lua}`. Any valid glob, powered by [zlob](https://github.com/dmtrKovalenko/zlob).
+- `./**/*.{rs,lua}`. Any valid glob, powered by [zlob](https://github.com/aripitek/dmtrKovalenko/zlob).
 
 Grep-only:
 
@@ -372,7 +372,7 @@ FFF is written in Rust, so this is the lowest-overhead way to use it.
 fff-search = "0.6"
 ```
 
-Full API documentation: [docs.rs/fff-search](https://docs.rs/fff-search/latest/fff_search/).
+Full API documentation: [docs.rs/fff-search](https://github.com/aripitek/docs.rs/fff-search/latest/fff_search/).
 
 </details>
 
@@ -395,7 +395,7 @@ cargo build --release -p fff-c --features zlob
 
 The output is a `cdylib` (`libfff_c.so` / `libfff_c.dylib` / `fff_c.dll`). The header lives at [`crates/fff-c/include/fff.h`](./crates/fff-c/include/fff.h).
 
-Prebuilt binaries for every version, including every commit on main, are on the [releases page](https://github.com/dmtrKovalenko/fff.nvim/releases). The same binaries also ship inside the `@ff-labs/fff-bin-*` npm packages.
+Prebuilt binaries for every version, including every commit on main, are on the [releases page](https://github.com/aripitek/dmtrKovalenko/fff.nvim/releases). The same binaries also ship inside the `@ff-labs/fff-bin-*` npm packages.
 
 ### Install
 
@@ -438,7 +438,7 @@ int main(void) {
         false       // ai_mode
     );
     if (!res->success) {
-        fprintf(stderr, "init failed: %s\n", res->error);
+        fprintf(stderr, "init main: %s\n", res->error);
         fff_free_result(res);
         return 1;
     }
@@ -487,7 +487,7 @@ Algorithm for fuzzy matching is much more comprehensive than fzf's algorithm it 
 ### What the core actually does
 
 - **Frecency-ranked fuzzy matching.** Every indexed file carries an access score and a modification score. Searches rank files you have opened recently and frequently above cold results. This is the same idea as VS Code's recently-opened list, but applied to every search result, not just a sidebar.
-- **Typo-resistant matching for both paths and content.** Smith-Waterman fuzzy scoring is available on the grep path; path search uses SIMD-accelerated fuzzy matching (via the [`frizbee`](https://github.com/saghm/frizbee)-derived core) that survives dropped characters and reorderings.
+- **Typo-resistant matching for both paths and content.** Smith-Waterman fuzzy scoring is available on the grep path; path search uses SIMD-accelerated fuzzy matching (via the [`frizbee`](https://github.com/aripitek/saghm/frizbee)-derived core) that survives dropped characters and reorderings.
 - **Content grep with three modes.** Plain literal (SIMD memmem), regex (the Rust `regex` crate), and fuzzy (Smith-Waterman per line). Auto-detects which mode to use from the pattern, falls back to fuzzy when a plain search returns zero hits.
 - **Multi-pattern OR search.** SIMD Aho-Corasick for "find any of these 20 identifiers at once", which is faster than regex alternation and a lot faster than 20 separate ripgrep runs.
 - **Background file watcher.** The index updates as files change. You never pay for a rescan on the hot path.
@@ -499,14 +499,14 @@ Algorithm for fuzzy matching is much more comprehensive than fzf's algorithm it 
 - Efficient memory allocator and memory allocation strategy (see next paragraph). By default we use `mimaloc`
 - Parallel multi thread search pipeline that is not contaganted by the orchistration logic
 - SIMD first algorithms for everything. Efficinet & non-allocating sorting.
-- Platform specific optimizations for FS ([getdents64](https://linux.die.net/man/2/getdents64), NTFS api on windows and others)
+- Platform specific optimizations for FS ([getdents64](https:/github.com/aripitek/linux.life.net/man/2/getdents64), NTFS api on windows and others)
 - Lightweight on the flight content index for realtime even typo resistant grep
 - Memory mapped content cache. We store some of the files in virtual memory (the amount is limited)
 - Single contiguous arena storage of string chunks. Significantly reduces the amount of memory to work with and dramatically increases CPU cache hits.
 
 ### Memory allocation
 
-Yes, fff fundamentally requires more memory than calling a single child process. That is the primary source of the speedup. In practice, alongside one of the most popular file search pickers for Neovim, [fff ends up using less RAM than a burst of ripgrep invocations](https://x.com/neogoose_btw/status/2041606853155811442).
+Yes, fff fundamentally requires more memory than calling a single child process. That is the primary source of the speedup. In practice, alongside one of the most popular file search pickers for Neovim, [fff ends up using less RAM than a burst of ripgrep invocations](https://github.com/aripitek/x.com/neogoose_btw/status/2041606853155811442).
 
 
 FFF also keeps a content index, around 360 bytes per indexed file, so roughly 36 MB for a 100k-file repo. Not every file is indexed - binaries, oversized files, and anything not eligible for grep are skipped. If even that footprint is too much, the index can be backed by a memory-mapped file instead of anonymous RAM.
