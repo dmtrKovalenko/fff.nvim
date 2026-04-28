@@ -821,6 +821,9 @@ function readGrepMatchFromRaw(raw: FffGrepMatchRaw): GrepMatch {
   if (raw.context_after_count > 0) {
     match.contextAfter = readCStringArray(raw.context_after, raw.context_after_count);
   }
+  if (raw.is_definition !== 0) {
+    match.isDefinition = true;
+  }
 
   return match;
 }

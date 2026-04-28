@@ -325,7 +325,7 @@ export class FileFinder {
       options?.timeBudgetMs ?? 0,
       options?.beforeContext ?? 0,
       options?.afterContext ?? 0,
-      false,
+      options?.classifyDefinitions ?? false,
     );
   }
 
@@ -374,7 +374,7 @@ export class FileFinder {
       options.timeBudgetMs ?? 0,
       options.beforeContext ?? 0,
       options.afterContext ?? 0,
-      false,
+      options.classifyDefinitions ?? false,
     );
   }
 

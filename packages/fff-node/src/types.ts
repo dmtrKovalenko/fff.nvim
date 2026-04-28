@@ -358,6 +358,12 @@ export interface GrepOptions {
   beforeContext?: number;
   /** Number of context lines to include after each match (default: 0) */
   afterContext?: number;
+  /**
+   * When true, classify each match line as a code definition (struct/fn/class/...)
+   * and expose it via `GrepMatch.isDefinition`. Let callers re-rank defs first
+   * without a TS-side regex port. (default: false)
+   */
+  classifyDefinitions?: boolean;
 }
 
 /**
@@ -398,6 +404,8 @@ export interface GrepMatch {
   contextBefore?: string[];
   /** Lines after the match (context). Empty array when context is 0. */
   contextAfter?: string[];
+  /** Whether this line is a code definition (only populated when `classifyDefinitions: true`). */
+  isDefinition?: boolean;
 }
 
 /**
@@ -454,4 +462,9 @@ export interface MultiGrepOptions {
   beforeContext?: number;
   /** Number of context lines to include after each match (default: 0) */
   afterContext?: number;
+  /**
+   * When true, classify each match line as a code definition (struct/fn/class/...)
+   * and expose it via `GrepMatch.isDefinition`. (default: false)
+   */
+  classifyDefinitions?: boolean;
 }

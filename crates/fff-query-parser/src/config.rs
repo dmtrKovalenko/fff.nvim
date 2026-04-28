@@ -91,6 +91,12 @@ pub trait ParserConfig {
         has_wildcards(token)
     }
 
+    /// If `true`, a PathSegment constraint that is the ONLY token in the
+    /// query is demoted to fuzzy text to avoid over filtering
+    fn treat_lone_path_as_text(&self) -> bool {
+        true
+    }
+
     /// Custom constraint parsers for picker-specific needs
     fn parse_custom<'a>(&self, _input: &'a str) -> Option<Constraint<'a>> {
         None

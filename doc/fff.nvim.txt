@@ -1,5 +1,5 @@
 *fff.nvim.txt*
-                            For Neovim >= 0.10.0    Last change: 2026 April 23
+                            For Neovim >= 0.10.0    Last change: 2026 April 27
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -15,71 +15,12 @@ Table of Contents                                 *fff.nvim-table-of-contents*
 1. Links                                                      |fff.nvim-links|
 
 
+A file search toolkit for humans and AI agents. Really fast.Typo-resistant path and content search, frecency-ranked file access, a
+background watcher, and a lightweight in-memory content index. Way faster than
+CLIs like ripgrep and fzf in any long-running process that searches more than
+once.
 
-
-
-WHY THIS FORK?                                       *fff.nvim-why-this-fork?*
-
-This fork extends dmtrKovalenko/fff.nvim
-<https://github.com/dmtrKovalenko/fff.nvim> into a **complete picker
-ecosystem**. The upstream project is an excellent, blazing-fast fuzzy file
-finder powered by Rust. This fork keeps all of that and adds the pickers you
-actually need day-to-day:
-
-  ------------------------------------------------------------------------
-  Feature               Upstream                This Fork
-  --------------------- ----------------------- --------------------------
-  :Buffers picker                               Full buffer list with
-                                                modified, current, and
-                                                alternate indicators
-
-  :GFiles picker                                Dedicated picker for
-                                                git status files with
-                                                status indicators and
-                                                preview
-
-  :Colors picker                                Browse and switch
-                                                colorschemes with live
-                                                preview
-
-  Fuzzy file search                             
-  with frecency                                 
-
-  Livegrep (plain,                              
-  regex, fuzzy)                                 
-
-  Multi-select+                                 
-  quickfix                                      
-
-  Queryconstraints                              
-  (status:, *.ext,                              
-  !exclude)                                     
-
-  Gitstatus signs +                             
-  text coloring                                 
-  ------------------------------------------------------------------------
-**Inshort:** upstream focused on making file finding extremely fast with Rust.
-This fork fills the "where’s the rest of the picker suite?" gap, bringing it
-closer to feature parity with Telescope and fzf.vim while keeping the
-Rust-powered speed.
-
-------------------------------------------------------------------------------
-
-FEATURES                                                   *fff.nvim-features*
-
-FFF is a tool for grepping, fuzzy file matching, globbing, and multigrepping
-with a strong focus on performance and useful search results. For humans -
-provides an unbelievable typo-resistant experience, for AI agents - implements
-the fastest file search with additional free memory suggesting the best search
-results based on various factors like frecency, git status, file size,
-definition matches, and more.
-
-A file search toolkit for humans and AI agents. Really fast. Typo-resistant
-path and content search, frecency-ranked file access, a background watcher,
-and a lightweight in-memory content index. Way faster than CLIs like ripgrep
-and fzf in any long-running process that searches more than once.
-
-It started life as a |fff.nvim-neovim-plugin| people loved, but it turned out
+Originally started as |fff.nvim-neovim-plugin| people loved, but it turned out
 that plenty of AI harnesses and code editors need the same thing: accurate,
 fast file search as a library. That is what fff is.
 
@@ -738,7 +679,7 @@ MINIMAL EXAMPLE ~
 
 NOTES ~
 
-- Every function returning `FffResult*` allocates with Rust’s `Box`. Free with `fff_free_result` — not `libc::free`.
+- Every function returning `FffResult*` allocates with Rust’s `Box`. Free with `fff_free_result`, do not use malloc’s free
 - Payloads (search results, grep results, scan progress) have their own dedicated free functions listed in the header.
 - C strings returned in the `handle` field (e.g. from `fff_get_base_path`) are freed with `fff_free_string`.
 
@@ -813,7 +754,7 @@ than a burst of ripgrep invocations
 <https://x.com/neogoose_btw/status/2041606853155811442>.
 
 FFF also keeps a content index, around 360 bytes per indexed file, so roughly
-36 MB for a 100k-file repo. Not every file is indexed — binaries, oversized
+36 MB for a 100k-file repo. Not every file is indexed - binaries, oversized
 files, and anything not eligible for grep are skipped. If even that footprint
 is too much, the index can be backed by a memory-mapped file instead of
 anonymous RAM.
