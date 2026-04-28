@@ -1,13 +1,16 @@
 *fff.nvim.txt*
+<<<<<<< HEAD
                             For Neovim >= 0.10.0    Last change: 2026 April 27
+||||||| 29053c6
+                            For Neovim >= 0.10.0    Last change: 2026 April 23
+=======
+                            For Neovim >= 0.10.0    Last change: 2026 April 24
+>>>>>>> origin/feat/implement-buffers-support
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
 
   - Why This Fork?                                   |fff.nvim-why-this-fork?|
-  - Features                                               |fff.nvim-features|
-  - MCP                                                         |fff.nvim-mcp|
-  - Neovim guide                                       |fff.nvim-neovim-guide|
   - What is FFF and why use it over ripgrep or fzf?|fff.nvim-what-is-fff-and-why-use-it-over-ripgrep-or-fzf?|
   - Repository layout                             |fff.nvim-repository-layout|
   - Contributing                                       |fff.nvim-contributing|
@@ -27,10 +30,54 @@ fast file search as a library. That is what fff is.
 ------------------------------------------------------------------------------
 Pick what you are interested in:
 
-MCP server ~
 
-Works with Claude Code, Codex, OpenCode, Cursor, Cline, and any MCP-capable
-client. Fewer grep roundtrips, less wasted context, faster answers.
+WHY THIS FORK?                                       *fff.nvim-why-this-fork?*
+
+This fork extends dmtrKovalenko/fff.nvim
+<https://github.com/dmtrKovalenko/fff.nvim> into a **complete picker
+ecosystem**. The upstream project is an excellent, blazing-fast fuzzy file
+finder powered by Rust. This fork keeps all of that and adds the pickers you
+actually need day-to-day:
+
+  ------------------------------------------------------------------------
+  Feature               Upstream                This Fork
+  --------------------- ----------------------- --------------------------
+  :Buffers picker                               Full buffer list with
+                                                modified, current, and
+                                                alternate indicators
+
+  :GFiles picker                                Dedicated picker for
+                                                git status files with
+                                                status indicators and
+                                                preview
+
+  :Colors picker                                Browse and switch
+                                                colorschemes with live
+                                                preview
+
+  Fuzzy file search                             
+  with frecency                                 
+
+  Livegrep (plain,                              
+  regex, fuzzy)                                 
+
+  Multi-select+                                 
+  quickfix                                      
+
+  Queryconstraints                              
+  (status:, *.ext,                              
+  !exclude)                                     
+
+  Gitstatus signs +                             
+  text coloring                                 
+  ------------------------------------------------------------------------
+**Inshort:** upstream focused on making file finding extremely fast with Rust.
+This fork fills the "where’s the rest of the picker suite?" gap, bringing it
+closer to feature parity with Telescope and fzf.vim while keeping the
+Rust-powered speed.
+
+------------------------------------------------------------------------------
+MCP server ~
 
 - Works out of the box with no additional configuration
 - Typo resistant fuzzy search <https://github.com/saghen/frizbee>
@@ -38,9 +85,13 @@ client. Fewer grep roundtrips, less wasted context, faster answers.
 - Separate file index maintained by a dedicated backend allows <10 milliseconds search time for 50k files codebase
 - **Buffer picker** - quickly switch between open buffers (similar to fzf.vim’s `:Buffers`)
 - **Colors picker** - browse and switch colorschemes with live preview (similar to fzf.vim’s `:Colors`)
+- **Git files picker** - browse files with git status (similar to fzf.vim’s `:GFiles?`)
 - Display images in previews (for now requires snacks.nvim)
 - Smart in a plenty of different ways hopefully helpful for your workflow
 - This plugin initializes itself lazily by default
+
+Works with Claude Code, Codex, OpenCode, Cursor, Cline, and any MCP-capable
+client. Fewer grep roundtrips, less wasted context, faster answers.
 
 
 ONE-LINE INSTALL ~
@@ -328,25 +379,6 @@ AVAILABLE METHODS
     require('fff').change_indexing_directory(new_path)  -- Change the base directory for the file picker
 <
 
-just jump to the definition and see what other APIs are exposed we have a
-plenty
-
-
-COMMANDS
-
-FFF.nvim provides several commands for interacting with the file picker:
-
-- `:FFFFind [path|query]` - Open file picker. Optional: provide directory path or search query
-- `:FFFBuffers` - Open buffer picker to browse and switch between open buffers
-- `:Colors` - Open colors picker to browse and switch colorschemes with live preview
-- `:GFiles` - Open git files picker to browse git status files (similar to fzf.vim :GFiles?)
-- `:FFFScan` - Manually trigger a rescan of files in the current directory
-- `:FFFRefreshGit` - Manually refresh git status for all files
-- `:FFFClearCache [all|frecency|files]` - Clear various caches
-- `:FFFHealth` - Check FFF health status and dependencies
-- `:FFFDebug [on|off|toggle]` - Toggle debug scores display
-- `:FFFOpenLog` - Open the FFF log file in a new tab
-
 
 BUFFER PICKER
 
@@ -430,12 +462,6 @@ files in various split modes
 >lua
     vim.keymap.set('n', '<leader>g', function() require('fff').git_files() end, { desc = 'FFF Git Files' })
 <
-
-**Usage:**
-
-Simply run `:GFiles` to open the git files picker. It will show all files that
-have changed according to `git status`. The picker displays git status for each
-file using visual indicators and colors.
 
 
 MULTIPLE KEY BINDINGS
