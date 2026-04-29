@@ -21,6 +21,7 @@ import type {
   SearchResult,
   MixedItem,
 } from "@ff-labs/fff-node";
+import { buildQuery } from "./query";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -102,65 +103,6 @@ function storeFindCursor(cursor: FindCursor): string {
 
 function getFindCursor(id: string): FindCursor | undefined {
   return findCursorCache.get(id);
-}
-
-// ---------------------------------------------------------------------------
-// Query building helpers
-// ---------------------------------------------------------------------------
-
-function normalizePathConstraint(path: string): string | null {
-  let trimmed = path.trim();
-  if (!trimmed) return trimmed;
-  if (trimmed === "." || trimmed === "./") return null;
-  // Strip a leading `./` so `./**/*.rs` and `**/*.rs` behave identically.
-  if (trimmed.startsWith("./")) trimmed = trimmed.slice(2);
-  // Already signals path-constraint syntax to the parser.
-  if (trimmed.startsWith("/") || trimmed.endsWith("/")) return trimmed;
-  // Globs (`*.ts`, `src/**/*.cc`, `{src,lib}`) are handled by the parser.
-  if (/[*?\[{]/.test(trimmed)) return trimmed;
-  // Filename with extension (`main.rs`, `config.json`) → FilePath constraint.
-  const lastSegment = trimmed.split("/").pop() ?? "";
-  if (/\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(lastSegment)) return trimmed;
-  // Bare directory prefix → append `/` so the parser sees a PathSegment.
-  return `${trimmed}/`;
-}
-
-// Exclusions are emitted as `!<constraint>` tokens, which the Rust parser
-// understands (crates/fff-query-parser/src/parser.rs). We normalize each one
-// the same way as the include path so bare dirs become PathSegment excludes.
-// Tolerate callers passing already-negated forms like `!src/` by stripping
-// the leading `!` before normalizing so we never double-negate (`!!src/`).
-function normalizeExcludes(exclude: string | string[] | undefined): string[] {
-  if (!exclude) return [];
-  const list = Array.isArray(exclude) ? exclude : [exclude];
-  const out: string[] = [];
-  for (const raw of list) {
-    const parts = raw
-      .split(/[,\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    for (const p of parts) {
-      const stripped = p.startsWith("!") ? p.slice(1) : p;
-      const normalized = normalizePathConstraint(stripped);
-      if (normalized) out.push(`!${normalized}`);
-    }
-  }
-  return out;
-}
-
-function buildQuery(
-  path: string | undefined,
-  pattern: string,
-  exclude?: string | string[],
-): string {
-  const parts: string[] = [];
-  if (path) {
-    const pathConstraint = normalizePathConstraint(path);
-    if (pathConstraint) parts.push(pathConstraint);
-  }
-  parts.push(...normalizeExcludes(exclude));
-  parts.push(pattern);
-  return parts.join(" ");
 }
 
 // ---------------------------------------------------------------------------
@@ -650,7 +592,7 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       const f = await ensureFinder(activeCwd);
       const effectiveLimit = Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT);
-      const query = buildQuery(params.path, params.pattern, params.exclude);
+      const query = buildQuery(params.path, params.pattern, params.exclude, activeCwd);
       // Auto-detect: regex if the pattern has regex metacharacters AND parses
       // as a valid regex, otherwise plain literal. The fuzzy fallback below
       // only kicks in for plain mode — regex queries are intentional.
@@ -829,7 +771,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         : Math.max(1, params.limit ?? DEFAULT_FIND_LIMIT);
       const query = resumed
         ? resumed.query
-        : buildQuery(params.path, params.pattern, params.exclude);
+        : buildQuery(params.path, params.pattern, params.exclude, activeCwd);
       const pattern = resumed ? resumed.pattern : params.pattern;
       const pageIndex = resumed?.nextPageIndex ?? 0;
 

@@ -78,6 +78,7 @@ prepare-node: build
 
 test-bun: prepare-bun
 	cd packages/fff-bun && bun test src/
+	cd packages/pi-fff && bun test test/
 
 test-node: prepare-node
 	cd packages/fff-node && npm run build && node test/e2e.mjs
