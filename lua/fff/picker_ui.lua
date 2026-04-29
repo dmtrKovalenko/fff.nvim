@@ -2228,6 +2228,15 @@ function M.recall_query_from_history()
   end)
 end
 
+--- Check whether the given window has 'winfixbuf' enabled.
+--- pcall-guarded so this stays safe on Neovim versions that predate the option.
+--- @param win number Window ID
+--- @return boolean
+local function window_has_winfixbuf(win)
+  local ok, val = pcall(vim.api.nvim_get_option_value, 'winfixbuf', { win = win })
+  return ok and val == true
+end
+
 --- Find the first visible window with a normal file buffer
 --- @return number|nil Window ID of the first suitable window, or nil if none found
 local function find_suitable_window()
@@ -2254,6 +2263,7 @@ local function find_suitable_window()
           and modifiable
           and not is_picker_window
           and filetype ~= 'undotree'
+          and not window_has_winfixbuf(win)
         then
           return win
         end
@@ -2465,17 +2475,28 @@ function M.select(action)
   M.close()
 
   if action == 'edit' then
+    local current_win = vim.api.nvim_get_current_win()
     local current_buf = vim.api.nvim_get_current_buf()
     local current_buftype = vim.api.nvim_get_option_value('buftype', { buf = current_buf })
     local current_buf_modifiable = vim.api.nvim_get_option_value('modifiable', { buf = current_buf })
+    local current_winfixbuf = window_has_winfixbuf(current_win)
 
-    -- If current active buffer is not a normal buffer we find a suitable window with a tab otherwise opening a new split
-    if current_buftype ~= '' or not current_buf_modifiable then
+    -- If the current window can't host a new buffer (special buftype, non-modifiable,
+    -- or 'winfixbuf' locking it), retarget a suitable window or fall back to a split.
+    -- Without this, :edit raises E1513 ("Cannot switch buffer. 'winfixbuf' is enabled")
+    -- whenever the picker is invoked from a window pinned via :h winfixbuf.
+    local opened_via_split = false
+    if current_buftype ~= '' or not current_buf_modifiable or current_winfixbuf then
       local suitable_win = find_suitable_window()
-      if suitable_win then vim.api.nvim_set_current_win(suitable_win) end
+      if suitable_win then
+        vim.api.nvim_set_current_win(suitable_win)
+      elseif current_winfixbuf then
+        vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
+        opened_via_split = true
+      end
     end
 
-    vim.cmd('edit ' .. vim.fn.fnameescape(relative_path))
+    if not opened_via_split then vim.cmd('edit ' .. vim.fn.fnameescape(relative_path)) end
   elseif action == 'split' then
     vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
   elseif action == 'vsplit' then
