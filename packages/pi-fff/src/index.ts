@@ -279,76 +279,11 @@ function createFffMentionProvider(
   };
 }
 
-// Simple editor wrapper that injects FFF @-mention autocomplete alongside base provider
-class FffEditor extends CustomEditor {
-  private baseProvider: AutocompleteProvider | undefined;
-  private getMentionItems: (
-    query: string,
-    signal: AbortSignal,
-  ) => Promise<AutocompleteItem[]>;
-
-  constructor(
-    tui: any,
-    theme: any,
-    keybindings: any,
-    getMentionItems: (
-      query: string,
-      signal: AbortSignal,
-    ) => Promise<AutocompleteItem[]>,
-  ) {
-    super(tui, theme, keybindings);
-    this.getMentionItems = getMentionItems;
-  }
-
-  override setAutocompleteProvider(provider: AutocompleteProvider): void {
-    this.baseProvider = provider;
-    // Create composite provider that handles @-mentions and falls back to base
-    const mentionProvider = createFffMentionProvider(this.getMentionItems);
-    const compositeProvider: AutocompleteProvider = {
-      getSuggestions: async (lines, cursorLine, cursorCol, options) => {
-        // Try @-mention first
-        const mentionResult = await mentionProvider.getSuggestions(
-          lines,
-          cursorLine,
-          cursorCol,
-          options,
-        );
-        if (mentionResult) return mentionResult;
-        // Fall back to base provider
-        return (
-          this.baseProvider?.getSuggestions(
-            lines,
-            cursorLine,
-            cursorCol,
-            options,
-          ) ?? null
-        );
-      },
-      applyCompletion: (lines, cursorLine, cursorCol, item, prefix) => {
-        // Let mention provider handle @ completions, base provider for others
-        if (prefix?.startsWith("@")) {
-          return mentionProvider.applyCompletion!(
-            lines,
-            cursorLine,
-            cursorCol,
-            item,
-            prefix,
-          );
-        }
-        return (
-          this.baseProvider?.applyCompletion?.(
-            lines,
-            cursorLine,
-            cursorCol,
-            item,
-            prefix,
-          ) ?? { lines, cursorLine, cursorCol }
-        );
-      },
-    };
-    super.setAutocompleteProvider(compositeProvider);
-  }
-}
+// FffEditor is defined inside fffExtension() so it can capture `getMentionItems`
+// via closure rather than via a 4th constructor parameter. This makes the class
+// safe to subclass via `new SubClass(tui, theme, keybindings)` -- the pattern
+// pi-vim and pi-image-attachments use to compose editors. See:
+// https://github.com/badlogic/pi-mono/issues/3935
 
 // ---------------------------------------------------------------------------
 // Extension
@@ -450,6 +385,64 @@ export default function fffExtension(pi: ExtensionAPI) {
       });
   }
 
+  // Editor wrapper that injects FFF @-mention autocomplete alongside base provider.
+  // Defined inside fffExtension() so the class methods capture `getMentionItems`
+  // via closure. Subclasses constructed as `new Sub(tui, theme, keybindings)` by
+  // composability wrappers (pi-vim, pi-image-attachments) still get a working
+  // mention provider because the closure binding is preserved across subclassing.
+  class FffEditor extends CustomEditor {
+    private baseProvider: AutocompleteProvider | undefined;
+
+    override setAutocompleteProvider(provider: AutocompleteProvider): void {
+      this.baseProvider = provider;
+      // Create composite provider that handles @-mentions and falls back to base
+      const mentionProvider = createFffMentionProvider(getMentionItems);
+      const compositeProvider: AutocompleteProvider = {
+        getSuggestions: async (lines, cursorLine, cursorCol, options) => {
+          // Try @-mention first
+          const mentionResult = await mentionProvider.getSuggestions(
+            lines,
+            cursorLine,
+            cursorCol,
+            options,
+          );
+          if (mentionResult) return mentionResult;
+          // Fall back to base provider
+          return (
+            this.baseProvider?.getSuggestions(
+              lines,
+              cursorLine,
+              cursorCol,
+              options,
+            ) ?? null
+          );
+        },
+        applyCompletion: (lines, cursorLine, cursorCol, item, prefix) => {
+          // Let mention provider handle @ completions, base provider for others
+          if (prefix?.startsWith("@")) {
+            return mentionProvider.applyCompletion!(
+              lines,
+              cursorLine,
+              cursorCol,
+              item,
+              prefix,
+            );
+          }
+          return (
+            this.baseProvider?.applyCompletion?.(
+              lines,
+              cursorLine,
+              cursorCol,
+              item,
+              prefix,
+            ) ?? { lines, cursorLine, cursorCol }
+          );
+        },
+      };
+      super.setAutocompleteProvider(compositeProvider);
+    }
+  }
+
   function applyEditorMode(ctx: {
     ui: {
       setEditorComponent: (
@@ -462,7 +455,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     } else {
       ctx.ui.setEditorComponent(
         (tui: any, theme: any, keybindings: any) =>
-          new FffEditor(tui, theme, keybindings, getMentionItems),
+          new FffEditor(tui, theme, keybindings),
       );
     }
   }
