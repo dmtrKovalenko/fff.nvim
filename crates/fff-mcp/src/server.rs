@@ -12,7 +12,7 @@ use crate::cursor::CursorStore;
 use crate::output::{GrepFormatter, OutputMode, file_suffix};
 use fff::grep::{GrepMode, GrepSearchOptions, has_regex_metacharacters};
 use fff::types::{FileItem, PaginationArgs};
-use fff::{FuzzySearchOptions, QueryParser, SharedFrecency, SharedPicker};
+use fff::{FuzzySearchOptions, QueryParser, SharedFilePicker, SharedFrecency};
 use fff_query_parser::AiGrepConfig;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -160,7 +160,7 @@ pub struct MultiGrepParams {
 
 #[derive(Clone)]
 pub struct FffServer {
-    picker: SharedPicker,
+    picker: SharedFilePicker,
     #[allow(dead_code)]
     frecency: SharedFrecency,
     cursor_store: Arc<Mutex<CursorStore>>,
@@ -169,7 +169,7 @@ pub struct FffServer {
 }
 
 impl FffServer {
-    pub fn new(picker: SharedPicker, frecency: SharedFrecency) -> Self {
+    pub fn new(picker: SharedFilePicker, frecency: SharedFrecency) -> Self {
         Self {
             picker,
             frecency,

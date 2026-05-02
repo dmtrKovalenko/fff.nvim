@@ -350,6 +350,9 @@ impl FileItem {
         path.starts_with(prefix)
     }
 
+    /// Write `base_path + '/' + relative_path` into `buf` and return it
+    /// as `&Path`. Takes a fixed-size array so the buffer can live on
+    /// the stack (no heap allocation, no bounds checks in the hot loop).
     pub(crate) fn write_absolute_path<'a>(
         &self,
         arena: ArenaPtr,
@@ -359,7 +362,6 @@ impl FileItem {
         let base = base_path.as_os_str().as_encoded_bytes();
         let base_len = base.len();
         buf[..base_len].copy_from_slice(base);
-        // Add separator if base doesn't end with one
         let sep_len = if base_len > 0 && base[base_len - 1] != b'/' {
             buf[base_len] = b'/';
             1
@@ -367,12 +369,29 @@ impl FileItem {
             0
         };
         let rel_start = base_len + sep_len;
-        let mut rel_buf = [0u8; PATH_BUF_SIZE];
-        let rel = self.path.read_to_buf(arena, &mut rel_buf);
-        let rel_bytes = rel.as_bytes();
-        buf[rel_start..rel_start + rel_bytes.len()].copy_from_slice(rel_bytes);
-        let total = rel_start + rel_bytes.len();
+        let rel = self.path.read_to_buf(arena, &mut buf[rel_start..]);
+        let total = rel_start + rel.len();
         Path::new(unsafe { std::str::from_utf8_unchecked(&buf[..total]) })
+    }
+
+    /// Write the relative path into `buf` and NUL-terminate, returning
+    /// a `&CStr`. Fixed-size array so the buffer is stack-allocatable.
+    ///
+    /// Paired with a parent-directory fd this eliminates the per-file
+    /// absolute-path memcpy: `openat(dir_fd, cstr.as_ptr(), O_RDONLY)`
+    /// resolves the name relative to `dir_fd`.
+    pub(crate) fn write_relative_cstr<'a>(
+        &self,
+        arena: ArenaPtr,
+        buf: &'a mut [u8; PATH_BUF_SIZE],
+    ) -> &'a std::ffi::CStr {
+        // Reserve the last byte for the NUL terminator.
+        let rel = self.path.read_to_buf(arena, &mut buf[..PATH_BUF_SIZE - 1]);
+        let n = rel.len();
+        buf[n] = 0;
+        // SAFETY: `buf[..=n]` ends with the NUL we just wrote and
+        // filesystem paths never contain interior NULs.
+        unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(&buf[..=n]) }
     }
 
     #[inline]
@@ -437,6 +456,25 @@ impl FileItem {
         }
 
         self.content = OnceLock::new();
+    }
+
+    pub fn update_metadata(
+        &mut self,
+        budget: &ContentCacheBudget,
+        modified_secs: Option<u64>,
+        new_size: Option<u64>,
+    ) {
+        if let Some(modified) = modified_secs
+            && self.modified < modified
+        {
+            self.modified = modified;
+        }
+
+        self.invalidate_mmap(budget);
+
+        if let Some(size) = new_size {
+            self.size = size;
+        }
     }
 
     /// Get the cached file contents or lazily load and cache them.

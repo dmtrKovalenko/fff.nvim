@@ -1,11 +1,5 @@
 *fff.nvim.txt*
-<<<<<<< HEAD
-                            For Neovim >= 0.10.0    Last change: 2026 April 27
-||||||| 29053c6
-                            For Neovim >= 0.10.0    Last change: 2026 April 23
-=======
-                            For Neovim >= 0.10.0    Last change: 2026 April 24
->>>>>>> origin/feat/implement-buffers-support
+                              For Neovim >= 0.10.0    Last change: 2026 May 02
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*

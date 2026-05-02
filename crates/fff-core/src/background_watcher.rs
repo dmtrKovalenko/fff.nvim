@@ -1,15 +1,15 @@
 use crate::error::Error;
 use crate::file_picker::{FFFMode, FilePicker};
 use crate::git::GitStatusCache;
-use crate::shared::{SharedFrecency, SharedPicker};
+use crate::shared::{SharedFilePicker, SharedFrecency};
 use crate::sort_buffer::sort_with_buffer;
 use git2::Repository;
 use notify::event::{AccessKind, AccessMode};
 use notify::{Config, EventKind, EventKindMask, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, DebouncedEvent, NoCache, new_debouncer_opt};
+use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 use tracing::{Level, debug, error, info, warn};
@@ -18,24 +18,13 @@ type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, No
 
 /// Owns the file-system watcher and guarantees that all background threads
 /// are fully joined before `stop()` / `Drop` returns.
-///
-/// Architecture:
-///   - The debouncer (and its internal watcher) live inside an **owner thread**
-///     that we spawn and hold the `JoinHandle` for.
-///   - `stop()` sets a flag, unparks the owner thread, and **joins** it.
-///   - Inside the owner thread, `Debouncer::stop()` is called which joins the
-///     debouncer's event-processing thread.
-///   - On Windows an additional short sleep is added after `Debouncer::stop()`
-///     because `notify`'s `ReadDirectoryChangesWatcher` discards its thread
-///     `JoinHandle`, so we cannot join it directly. The watcher's `Drop` does
-///     signal the thread via semaphore so it exits almost immediately, but we
-///     need to give the OS a moment to reclaim it.
 pub struct BackgroundWatcher {
-    stop_signal: Arc<AtomicBool>,
+    debouncer: Arc<Mutex<Option<Debouncer>>>,
+    watch_tx: Option<mpsc::Sender<PathBuf>>,
     owner_thread: Option<std::thread::JoinHandle<()>>,
 }
 
-const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(250);
+const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(50);
 const MAX_PATHS_THRESHOLD: usize = 1024;
 /// On macOS, each `watch()` call creates a separate FSEventStream. When the
 /// number of directories exceeds this threshold we fall back to a single
@@ -44,15 +33,15 @@ const MAX_MACOS_NONRECURSIVE_WATCHES: usize = 4096;
 /// Minimum seconds between frecency tracks of the same file in AI mode.
 /// Prevents score inflation from rapid burst edits by AI agents.
 const AI_MODE_COOLDOWN_SECS: u64 = 5 * 60;
+const MAX_OVERFLOW_FILES: usize = 1024;
 
 impl BackgroundWatcher {
     pub fn new(
         base_path: PathBuf,
         git_workdir: Option<PathBuf>,
-        shared_picker: SharedPicker,
+        shared_picker: SharedFilePicker,
         shared_frecency: SharedFrecency,
         mode: FFFMode,
-        watch_dirs: Vec<PathBuf>,
     ) -> Result<Self, Error> {
         info!(
             "Initializing background watcher for path: {}, mode: {:?}",
@@ -60,11 +49,41 @@ impl BackgroundWatcher {
             mode,
         );
 
-        let (watch_tx, watch_rx) = mpsc::channel::<PathBuf>();
+        // Refuse to watch the filesystem root or the user's home directory.
+        // These are prone to high-volume event churn (editor temp files,
+        // browser caches, log rotations) which inflates the overflow arena
+        // and, on macOS, can exhaust the per-process FSEvents stream limit.
+        if base_path.parent().is_none()
+            || Some(base_path.as_os_str()) == dirs::home_dir().as_ref().map(|p| p.as_os_str())
+        {
+            return Err(Error::FilesystemRoot(base_path));
+        }
 
-        // Clone shared state for the owner thread (needed for injecting
-        // files that existed before a watch was registered on their directory).
-        let owner_picker = shared_picker.clone();
+        // macOS: always use a single recursive FSEvent stream.
+        //
+        // Per-dir NonRecursive watches create one FSEvent stream per dir.
+        // The per-process FSEvent cap is lower than expected in practice
+        // (4096 per process, but FFF usually is running within code editors),
+        // and each failed `watch()` after the cap blocks ~40 ms on kernel retry.
+        // Yes we pay for filtering events on handler phase but it is usable
+        //
+        // macOS and Windows use a single recursive watch. FSEvents and
+        // ReadDirectoryChangesW both support true kernel-level recursion
+        // on one handle — per-dir NonRecursive watches burn streams/handles
+        // for no benefit and, on Windows, have been observed to silently
+        // drop Modify events for nested paths.
+        //
+        // Linux keeps the per-dir NonRecursive strategy: inotify has no
+        // kernel-level recursion, so Recursive here would still register
+        // one watch per subdir but without the ignored-dir filtering we
+        // get by iterating `picker.for_each_dir` ourselves.
+        let use_recursive = cfg!(any(target_os = "macos", target_os = "windows"));
+
+        let (watch_tx, watch_rx) = mpsc::channel::<PathBuf>();
+        let watch_tx_for_debouncer = watch_tx.clone();
+
+        let owner_weak_picker = shared_picker.weaken();
+        let owner_frecency = shared_frecency.clone();
         let owner_git_workdir = git_workdir.clone();
 
         let debouncer = Self::create_debouncer(
@@ -73,57 +92,73 @@ impl BackgroundWatcher {
             shared_picker,
             shared_frecency,
             mode,
-            watch_dirs,
-            watch_tx,
+            use_recursive,
+            watch_tx_for_debouncer,
         )?;
+
         info!("Background file watcher initialized successfully");
 
-        let stop_signal = Arc::new(AtomicBool::new(false));
-        let stop_clone = Arc::clone(&stop_signal);
+        // debouncer is shared with the owner thread, once it's dropped the thread is closed
+        let debouncer = Arc::new(Mutex::new(Some(debouncer)));
+        // Only the Linux per-dir-watch branch needs this clone; on other
+        // platforms the owner thread never touches the debouncer.
+        #[cfg(target_os = "linux")]
+        let owner_debouncer = Arc::clone(&debouncer);
 
-        // The owner thread keeps the debouncer alive and ensures proper
-        // cleanup: `Debouncer::stop()` joins its internal thread, then the
-        // watcher `Drop` signals its I/O thread to exit.
         let owner_thread = std::thread::Builder::new()
-            .name("fff-watcher-owner".into())
+            .name("fff-watcher-own".into())
             .spawn(move || {
-                let mut debouncer = debouncer;
-                while !stop_clone.load(Ordering::Acquire) {
-                    // Process pending watch requests from the event handler
-                    // (new directories that need to be watched).
-                    while let Ok(dir) = watch_rx.try_recv() {
-                        match debouncer.watch(dir.as_path(), RecursiveMode::NonRecursive) {
-                            Ok(()) => {
-                                debug!("Added watch for new directory: {}", dir.display());
-                            }
-                            Err(e) => {
-                                warn!("Failed to watch new directory {}: {}", dir.display(), e);
-                            }
-                        }
+                while let Ok(dir) = watch_rx.recv() {
+                    // if the picker is dropped we do need to exit the loop
+                    let Some(strong_picker) = owner_weak_picker.upgrade() else {
+                        break;
+                    };
 
-                        // Files created before the watch was registered don't
-                        // generate events. Do a flat (non-recursive) read_dir
-                        // to inject any files that already exist. Subdirectories
-                        // are not descended — they get their own watches via
-                        // future Create events from this directory's watch.
-                        inject_existing_files(&dir, &owner_picker, &owner_git_workdir);
+                    // Only inotify (Linux) has no kernel-level recursion, so
+                    // it's the only platform that needs a per-subdir watch to
+                    // be registered at runtime. macOS FSEvents and Windows
+                    // ReadDirectoryChangesW are already watching recursively
+                    // from the base path (see `create_debouncer`), and
+                    // registering a second overlapping stream there produces
+                    // duplicate/out-of-order events.
+                    #[cfg(target_os = "linux")]
+                    {
+                        // Register the new directory with the debouncer, then
+                        // drop the mutex BEFORE doing picker-side work — see
+                        // the comment on `BackgroundWatcher::stop` for the
+                        // lock-ordering rationale.
+                        let mut guard = owner_debouncer.lock();
+                        let Some(debouncer) = guard.as_mut() else {
+                            break;
+                        };
+
+                        if let Err(e) = debouncer.watch(&dir, RecursiveMode::NonRecursive) {
+                            warn!(
+                                ?e,
+                                dir = %dir.display(),
+                                "Failed to init watcher for new directory"
+                            );
+                        }
                     }
-                    std::thread::park_timeout(Duration::from_secs(1));
+
+                    track_files_from_new_directories(
+                        &dir,
+                        &strong_picker,
+                        &owner_frecency,
+                        &owner_git_workdir,
+                    );
+
+                    // Transient strong ref drops here, back
+                    // to weak-only before the next `recv()`.
                 }
-                // Debouncer::stop() joins the debouncer's event thread, then
-                // drops the watcher (whose Drop signals the I/O thread).
-                debouncer.stop();
-                // On Windows the notify crate discards the ReadDirectoryChangesW
-                // thread's JoinHandle — we cannot join it. Its Drop signals the
-                // thread via semaphore so it exits almost immediately; give the
-                // OS a moment to fully reclaim it.
-                #[cfg(windows)]
-                std::thread::sleep(Duration::from_millis(250));
+
+                tracing::info!("Background watcher is stopped");
             })
             .expect("failed to spawn fff-watcher-owner thread");
 
         Ok(Self {
-            stop_signal,
+            debouncer,
+            watch_tx: Some(watch_tx),
             owner_thread: Some(owner_thread),
         })
     }
@@ -131,10 +166,10 @@ impl BackgroundWatcher {
     fn create_debouncer(
         base_path: PathBuf,
         git_workdir: Option<PathBuf>,
-        shared_picker: SharedPicker,
+        shared_picker: SharedFilePicker,
         shared_frecency: SharedFrecency,
         mode: FFFMode,
-        watch_dirs: Vec<PathBuf>,
+        use_recursive: bool,
         watch_tx: mpsc::Sender<PathBuf>,
     ) -> Result<Debouncer, Error> {
         let config = Config::default()
@@ -146,33 +181,44 @@ impl BackgroundWatcher {
             // our own grep calls and preview window rendering
             .with_event_kinds(EventKindMask::CORE);
 
-        // Decide the watching strategy up-front so the event handler closure
-        // knows whether it needs to request dynamic directory watches.
-        let use_recursive =
-            cfg!(target_os = "macos") && watch_dirs.len() > MAX_MACOS_NONRECURSIVE_WATCHES;
-
+        // `use_recursive` was decided by the caller from a cheap size hint,
+        // so the event-handler closure can capture it directly.
+        //
+        // The closure lives on the debouncer's internal event thread
+        // for as long as the debouncer exists — i.e. the full
+        // lifetime of `BackgroundWatcher`. Capturing a strong
+        // `SharedFilePicker` here would re-introduce the Arc cycle
+        // we just broke with `owner_picker`'s `downgrade()` above.
+        // Capture a weak handle instead and upgrade per-batch.
         let git_workdir_for_handler = git_workdir.clone();
+        let shared_picker_for_watching = shared_picker.clone();
+        let event_picker = shared_picker.weaken();
         let mut debouncer = new_debouncer_opt(
             DEBOUNCE_TIMEOUT,
             Some(DEBOUNCE_TIMEOUT / 2), // tick rate for the event span
             {
                 move |result: DebounceEventResult| match result {
                     Ok(events) => {
+                        // Upgrade just long enough to drive one
+                        // debounced batch. Failure means every
+                        // external `SharedFilePicker` has already
+                        // dropped and teardown is already underway.
+                        let Some(strong_picker) = event_picker.upgrade() else {
+                            return;
+                        };
+
                         let new_dirs = handle_debounced_events(
                             events,
                             &git_workdir_for_handler,
-                            &shared_picker,
+                            &strong_picker,
                             &shared_frecency,
                             mode,
                         );
 
-                        // In NonRecursive mode, register watches for newly
-                        // discovered directories so future file events in them
-                        // are captured. In Recursive mode the single stream
-                        // already covers new subdirectories.
-                        if !use_recursive {
-                            for dir in new_dirs {
-                                let _ = watch_tx.send(dir);
+                        // every new directory creates had to be reflected in the picker state
+                        for dir in new_dirs {
+                            if let Err(e) = watch_tx.send(dir) {
+                                warn!(?e, "Failed to send directory update error");
                             }
                         }
                     }
@@ -215,28 +261,70 @@ impl BackgroundWatcher {
             debouncer.watch(base_path.as_path(), RecursiveMode::Recursive)?;
             info!(
                 "File watcher initialized with single recursive watch on {} \
-                 ({} directories exceeded threshold of {})",
+                 (exceeded threshold of {})",
                 base_path.display(),
-                watch_dirs.len(),
                 MAX_MACOS_NONRECURSIVE_WATCHES,
             );
         } else {
             debouncer.watch(base_path.as_path(), RecursiveMode::NonRecursive)?;
 
-            for dir in &watch_dirs {
-                match debouncer.watch(dir.as_path(), RecursiveMode::NonRecursive) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        // Non-fatal: directory may have been removed between discovery and watch
-                        warn!("Failed to watch directory {}: {}", dir.display(), e);
+            // Stream watch-dir registration directly under the picker
+            // read lock. Only Linux (inotify) reaches this branch —
+            // macOS always takes the recursive path above. `inotify`'s
+            // `inotify_add_watch()` is fast-fail: on ENOSPC it returns
+            // immediately, no kernel retry loop, so holding the read
+            // lock across the stream is O(ms) even for large repos.
+            //
+            // Abort the loop after a run of failures. Once ENOSPC hits,
+            // further calls won't succeed until the user raises
+            // `fs.inotify.max_user_watches`, so there's no value in
+            // continuing.
+            const MAX_CONSECUTIVE_WATCH_FAILURES: usize = 16;
+
+            let mut watched = 0usize;
+            let mut consecutive_failures = 0usize;
+            let mut aborted_early = false;
+
+            if let Some(guard) = shared_picker_for_watching.read().ok()
+                && let Some(picker) = guard.as_ref()
+            {
+                use std::ops::ControlFlow;
+                picker.for_each_dir(|dir| {
+                    match debouncer.watch(dir, RecursiveMode::NonRecursive) {
+                        Ok(()) => {
+                            watched += 1;
+                            consecutive_failures = 0;
+                            ControlFlow::Continue(())
+                        }
+                        Err(e) => {
+                            consecutive_failures += 1;
+                            if consecutive_failures <= 4 {
+                                warn!("Failed to watch directory {}: {}", dir.display(), e);
+                            }
+
+                            if consecutive_failures >= MAX_CONSECUTIVE_WATCH_FAILURES {
+                                warn!(
+                                    consecutive_failures,
+                                    watched,
+                                    "Aborting NonRecursive watch loop — per-process \
+                                 watch cap exhausted, further dirs would just burn \
+                                 kernel time for no coverage"
+                                );
+                                aborted_early = true;
+                                ControlFlow::Break(())
+                            } else {
+                                ControlFlow::Continue(())
+                            }
+                        }
                     }
-                }
+                });
             }
 
             info!(
-                "File watcher initialized for {} directories (NonRecursive) under {}",
-                watch_dirs.len(),
-                base_path.display()
+                "File watcher initialized for {} directories (NonRecursive) under {} (aborted_early={})",
+                watched,
+                base_path.display(),
+                aborted_early,
             );
         }
 
@@ -252,17 +340,50 @@ impl BackgroundWatcher {
         Ok(debouncer)
     }
 
+    /// Signal the watcher to shut down without blocking on its worker
+    /// threads. Safe to call from any context, including while holding
+    /// the [`SharedFilePicker`] write lock.
+    ///
+    /// Both the debouncer's internal event loop and our owner thread
+    /// may call `SharedFilePicker::write()` inside their handlers. A
+    /// blocking join here would deadlock against a caller that already
+    /// holds that lock (e.g. `stop_background_monitor` under a
+    /// `shared_picker.write()` guard). Instead we:
+    ///
+    ///   * drop the `watch_tx` Sender — the owner thread's
+    ///     `watch_rx.recv()` returns `Err` and the thread exits at
+    ///     its next `recv`.
+    ///   * call `debouncer.stop_nonblocking()` — signals the debouncer
+    ///     event loop to exit on its next tick and drops the watcher,
+    ///     closing the FSEvent / inotify / ReadDirectoryChangesW stream.
+    ///   * detach both `JoinHandle`s.
+    ///
+    /// In-flight handler invocations finish on their own (at most one
+    /// more batch) once the caller releases any locks they hold.
     pub fn stop(&mut self) {
-        self.stop_signal.store(true, Ordering::Release);
-        if let Some(handle) = self.owner_thread.take() {
-            handle.thread().unpark();
-
-            if let Err(e) = handle.join() {
-                error!("Watcher owner thread panicked: {:?}", e);
-            }
+        self.watch_tx.take();
+        if let Some(debouncer) = self.debouncer.lock().take() {
+            debouncer.stop_nonblocking();
         }
 
-        info!("Background file watcher stopped successfully");
+        self.owner_thread.take();
+
+        info!("Background file watcher stop signaled");
+    }
+
+    /// Queue a non-recursive watch registration on `dir`.
+    ///
+    /// The owner thread is always blocked on `watch_rx.recv()`, so
+    /// the `send()` here wakes it immediately via the channel's
+    /// condvar — no external unpark needed.
+    ///
+    /// Returns `false` once `stop()` has dropped our `Sender` — any
+    /// further request is silently discarded.
+    pub(crate) fn request_watch_dir(&self, dir: PathBuf) -> bool {
+        match self.watch_tx.as_ref() {
+            Some(tx) => tx.send(dir).is_ok(),
+            None => false,
+        }
     }
 }
 
@@ -276,7 +397,7 @@ impl Drop for BackgroundWatcher {
 fn handle_debounced_events(
     events: Vec<DebouncedEvent>,
     git_workdir: &Option<PathBuf>,
-    shared_picker: &SharedPicker,
+    shared_picker: &SharedFilePicker,
     shared_frecency: &SharedFrecency,
     mode: FFFMode,
 ) -> Vec<PathBuf> {
@@ -285,6 +406,7 @@ fn handle_debounced_events(
     let mut need_full_rescan = false;
     let mut need_full_git_rescan = false;
     let mut paths_to_remove = Vec::new();
+    let mut dirs_to_remove: Vec<PathBuf> = Vec::new();
     let mut paths_to_add_or_modify = Vec::new();
     let mut new_dirs_to_watch = Vec::new();
     let mut affected_paths_count = 0usize;
@@ -346,8 +468,20 @@ fn handle_debounced_events(
             //   - Remove events are not always emitted (macOS often sends
             //     Modify(Name(Any)) instead of Remove).
             let is_removal = matches!(debounced_event.event.kind, EventKind::Remove(_));
+            // Directory-level remove: macOS FSEvents delivers a single
+            // `Remove(Folder)` event for a whole directory tree (e.g.
+            // after `git reset --hard` wipes a dir full of staged-but-
+            // uncommitted files). Individual per-file Remove events for
+            // the children do *not* arrive. Treat the folder removal as
+            // "evict every indexed descendant".
+            let is_folder_removal = matches!(
+                debounced_event.event.kind,
+                EventKind::Remove(notify::event::RemoveKind::Folder)
+            );
 
-            if is_removal || !path.exists() {
+            if is_folder_removal {
+                dirs_to_remove.push(path.to_path_buf());
+            } else if is_removal || !path.exists() {
                 paths_to_remove.push(path.as_path());
             } else if path.is_dir() {
                 // New directory — collect it so the caller can register a
@@ -382,7 +516,9 @@ fn handle_debounced_events(
 
     if need_full_rescan {
         info!(?affected_paths_count, "Triggering full rescan");
-        trigger_full_rescan(shared_picker, shared_frecency);
+        if let Err(e) = shared_picker.trigger_full_rescan_async(shared_frecency) {
+            error!("Failed to trigger full rescan: {:?}", e);
+        }
         return Vec::new();
     }
 
@@ -393,58 +529,89 @@ fn handle_debounced_events(
     paths_to_add_or_modify.dedup_by(|a, b| a.as_os_str().eq(b.as_os_str()));
 
     info!(
-        "Event processing summary: {} to remove, {} to add/modify, {} new dirs",
+        "Event processing summary: {} to remove, {} dirs to remove, {} to add/modify, {} new dirs",
         paths_to_remove.len(),
+        dirs_to_remove.len(),
         paths_to_add_or_modify.len(),
         new_dirs_to_watch.len()
     );
 
     // Apply file index updates (add/remove) unconditionally — these must
     // happen even when there is no git repository.
-    let files_to_update_git_status =
-        if !paths_to_remove.is_empty() || !paths_to_add_or_modify.is_empty() {
-            debug!(
-                "Applying file index changes: {} to remove, {} to add/modify",
-                paths_to_remove.len(),
-                paths_to_add_or_modify.len(),
+    let (files_to_update_git_status, overflow_count) = if !paths_to_remove.is_empty()
+        || !dirs_to_remove.is_empty()
+        || !paths_to_add_or_modify.is_empty()
+    {
+        debug!(
+            "Applying file index changes: {} to remove, {} dirs to remove, {} to add/modify",
+            paths_to_remove.len(),
+            dirs_to_remove.len(),
+            paths_to_add_or_modify.len(),
+        );
+
+        let apply_changes = |picker: &mut FilePicker| -> (Vec<PathBuf>, usize) {
+            // Remove whole directories first so any subsequent single-file
+            // remove event for a path that lived under them becomes a cheap
+            // no-op rather than a failed lookup.
+            for dir in &dirs_to_remove {
+                let count = picker.remove_all_files_in_dir(dir);
+                debug!("remove_all_files_in_dir({:?}) -> {} files", dir, count);
+            }
+
+            for path in &paths_to_remove {
+                let removed = picker.remove_file_by_path(path);
+                debug!("remove_file_by_path({:?}) -> {}", path, removed);
+            }
+
+            let mut files_to_update = Vec::with_capacity(paths_to_add_or_modify.len());
+            for path in &paths_to_add_or_modify {
+                let added = picker.on_create_or_modify(path).is_some();
+                if added {
+                    debug!("on_create_or_modify({:?}) -> Some", path);
+                    files_to_update.push(path.to_path_buf());
+                } else {
+                    error!("on_create_or_modify({:?}) -> None (file not added!)", path);
+                }
+            }
+            let overflow_count = picker.get_overflow_files().len();
+            info!(
+                "apply_changes complete: {} files to update git status, overflow={}",
+                files_to_update.len(),
+                overflow_count,
             );
-
-            let apply_changes = |picker: &mut FilePicker| -> Vec<PathBuf> {
-                for path in &paths_to_remove {
-                    let removed = picker.remove_file_by_path(path);
-                    debug!("remove_file_by_path({:?}) -> {}", path, removed);
-                }
-
-                let mut files_to_update = Vec::with_capacity(paths_to_add_or_modify.len());
-                for path in &paths_to_add_or_modify {
-                    let added = picker.on_create_or_modify(path).is_some();
-                    if added {
-                        debug!("on_create_or_modify({:?}) -> Some", path);
-                        files_to_update.push(path.to_path_buf());
-                    } else {
-                        error!("on_create_or_modify({:?}) -> None (file not added!)", path);
-                    }
-                }
-                info!(
-                    "apply_changes complete: {} files to update git status",
-                    files_to_update.len()
-                );
-                files_to_update
-            };
-
-            let Ok(mut guard) = shared_picker.write() else {
-                error!("Failed to acquire file picker write lock");
-                return new_dirs_to_watch;
-            };
-            let Some(ref mut picker) = *guard else {
-                error!("File picker not initialized");
-                return new_dirs_to_watch;
-            };
-            apply_changes(picker)
-        } else {
-            debug!("No file index changes to apply");
-            Vec::new()
+            (files_to_update, overflow_count)
         };
+
+        let Ok(mut guard) = shared_picker.write() else {
+            error!("Failed to acquire file picker write lock");
+            return new_dirs_to_watch;
+        };
+        let Some(ref mut picker) = *guard else {
+            error!("File picker not initialized");
+            return new_dirs_to_watch;
+        };
+        apply_changes(picker)
+    } else {
+        debug!("No file index changes to apply");
+        (Vec::new(), 0)
+    };
+
+    // The overflow arena grows monotonically as new files are created — a
+    // file's chunks are added on creation but never reclaimed on removal.
+    // On directories with high churn (e.g. `$HOME` with editor temp files,
+    // browser caches) this inflates RSS unboundedly. Once overflow exceeds
+    // the threshold, fall back to a full rescan: that replaces `sync_data`
+    // and drops the builder arena, which is the only path that reclaims it.
+    if overflow_count > MAX_OVERFLOW_FILES {
+        warn!(
+            ?overflow_count,
+            "Overflow count exceeded the threshold, triggering full rescan.",
+        );
+        if let Err(e) = shared_picker.trigger_full_rescan_async(shared_frecency) {
+            error!("Failed to trigger full rescan: {:?}", e);
+        }
+        return new_dirs_to_watch;
+    }
 
     // AI mode: auto-track frecency for all modified/created files.
     // Uses a 5-minute cooldown per file to prevent score inflation from rapid
@@ -499,11 +666,19 @@ fn handle_debounced_events(
     if need_full_git_rescan {
         info!("Triggering full git rescan");
 
-        let result = shared_picker.refresh_git_status(shared_frecency);
-        if let Err(e) = result {
+        if let Err(e) = shared_picker.refresh_git_status(shared_frecency) {
             error!("Failed to refresh git status: {:?}", e);
         }
-        return new_dirs_to_watch;
+        // IMPORTANT: do NOT return here. When a batch contains both
+        // `.git/index` events (e.g. from `git add`) AND worktree-file
+        // Modify events (e.g. a subsequent edit to the same file),
+        // `refresh_git_status` might run while libgit2 sees an
+        // intermediate state — lock-wait mitigates this but can't fully
+        // eliminate it, and refresh doesn't always observe the final
+        // worktree contents if the edit event landed just before the
+        // batch flushed. Re-running the per-path query for explicitly
+        // changed files overrides any stale bits from refresh with an
+        // authoritative per-file status read.
     }
 
     if !files_to_update_git_status.is_empty() {
@@ -536,40 +711,14 @@ fn handle_debounced_events(
     new_dirs_to_watch
 }
 
-fn trigger_full_rescan(shared_picker: &SharedPicker, shared_frecency: &SharedFrecency) {
-    info!("Triggering full filesystem rescan");
-
-    // Note: no need to clear mmaps — they are backed by the kernel page cache
-    // and automatically reflect file changes. Old FileItems (and their mmaps)
-    // are dropped when the picker rebuilds its file list.
-
-    let Ok(mut guard) = shared_picker.write() else {
-        error!("Failed to acquire file picker write lock for full rescan");
-        return;
-    };
-    let Some(ref mut picker) = *guard else {
-        error!("File picker not initialized, cannot trigger rescan");
-        return;
-    };
-    if let Err(e) = picker.trigger_rescan(shared_frecency) {
-        error!("Failed to trigger full rescan: {:?}", e);
-        return;
-    }
-    info!("Full filesystem rescan completed successfully");
-
-    // Spawn background warmup + bigram rebuild (mirrors the initial scan's
-    // post-scan phase). The write lock is still held here but the spawned
-    // thread re-acquires it later — safe because the guard drops at function end.
-    // NOTE: must NOT call shared_picker.need_complex_rebuild() here — that would
-    // try to read-lock the same RwLock we already hold as write, causing a deadlock.
-    if picker.need_enable_mmap_cache() || picker.need_enable_content_indexing() {
-        picker.spawn_post_rescan_rebuild(shared_picker.clone());
-    }
-}
-
 /// After registering a watch on a newly created directory, list its
 /// immediate children and add any files to the picker.
-fn inject_existing_files(dir: &Path, shared_picker: &SharedPicker, git_workdir: &Option<PathBuf>) {
+fn track_files_from_new_directories(
+    dir: &Path,
+    shared_picker: &SharedFilePicker,
+    shared_frecency: &SharedFrecency,
+    git_workdir: &Option<PathBuf>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -590,15 +739,36 @@ fn inject_existing_files(dir: &Path, shared_picker: &SharedPicker, git_workdir: 
         return;
     }
 
-    let Ok(mut guard) = shared_picker.write() else {
-        return;
-    };
-    let Some(ref mut picker) = *guard else {
-        return;
-    };
+    // brief read lock
+    {
+        let Ok(mut guard) = shared_picker.write() else {
+            return;
+        };
 
-    for path in &files_to_add {
-        picker.on_create_or_modify(path);
+        let Some(ref mut picker) = *guard else {
+            return;
+        };
+
+        for path in &files_to_add {
+            picker.on_create_or_modify(path);
+        }
+    }
+
+    if let Some(repo) = repo.as_ref() {
+        let status = match GitStatusCache::git_status_for_paths(repo, &files_to_add) {
+            Ok(status) => status,
+            Err(e) => {
+                tracing::error!(?e, "inject_existing_files: git status query failed");
+                return;
+            }
+        };
+
+        if let Ok(mut guard) = shared_picker.write()
+            && let Some(ref mut picker) = *guard
+            && let Err(e) = picker.update_git_statuses(status, shared_frecency)
+        {
+            error!("inject_existing_files: failed to update git statuses: {e:?}");
+        }
     }
 
     debug!(
@@ -638,7 +808,7 @@ fn is_path_ignored(path: &Path, repo: &Option<Repository>) -> bool {
 }
 
 #[inline]
-fn is_git_file(path: &Path) -> bool {
+pub(crate) fn is_git_file(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str() == ".git")
 }

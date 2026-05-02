@@ -46,22 +46,50 @@ local function setup_global_autocmds(config)
   vim.api.nvim_create_autocmd('DirChanged', {
     group = group,
     callback = function()
+      -- Window-local `:lcd` / `:tcd` are per-window — they don't change the
+      -- effective project root for the picker, so bail before touching
+      -- anything else.
       if vim.v.event.scope == 'window' then return end
+      if not state.initialized then return end
+
       local new_cwd = vim.v.event.cwd
-      if state.initialized and new_cwd and new_cwd ~= config.base_path then
-        vim.schedule(function()
-          -- Delay require to avoid circular dependency: core -> main -> picker_ui -> file_picker -> core
-          local ok, picker = pcall(require, 'fff.main')
-          if not ok then
-            vim.notify('FFF: Failed to load main module: ' .. tostring(picker), vim.log.levels.ERROR)
-            return
-          end
-          local change_ok, err = pcall(picker.change_indexing_directory, new_cwd)
-          if not change_ok then
-            vim.notify('FFF: Failed to change indexing directory: ' .. tostring(err), vim.log.levels.ERROR)
-          end
-        end)
+      if not new_cwd or new_cwd == '' then return end
+
+      -- Canonicalize both sides before comparing. `vim.v.event.cwd` is
+      -- whatever the caller passed to `:cd` (often unexpanded, sometimes
+      -- containing `~` or symlinks), while `config.base_path` is the form
+      -- the picker was last re-indexed against (post-`expand`). Without
+      -- resolving symlinks + ensuring an absolute path, trivially
+      -- equivalent paths compare as different (`/private/var/x` vs
+      -- `/var/x` on macOS, resolved-vs-unresolved symlinks from LSP root
+      -- detection, etc.) and every such mismatch schedules a 450k-file
+      -- reindex through the Rust side.
+      local function canonicalize(p)
+        if not p or p == '' then return p end
+        local abs = vim.fn.fnamemodify(vim.fn.expand(p), ':p')
+        -- `:p` leaves a trailing slash on directories — strip for
+        -- comparison stability.
+        abs = abs:gsub('/+$', '')
+        local ok, resolved = pcall(vim.fn.resolve, abs)
+        return (ok and resolved ~= '') and resolved or abs
       end
+
+      local new_canonical = canonicalize(new_cwd)
+      local base_canonical = canonicalize(config.base_path)
+      if new_canonical == base_canonical then return end
+
+      vim.schedule(function()
+        -- Delay require to avoid circular dependency: core -> main -> picker_ui -> file_picker -> core
+        local ok, picker = pcall(require, 'fff.main')
+        if not ok then
+          vim.notify('FFF: Failed to load main module: ' .. tostring(picker), vim.log.levels.ERROR)
+          return
+        end
+        local change_ok, err = pcall(picker.change_indexing_directory, new_canonical)
+        if not change_ok then
+          vim.notify('FFF: Failed to change indexing directory: ' .. tostring(err), vim.log.levels.ERROR)
+        end
+      end)
     end,
     desc = 'Automatically sync FFF directory changes',
   })

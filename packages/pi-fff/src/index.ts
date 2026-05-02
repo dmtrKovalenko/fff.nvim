@@ -21,6 +21,7 @@ import type {
   SearchResult,
   MixedItem,
 } from "@ff-labs/fff-node";
+import { buildQuery } from "./query";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -102,65 +103,6 @@ function storeFindCursor(cursor: FindCursor): string {
 
 function getFindCursor(id: string): FindCursor | undefined {
   return findCursorCache.get(id);
-}
-
-// ---------------------------------------------------------------------------
-// Query building helpers
-// ---------------------------------------------------------------------------
-
-function normalizePathConstraint(path: string): string | null {
-  let trimmed = path.trim();
-  if (!trimmed) return trimmed;
-  if (trimmed === "." || trimmed === "./") return null;
-  // Strip a leading `./` so `./**/*.rs` and `**/*.rs` behave identically.
-  if (trimmed.startsWith("./")) trimmed = trimmed.slice(2);
-  // Already signals path-constraint syntax to the parser.
-  if (trimmed.startsWith("/") || trimmed.endsWith("/")) return trimmed;
-  // Globs (`*.ts`, `src/**/*.cc`, `{src,lib}`) are handled by the parser.
-  if (/[*?\[{]/.test(trimmed)) return trimmed;
-  // Filename with extension (`main.rs`, `config.json`) → FilePath constraint.
-  const lastSegment = trimmed.split("/").pop() ?? "";
-  if (/\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(lastSegment)) return trimmed;
-  // Bare directory prefix → append `/` so the parser sees a PathSegment.
-  return `${trimmed}/`;
-}
-
-// Exclusions are emitted as `!<constraint>` tokens, which the Rust parser
-// understands (crates/fff-query-parser/src/parser.rs). We normalize each one
-// the same way as the include path so bare dirs become PathSegment excludes.
-// Tolerate callers passing already-negated forms like `!src/` by stripping
-// the leading `!` before normalizing so we never double-negate (`!!src/`).
-function normalizeExcludes(exclude: string | string[] | undefined): string[] {
-  if (!exclude) return [];
-  const list = Array.isArray(exclude) ? exclude : [exclude];
-  const out: string[] = [];
-  for (const raw of list) {
-    const parts = raw
-      .split(/[,\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    for (const p of parts) {
-      const stripped = p.startsWith("!") ? p.slice(1) : p;
-      const normalized = normalizePathConstraint(stripped);
-      if (normalized) out.push(`!${normalized}`);
-    }
-  }
-  return out;
-}
-
-function buildQuery(
-  path: string | undefined,
-  pattern: string,
-  exclude?: string | string[],
-): string {
-  const parts: string[] = [];
-  if (path) {
-    const pathConstraint = normalizePathConstraint(path);
-    if (pathConstraint) parts.push(pathConstraint);
-  }
-  parts.push(...normalizeExcludes(exclude));
-  parts.push(pattern);
-  return parts.join(" ");
 }
 
 // ---------------------------------------------------------------------------
@@ -337,76 +279,11 @@ function createFffMentionProvider(
   };
 }
 
-// Simple editor wrapper that injects FFF @-mention autocomplete alongside base provider
-class FffEditor extends CustomEditor {
-  private baseProvider: AutocompleteProvider | undefined;
-  private getMentionItems: (
-    query: string,
-    signal: AbortSignal,
-  ) => Promise<AutocompleteItem[]>;
-
-  constructor(
-    tui: any,
-    theme: any,
-    keybindings: any,
-    getMentionItems: (
-      query: string,
-      signal: AbortSignal,
-    ) => Promise<AutocompleteItem[]>,
-  ) {
-    super(tui, theme, keybindings);
-    this.getMentionItems = getMentionItems;
-  }
-
-  override setAutocompleteProvider(provider: AutocompleteProvider): void {
-    this.baseProvider = provider;
-    // Create composite provider that handles @-mentions and falls back to base
-    const mentionProvider = createFffMentionProvider(this.getMentionItems);
-    const compositeProvider: AutocompleteProvider = {
-      getSuggestions: async (lines, cursorLine, cursorCol, options) => {
-        // Try @-mention first
-        const mentionResult = await mentionProvider.getSuggestions(
-          lines,
-          cursorLine,
-          cursorCol,
-          options,
-        );
-        if (mentionResult) return mentionResult;
-        // Fall back to base provider
-        return (
-          this.baseProvider?.getSuggestions(
-            lines,
-            cursorLine,
-            cursorCol,
-            options,
-          ) ?? null
-        );
-      },
-      applyCompletion: (lines, cursorLine, cursorCol, item, prefix) => {
-        // Let mention provider handle @ completions, base provider for others
-        if (prefix?.startsWith("@")) {
-          return mentionProvider.applyCompletion!(
-            lines,
-            cursorLine,
-            cursorCol,
-            item,
-            prefix,
-          );
-        }
-        return (
-          this.baseProvider?.applyCompletion?.(
-            lines,
-            cursorLine,
-            cursorCol,
-            item,
-            prefix,
-          ) ?? { lines, cursorLine, cursorCol }
-        );
-      },
-    };
-    super.setAutocompleteProvider(compositeProvider);
-  }
-}
+// FffEditor is defined inside fffExtension() so it can capture `getMentionItems`
+// via closure rather than via a 4th constructor parameter. This makes the class
+// safe to subclass via `new SubClass(tui, theme, keybindings)` -- the pattern
+// pi-vim and pi-image-attachments use to compose editors. See:
+// https://github.com/badlogic/pi-mono/issues/3935
 
 // ---------------------------------------------------------------------------
 // Extension
@@ -508,6 +385,64 @@ export default function fffExtension(pi: ExtensionAPI) {
       });
   }
 
+  // Editor wrapper that injects FFF @-mention autocomplete alongside base provider.
+  // Defined inside fffExtension() so the class methods capture `getMentionItems`
+  // via closure. Subclasses constructed as `new Sub(tui, theme, keybindings)` by
+  // composability wrappers (pi-vim, pi-image-attachments) still get a working
+  // mention provider because the closure binding is preserved across subclassing.
+  class FffEditor extends CustomEditor {
+    private baseProvider: AutocompleteProvider | undefined;
+
+    override setAutocompleteProvider(provider: AutocompleteProvider): void {
+      this.baseProvider = provider;
+      // Create composite provider that handles @-mentions and falls back to base
+      const mentionProvider = createFffMentionProvider(getMentionItems);
+      const compositeProvider: AutocompleteProvider = {
+        getSuggestions: async (lines, cursorLine, cursorCol, options) => {
+          // Try @-mention first
+          const mentionResult = await mentionProvider.getSuggestions(
+            lines,
+            cursorLine,
+            cursorCol,
+            options,
+          );
+          if (mentionResult) return mentionResult;
+          // Fall back to base provider
+          return (
+            this.baseProvider?.getSuggestions(
+              lines,
+              cursorLine,
+              cursorCol,
+              options,
+            ) ?? null
+          );
+        },
+        applyCompletion: (lines, cursorLine, cursorCol, item, prefix) => {
+          // Let mention provider handle @ completions, base provider for others
+          if (prefix?.startsWith("@")) {
+            return mentionProvider.applyCompletion!(
+              lines,
+              cursorLine,
+              cursorCol,
+              item,
+              prefix,
+            );
+          }
+          return (
+            this.baseProvider?.applyCompletion?.(
+              lines,
+              cursorLine,
+              cursorCol,
+              item,
+              prefix,
+            ) ?? { lines, cursorLine, cursorCol }
+          );
+        },
+      };
+      super.setAutocompleteProvider(compositeProvider);
+    }
+  }
+
   function applyEditorMode(ctx: {
     ui: {
       setEditorComponent: (
@@ -520,7 +455,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     } else {
       ctx.ui.setEditorComponent(
         (tui: any, theme: any, keybindings: any) =>
-          new FffEditor(tui, theme, keybindings, getMentionItems),
+          new FffEditor(tui, theme, keybindings),
       );
     }
   }
@@ -650,7 +585,7 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       const f = await ensureFinder(activeCwd);
       const effectiveLimit = Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT);
-      const query = buildQuery(params.path, params.pattern, params.exclude);
+      const query = buildQuery(params.path, params.pattern, params.exclude, activeCwd);
       // Auto-detect: regex if the pattern has regex metacharacters AND parses
       // as a valid regex, otherwise plain literal. The fuzzy fallback below
       // only kicks in for plain mode — regex queries are intentional.
@@ -829,7 +764,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         : Math.max(1, params.limit ?? DEFAULT_FIND_LIMIT);
       const query = resumed
         ? resumed.query
-        : buildQuery(params.path, params.pattern, params.exclude);
+        : buildQuery(params.path, params.pattern, params.exclude, activeCwd);
       const pattern = resumed ? resumed.pattern : params.pattern;
       const pageIndex = resumed?.nextPageIndex ?? 0;
 

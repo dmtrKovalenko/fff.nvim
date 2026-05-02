@@ -6,6 +6,8 @@ noice = "noice"
 fo = "fo"
 ba = "ba"
 ue = "ue"
+# file extensions that look like typos
+thm = "thm"
 # some typos we use for tests
 comparsion = "comparsion"
 modfiers = "modfiers"

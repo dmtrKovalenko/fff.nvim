@@ -1,13 +1,14 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use fff::file_picker::{FFFMode, FilePicker};
 use fff::{
-    FilePickerOptions, GrepMode, GrepSearchOptions, SharedFrecency, SharedPicker, parse_grep_query,
+    FilePickerOptions, GrepMode, GrepSearchOptions, SharedFilePicker, SharedFrecency,
+    parse_grep_query,
 };
 use std::sync::OnceLock;
 use std::time::Duration;
 
 struct TestData {
-    shared_picker: SharedPicker,
+    shared_picker: SharedFilePicker,
 }
 
 static SETUP: OnceLock<TestData> = OnceLock::new();
@@ -32,7 +33,7 @@ fn big_repo_path() -> String {
 fn setup() -> &'static TestData {
     SETUP.get_or_init(|| {
         let path = big_repo_path();
-        let shared_picker = SharedPicker::default();
+        let shared_picker = SharedFilePicker::default();
         let shared_frecency = SharedFrecency::default();
 
         eprintln!("Initializing FilePicker for {:?}...", path);
@@ -70,9 +71,9 @@ fn setup() -> &'static TestData {
     })
 }
 
-fn setup_cold() -> SharedPicker {
+fn setup_cold() -> SharedFilePicker {
     let path = big_repo_path();
-    let shared_picker = SharedPicker::default();
+    let shared_picker = SharedFilePicker::default();
     let shared_frecency = SharedFrecency::default();
 
     FilePicker::new_with_shared_state(

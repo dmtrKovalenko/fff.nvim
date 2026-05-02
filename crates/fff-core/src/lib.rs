@@ -20,7 +20,7 @@
 //!
 //! ## Shared State
 //!
-//! [`SharedPicker`], [`SharedFrecency`], and [`SharedQueryTracker`] are
+//! [`SharedFilePicker`], [`SharedFrecency`], and [`SharedQueryTracker`] are
 //! newtype wrappers around `Arc<RwLock<Option<T>>>` for thread-safe shared
 //! access. They provide `read()` / `write()` methods with built-in error
 //! conversion and convenience helpers like `wait_for_scan()`.
@@ -33,10 +33,10 @@
 //! use fff_search::query_tracker::QueryTracker;
 //! use fff_search::{
 //!     FFFMode, FilePickerOptions, FuzzySearchOptions, PaginationArgs, QueryParser,
-//!     SharedFrecency, SharedPicker, SharedQueryTracker,
+//!     SharedFrecency, SharedFilePicker, SharedQueryTracker,
 //! };
 //!
-//! let shared_picker = SharedPicker::default();
+//! let shared_picker = SharedFilePicker::default();
 //! let shared_frecency = SharedFrecency::default();
 //! let shared_query_tracker = SharedQueryTracker::default();
 //!
@@ -92,7 +92,11 @@
 //! ```
 
 mod background_watcher;
-mod bigram_filter;
+mod scan;
+// public only for benchmarks — the inverted index is still re-exported via
+// `pub use bigram_filter::*` below for external consumers.
+#[doc(hidden)]
+pub mod bigram_filter;
 pub mod bigram_query;
 mod constraints;
 mod db_healthcheck;

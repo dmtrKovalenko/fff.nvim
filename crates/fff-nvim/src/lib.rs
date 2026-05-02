@@ -6,7 +6,7 @@ use fff::path_utils::expand_tilde;
 use fff::query_tracker::QueryTracker;
 use fff::{
     DbHealthChecker, Error, FFFMode, FileSearchConfig, FuzzySearchOptions, GrepConfig,
-    PaginationArgs, QueryParser, Score, SearchResult, SharedFrecency, SharedPicker,
+    PaginationArgs, QueryParser, Score, SearchResult, SharedFilePicker, SharedFrecency,
     SharedQueryTracker,
 };
 use mimalloc::MiMalloc;
@@ -27,7 +27,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 // the global state for neovim lives here for efficiency
 // lua ffi is pretty bad with the overhead of converting raw pointer into tables
-pub static FILE_PICKER: Lazy<SharedPicker> = Lazy::new(SharedPicker::default);
+pub static FILE_PICKER: Lazy<SharedFilePicker> = Lazy::new(SharedFilePicker::default);
 pub static FRECENCY: Lazy<SharedFrecency> = Lazy::new(SharedFrecency::default);
 pub static QUERY_TRACKER: Lazy<SharedQueryTracker> = Lazy::new(SharedQueryTracker::default);
 
@@ -92,19 +92,22 @@ pub fn init_file_picker(_: &Lua, base_path: String) -> LuaResult<bool> {
 }
 
 fn reinit_file_picker_internal(path: &Path) -> Result<(), Error> {
-    // Cancel and stop the old picker under a single write lock to avoid
-    // a window where FILE_PICKER is None (which causes FilePickerMissing
-    // errors if the UI is searching concurrently).
+    // Cancel and stop the old picker's watcher under the write lock.
+    // `stop_background_monitor` is non-blocking (signals the debouncer
+    // to exit on its next tick without joining), so it's safe under
+    // the lock. In-flight watcher handlers finish naturally once we
+    // release the guard.
     {
         let mut guard = FILE_PICKER.write()?;
         if let Some(ref mut picker) = *guard {
-            // Signal cancellation BEFORE stopping — this tells any orphaned
-            // scan threads from this picker to discard their results.
+            // Signal cancellation BEFORE stopping the watcher so any
+            // orphaned scan/post-scan threads discard their results
+            // instead of racing with the new picker.
             picker.cancel();
             picker.stop_background_monitor();
         }
-        // Don't take() here — leave the old picker in place so searches
-        // still work until new_with_shared_state replaces it atomically.
+        // Don't take() the picker here — leave the old one in place so
+        // searches still work until new_with_shared_state replaces it.
     }
 
     // Create new picker — this atomically replaces the old one via write lock
@@ -136,14 +139,37 @@ pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<()> {
         LuaError::RuntimeError(format!("Failed to canonicalize path '{}': {}", new_path, e))
     })?;
 
-    if let Ok(Some(picker)) = FILE_PICKER.read().as_deref()
-        && picker.base_path() == canonical_path
-    {
-        return Ok(()); // same dir
-    }
-
-    // Spawn a background thread to avoid blocking Lua/UI thread
+    // Spawn a background thread BEFORE touching the picker lock. The
+    // same-dir short-circuit previously called `FILE_PICKER.read()` on
+    // the lua/UI thread, which blocks if a reindex writer is already in
+    // flight — on repeated DirChanged events (e.g. LSP root switching
+    // right after closing the picker) that could freeze the nvim main
+    // loop for the entire duration of an in-progress scan. Move the
+    // check into the spawned worker so the main thread always returns
+    // instantly; the internal reinit path also re-checks and no-ops if
+    // the picker is already pointing at `canonical_path`.
     std::thread::spawn(move || {
+        ::tracing::info!(
+            ?canonical_path,
+            "restart_index_in_path: spawned worker running"
+        );
+        {
+            let guard = match FILE_PICKER.read() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            if let Some(ref picker) = *guard
+                && picker.base_path() == canonical_path
+            {
+                ::tracing::info!(?canonical_path, "restart_index_in_path: same dir, skipping");
+                return;
+            }
+        }
+
+        ::tracing::info!(
+            ?canonical_path,
+            "restart_index_in_path: calling reinit_file_picker_internal"
+        );
         if let Err(e) = reinit_file_picker_internal(&canonical_path) {
             ::tracing::error!(
                 ?e,
@@ -159,14 +185,13 @@ pub fn restart_index_in_path(_: &Lua, new_path: String) -> LuaResult<()> {
 }
 
 pub fn scan_files(_: &Lua, _: ()) -> LuaResult<()> {
-    let mut file_picker = FILE_PICKER.write().into_lua_result()?;
-    let picker = file_picker
-        .as_mut()
-        .ok_or(Error::FilePickerMissing)
+    // Async: spawns a BG thread that walks off-lock, swaps sync_data
+    // under a brief write, then applies git + frecency off-lock. Returns
+    // immediately so the lua/UI thread never waits on the walk.
+    FILE_PICKER
+        .trigger_full_rescan_async(&FRECENCY)
         .into_lua_result()?;
-
-    picker.trigger_rescan(&FRECENCY).into_lua_result()?;
-    ::tracing::info!("scan_files trigger_rescan completed");
+    ::tracing::info!("scan_files rescan spawned");
     Ok(())
 }
 
@@ -370,32 +395,65 @@ fn build_file_path_fallback(lua: &Lua, path: &Path, total_files: usize) -> LuaRe
 }
 
 pub fn track_access(_: &Lua, file_path: String) -> LuaResult<bool> {
+    // Called from the nvim main thread on every BufEnter via a libuv
+    // async chain. The body does an LMDB write (~100-200 ms) and takes
+    // `FILE_PICKER.write()`, which — if it has to queue behind any
+    // concurrent writer (post-scan install, background watcher event
+    // apply) — can stall the UI for multiple seconds. Hand the work off
+    // to a detached OS thread and return immediately so the main loop
+    // never waits on us.
+    //
+    // Losing a frecency update on shutdown is acceptable: frecency is
+    // a best-effort signal and the next BufEnter for the same file will
+    // produce an equivalent update.
     let file_path = PathBuf::from(&file_path);
+    std::thread::spawn(move || {
+        {
+            let frecency_guard = match FRECENCY.read() {
+                Ok(g) => g,
+                Err(e) => {
+                    ::tracing::debug!(?e, "track_access: frecency read lock poisoned");
+                    return;
+                }
+            };
+            let Some(ref frecency) = *frecency_guard else {
+                return;
+            };
+            if let Err(e) = frecency.track_access(file_path.as_path()) {
+                ::tracing::debug!(?e, ?file_path, "track_access: frecency DB write failed");
+                return;
+            }
+        }
 
-    // Track access in frecency DB (expensive LMDB write, ~100-200ms)
-    // Do this WITHOUT holding FILE_PICKER lock to avoid blocking searches
-    let frecency_guard = FRECENCY.read().into_lua_result()?;
-    let Some(ref frecency) = *frecency_guard else {
-        return Ok(false);
-    };
-    frecency
-        .track_access(file_path.as_path())
-        .into_lua_result()?;
-    drop(frecency_guard);
+        let mut file_picker = match FILE_PICKER.write() {
+            Ok(g) => g,
+            Err(e) => {
+                ::tracing::debug!(?e, "track_access: file picker write lock poisoned");
+                return;
+            }
+        };
+        let Some(ref mut picker) = *file_picker else {
+            return;
+        };
 
-    // Quick lock to update single file's frecency score in picker
-    let mut file_picker = FILE_PICKER.write().into_lua_result()?;
-    let Some(ref mut picker) = *file_picker else {
-        return Err(error::to_lua_error(Error::FilePickerMissing));
-    };
-
-    let frecency_guard = FRECENCY.read().into_lua_result()?;
-    let Some(ref frecency) = *frecency_guard else {
-        return Ok(false);
-    };
-    picker
-        .update_single_file_frecency(&file_path, frecency)
-        .into_lua_result()?;
+        let frecency_guard = match FRECENCY.read() {
+            Ok(g) => g,
+            Err(e) => {
+                ::tracing::debug!(?e, "track_access: frecency read lock poisoned on update");
+                return;
+            }
+        };
+        let Some(ref frecency) = *frecency_guard else {
+            return;
+        };
+        if let Err(e) = picker.update_single_file_frecency(&file_path, frecency) {
+            ::tracing::debug!(
+                ?e,
+                ?file_path,
+                "track_access: update_single_file_frecency failed"
+            );
+        }
+    });
 
     Ok(true)
 }
@@ -463,13 +521,14 @@ pub fn update_single_file_frecency(_: &Lua, file_path: String) -> LuaResult<bool
 }
 
 pub fn stop_background_monitor(_: &Lua, _: ()) -> LuaResult<bool> {
+    // `stop_background_monitor` is non-blocking — the debouncer /
+    // owner threads exit on their next iteration, so it is safe to
+    // call under the FILE_PICKER write lock.
     let mut file_picker = FILE_PICKER.write().into_lua_result()?;
     let Some(ref mut picker) = *file_picker else {
         return Err(error::to_lua_error(Error::FilePickerMissing));
     };
-
     picker.stop_background_monitor();
-
     Ok(true)
 }
 
@@ -490,27 +549,30 @@ pub fn cancel_scan(_: &Lua, _: ()) -> LuaResult<bool> {
 }
 
 pub fn track_query_completion(_: &Lua, (query, file_path): (String, String)) -> LuaResult<bool> {
-    // Get the project path before spawning thread
-    let project_path = {
-        let file_picker = FILE_PICKER.read().into_lua_result()?;
-        let Some(ref picker) = *file_picker else {
-            return Ok(false);
-        };
-        picker.base_path().to_path_buf()
-    };
-
-    // Canonicalize the file path before spawning thread
-    let file_path = match fff::path_utils::canonicalize(&file_path) {
-        Ok(path) => path,
-        Err(e) => {
-            tracing::warn!(?file_path, error = ?e, "Failed to canonicalize file path for tracking");
-            return Ok(false);
-        }
-    };
-
-    // Spawn background thread to do the actual tracking (expensive DB write)
+    // Everything runs on a background thread — including the
+    // `FILE_PICKER.read()` used to fetch `project_path`. Doing that read
+    // on the main (UI) thread stalled nvim whenever a reindex writer was
+    // in flight: parking_lot's fair queue makes a read block behind a
+    // pending writer, so the main thread would freeze for the full
+    // duration of the scan.
     let query_tracker = QUERY_TRACKER.clone();
     std::thread::spawn(move || {
+        let project_path = match FILE_PICKER.read() {
+            Ok(guard) => match *guard {
+                Some(ref picker) => picker.base_path().to_path_buf(),
+                None => return,
+            },
+            Err(_) => return,
+        };
+
+        let file_path = match fff::path_utils::canonicalize(&file_path) {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!(?file_path, error = ?e, "Failed to canonicalize file path for tracking");
+                return;
+            }
+        };
+
         if let Ok(mut guard) = query_tracker.write()
             && let Some(tracker) = guard.as_mut()
             && let Err(e) = tracker.track_query_completion(&query, &project_path, &file_path)
@@ -547,16 +609,18 @@ pub fn get_historical_query(_: &Lua, offset: usize) -> LuaResult<Option<String>>
 }
 
 pub fn track_grep_query(_: &Lua, query: String) -> LuaResult<bool> {
-    let project_path = {
-        let file_picker = FILE_PICKER.read().into_lua_result()?;
-        let Some(ref picker) = *file_picker else {
-            return Ok(false);
-        };
-        picker.base_path().to_path_buf()
-    };
-
+    // Move the `FILE_PICKER.read()` into the spawned worker too —
+    // see the note on `track_query_completion` above for why.
     let query_tracker = QUERY_TRACKER.clone();
     std::thread::spawn(move || {
+        let project_path = match FILE_PICKER.read() {
+            Ok(guard) => match *guard {
+                Some(ref picker) => picker.base_path().to_path_buf(),
+                None => return,
+            },
+            Err(_) => return,
+        };
+
         if let Ok(mut guard) = query_tracker.write()
             && let Some(ref mut tracker) = *guard
             && let Err(e) = tracker.track_grep_query(&query, &project_path)
@@ -604,39 +668,9 @@ pub fn parse_grep_query(lua: &Lua, query: String) -> LuaResult<LuaTable> {
 }
 
 pub fn wait_for_initial_scan(_: &Lua, timeout_ms: Option<u64>) -> LuaResult<bool> {
-    // Extract the scan signal Arc WITHOUT holding the read lock, so the
-    // scan thread can acquire the write lock to store its results.
-    // Holding a read lock while polling would deadlock: the scan thread
-    // needs a write lock to finish, but can't acquire it while we hold the read lock.
-    let scan_signal = {
-        let file_picker = FILE_PICKER.read().into_lua_result()?;
-        let picker = file_picker
-            .as_ref()
-            .ok_or(Error::FilePickerMissing)
-            .into_lua_result()?;
-        picker.scan_signal()
-    }; // read lock released here
+    let scanned = FILE_PICKER.wait_for_scan(Duration::from_millis(timeout_ms.unwrap_or(500)));
 
-    let timeout_ms = timeout_ms.unwrap_or(500);
-    let timeout_duration = Duration::from_millis(timeout_ms);
-    let start_time = std::time::Instant::now();
-    let mut sleep_duration = Duration::from_millis(1);
-
-    while scan_signal.load(std::sync::atomic::Ordering::Relaxed) {
-        if start_time.elapsed() >= timeout_duration {
-            ::tracing::warn!("wait_for_initial_scan timed out after {}ms", timeout_ms);
-            return Ok(false);
-        }
-
-        std::thread::sleep(sleep_duration);
-        sleep_duration = std::cmp::min(sleep_duration * 2, Duration::from_millis(50));
-    }
-
-    ::tracing::debug!(
-        "wait_for_initial_scan completed in {:?}",
-        start_time.elapsed()
-    );
-    Ok(true)
+    Ok(scanned)
 }
 
 pub fn init_tracing(

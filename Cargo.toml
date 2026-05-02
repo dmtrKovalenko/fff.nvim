@@ -7,7 +7,6 @@ members = [
   "crates/fff-query-parser",
   "crates/fff-grep",
 ]
-exclude = ["crates/fff-notify-debouncer-full"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -37,7 +36,7 @@ zlob = "1.3.3"
 mlua = { version = "0.11.1", features = ["module", "luajit"] }
 neo_frizbee = { version = "0.10.1", features = ["match_end_col"] }
 notify = { version = "9.0.0-rc.3" }
-notify-debouncer-full = { package = "fff-notify-debouncer-full", version = "0.9.1" }
+notify-debouncer-full = { package = "fff-notify-debouncer-full", version = "0.9.3" }
 once_cell = "1.20.2"
 parking_lot = "0.12"
 pathdiff = "0.2.1"
@@ -62,3 +61,11 @@ lto = "thin"
 
 [profile.bench]
 inherits = "release"
+
+# For Instruments / xctrace: release-level optimization but keep debuginfo
+# and symbols so sampled frames resolve to real Rust names.
+[profile.prof]
+inherits = "release"
+debug = "full"
+strip = false
+lto = "thin"

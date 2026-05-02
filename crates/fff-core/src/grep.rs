@@ -1023,14 +1023,24 @@ pub(crate) fn multi_grep_search<'a>(
         filtered_file_count = retry_count;
     }
 
-    // Apply bigram prefilter to the file list
+    // Apply bigram prefilter to the file list. Bigram columns only cover
+    // the indexable region — `bigram_overlay.base_file_count()` is the
+    // authoritative boundary. Files past it (unindexable base, overflow)
+    // are always retained and searched directly.
     if let Some(ref candidates) = bigram_candidates {
         let base_ptr = files.as_ptr();
+        let bigram_boundary = bigram_overlay
+            .map(|o| o.base_file_count())
+            .unwrap_or(files.len());
+
         files_to_search.retain(|f| {
             if f.is_overflow() {
                 return true;
             }
             let file_idx = unsafe { (*f as *const FileItem).offset_from(base_ptr) as usize };
+            if file_idx >= bigram_boundary {
+                return true;
+            }
             BigramFilter::is_candidate(candidates, file_idx)
         });
     }
@@ -1941,7 +1951,17 @@ pub(crate) fn grep_search<'a>(
                         }
                     }
 
+                    // Bigram columns only cover the indexable region at
+                    // `files[..overlay.base_file_count()]` — which equals
+                    // `indexable_count` today. Files past that boundary
+                    // (unindexable base files, overflow) are not tracked by
+                    // the bigram filter, so we always retain them and let
+                    // the full text search decide.
                     let base_ptr = files.as_ptr();
+                    let bigram_boundary = bigram_overlay
+                        .map(|o| o.base_file_count())
+                        .unwrap_or(files.len());
+
                     files_to_search.retain(|f| {
                         if f.is_overflow() {
                             return true;
@@ -1949,6 +1969,10 @@ pub(crate) fn grep_search<'a>(
 
                         let file_idx =
                             unsafe { (*f as *const FileItem).offset_from(base_ptr) as usize };
+
+                        if file_idx >= bigram_boundary {
+                            return true;
+                        }
 
                         BigramFilter::is_candidate(&candidates, file_idx)
                     });

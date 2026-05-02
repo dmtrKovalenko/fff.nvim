@@ -3,7 +3,7 @@ use fff::file_picker::{FFFMode, FilePicker};
 use fff::types::PaginationArgs;
 use fff::{
     FilePickerOptions, FuzzySearchOptions, GrepMode, GrepSearchOptions, QueryParser,
-    SharedFrecency, SharedPicker,
+    SharedFilePicker, SharedFrecency,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -25,7 +25,7 @@ fn init_tracing() {
 /// Initialize FilePicker using shared state
 fn init_file_picker_internal(
     path: &str,
-    shared_picker: &SharedPicker,
+    shared_picker: &SharedFilePicker,
     shared_frecency: &SharedFrecency,
 ) -> Result<(), String> {
     FilePicker::new_with_shared_state(
@@ -43,7 +43,7 @@ fn init_file_picker_internal(
 
 /// Helper function to wait for scanning to complete and get file count
 fn wait_for_scan_completion(
-    shared_picker: &SharedPicker,
+    shared_picker: &SharedFilePicker,
     timeout_secs: u64,
 ) -> Result<usize, String> {
     let start = std::time::Instant::now();
@@ -105,7 +105,7 @@ fn wait_for_scan_completion(
 }
 
 /// Clean up shared state
-fn cleanup_shared_state(shared_picker: &SharedPicker) {
+fn cleanup_shared_state(shared_picker: &SharedFilePicker) {
     if let Ok(mut picker_guard) = shared_picker.write() {
         if let Some(mut picker) = picker_guard.take() {
             picker.stop_background_monitor();
@@ -114,7 +114,7 @@ fn cleanup_shared_state(shared_picker: &SharedPicker) {
 }
 
 /// Initialize FilePicker once and return shared state
-fn setup_once() -> Result<(SharedPicker, SharedFrecency), String> {
+fn setup_once() -> Result<(SharedFilePicker, SharedFrecency), String> {
     init_tracing();
 
     let big_repo_path = PathBuf::from("./big-repo");
@@ -126,7 +126,7 @@ fn setup_once() -> Result<(SharedPicker, SharedFrecency), String> {
         .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
     eprintln!("  Path: {:?}", canonical_path);
 
-    let shared_picker = SharedPicker::default();
+    let shared_picker = SharedFilePicker::default();
     let shared_frecency = SharedFrecency::default();
 
     init_file_picker_internal(
@@ -171,7 +171,7 @@ fn bench_indexing(c: &mut Criterion) {
 
     group.bench_function("index_big_repo", |b| {
         b.iter(|| {
-            let sp = SharedPicker::default();
+            let sp = SharedFilePicker::default();
             let sf = SharedFrecency::default();
 
             let start = std::time::Instant::now();

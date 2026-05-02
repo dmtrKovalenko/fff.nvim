@@ -15,7 +15,7 @@ mod update_check;
 use clap::Parser;
 use fff::file_picker::FilePicker;
 use fff::frecency::FrecencyTracker;
-use fff::{FFFMode, SharedFrecency, SharedPicker};
+use fff::{FFFMode, SharedFilePicker, SharedFrecency};
 use git2::Repository;
 use mimalloc::MiMalloc;
 use rmcp::{ServiceExt, transport::stdio};
@@ -232,7 +232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let shared_picker = SharedPicker::default();
+    let shared_picker = SharedFilePicker::default();
     let shared_frecency = SharedFrecency::default();
     if let Some(frecency_db_path) = args.frecency_db_path {
         match FrecencyTracker::new(&frecency_db_path, false) {

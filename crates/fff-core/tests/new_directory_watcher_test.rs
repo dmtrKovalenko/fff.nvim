@@ -24,7 +24,9 @@ use tempfile::TempDir;
 
 use fff_search::file_picker::{FFFMode, FilePicker};
 use fff_search::grep::{GrepMode, GrepSearchOptions, parse_grep_query};
-use fff_search::{FilePickerOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
+use fff_search::{
+    FilePickerOptions, PaginationArgs, QueryParser, SharedFilePicker, SharedFrecency,
+};
 
 // ═══════════════════════════════════════════════════════════════════════
 // Helpers
@@ -54,8 +56,8 @@ fn git_init_and_commit(dir: &Path) {
     git_run(dir, &["commit", "-m", "initial"]);
 }
 
-fn make_watched_picker(base: &Path) -> (SharedPicker, SharedFrecency) {
-    let shared_picker = SharedPicker::default();
+fn make_watched_picker(base: &Path) -> (SharedFilePicker, SharedFrecency) {
+    let shared_picker = SharedFilePicker::default();
     let shared_frecency = SharedFrecency::noop();
 
     FilePicker::new_with_shared_state(
@@ -75,7 +77,7 @@ fn make_watched_picker(base: &Path) -> (SharedPicker, SharedFrecency) {
 }
 
 /// Wait for the initial scan + watcher to be fully ready.
-fn wait_ready(shared_picker: &SharedPicker) {
+fn wait_ready(shared_picker: &SharedFilePicker) {
     assert!(
         shared_picker.wait_for_scan(Duration::from_secs(10)),
         "Timed out waiting for initial scan"
@@ -89,7 +91,7 @@ fn wait_ready(shared_picker: &SharedPicker) {
 /// Poll the picker until `predicate` returns true or timeout expires.
 /// Returns the elapsed duration if successful, panics on timeout.
 fn poll_until(
-    shared_picker: &SharedPicker,
+    shared_picker: &SharedFilePicker,
     timeout: Duration,
     description: &str,
     predicate: impl Fn(&FilePicker) -> bool,

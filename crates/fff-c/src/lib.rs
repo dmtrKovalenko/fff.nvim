@@ -35,7 +35,7 @@ use fff::file_picker::FilePicker;
 use fff::frecency::FrecencyTracker;
 use fff::query_tracker::QueryTracker;
 use fff::{DbHealthChecker, FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser};
-use fff::{SharedFrecency, SharedPicker};
+use fff::{SharedFilePicker, SharedFrecency};
 use ffi_types::{
     FffDirItem, FffDirSearchResult, FffFileItem, FffGrepMatch, FffGrepResult, FffMixedItem,
     FffMixedSearchResult, FffResult, FffScanProgress, FffScore, FffSearchResult,
@@ -46,7 +46,7 @@ use ffi_types::{
 /// The caller receives this as `*mut c_void` and must pass it to every FFI call.
 /// The fff_handle is freed by `fff_destroy`.
 struct FffInstance {
-    picker: SharedPicker,
+    picker: SharedFilePicker,
     frecency: SharedFrecency,
     query_tracker: SharedQueryTracker,
 }
@@ -204,7 +204,7 @@ pub unsafe extern "C" fn fff_create_instance2(
     let history_path = unsafe { optional_cstr(history_db_path) }.map(|s| s.to_string());
 
     // Create shared state that background threads will write into.
-    let shared_picker = SharedPicker::default();
+    let shared_picker = SharedFilePicker::default();
     let shared_frecency = SharedFrecency::default();
     let query_tracker = SharedQueryTracker::default();
 
@@ -744,18 +744,10 @@ pub unsafe extern "C" fn fff_scan_files(fff_handle: *mut c_void) -> *mut FffResu
         Err(e) => return e,
     };
 
-    let mut guard = match inst.picker.write() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
-
-    let picker = match guard.as_mut() {
-        Some(p) => p,
-        None => return FffResult::err("File picker not initialized"),
-    };
-
-    match picker.trigger_rescan(&inst.frecency) {
-        Ok(_) => FffResult::ok_empty(),
+    // Async: rescan runs on a BG thread, caller returns immediately.
+    // Use `fff_is_scanning` / `fff_wait_for_scan` to observe progress.
+    match inst.picker.trigger_full_rescan_async(&inst.frecency) {
+        Ok(()) => FffResult::ok_empty(),
         Err(e) => FffResult::err(&format!("Failed to trigger rescan: {}", e)),
     }
 }
@@ -904,14 +896,17 @@ pub unsafe extern "C" fn fff_restart_index(
     };
 
     let (warmup_caches, content_indexing, watch, mode) = if let Some(mut picker) = guard.take() {
-        let warmup = picker.need_enable_mmap_cache();
-        let ci = picker.need_enable_content_indexing();
-        let w = picker.need_watch();
+        let warmup = picker.has_mmap_cache();
+        let enable_content_indexing = picker.has_content_indexing();
+        let watch = picker.has_watcher();
         let mode = picker.mode();
+
         picker.stop_background_monitor();
-        (warmup, ci, w, mode)
+
+        (warmup, enable_content_indexing, watch, mode)
     } else {
-        (false, false, true, FFFMode::default())
+        // this is error state anyway
+        (false, true, true, FFFMode::default())
     };
 
     drop(guard);

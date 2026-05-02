@@ -79,5 +79,6 @@ dunce = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+proptest = { version = "1", default-features = false, features = ["std", "fork"] }
 rand = { version = "0.8", features = ["small_rng"] }
 tempfile = "3.8"

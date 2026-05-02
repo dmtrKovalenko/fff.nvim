@@ -1,9 +1,9 @@
 use fff::file_picker::{FFFMode, FilePicker};
-use fff::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
+use fff::{FuzzySearchOptions, PaginationArgs, QueryParser, SharedFilePicker, SharedFrecency};
 use std::time::{Duration, Instant};
 
 /// Wait for background scan to complete
-fn wait_for_scan(shared_picker: &SharedPicker, timeout_secs: u64) -> Result<usize, String> {
+fn wait_for_scan(shared_picker: &SharedFilePicker, timeout_secs: u64) -> Result<usize, String> {
     let timeout = Duration::from_secs(timeout_secs);
     if !shared_picker.wait_for_scan(timeout) {
         return Err(format!("Scan timed out after {} seconds", timeout_secs));
@@ -33,7 +33,7 @@ fn main() {
         fff::path_utils::canonicalize(&big_repo_path).expect("Failed to canonicalize path");
 
     // Create shared state
-    let shared_picker = SharedPicker::default();
+    let shared_picker = SharedFilePicker::default();
     let shared_frecency = SharedFrecency::default();
 
     eprintln!("Initializing FilePicker for: {:?}", canonical_path);

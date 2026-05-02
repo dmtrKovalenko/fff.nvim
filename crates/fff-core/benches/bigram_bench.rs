@@ -90,7 +90,8 @@ fn bench_bigram_build(c: &mut Criterion) {
     let file_counts = [10_000, 100_000];
 
     for &file_count in &file_counts {
-        // Pre-generate content so we only measure index building
+        // Pre-generate content so we only measure index building.
+        // Short content (~85 bytes/file) exercises the scalar fast path.
         let contents: Vec<String> = (0..file_count)
             .map(|i| {
                 format!(
@@ -100,13 +101,47 @@ fn bench_bigram_build(c: &mut Criterion) {
             .collect();
 
         group.bench_with_input(
-            BenchmarkId::new("build_and_compress", file_count),
+            BenchmarkId::new("short_content", file_count),
             &file_count,
             |b, &fc| {
                 b.iter(|| {
                     let builder = BigramIndexBuilder::new(fc);
                     let skip_builder = BigramIndexBuilder::new(fc);
                     for (i, content) in contents.iter().enumerate() {
+                        builder.add_file_content(&skip_builder, i, content.as_bytes());
+                    }
+                    let index = builder.compress(None);
+                    black_box(index.columns_used())
+                });
+            },
+        );
+
+        // Long content (~4 KB/file) exercises the SIMD pre-pass path.
+        // Build a realistic-looking source-like blob by repeating snippets.
+        let long_contents: Vec<String> = (0..file_count)
+            .map(|i| {
+                let mut s = String::with_capacity(4096);
+                for j in 0..50 {
+                    s.push_str(&format!(
+                        "pub fn handler_{i}_{j}(ctx: &Context) -> Result<Response, Error> {{\n"
+                    ));
+                    s.push_str("    let parsed = ctx.parse()?;\n");
+                    s.push_str("    let validated = parsed.validate()?;\n");
+                    s.push_str(&format!("    ctx.respond(validated, {}).await\n", j));
+                    s.push_str("}\n\n");
+                }
+                s
+            })
+            .collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("long_content", file_count),
+            &file_count,
+            |b, &fc| {
+                b.iter(|| {
+                    let builder = BigramIndexBuilder::new(fc);
+                    let skip_builder = BigramIndexBuilder::new(fc);
+                    for (i, content) in long_contents.iter().enumerate() {
                         builder.add_file_content(&skip_builder, i, content.as_bytes());
                     }
                     let index = builder.compress(None);

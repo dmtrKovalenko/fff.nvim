@@ -33,6 +33,7 @@ local M = {}
 --- @field toggle_debug string
 --- @field cycle_grep_modes string
 --- @field cycle_previous_query string
+--- @field cycle_forward_query string
 --- @field toggle_select string
 --- @field send_to_quickfix string
 --- @field focus_list string
@@ -247,6 +248,8 @@ local function init()
       cycle_grep_modes = '<S-Tab>',
       -- goes to the previous query in history
       cycle_previous_query = '<C-Up>',
+      -- goes to the next query in history (forward)
+      cycle_forward_query = '<C-Down>',
       -- multi-select keymaps for quickfix
       toggle_select = '<Tab>',
       send_to_quickfix = '<C-q>',

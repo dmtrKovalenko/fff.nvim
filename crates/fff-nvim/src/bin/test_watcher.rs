@@ -4,7 +4,9 @@
 
 use fff::file_picker::FilePicker;
 use fff::git::format_git_status;
-use fff::{FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
+use fff::{
+    FFFMode, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFilePicker, SharedFrecency,
+};
 use std::env;
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -25,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let r = running.clone();
 
     // Create shared state
-    let shared_picker = SharedPicker::default();
+    let shared_picker = SharedFilePicker::default();
     let shared_frecency = SharedFrecency::default();
 
     // Clone for signal handler

@@ -24,3 +24,6 @@ scripts/benchmark-results/
 *.dylib
 *.so
 *.dll
+
+# Instruments traces
+*.trace/

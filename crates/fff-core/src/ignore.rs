@@ -14,8 +14,16 @@ pub(crate) const NON_GIT_IGNORED_DIRS: &[&str] = &[
 ];
 
 #[cfg(target_os = "macos")]
-pub(crate) const PLATFORM_IGNORED_DIRS: &[&str] =
-    &["Library/Application Support", "Library/Caches"];
+pub(crate) const PLATFORM_IGNORED_DIRS: &[&str] = &[
+    "Library/Application Support",
+    "Library/Caches",
+    // App-group sandbox storage — used by iMessage, Photos, Notes, Calendar,
+    // Electron apps, etc. for SQLite-WAL, LevelDB, protobuf files. These are
+    // almost entirely extension-less binary files (~80k on a typical $HOME)
+    // that never need to appear in a fuzzy or grep search.
+    "Library/Group Containers",
+    "Library/Containers",
+];
 
 #[cfg(target_os = "windows")]
 pub(crate) const PLATFORM_IGNORED_DIRS: &[&str] = &[

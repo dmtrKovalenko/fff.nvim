@@ -1,55 +1,125 @@
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
+use std::time::{Duration, Instant};
 
 use crate::error::Error;
 use crate::file_picker::FilePicker;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
 use crate::query_tracker::QueryTracker;
+use crate::scan::ScanJob;
+
+/// Poll `.git/index.lock` until it disappears (git write completed), giving up
+/// after [`GIT_LOCK_MAX_WAIT`]. Used by [`SharedPicker::refresh_git_status`]
+/// to avoid reading a half-updated index when the watcher fires mid-`git add`.
+///
+/// The wait is bounded and cheap: the lock file is typically cleared within
+/// a few milliseconds of the git command exiting.
+fn wait_for_git_index_lock_release(git_root: &Path) {
+    const GIT_LOCK_POLL: Duration = Duration::from_millis(10);
+    const GIT_LOCK_MAX_WAIT: Duration = Duration::from_millis(500);
+
+    let lock = git_root.join(".git").join("index.lock");
+    // Fast path: no lock present.
+    if !lock.exists() {
+        return;
+    }
+    let deadline = Instant::now() + GIT_LOCK_MAX_WAIT;
+    while lock.exists() && Instant::now() < deadline {
+        std::thread::sleep(GIT_LOCK_POLL);
+    }
+    if lock.exists() {
+        tracing::warn!(
+            "Proceeding with git status refresh despite lingering \
+             .git/index.lock at {} — will retry once it clears",
+            lock.display()
+        );
+    }
+}
 
 /// Thread-safe shared handle to the [`FilePicker`] instance.
+/// This accumulates only asynchronous non-blocking operations against the
+/// file picker: creating, triggering various rescans and so on.
 ///
-/// Uses `parking_lot::RwLock` which is reader-fair — new readers are not
-/// blocked when a writer is waiting, preventing search query stalls during
-/// background bigram builds or watcher writes.
+/// For blocking access use internal picker via `.read()` or `.write()`
 ///
-/// `Clone` gives a new handle to the same picker (Arc clone).
-/// `Default` creates an empty handle suitable for `Lazy::new(SharedPicker::default)`.
+/// ```ignore
+/// let shared_picker = SharedFilePicker::default();
+///
+/// if let Some(picker) = shared_picker.read()?.as_ref() {
+///     let files = picker.fuzzy_search(&query, options);
+///     println!("Found {} files", files.len());
+/// } else {
+///     println!("Picker not initialized");
+/// }
+/// ```
 #[derive(Clone, Default)]
-pub struct SharedPicker(pub(crate) Arc<parking_lot::RwLock<Option<FilePicker>>>);
+pub struct SharedFilePicker(pub(crate) Arc<SharedPickerInner>);
 
-impl std::fmt::Debug for SharedPicker {
+pub struct SharedPickerInner {
+    picker: parking_lot::RwLock<Option<FilePicker>>,
+}
+
+impl Default for SharedPickerInner {
+    fn default() -> Self {
+        Self {
+            picker: parking_lot::RwLock::new(None),
+        }
+    }
+}
+
+/// Non-owning handle to a [`SharedPicker`].
+#[derive(Clone)]
+pub(crate) struct WeakFilePicker(Weak<SharedPickerInner>);
+
+impl WeakFilePicker {
+    /// Try to promote the weak handle back to a strong [`SharedPicker`].
+    ///
+    /// Returns `None` once every strong `SharedPicker` clone has been
+    /// dropped. Callers should treat that as "the picker is being
+    /// torn down" and exit their current iteration cleanly.
+    pub(crate) fn upgrade(&self) -> Option<SharedFilePicker> {
+        self.0.upgrade().map(SharedFilePicker)
+    }
+}
+
+impl std::fmt::Debug for SharedFilePicker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("SharedPicker").field(&"..").finish()
     }
 }
 
-impl SharedPicker {
+impl SharedFilePicker {
     pub fn read(&self) -> Result<parking_lot::RwLockReadGuard<'_, Option<FilePicker>>, Error> {
-        Ok(self.0.read())
+        Ok(self.0.picker.read())
     }
 
     pub fn write(&self) -> Result<parking_lot::RwLockWriteGuard<'_, Option<FilePicker>>, Error> {
-        Ok(self.0.write())
+        Ok(self.0.picker.write())
+    }
+
+    /// Produce a non-owning handle to the same inner picker.
+    /// Use it if you don't need to block internal threads from dropping while owning this ref
+    pub(crate) fn weaken(&self) -> WeakFilePicker {
+        WeakFilePicker(Arc::downgrade(&self.0))
     }
 
     /// Return `true` if this is an instance of the picker that requires a complicated post-scan
     /// indexing/cache warmup job. The indexing is not crazy but it takes time.
     pub fn need_complex_rebuild(&self) -> bool {
-        let guard = self.0.read();
+        let guard = self.0.picker.read();
         guard
             .as_ref()
-            .is_some_and(|p| p.need_enable_mmap_cache() || p.need_enable_content_indexing())
+            .is_some_and(|p| p.has_mmap_cache() || p.has_content_indexing())
     }
 
     /// Block until the background filesystem scan finishes.
     /// Returns `true` if scan completed, `false` on timeout.
     pub fn wait_for_scan(&self, timeout: Duration) -> bool {
         let signal = {
-            let guard = self.0.read();
+            let guard = self.0.picker.read();
             match &*guard {
-                Some(picker) => picker.scan_signal(),
+                Some(picker) => Arc::clone(&picker.signals.scanning),
                 None => return true,
             }
         };
@@ -67,16 +137,16 @@ impl SharedPicker {
     /// Block until the background file watcher is ready.
     /// Returns `true` if watcher ready, `false` on timeout.
     pub fn wait_for_watcher(&self, timeout: Duration) -> bool {
-        let signal = {
-            let guard = self.0.read();
+        let watch_ready_signal = {
+            let guard = self.0.picker.read();
             match &*guard {
-                Some(picker) => picker.watcher_signal(),
+                Some(picker) => Arc::clone(&picker.signals.watcher_ready),
                 None => return true,
             }
         };
 
         let start = std::time::Instant::now();
-        while !signal.load(std::sync::atomic::Ordering::Acquire) {
+        while !watch_ready_signal.load(std::sync::atomic::Ordering::Acquire) {
             if start.elapsed() >= timeout {
                 return false;
             }
@@ -85,9 +155,37 @@ impl SharedPicker {
         true
     }
 
+    /// Trigger a full filesystem rescan without blocking the caller.
+    /// Performs a safe async rescan. Guarantees only single active rescan per picker.
+    /// If many rescans requested the last one guaranteed to be finished.
+    pub fn trigger_full_rescan_async(&self, shared_frecency: &SharedFrecency) -> Result<(), Error> {
+        match ScanJob::new(self, shared_frecency, /*install_watcher=*/ false)? {
+            Some(job) => {
+                job.spawn();
+            }
+            None => {
+                // A scan is already in flight — mark a follow-up as
+                // needed. The running scan's `run()` drains this flag
+                // and reschedules itself.
+                if let Ok(guard) = self.read()
+                    && let Some(picker) = guard.as_ref()
+                {
+                    picker
+                        .scan_signals()
+                        .rescan_pending
+                        .store(true, std::sync::atomic::Ordering::Release);
+                    tracing::info!(
+                        "Full rescan requested while another scan is active — \
+                         deferred via rescan_pending flag"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Refresh git statuses for all indexed files.
     pub fn refresh_git_status(&self, shared_frecency: &SharedFrecency) -> Result<usize, Error> {
-        use git2::StatusOptions;
         use tracing::debug;
 
         let git_status = {
@@ -101,13 +199,21 @@ impl SharedPicker {
                 picker.git_root()
             );
 
+            // Wait briefly for any in-progress git operation to release
+            // its `.git/index.lock`. libgit2 reads `.git/index` directly
+            // and does NOT coordinate with the filesystem lock; if a
+            // writer is mid-atomic-rename (lock file exists, new index
+            // not yet swapped in), we would observe stale status data.
+            // This matters most for the background watcher, which
+            // typically fires refresh in response to the very events
+            // produced by that in-flight git write.
+            if let Some(root) = picker.git_root() {
+                wait_for_git_index_lock_release(root);
+            }
+
             GitStatusCache::read_git_status(
                 picker.git_root(),
-                StatusOptions::new()
-                    .include_untracked(true)
-                    .recurse_untracked_dirs(true)
-                    .include_unmodified(true)
-                    .exclude_submodules(true),
+                &mut crate::git::default_status_options(),
             )
         };
 

@@ -20,7 +20,9 @@ use rand::{RngCore, SeedableRng};
 
 use fff_search::file_picker::{FFFMode, FilePicker, FuzzySearchOptions};
 use fff_search::grep::{GrepMode, GrepSearchOptions, parse_grep_query};
-use fff_search::{FilePickerOptions, PaginationArgs, QueryParser, SharedFrecency, SharedPicker};
+use fff_search::{
+    FilePickerOptions, PaginationArgs, QueryParser, SharedFilePicker, SharedFrecency,
+};
 
 const DOMAINS: &[&str] = &[
     r#"
@@ -308,7 +310,7 @@ fn fuzz_file_operations_stress() {
     git_init_and_commit(base);
     t_git += t0.elapsed();
 
-    let shared_picker = SharedPicker::default();
+    let shared_picker = SharedFilePicker::default();
 
     FilePicker::new_with_shared_state(
         shared_picker.clone(),
@@ -711,7 +713,7 @@ fn fuzzy_search_paths(picker: &FilePicker, query: &str) -> Vec<String> {
         .collect()
 }
 
-fn wait_for_bigram(shared_picker: &SharedPicker) {
+fn wait_for_bigram(shared_picker: &SharedFilePicker) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         std::thread::sleep(Duration::from_millis(50));

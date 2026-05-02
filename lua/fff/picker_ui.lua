@@ -933,6 +933,7 @@ function M.setup_keymaps()
   set_keymap('i', keymaps.move_up, M.move_up, input_opts)
   set_keymap('i', keymaps.move_down, M.move_down, input_opts)
   set_keymap('i', keymaps.cycle_previous_query, M.recall_query_from_history, input_opts)
+  set_keymap('i', keymaps.cycle_forward_query, M.cycle_forward_query, input_opts)
   set_keymap('n', 'j', M.move_down, input_opts)
   set_keymap('n', 'k', M.move_up, input_opts)
   set_keymap('n', keymaps.focus_list, M.focus_list_win, input_opts)
@@ -2228,6 +2229,56 @@ function M.recall_query_from_history()
   end)
 end
 
+--- Cycle forward through query history (toward more recent queries).
+--- Complements recall_query_from_history which cycles backward.
+--- Allows bidirectional navigation without losing your place.
+function M.cycle_forward_query()
+  if not M.state.active then return end
+
+  -- Initialize offset on first press (start from most recent, same as backward)
+  if M.state.history_offset == nil then
+    M.state.history_offset = 0
+  elseif M.state.history_offset > 0 then
+    -- Decrement offset to move forward toward more recent queries
+    M.state.history_offset = M.state.history_offset - 1
+  else
+    -- At the most recent entry (offset 0), can't go further forward
+    return
+  end
+
+  -- Fetch query at current offset from Rust (grep and file picker have separate histories)
+  local fuzzy = require('fff.core').ensure_initialized()
+  local history_fn = M.state.mode == 'grep' and fuzzy.get_historical_grep_query or fuzzy.get_historical_query
+  local ok, query = pcall(history_fn, M.state.history_offset)
+
+  if not ok or not query then
+    -- Shouldn't happen since we validated the offset, but handle gracefully
+    M.state.history_offset = nil
+    return
+  end
+
+  if M.state.mode ~= 'grep' then M.state.next_search_force_combo_boost = true end
+
+  -- this is going to trigger the on_input_change handler with the normal search and render flow
+  vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { M.state.config.prompt .. query })
+
+  -- Position cursor at end
+  vim.schedule(function()
+    if M.state.active and M.state.input_win and vim.api.nvim_win_is_valid(M.state.input_win) then
+      vim.api.nvim_win_set_cursor(M.state.input_win, { 1, #M.state.config.prompt + #query })
+    end
+  end)
+end
+
+--- Check whether the given window has 'winfixbuf' enabled.
+--- pcall-guarded so this stays safe on Neovim versions that predate the option.
+--- @param win number Window ID
+--- @return boolean
+local function window_has_winfixbuf(win)
+  local ok, val = pcall(vim.api.nvim_get_option_value, 'winfixbuf', { win = win })
+  return ok and val == true
+end
+
 --- Find the first visible window with a normal file buffer
 --- @return number|nil Window ID of the first suitable window, or nil if none found
 local function find_suitable_window()
@@ -2254,6 +2305,7 @@ local function find_suitable_window()
           and modifiable
           and not is_picker_window
           and filetype ~= 'undotree'
+          and not window_has_winfixbuf(win)
         then
           return win
         end
@@ -2465,17 +2517,28 @@ function M.select(action)
   M.close()
 
   if action == 'edit' then
+    local current_win = vim.api.nvim_get_current_win()
     local current_buf = vim.api.nvim_get_current_buf()
     local current_buftype = vim.api.nvim_get_option_value('buftype', { buf = current_buf })
     local current_buf_modifiable = vim.api.nvim_get_option_value('modifiable', { buf = current_buf })
+    local current_winfixbuf = window_has_winfixbuf(current_win)
 
-    -- If current active buffer is not a normal buffer we find a suitable window with a tab otherwise opening a new split
-    if current_buftype ~= '' or not current_buf_modifiable then
+    -- If the current window can't host a new buffer (special buftype, non-modifiable,
+    -- or 'winfixbuf' locking it), retarget a suitable window or fall back to a split.
+    -- Without this, :edit raises E1513 ("Cannot switch buffer. 'winfixbuf' is enabled")
+    -- whenever the picker is invoked from a window pinned via :h winfixbuf.
+    local opened_via_split = false
+    if current_buftype ~= '' or not current_buf_modifiable or current_winfixbuf then
       local suitable_win = find_suitable_window()
-      if suitable_win then vim.api.nvim_set_current_win(suitable_win) end
+      if suitable_win then
+        vim.api.nvim_set_current_win(suitable_win)
+      elseif current_winfixbuf then
+        vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
+        opened_via_split = true
+      end
     end
 
-    vim.cmd('edit ' .. vim.fn.fnameescape(relative_path))
+    if not opened_via_split then vim.cmd('edit ' .. vim.fn.fnameescape(relative_path)) end
   elseif action == 'split' then
     vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
   elseif action == 'vsplit' then

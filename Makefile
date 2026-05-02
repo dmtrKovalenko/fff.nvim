@@ -4,7 +4,11 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCLUDEDIR ?= $(PREFIX)/include
 
-.PHONY: build build-c-lib install uninstall test test-rust test-lua test-version test-bun test-node prepare-bun prepare-node set-npm-version header
+# Compile-time cfg that gates the watcher + git-status fuzz stress test.
+STRESS_RUSTFLAGS := --cfg stress
+FFF_STRESS_DEFAULT_SEED ?= 0xDEADBEEFCAFEBABE
+
+.PHONY: build build-c-lib install uninstall test test-rust test-lua test-version test-bun test-node prepare-bun prepare-node set-npm-version header test-stress test-stress-seeded test-stress-random
 
 all: format test lint
 
@@ -78,11 +82,32 @@ prepare-node: build
 
 test-bun: prepare-bun
 	cd packages/fff-bun && bun test src/
+	cd packages/pi-fff && bun test test/
 
 test-node: prepare-node
 	cd packages/fff-node && npm run build && node test/e2e.mjs
 
 test: test-rust test-lua test-version test-bun test-node
+
+
+test-stress-seeded:
+	FFF_STRESS_SEED="$${FFF_STRESS_SEED:-$(FFF_STRESS_DEFAULT_SEED)}" \
+	RUSTFLAGS="$(STRESS_RUSTFLAGS)" \
+	cargo test \
+		-p fff-search \
+		--test fuzz_git_watcher_stress \
+		--features zlob \
+		-- --nocapture stress_seeded
+
+test-stress-random:
+	RUSTFLAGS="$(STRESS_RUSTFLAGS)" \
+	cargo test \
+		-p fff-search \
+		--test fuzz_git_watcher_stress \
+		--features zlob \
+		-- --nocapture stress_random
+
+test-stress: test-stress-seeded test-stress-random
 
 # Update version in a package.json, including optionalDependencies.
 # Usage: make set-npm-version PKG=packages/fff-bun VERSION=1.0.0-nightly.abc1234
