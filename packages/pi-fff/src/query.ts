@@ -10,12 +10,14 @@ export function normalizePathConstraint(
   if (path.isAbsolute(trimmed)) {
     const relative = path.relative(cwd, trimmed).replaceAll(path.sep, "/");
     if (relative === "") return null;
-    if (relative.startsWith("../") || relative === ".." || path.isAbsolute(relative)) {
-      throw new Error(
-        `Path constraint must be relative to the workspace: ${pathConstraint}`,
-      );
-    }
     trimmed = relative;
+    if (relative.startsWith("../") || relative === ".." || path.isAbsolute(relative)) {
+      // Outside the workspace — the relative path now starts with ../.
+      // Let it continue through glob collapsing so .agents/** still becomes
+      // ../other/.agents/ etc. FFF will return empty, which is the correct
+      // silent-fail behavior. Throwing here was a regression: agents
+      // legitimately search outside their workspace.
+    }
   }
 
   if (trimmed === "." || trimmed === "./") return null;
