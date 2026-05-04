@@ -8,6 +8,9 @@
 
 $ErrorActionPreference = 'Stop'
 
+# Force TLS 1.2 — PS 5.1 on older Win10 may default to SSL3/TLS1.0 which GitHub rejects.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
 $Repo = 'dmtrKovalenko/fff.nvim'
 $BinaryName = 'fff-mcp'
 $InstallDir = if ($env:FFF_MCP_INSTALL_DIR) { $env:FFF_MCP_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'fff-mcp\bin' }
@@ -45,7 +48,6 @@ function Install-Binary {
 
     $filename = "$BinaryName-$Target.exe"
     $url = "https://github.com/$Repo/releases/download/$Tag/$filename"
-    $checksumUrl = "$url.sha256"
 
     Write-Info "Downloading $filename from release $Tag..."
 
@@ -63,19 +65,6 @@ function Install-Binary {
             Write-Host "  Platform: $Target"
             Write-Host "Check available releases at: https://github.com/$Repo/releases"
             throw
-        }
-
-        $tmpSha = "$tmpFile.sha256"
-        try {
-            Invoke-WebRequest -Uri $checksumUrl -OutFile $tmpSha -UseBasicParsing -ErrorAction Stop
-            Write-Info "Verifying checksum..."
-            $expected = (Get-Content $tmpSha -Raw).Trim().Split()[0]
-            $actual = (Get-FileHash -Path $tmpFile -Algorithm SHA256).Hash.ToLower()
-            if ($expected.ToLower() -ne $actual) {
-                throw "Checksum verification failed! expected=$expected actual=$actual"
-            }
-        } catch [System.Net.WebException] {
-            Write-Warn "Checksum file not available, skipping verification."
         }
 
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
