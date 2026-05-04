@@ -3,8 +3,21 @@
 .SYNOPSIS
     FFF MCP Server installer for Windows.
 .DESCRIPTION
-    Usage: irm https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.ps1 | iex
+    Pipe usage:
+        irm https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.ps1 | iex
+    Direct usage (supports params):
+        iwr https://.../install-mcp.ps1 -OutFile install-mcp.ps1; .\install-mcp.ps1 -Version v0.1.2
+    Env-var fallbacks (for the piped form):
+        $env:FFF_MCP_VERSION, $env:FFF_MCP_INSTALL_DIR
+.PARAMETER Version
+    Release tag to install (e.g. 'v0.1.2'). Default: latest release containing a Windows MCP asset.
+.PARAMETER InstallDir
+    Target install directory. Default: $env:LOCALAPPDATA\fff-mcp\bin.
 #>
+param(
+    [string]$Version = $env:FFF_MCP_VERSION,
+    [string]$InstallDir = $env:FFF_MCP_INSTALL_DIR
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -13,15 +26,15 @@ $ErrorActionPreference = 'Stop'
 
 $Repo = 'dmtrKovalenko/fff.nvim'
 $BinaryName = 'fff-mcp'
-$InstallDir = if ($env:FFF_MCP_INSTALL_DIR) { $env:FFF_MCP_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'fff-mcp\bin' }
+if (-not $InstallDir) { $InstallDir = Join-Path $env:LOCALAPPDATA 'fff-mcp\bin' }
 
 function Write-Info    { param($m) Write-Host $m -ForegroundColor Blue }
 function Write-Success { param($m) Write-Host $m -ForegroundColor DarkYellow }
 function Write-Warn    { param($m) Write-Host $m -ForegroundColor Yellow }
 
 function Get-Target {
-    $arch = $env:PROCESSOR_ARCHITECTURE
-    if ($env:PROCESSOR_ARCHITEW6432) { $arch = $env:PROCESSOR_ARCHITEW6432 }
+    # Read from registry — env vars lie under x86/ARM64 emulation. Same approach Bun uses.
+    $arch = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').PROCESSOR_ARCHITECTURE
     switch ($arch) {
         'AMD64' { return 'x86_64-pc-windows-msvc' }
         'ARM64' { return 'aarch64-pc-windows-msvc' }
@@ -43,6 +56,25 @@ function Get-LatestReleaseTag {
     return $rel.tag_name
 }
 
+function Invoke-Download {
+    param([string]$Url, [string]$OutFile)
+    # curl.exe (ships with Win10 1803+) is faster than iwr on PS 5.1. Fall back to iwr.
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & $curl.Source -fsSL -o $OutFile $Url
+        if ($LASTEXITCODE -ne 0) { throw "curl.exe exited with $LASTEXITCODE" }
+    } else {
+        $prev = $ProgressPreference
+        try {
+            # iwr progress bar tanks throughput on PS 5.1.
+            $ProgressPreference = 'SilentlyContinue'
+            Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
+        } finally {
+            $ProgressPreference = $prev
+        }
+    }
+}
+
 function Install-Binary {
     param([string]$Target, [string]$Tag)
 
@@ -56,7 +88,7 @@ function Install-Binary {
     try {
         $tmpFile = Join-Path $tmp $filename
         try {
-            Invoke-WebRequest -Uri $url -OutFile $tmpFile -UseBasicParsing
+            Invoke-Download -Url $url -OutFile $tmpFile
         } catch {
             Write-Host ""
             Write-Host "Error: Failed to download binary for your platform." -ForegroundColor Red
@@ -90,8 +122,10 @@ function Add-ToUserPath {
     if ($entries -notcontains $Dir) {
         $newPath = (@($entries + $Dir) -join ';')
         [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-        Write-Success "Added $Dir to user PATH (open a new shell to pick it up)."
+        Write-Success "Added $Dir to user PATH."
     }
+    # Make available in current session too — no shell restart needed.
+    if (-not (Test-OnPath $Dir)) { $env:PATH = "$env:PATH;$Dir" }
 }
 
 function Show-SetupInstructions {
@@ -178,7 +212,12 @@ function Main {
     Write-Host ""
     Write-Info "Detected platform: $target"
 
-    $tag = Get-LatestReleaseTag -Target $target
+    if ($Version) {
+        $tag = $Version
+        Write-Info "Using pinned version: $tag"
+    } else {
+        $tag = Get-LatestReleaseTag -Target $target
+    }
     $binaryPath = Install-Binary -Target $target -Tag $tag
 
     if ($isUpdate) {
@@ -186,9 +225,7 @@ function Main {
         Write-Success "FFF MCP Server updated to $tag!"
         Write-Host ""
     } else {
-        if (-not (Test-OnPath $InstallDir)) {
-            Add-ToUserPath $InstallDir
-        }
+        Add-ToUserPath $InstallDir
         Show-SetupInstructions -BinaryPath $binaryPath
     }
 }
