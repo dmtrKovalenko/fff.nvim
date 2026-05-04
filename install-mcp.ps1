@@ -13,11 +13,19 @@
     Release tag to install (e.g. 'v0.1.2'). Default: latest release containing a Windows MCP asset.
 .PARAMETER InstallDir
     Target install directory. Default: $env:LOCALAPPDATA\fff-mcp\bin.
+.PARAMETER PathScope
+    How to persist PATH: 'User' (set user env var, default), 'Profile' (append to $PROFILE *nix-style), 'None' (do not persist).
+    Env-var fallback: $env:FFF_MCP_PATH_SCOPE.
 #>
 param(
     [string]$Version = $env:FFF_MCP_VERSION,
-    [string]$InstallDir = $env:FFF_MCP_INSTALL_DIR
+    [string]$InstallDir = $env:FFF_MCP_INSTALL_DIR,
+    [ValidateSet('User', 'Profile', 'None')]
+    [string]$PathScope
 )
+if (-not $PathScope) {
+    $PathScope = if ($env:FFF_MCP_PATH_SCOPE) { $env:FFF_MCP_PATH_SCOPE } else { 'User' }
+}
 
 $ErrorActionPreference = 'Stop'
 
@@ -124,7 +132,30 @@ function Add-ToUserPath {
         [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
         Write-Success "Added $Dir to user PATH."
     }
-    # Make available in current session too — no shell restart needed.
+}
+
+function Add-ToProfilePath {
+    param([string]$Dir)
+    $profilePath = $PROFILE.CurrentUserAllHosts
+    $line = "`$env:PATH += ';$Dir'  # added by fff-mcp installer"
+    if (Test-Path $profilePath) {
+        $existing = Get-Content $profilePath -Raw -ErrorAction SilentlyContinue
+        if ($existing -and $existing.Contains($Dir)) { return }
+    } else {
+        New-Item -ItemType File -Force -Path $profilePath | Out-Null
+    }
+    Add-Content -Path $profilePath -Value "`n$line"
+    Write-Success "Appended PATH update to $profilePath."
+}
+
+function Set-Path {
+    param([string]$Dir, [string]$Scope)
+    switch ($Scope) {
+        'User'    { Add-ToUserPath $Dir }
+        'Profile' { Add-ToProfilePath $Dir }
+        'None'    { Write-Info "Skipping PATH persistence (-PathScope None)." }
+    }
+    # Make available in current session regardless of scope.
     if (-not (Test-OnPath $Dir)) { $env:PATH = "$env:PATH;$Dir" }
 }
 
@@ -225,7 +256,7 @@ function Main {
         Write-Success "FFF MCP Server updated to $tag!"
         Write-Host ""
     } else {
-        Add-ToUserPath $InstallDir
+        Set-Path -Dir $InstallDir -Scope $PathScope
         Show-SetupInstructions -BinaryPath $binaryPath
     }
 }
