@@ -103,7 +103,7 @@ fn setup_tracker_with_data(entries: &[TestQueryEntry]) -> (QueryTracker, PathBuf
         .as_nanos();
     let temp_dir =
         std::env::temp_dir().join(format!("fff_bench_{}_{}", timestamp, rand::random::<u32>()));
-    let mut tracker = QueryTracker::new(temp_dir.to_str().unwrap(), true).unwrap();
+    let mut tracker = QueryTracker::open(temp_dir.to_str().unwrap()).unwrap();
 
     // Insert all test data
     for entry in entries {

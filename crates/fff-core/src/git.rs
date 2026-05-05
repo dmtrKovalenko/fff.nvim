@@ -194,7 +194,9 @@ mod tests {
     #[test]
     fn lookup_is_case_exact_regardless_of_libgit2_sort_order() {
         let tmp = TempDir::new().unwrap();
-        let base = tmp.path().canonicalize().unwrap();
+        // `std::fs::canonicalize` on Windows adds a `\\?\` UNC prefix that
+        // libgit2's workdir string lacks. Use dunce so both sides match.
+        let base = crate::path_utils::canonicalize(tmp.path()).unwrap();
 
         // Mixed-case names that sort differently under byte-wise vs
         // case-insensitive comparators.

@@ -1,6 +1,6 @@
 [package]
 name = "fff-nvim"
-version = "0.6.4"
+version = "0.7.0"
 edition = "2024"
 
 [lib]
@@ -51,6 +51,10 @@ path = "src/bin/test_memory_leak.rs"
 name = "bench_ci_memmem"
 path = "src/bin/bench_ci_memmem.rs"
 
+[[bin]]
+name = "bench_lmdb_parallel"
+path = "src/bin/bench_lmdb_parallel.rs"
+
 [dependencies]
 # Workspace dependencies
 ahash = { workspace = true }
@@ -60,10 +64,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff = { package = "fff-search", path = "../fff-core", version = "0.6.4", features = [
+fff = { package = "fff-search", path = "../fff-core", version = "0.7.0", features = [
 	"mimalloc-collect",
 ] }
-fff-query-parser = { path = "../fff-query-parser", version = "0.6.4" }
+fff-query-parser = { path = "../fff-query-parser", version = "0.7.0" }
 
 # External dependencies
 blake3 = "1.8.2"

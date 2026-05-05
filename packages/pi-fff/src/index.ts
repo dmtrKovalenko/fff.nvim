@@ -292,6 +292,11 @@ function createFffMentionProvider(
 export default function fffExtension(pi: ExtensionAPI) {
   let finder: FileFinder | null = null;
   let finderCwd: string | null = null;
+  // Concurrent ensureFinder() callers share the same in-flight promise so
+  // FileFinder.create() (which takes native DB locks) runs at most once per
+  // base path at a time — otherwise parallel tool calls would race and
+  // deadlock at the native layer (issue #403).
+  let finderPromise: Promise<FileFinder> | null = null;
   let activeCwd = process.cwd();
 
   // Mode resolution: flag > env > default
@@ -324,28 +329,37 @@ export default function fffExtension(pi: ExtensionAPI) {
     return currentMode !== "tools-only";
   }
 
-  async function ensureFinder(cwd: string): Promise<FileFinder> {
-    if (finder && !finder.isDestroyed && finderCwd === cwd) return finder;
-    if (finder && !finder.isDestroyed) {
-      finder.destroy();
-      finder = null;
-      finderCwd = null;
-    }
+  function ensureFinder(cwd: string): Promise<FileFinder> {
+    if (finder && !finder.isDestroyed && finderCwd === cwd)
+      return Promise.resolve(finder);
+    if (finderPromise) return finderPromise;
 
-    const result = FileFinder.create({
-      basePath: cwd,
-      frecencyDbPath,
-      historyDbPath,
-      aiMode: true,
+    finderPromise = (async () => {
+      if (finder && !finder.isDestroyed) {
+        finder.destroy();
+        finder = null;
+        finderCwd = null;
+      }
+
+      const result = FileFinder.create({
+        basePath: cwd,
+        frecencyDbPath,
+        historyDbPath,
+        aiMode: true,
+      });
+
+      if (!result.ok)
+        throw new Error(`Failed to create FFF file finder: ${result.error}`);
+
+      finder = result.value;
+      finderCwd = cwd;
+      await finder.waitForScan(15000);
+      return finder;
+    })().finally(() => {
+      finderPromise = null;
     });
 
-    if (!result.ok)
-      throw new Error(`Failed to create FFF file finder: ${result.error}`);
-
-    finder = result.value;
-    finderCwd = cwd;
-    await finder.waitForScan(15000);
-    return finder;
+    return finderPromise;
   }
 
   function destroyFinder() {

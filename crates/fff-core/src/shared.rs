@@ -282,12 +282,8 @@ impl SharedFrecency {
     }
 
     /// Spawn a background GC thread for this frecency tracker.
-    pub fn spawn_gc(
-        &self,
-        db_path: String,
-        use_unsafe_no_lock: bool,
-    ) -> crate::Result<std::thread::JoinHandle<()>> {
-        FrecencyTracker::spawn_gc(self.clone(), db_path, use_unsafe_no_lock)
+    pub fn spawn_gc(&self, db_path: String) -> crate::Result<std::thread::JoinHandle<()>> {
+        FrecencyTracker::spawn_gc(self.clone(), db_path)
     }
 
     /// Drop the in-memory tracker and delete the on-disk database directory.

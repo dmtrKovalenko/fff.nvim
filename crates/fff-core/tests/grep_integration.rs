@@ -864,7 +864,8 @@ fn grep_with_path_constraint() {
     let result = picker.grep(&parsed, &plain_opts());
 
     assert_eq!(result.matches.len(), 1);
-    assert!(result.files[0].relative_path(&picker).starts_with("src/"));
+    let rel = result.files[0].relative_path(&picker);
+    assert!(rel.starts_with("src/") || rel.starts_with("src\\"));
 }
 
 // ── Negated constraint tests ───────────────────────────────────────────
@@ -921,7 +922,10 @@ fn grep_with_negated_path_constraint() {
         result.matches.len()
     );
     assert!(
-        result.files[0].relative_path(&picker).starts_with("tests/"),
+        result.files[0].relative_path(&picker).starts_with("tests/")
+            || result.files[0]
+                .relative_path(&picker)
+                .starts_with("tests\\"),
         "should only match tests/ file, got: {}",
         result.files[0].relative_path(&picker)
     );

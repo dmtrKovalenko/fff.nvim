@@ -2517,6 +2517,9 @@ mod tests {
         use std::sync::atomic::AtomicBool;
 
         let dir = tempfile::tempdir().unwrap();
+        // Match the picker's internal dunce-canonicalize so paths passed to
+        // on_create_or_modify resolve back to the same base_path on Windows.
+        let base = crate::path_utils::canonicalize(dir.path()).unwrap();
 
         // Five base files: only three contain the pattern "unicorn".
         // We need some files WITHOUT the pattern so the bigrams for
@@ -2530,12 +2533,12 @@ mod tests {
             ("e.txt", "just some random content"),
         ];
         for (name, content) in base_contents {
-            let mut f = std::fs::File::create(dir.path().join(name)).unwrap();
+            let mut f = std::fs::File::create(base.join(name)).unwrap();
             writeln!(f, "{}", content).unwrap();
         }
 
         let mut picker = FilePicker::new(FilePickerOptions {
-            base_path: dir.path().to_str().unwrap().into(),
+            base_path: base.to_str().unwrap().into(),
             watch: false,
             ..Default::default()
         })
@@ -2557,7 +2560,7 @@ mod tests {
         // Add three overflow files (new after the bigram index was built),
         // all containing "unicorn".
         for name in ["f.txt", "g.txt", "h.txt"] {
-            let path = dir.path().join(name);
+            let path = base.join(name);
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "overflow unicorn entry").unwrap();
             drop(f);

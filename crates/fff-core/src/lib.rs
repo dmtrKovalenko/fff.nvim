@@ -44,10 +44,10 @@
 //! std::fs::create_dir_all(&tmp).unwrap();
 //!
 //! // 1. Optionally initialize frecency and query tracker databases
-//! let frecency = FrecencyTracker::new(tmp.join("frecency"), false)?;
+//! let frecency = FrecencyTracker::open(tmp.join("frecency"))?;
 //! shared_frecency.init(frecency)?;
 //!
-//! let query_tracker = QueryTracker::new(tmp.join("queries"), false)?;
+//! let query_tracker = QueryTracker::open(tmp.join("queries"))?;
 //! shared_query_tracker.init(query_tracker)?;
 //!
 //! // 2. Init the file picker (spawns background scan + watcher)
@@ -144,6 +144,7 @@ pub mod query_tracker;
 pub mod types;
 
 mod ignore;
+mod lmdb;
 /// Thread-safe shared handles for [`FilePicker`], [`FrecencyTracker`],
 /// and [`QueryTracker`].
 pub mod shared;

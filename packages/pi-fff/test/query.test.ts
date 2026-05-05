@@ -29,4 +29,37 @@ describe("path constraint normalization", () => {
       buildQuery("/tmp/workspace/.agents/**", "*", "/tmp/workspace/test/**", cwd),
     ).toBe(".agents/ !test/ *");
   });
+
+  test("treats path='.' as workspace root (no constraint)", () => {
+    expect(normalizePathConstraint(".", cwd)).toBeNull();
+    expect(normalizePathConstraint("./", cwd)).toBeNull();
+    expect(buildQuery(".", "needle", undefined, cwd)).toBe("needle");
+  });
+
+  test("treats absolute workspace root as no constraint", () => {
+    expect(normalizePathConstraint(cwd, cwd)).toBeNull();
+    expect(buildQuery(cwd, "needle", undefined, cwd)).toBe("needle");
+  });
+
+  test("bare directory path without trailing slash becomes PathSegment", () => {
+    expect(normalizePathConstraint("app", cwd)).toBe("app/");
+    expect(normalizePathConstraint("src/nested", cwd)).toBe("src/nested/");
+    expect(buildQuery("app", "needle", undefined, cwd)).toBe("app/ needle");
+  });
+
+  test("converts absolute in-workspace file path to repo-relative", () => {
+    expect(normalizePathConstraint("/tmp/workspace/src/main.rs", cwd)).toBe("src/main.rs");
+    expect(buildQuery("/tmp/workspace/src/main.rs", "needle", undefined, cwd)).toBe(
+      "src/main.rs needle",
+    );
+  });
+
+  test("converts absolute in-workspace directory (without trailing slash) to repo-relative", () => {
+    expect(normalizePathConstraint("/tmp/workspace/src", cwd)).toBe("src/");
+    expect(buildQuery("/tmp/workspace/src", "needle", undefined, cwd)).toBe("src/ needle");
+  });
+
+  test("converts absolute in-workspace glob path to repo-relative glob", () => {
+    expect(normalizePathConstraint("/tmp/workspace/src/**/*.ts", cwd)).toBe("src/**/*.ts");
+  });
 });

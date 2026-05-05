@@ -235,10 +235,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shared_picker = SharedFilePicker::default();
     let shared_frecency = SharedFrecency::default();
     if let Some(frecency_db_path) = args.frecency_db_path {
-        match FrecencyTracker::new(&frecency_db_path, false) {
+        match FrecencyTracker::open(&frecency_db_path) {
             Ok(tracker) => {
                 let _ = shared_frecency.init(tracker);
-                let _ = shared_frecency.spawn_gc(frecency_db_path, false);
+                let _ = shared_frecency.spawn_gc(frecency_db_path);
             }
             Err(e) => {
                 eprintln!("Warning: Failed to init frecency db: {}", e);

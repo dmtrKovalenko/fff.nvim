@@ -443,7 +443,10 @@ fn burst_file_creation_in_new_directory() {
             let batch_count = picker
                 .get_files()
                 .iter()
-                .filter(|f| f.relative_path(picker).starts_with("src/batch/"))
+                .filter(|f| {
+                    let p = f.relative_path(picker);
+                    p.starts_with("src/batch/") || p.starts_with("src\\batch\\")
+                })
                 .count();
             batch_count >= file_count
         },

@@ -4,9 +4,11 @@ This repository contains **FFF.nvim (Fast File Finder)**, a high-performance fil
 
 ## Development Commands
 
+Always prefer Makefile commands listed to the cargo/bun/node if possible.
+
 ### Building
 
-- `cargo build --release` - Build the Rust fuzzy matcher and file picker
+- `make build` - build everything
 
 ### Testing and Development Tools
 
@@ -17,7 +19,6 @@ This project does not have a traditional test suite. Testing is done through:
 
 ### Code Quality
 
-- `cargo fmt` - Format Rust code (follows standard conventions)
 - `make lint` - Rust linting and code analysis
 - `make format` - Format all code 
 - `make test` - Run unit tests (limited coverage, primarily integration testing)

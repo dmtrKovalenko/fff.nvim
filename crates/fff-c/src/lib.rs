@@ -110,6 +110,9 @@ fn default_i32(val: i32, default: i32) -> i32 {
 /// cache-budget configuration. This function delegates to `fff_create_instance2`
 /// with NULL log paths and auto cache budget, so behaviour is unchanged.
 ///
+/// The `use_unsafe_no_lock` parameter is deprecated and ignored; see
+/// [`fff_create_instance2`] for details.
+///
 /// ## Safety
 /// See `fff_create_instance2`.
 #[unsafe(no_mangle)]
@@ -117,7 +120,7 @@ pub unsafe extern "C" fn fff_create_instance(
     base_path: *const c_char,
     frecency_db_path: *const c_char,
     history_db_path: *const c_char,
-    use_unsafe_no_lock: bool,
+    _use_unsafe_no_lock: bool,
     enable_mmap_cache: bool,
     enable_content_indexing: bool,
     watch: bool,
@@ -128,7 +131,7 @@ pub unsafe extern "C" fn fff_create_instance(
             base_path,
             frecency_db_path,
             history_db_path,
-            use_unsafe_no_lock,
+            false,
             enable_mmap_cache,
             enable_content_indexing,
             watch,
@@ -152,7 +155,11 @@ pub unsafe extern "C" fn fff_create_instance(
 /// * `base_path`                   – directory to index (required)
 /// * `frecency_db_path`            – frecency LMDB database path (NULL/empty to skip)
 /// * `history_db_path`             – query history LMDB database path (NULL/empty to skip)
-/// * `use_unsafe_no_lock`          – use MDB_NOLOCK for LMDB (useful in single-process setups)
+/// * `use_unsafe_no_lock`          – **deprecated, ignored.** Previously enabled
+///   `MDB_NOLOCK|MDB_NOSYNC|MDB_NOMETASYNC` for LMDB; benchmarks showed no
+///   measurable win under realistic contention, so the flag is now a no-op.
+///   The parameter remains in the signature for ABI compatibility and will be
+///   removed in a future release.
 /// * `enable_mmap_cache`           – pre-populate mmap caches after the initial scan
 /// * `enable_content_indexing`     – build content index after the initial scan
 /// * `watch`                       – start a background file-system watcher for live updates
@@ -177,7 +184,7 @@ pub unsafe extern "C" fn fff_create_instance2(
     base_path: *const c_char,
     frecency_db_path: *const c_char,
     history_db_path: *const c_char,
-    use_unsafe_no_lock: bool,
+    _use_unsafe_no_lock: bool,
     enable_mmap_cache: bool,
     enable_content_indexing: bool,
     watch: bool,
@@ -214,12 +221,12 @@ pub unsafe extern "C" fn fff_create_instance2(
             let _ = std::fs::create_dir_all(parent);
         }
 
-        match FrecencyTracker::new(frecency_path, use_unsafe_no_lock) {
+        match FrecencyTracker::open(frecency_path) {
             Ok(tracker) => {
                 if let Err(e) = shared_frecency.init(tracker) {
                     return FffResult::err(&format!("Failed to acquire frecency lock: {}", e));
                 }
-                let _ = shared_frecency.spawn_gc(frecency_path.clone(), use_unsafe_no_lock);
+                let _ = shared_frecency.spawn_gc(frecency_path.clone());
             }
             Err(e) => return FffResult::err(&format!("Failed to init frecency db: {}", e)),
         }
@@ -231,7 +238,7 @@ pub unsafe extern "C" fn fff_create_instance2(
             let _ = std::fs::create_dir_all(parent);
         }
 
-        match QueryTracker::new(history_path, use_unsafe_no_lock) {
+        match QueryTracker::open(history_path) {
             Ok(tracker) => {
                 if let Err(e) = query_tracker.init(tracker) {
                     return FffResult::err(&format!("Failed to acquire query tracker lock: {}", e));

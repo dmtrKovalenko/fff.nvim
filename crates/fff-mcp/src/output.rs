@@ -154,7 +154,6 @@ pub struct GrepFormatter<'a> {
     pub files: &'a [&'a FileItem],
     pub total_matched: usize,
     pub next_file_offset: usize,
-    pub regex_fallback_error: Option<&'a str>,
     pub output_mode: OutputMode,
     pub max_results: usize,
     pub show_context: bool,
@@ -169,7 +168,6 @@ impl GrepFormatter<'_> {
             files,
             total_matched,
             next_file_offset,
-            regex_fallback_error,
             output_mode,
             max_results,
             show_context,
@@ -215,10 +213,6 @@ impl GrepFormatter<'_> {
         } else {
             2500
         };
-
-        if let Some(err) = regex_fallback_error {
-            lines.push(format!("! regex failed: {}, using literal match", err));
-        }
 
         // File overview: collect first match per file
         let file_preview = collect_file_preview(items, files, picker);

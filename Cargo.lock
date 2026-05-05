@@ -629,7 +629,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fff-c"
-version = "0.6.4"
+version = "0.7.0"
 dependencies = [
  "fff-query-parser",
  "fff-search",
@@ -642,7 +642,7 @@ dependencies = [
 
 [[package]]
 name = "fff-grep"
-version = "0.6.4"
+version = "0.7.0"
 dependencies = [
  "bstr",
  "memchr",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "fff-mcp"
-version = "0.6.4"
+version = "0.7.0"
 dependencies = [
  "clap",
  "fff-query-parser",
@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "fff-nvim"
-version = "0.6.4"
+version = "0.7.0"
 dependencies = [
  "ahash",
  "blake3",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "fff-query-parser"
-version = "0.6.4"
+version = "0.7.0"
 dependencies = [
  "criterion",
  "zlob",
@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "fff-search"
-version = "0.6.4"
+version = "0.7.0"
 dependencies = [
  "ahash",
  "aho-corasick",

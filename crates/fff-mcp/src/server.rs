@@ -19,6 +19,20 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{ServerHandler, schemars, tool, tool_handler, tool_router};
 
+/// Normalize the caller-supplied `maxResults`.
+///
+/// `None`, `Some(0)`, and non-positive / non-finite values fall back to
+/// `default`. Issue #400 reported that grep returned 0 items for
+/// `maxResults: 0` while `find_files` returned the entire dataset; treating
+/// 0 as "use the default" makes both tools behave consistently.
+fn normalize_max_results(raw: Option<f64>, default: usize) -> usize {
+    match raw {
+        None => default,
+        Some(v) if v <= 0.0 || !v.is_finite() => default,
+        Some(v) => (v.round() as usize).max(1),
+    }
+}
+
 fn cleanup_fuzzy_query(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -71,6 +85,9 @@ fn make_grep_options(
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FindFilesParams {
     /// Fuzzy search query. Supports path prefixes and glob constraints.
+    // `pattern` alias for consistency with grep's alias and the common
+    // file-search parameter name (#311).
+    #[serde(alias = "pattern")]
     pub query: String,
     /// Max results (default 20).
     #[serde(rename = "maxResults")]
@@ -84,6 +101,10 @@ pub struct FindFilesParams {
 pub struct GrepParams {
     /// Search text or regex query with optional constraint prefixes.
     /// Matches within single lines only — use ONE specific term, not multiple words.
+    // `pattern` alias: LLMs that have seen multi_grep (which uses `patterns`)
+    // routinely call grep with `pattern`; accept it instead of erroring out
+    // with an unhelpful "missing field `query`" (#311).
+    #[serde(alias = "pattern")]
     pub query: String,
     /// Max matching lines (default 20).
     #[serde(rename = "maxResults")]
@@ -273,7 +294,6 @@ impl FffServer {
                             files: &retry_result.files,
                             total_matched: retry_result.matches.len(),
                             next_file_offset: retry_result.next_file_offset,
-                            regex_fallback_error: retry_result.regex_fallback_error.as_deref(),
                             output_mode,
                             max_results,
                             show_context: ctx_lines > 0,
@@ -363,7 +383,6 @@ impl FffServer {
             files: &result.files,
             total_matched: result.matches.len(),
             next_file_offset: result.next_file_offset,
-            regex_fallback_error: result.regex_fallback_error.as_deref(),
             output_mode,
             max_results,
             show_context: ctx_lines > 0,
@@ -391,7 +410,7 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<FindFilesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20.0).round() as usize; // safe
+        let max_results = normalize_max_results(params.max_results, 20);
         let query = &params.query;
 
         let page_offset = params
@@ -503,7 +522,7 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<GrepParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20.0) as usize;
+        let max_results = normalize_max_results(params.max_results, 20);
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
         let parsed = QueryParser::new(AiGrepConfig).parse(&params.query);
@@ -545,7 +564,7 @@ impl FffServer {
 
 impl FffServer {
     fn multi_grep_inner(&self, params: MultiGrepParams) -> Result<CallToolResult, ErrorData> {
-        let max_results = params.max_results.unwrap_or(20.0).round() as usize;
+        let max_results = normalize_max_results(params.max_results, 20);
         let context = params.context.map(|v| v.round() as usize);
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
@@ -604,7 +623,6 @@ impl FffServer {
                         files: &fb_file_refs,
                         total_matched: fb_result.matches.len(),
                         next_file_offset: fb_result.next_file_offset,
-                        regex_fallback_error: None,
                         output_mode,
                         max_results,
                         show_context: false,
@@ -636,7 +654,6 @@ impl FffServer {
             files: &file_refs,
             total_matched: result.matches.len(),
             next_file_offset: result.next_file_offset,
-            regex_fallback_error: None,
             output_mode,
             max_results,
             show_context: ctx_lines > 0,
@@ -662,5 +679,64 @@ impl ServerHandler for FffServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("fff", env!("CARGO_PKG_VERSION")))
             .with_instructions(instructions)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_max_results_none_uses_default() {
+        assert_eq!(normalize_max_results(None, 20), 20);
+    }
+
+    #[test]
+    fn normalize_max_results_zero_uses_default() {
+        // Issue #400: `maxResults: 0` must not return zero items for grep
+        // while `find_files` returns the full set. Both tools now map 0 to
+        // the default limit.
+        assert_eq!(normalize_max_results(Some(0.0), 20), 20);
+    }
+
+    #[test]
+    fn normalize_max_results_negative_uses_default() {
+        assert_eq!(normalize_max_results(Some(-5.0), 20), 20);
+    }
+
+    #[test]
+    fn normalize_max_results_non_finite_uses_default() {
+        assert_eq!(normalize_max_results(Some(f64::NAN), 20), 20);
+        assert_eq!(normalize_max_results(Some(f64::INFINITY), 20), 20);
+    }
+
+    #[test]
+    fn normalize_max_results_rounds_and_clamps() {
+        assert_eq!(normalize_max_results(Some(0.4), 20), 1);
+        assert_eq!(normalize_max_results(Some(10.0), 20), 10);
+        assert_eq!(normalize_max_results(Some(10.7), 20), 11);
+    }
+
+    #[test]
+    fn grep_params_accepts_pattern_alias() {
+        // Issue #311: LLMs flip between `query` and `pattern`; accept both.
+        let via_query: GrepParams =
+            serde_json::from_str(r#"{"query":"foo"}"#).expect("query field");
+        assert_eq!(via_query.query, "foo");
+
+        let via_pattern: GrepParams =
+            serde_json::from_str(r#"{"pattern":"foo"}"#).expect("pattern alias");
+        assert_eq!(via_pattern.query, "foo");
+    }
+
+    #[test]
+    fn find_files_params_accepts_pattern_alias() {
+        let via_query: FindFilesParams =
+            serde_json::from_str(r#"{"query":"foo"}"#).expect("query field");
+        assert_eq!(via_query.query, "foo");
+
+        let via_pattern: FindFilesParams =
+            serde_json::from_str(r#"{"pattern":"foo"}"#).expect("pattern alias");
+        assert_eq!(via_pattern.query, "foo");
     }
 }

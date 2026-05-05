@@ -217,11 +217,24 @@ impl FileSync {
     fn find_file_index(&self, path: &Path, base_path: &Path) -> Result<usize, usize> {
         let arena = self.arena_base_ptr();
 
-        // Strip base_path prefix to get the relative path.
-        let rel_path = match path.strip_prefix(base_path) {
-            Ok(r) => r.to_string_lossy(),
-            Err(_) => return Err(0),
+        // Strip base_path prefix to get the relative path. On Windows this
+        // can fail for 8.3 short names or a different casing; fall back to
+        // canonicalize-then-strip so watcher events still land on the right
+        // `FileItem`.
+        let rel_path_owned: String = match path.strip_prefix(base_path) {
+            Ok(r) => r.to_string_lossy().into_owned(),
+            Err(_) => {
+                #[cfg(windows)]
+                {
+                    canonical_relative_path(path, base_path).ok_or(0usize)?
+                }
+                #[cfg(not(windows))]
+                {
+                    return Err(0);
+                }
+            }
         };
+        let rel_path: &str = &rel_path_owned;
 
         // Split into directory (with trailing '/') and filename.
         let parent_end = rel_path
@@ -1286,7 +1299,10 @@ impl FilePicker {
                         dir.update_frecency_if_larger(score);
                     }
                 } else {
-                    error!(?path, "Couldn't update the git status for path");
+                    // Expected on sparse checkouts: git reports a status for
+                    // a path that isn't materialized on disk and therefore
+                    // isn't in the file index. Don't spam the log (#404).
+                    debug!(?path, "Git status for path not in index, skipping");
                 }
                 Ok(())
             })?;
@@ -1301,12 +1317,13 @@ impl FilePicker {
     ) -> Result<(), Error> {
         let path = file_path.as_ref();
         let arena = self.arena_base_ptr();
-        let rel = self.to_relative_path(path).unwrap_or("");
+        let rel = self.to_relative_path(path);
+        let rel_ref: &str = rel.as_deref().unwrap_or("");
         let index = self
             .sync_data
             .find_file_index(path, &self.base_path)
             .ok()
-            .or_else(|| self.sync_data.find_overflow_index(rel));
+            .or_else(|| self.sync_data.find_overflow_index(rel_ref));
         if let Some(index) = index
             && let Some(file) = self.sync_data.get_file_mut(index)
         {
@@ -1332,12 +1349,13 @@ impl FilePicker {
 
     pub fn get_mut_file_by_path(&mut self, path: impl AsRef<Path>) -> Option<&mut FileItem> {
         let path = path.as_ref();
-        let rel = self.to_relative_path(path).unwrap_or("");
+        let rel = self.to_relative_path(path);
+        let rel_ref: &str = rel.as_deref().unwrap_or("");
         let index = self
             .sync_data
             .find_file_index(path, &self.base_path)
             .ok()
-            .or_else(|| self.sync_data.find_overflow_index(rel));
+            .or_else(|| self.sync_data.find_overflow_index(rel_ref));
         index.and_then(|i| self.sync_data.get_file_mut(i))
     }
 
@@ -1350,7 +1368,7 @@ impl FilePicker {
         }
 
         let relative_path = self.to_relative_path(path)?;
-        if let Some(idx) = self.sync_data.find_overflow_index(relative_path) {
+        if let Some(idx) = self.sync_data.find_overflow_index(&relative_path) {
             return self.handle_file_modify(path, FileSlot::Overflow(idx));
         }
 
@@ -1405,7 +1423,28 @@ impl FilePicker {
     /// Adds a new file from path to the picker, even if it should be ignored
     #[tracing::instrument(skip(self))]
     pub fn add_new_file(&mut self, path: &Path) -> Option<&FileItem> {
-        let (mut file_item, rel_path) = FileItem::new(path.to_path_buf(), &self.base_path, None);
+        // On Windows `pathdiff::diff_paths` is byte-wise, so a short-name
+        // input never shares a prefix with the canonicalized base_path and
+        // the resulting relative path becomes absolute. Canonicalize first.
+        #[cfg(windows)]
+        let canonical_buf: Option<PathBuf> = if path.starts_with(&self.base_path) {
+            None
+        } else if let Ok(c) = crate::path_utils::canonicalize(path) {
+            Some(c)
+        } else {
+            let parent = path.parent()?;
+            let file_name = path.file_name()?;
+            let mut p = crate::path_utils::canonicalize(parent).ok()?;
+            p.push(file_name);
+            Some(p)
+        };
+        #[cfg(windows)]
+        let path_for_index: &Path = canonical_buf.as_deref().unwrap_or(path);
+        #[cfg(not(windows))]
+        let path_for_index: &Path = path;
+
+        let (mut file_item, rel_path) =
+            FileItem::new(path_for_index.to_path_buf(), &self.base_path, None);
 
         // Lazily create the shared overflow builder if not exists yet
         let builder = self
@@ -1446,8 +1485,9 @@ impl FilePicker {
             Err(_) => {
                 // Check overflow for added files — these can be removed directly
                 // since they aren't in the base bigram index.
-                let rel = self.to_relative_path(path).unwrap_or("");
-                if let Some(abs_pos) = self.sync_data.find_overflow_index(rel) {
+                let rel = self.to_relative_path(path);
+                let rel_ref: &str = rel.as_deref().unwrap_or("");
+                if let Some(abs_pos) = self.sync_data.find_overflow_index(rel_ref) {
                     self.sync_data.files.remove(abs_pos);
                     true
                 } else {
@@ -1460,7 +1500,10 @@ impl FilePicker {
     // TODO make this O(n)
     pub fn remove_all_files_in_dir(&mut self, dir: impl AsRef<Path>) -> usize {
         let dir_path = dir.as_ref();
-        let relative_dir = self.to_relative_path(dir_path).unwrap_or("").to_string();
+        let relative_dir = self
+            .to_relative_path(dir_path)
+            .map(|c| c.into_owned())
+            .unwrap_or_default();
 
         let dir_prefix = if relative_dir.is_empty() {
             String::new()
@@ -1498,11 +1541,50 @@ impl FilePicker {
 
     /// Convert an absolute path to a relative path string (relative to base_path).
     /// Returns None if the path doesn't start with base_path.
-    fn to_relative_path<'a>(&self, path: &'a Path) -> Option<&'a str> {
-        path.strip_prefix(&self.base_path)
-            .ok()
-            .and_then(|p| p.to_str())
+    ///
+    /// On Windows the picker canonicalizes its base via `dunce`, so caller
+    /// paths that still carry 8.3 short names or a different casing would
+    /// fail a naive prefix check. Fall back to canonicalizing (or, when the
+    /// file was just deleted, canonicalizing its parent) before stripping.
+    fn to_relative_path<'a>(&self, path: &'a Path) -> Option<std::borrow::Cow<'a, str>> {
+        if let Ok(stripped) = path.strip_prefix(&self.base_path)
+            && let Some(s) = stripped.to_str()
+        {
+            return Some(std::borrow::Cow::Borrowed(s));
+        }
+
+        #[cfg(windows)]
+        {
+            let rel = canonical_relative_path(path, &self.base_path)?;
+            return Some(std::borrow::Cow::Owned(rel));
+        }
+
+        #[cfg(not(windows))]
+        None
     }
+}
+
+/// Resolve a possibly-short-name Windows path to the picker's canonical base.
+/// Used by the Windows-only fallbacks in `to_relative_path` and
+/// `find_file_index` so events still match tombstoned entries.
+#[cfg(windows)]
+fn canonical_relative_path(path: &Path, base: &Path) -> Option<String> {
+    if let Ok(canonical) = crate::path_utils::canonicalize(path)
+        && let Ok(stripped) = canonical.strip_prefix(base)
+        && let Some(s) = stripped.to_str()
+    {
+        return Some(s.to_owned());
+    }
+
+    // Deleted files can't be canonicalized — canonicalize the parent and
+    // re-attach the filename.
+    let parent = path.parent()?;
+    let file_name = path.file_name()?;
+    let canonical_parent = crate::path_utils::canonicalize(parent).ok()?;
+    let stripped_parent = canonical_parent.strip_prefix(base).ok()?;
+    let mut rel = stripped_parent.to_path_buf();
+    rel.push(file_name);
+    rel.to_str().map(str::to_owned)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2087,7 +2169,11 @@ mod tests {
     #[test]
     fn extract_watch_dirs_includes_pure_ancestor_dirs() {
         let dir = tempfile::tempdir().unwrap();
-        let base = dir.path();
+        // On Windows the picker canonicalizes base_path with dunce; match that
+        // here so the stored dir paths line up with assertions built from
+        // `base.join(..)` (which otherwise would carry an 8.3 short name).
+        let base_buf = crate::path_utils::canonicalize(dir.path()).unwrap();
+        let base = base_buf.as_path();
 
         // Tree:
         //   base/src/components/button.txt    (src/components has a file)

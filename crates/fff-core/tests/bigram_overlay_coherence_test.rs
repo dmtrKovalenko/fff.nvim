@@ -1294,15 +1294,17 @@ fn bigram_overlay_coherence_fuzzy_and_grep_combined() {
 
         // Fuzzy: deleted file not in results.
         let fuzzy_del = fuzzy_search_paths(picker, del_name);
+        let del_file = Path::new(del_name).file_name().unwrap().to_str().unwrap();
         assert!(
-            !fuzzy_del.iter().any(|p| p.contains(del_name)),
+            !fuzzy_del.iter().any(|p| p.contains(del_file)),
             "fuzzy should not find deleted file"
         );
 
         // Fuzzy: edited file still findable by name.
         let fuzzy_edit = fuzzy_search_paths(picker, edit_name);
+        let edit_file = Path::new(edit_name).file_name().unwrap().to_str().unwrap();
         assert!(
-            fuzzy_edit.iter().any(|p| p.contains(edit_name)),
+            fuzzy_edit.iter().any(|p| p.contains(edit_file)),
             "fuzzy should find edited file by name"
         );
     }

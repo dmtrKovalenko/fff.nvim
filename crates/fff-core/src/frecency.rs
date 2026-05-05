@@ -2,12 +2,10 @@ use crate::db_healthcheck::DbHealthChecker;
 use crate::error::{Error, Result};
 use crate::file_picker::FFFMode;
 use crate::git::is_modified_status;
+use crate::lmdb::{LmdbStore, is_map_full};
 use crate::shared::SharedFrecency;
-use heed::{Database, Env, EnvOpenOptions};
-use heed::{
-    EnvFlags,
-    types::{Bytes, SerdeBincode},
-};
+use heed::types::{Bytes, SerdeBincode};
+use heed::{Database, Env};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +14,7 @@ use std::{collections::VecDeque, path::Path};
 const DECAY_CONSTANT: f64 = 0.0693; // ln(2)/10 for 10-day half-life
 const SECONDS_PER_DAY: f64 = 86400.0;
 const MAX_HISTORY_DAYS: f64 = 30.0; // Only consider accesses within 30 days
+const MAX_TIMESTAMPS_PER_FILE: usize = 128;
 
 // AI mode: faster decay since AI sessions are shorter and more intense
 const AI_DECAY_CONSTANT: f64 = 0.231; // ln(2)/3 for 3-day half-life
@@ -57,26 +56,25 @@ impl DbHealthChecker for FrecencyTracker {
     }
 }
 
+impl LmdbStore for FrecencyTracker {
+    const MAX_DBS: u32 = 0;
+    // 10 MiB hard ceiling. Owner's db after years of use is ~560 KiB, so this
+    // leaves ~18× headroom while capping runaway growth (see GH issue #437).
+    const MAP_SIZE: usize = 10 * 1024 * 1024;
+    // Nuke the db when it exceeds 8 MiB on disk — leaves a small margin under
+    // MAP_SIZE so we don't hit MDB_MAP_FULL before the open-time erase fires.
+    const SIZE_CAP_BYTES: u64 = 8 * 1024 * 1024;
+}
+
 impl FrecencyTracker {
     /// Returns the on-disk path of the LMDB environment directory.
     pub fn db_path(&self) -> &Path {
         self.env.path()
     }
 
-    pub fn new(db_path: impl AsRef<Path>, use_unsafe_no_lock: bool) -> Result<Self> {
+    pub fn open(db_path: impl AsRef<Path>) -> Result<Self> {
         let db_path = db_path.as_ref();
-        fs::create_dir_all(db_path).map_err(Error::CreateDir)?;
-
-        let env = unsafe {
-            let mut opts = EnvOpenOptions::new();
-            opts.map_size(24 * 1024 * 1024); // 24 MiB
-            if use_unsafe_no_lock {
-                opts.flags(EnvFlags::NO_LOCK | EnvFlags::NO_SYNC | EnvFlags::NO_META_SYNC);
-            }
-            opts.open(db_path).map_err(Error::EnvOpen)?
-        };
-        env.clear_stale_readers()
-            .map_err(Error::DbClearStaleReaders)?;
+        let env = Self::open_env(db_path)?;
 
         // Try read-only open first — avoids blocking on the LMDB write lock
         // when another process (Neovim, another fff-mcp) already has it.
@@ -101,10 +99,16 @@ impl FrecencyTracker {
             }
         };
 
-        Ok(FrecencyTracker {
-            db,
-            env: env.clone(),
-        })
+        Ok(FrecencyTracker { db, env })
+    }
+
+    #[deprecated(
+        since = "0.7.0",
+        note = "LMDB unsafe no-lock mode is no longer supported; use `FrecencyTracker::open` instead. \
+                The `_use_unsafe_no_lock` argument is ignored."
+    )]
+    pub fn new(db_path: impl AsRef<Path>, _use_unsafe_no_lock: bool) -> Result<Self> {
+        Self::open(db_path)
     }
 
     /// Spawns a background thread to purge stale frecency entries and compact the database.
@@ -116,26 +120,28 @@ impl FrecencyTracker {
     /// use fff_search::frecency::FrecencyTracker;
     /// use fff_search::SharedFrecency;
     /// let shared_frecency: SharedFrecency = Default::default();
-    /// let _ = FrecencyTracker::spawn_gc(shared_frecency, "/path/to/frecency_db".into(), true).ok();
+    /// let _ = FrecencyTracker::spawn_gc(shared_frecency, "/path/to/frecency_db".into()).ok();
     /// ```
     pub fn spawn_gc(
         shared: SharedFrecency,
         db_path: String,
-        use_unsafe_no_lock: bool,
     ) -> Result<std::thread::JoinHandle<()>> {
         Ok(std::thread::Builder::new()
             .name("fff-frecency-gc".into())
-            .spawn(move || Self::run_frecency_gc(shared, db_path, use_unsafe_no_lock))?)
+            .spawn(move || Self::run_frecency_gc(shared, db_path))?)
     }
 
     #[tracing::instrument(skip(shared), fields(db_path = %db_path))]
-    fn run_frecency_gc(shared: SharedFrecency, db_path: String, use_unsafe_no_lock: bool) {
+    fn run_frecency_gc(shared: SharedFrecency, db_path: String) {
         let start = std::time::Instant::now();
-        let data_path = PathBuf::from(&db_path).join("data.mdb");
 
-        // Phase 1: Purge stale entries.
-        // The RwLock protects the Option<FrecencyTracker> (not the DB itself),
-        // so a read lock is sufficient — LMDB handles its own write serialization.
+        // Purge stale entries under a read lock on the Rust `Option`. LMDB
+        // serialises the internal write txn itself, so cross-process contention
+        // is handled below the heed layer. In-place compaction is intentionally
+        // skipped: it would require deleting `data.mdb`/`lock.mdb` while other
+        // processes may still hold the env, risking a split-brain on the same
+        // inode. Oversize reclamation happens at open time via
+        // `LmdbStore::erase_if_oversized` instead.
         let (deleted, pruned) = {
             let guard = match shared.read() {
                 Ok(g) => g,
@@ -160,97 +166,14 @@ impl FrecencyTracker {
             tracing::info!(deleted, pruned, elapsed = ?start.elapsed(), "Frecency GC purged entries");
         }
 
-        // Compact if we purged entries OR the file has significant freelist bloat
+        let data_path = PathBuf::from(&db_path).join("data.mdb");
         let file_size = fs::metadata(&data_path).map(|m| m.len()).unwrap_or(0);
-        if deleted == 0 && pruned == 0 && file_size <= 512 * 1024 {
-            return;
-        }
-
-        // Phase 2: Manual compaction under a single write lock
-        let mut guard = match shared.write() {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::debug!("Failed to acquire write lock: {e}");
-                return;
-            }
-        };
-
-        // Read all entries from current env
-        let entries: Vec<(Vec<u8>, VecDeque<u64>)> = match guard.as_ref() {
-            Some(tracker) => {
-                let rtxn = match tracker.env.read_txn() {
-                    Ok(t) => t,
-                    Err(e) => {
-                        tracing::debug!("Compaction read_txn failed: {e}");
-                        return;
-                    }
-                };
-                let iter = match tracker.db.iter(&rtxn) {
-                    Ok(i) => i,
-                    Err(e) => {
-                        tracing::debug!("Compaction iter failed: {e}");
-                        return;
-                    }
-                };
-                let mut entries = Vec::new();
-                let mut read_errors = 0u32;
-                for result in iter {
-                    match result {
-                        Ok((key, value)) => entries.push((key.to_vec(), value)),
-                        Err(_) => read_errors += 1,
-                    }
-                }
-                if read_errors > 0 {
-                    tracing::warn!(
-                        read_errors,
-                        "Skipped corrupted entries during compaction read"
-                    );
-                }
-                entries
-            }
-            None => return,
-        };
-
-        // Drop old tracker, delete files, create fresh env, write back
-        *guard = None;
-
-        let lock_path = PathBuf::from(&db_path).join("lock.mdb");
-        let _ = fs::remove_file(&data_path);
-        let _ = fs::remove_file(&lock_path);
-
-        let tracker = match FrecencyTracker::new(&db_path, use_unsafe_no_lock) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!("Compaction reopen failed, frecency disabled: {e}");
-                return;
-            }
-        };
-
-        let write_result = (|| -> std::result::Result<(), heed::Error> {
-            let mut wtxn = tracker.env.write_txn()?;
-            for (key, value) in &entries {
-                tracker.db.put(&mut wtxn, key.as_slice(), value)?;
-            }
-            wtxn.commit()?;
-            Ok(())
-        })();
-
-        match write_result {
-            Ok(()) => {
-                let new_size = fs::metadata(&data_path).map(|m| m.len()).unwrap_or(0);
-                *guard = Some(tracker);
-                tracing::debug!(
-                    entries = entries.len(),
-                    old_size = file_size,
-                    new_size,
-                    elapsed = ?start.elapsed(),
-                    "Frecency DB compacted"
-                );
-            }
-            Err(e) => {
-                tracing::error!("Compaction write failed, frecency data may be incomplete: {e}");
-                *guard = Some(tracker);
-            }
+        if file_size > <Self as LmdbStore>::SIZE_CAP_BYTES {
+            tracing::warn!(
+                size = file_size,
+                cap = <Self as LmdbStore>::SIZE_CAP_BYTES,
+                "Frecency DB exceeds size cap — will be erased on next open"
+            );
         }
     }
 
@@ -347,8 +270,11 @@ impl FrecencyTracker {
 
         let now = self.get_now();
         let cutoff_time = now.saturating_sub((MAX_HISTORY_DAYS * SECONDS_PER_DAY) as u64);
+
+        // Drop stale timestamps from the front while also enforcing the
+        // per-file cap. Reserves one slot for the `push_back` below.
         while let Some(&front_time) = accesses.front() {
-            if front_time < cutoff_time {
+            if front_time < cutoff_time || accesses.len() >= MAX_TIMESTAMPS_PER_FILE {
                 accesses.pop_front();
             } else {
                 break;
@@ -358,11 +284,28 @@ impl FrecencyTracker {
         accesses.push_back(now);
         tracing::debug!(?path, accesses = accesses.len(), "Tracking access");
 
-        self.db
-            .put(&mut wtxn, &key_hash, &accesses)
-            .map_err(Error::DbWrite)?;
+        if let Err(e) = self.db.put(&mut wtxn, &key_hash, &accesses) {
+            if is_map_full(&e) {
+                tracing::error!(
+                    ?path,
+                    "Frecency DB hit MDB_MAP_FULL; dropping write — db will be \
+                     erased on next open via LmdbStore::erase_if_oversized"
+                );
+                return Ok(());
+            }
+            return Err(Error::DbWrite(e));
+        }
 
-        wtxn.commit().map_err(Error::DbCommit)?;
+        if let Err(e) = wtxn.commit() {
+            if is_map_full(&e) {
+                tracing::error!(
+                    ?path,
+                    "Frecency DB hit MDB_MAP_FULL on commit; dropping write"
+                );
+                return Ok(());
+            }
+            return Err(Error::DbCommit(e));
+        }
 
         Ok(())
     }
@@ -533,7 +476,7 @@ mod tests {
     fn test_modification_score_interpolation() {
         let temp_dir = std::env::temp_dir().join("fff_test_interpolation");
         let _ = std::fs::remove_dir_all(&temp_dir);
-        let tracker = FrecencyTracker::new(temp_dir.to_str().unwrap(), true).unwrap();
+        let tracker = FrecencyTracker::open(temp_dir.to_str().unwrap()).unwrap();
 
         let current_time = tracker.get_now();
         let git_status = Some(git2::Status::WT_MODIFIED);

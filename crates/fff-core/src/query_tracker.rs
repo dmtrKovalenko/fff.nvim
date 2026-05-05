@@ -1,11 +1,10 @@
 use crate::db_healthcheck::DbHealthChecker;
 use crate::error::Error;
-use heed::types::Bytes;
-use heed::{Database, Env, EnvOpenOptions};
-use heed::{EnvFlags, types::SerdeBincode};
+use crate::lmdb::{LmdbStore, is_map_full};
+use heed::types::{Bytes, SerdeBincode};
+use heed::{Database, Env};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -60,32 +59,27 @@ impl DbHealthChecker for QueryTracker {
     }
 }
 
+impl LmdbStore for QueryTracker {
+    // 10 MiB hard ceiling. Same reasoning as FrecencyTracker (GH issue #437).
+    const MAP_SIZE: usize = 10 * 1024 * 1024;
+    const MAX_DBS: u32 = 16;
+    // Nuke at 4 MiB — query history is bounded per-project but query→file
+    // associations grow unbounded over typing time.
+    const SIZE_CAP_BYTES: u64 = 4 * 1024 * 1024;
+}
+
 impl QueryTracker {
     /// Returns the on-disk path of the LMDB environment directory.
     pub fn db_path(&self) -> &Path {
         self.env.path()
     }
 
-    pub fn new(db_path: impl AsRef<Path>, use_unsafe_no_lock: bool) -> Result<Self, Error> {
+    pub fn open(db_path: impl AsRef<Path>) -> Result<Self, Error> {
         let db_path = db_path.as_ref();
-        fs::create_dir_all(db_path).map_err(Error::CreateDir)?;
-
-        let env = unsafe {
-            let mut opts = EnvOpenOptions::new();
-            opts.map_size(10 * 1024 * 1024); // 100 MiB
-            opts.max_dbs(16); // Allow up to 16 databases per environment
-            if use_unsafe_no_lock {
-                opts.flags(EnvFlags::NO_LOCK | EnvFlags::NO_SYNC | EnvFlags::NO_META_SYNC);
-            }
-            opts.open(db_path).map_err(Error::EnvOpen)?
-        };
-
-        env.clear_stale_readers()
-            .map_err(Error::DbClearStaleReaders)?;
+        let env = Self::open_env(db_path)?;
 
         let mut wtxn = env.write_txn().map_err(Error::DbStartWriteTxn)?;
 
-        // Create two named databases
         let query_file_db = env
             .create_database(&mut wtxn, Some("query_file_associations"))
             .map_err(Error::DbCreate)?;
@@ -104,6 +98,15 @@ impl QueryTracker {
             query_history_db,
             grep_query_history_db,
         })
+    }
+
+    #[deprecated(
+        since = "0.7.0",
+        note = "LMDB unsafe no-lock mode is no longer supported; use `QueryTracker::open` instead. \
+                The `_use_unsafe_no_lock` argument is ignored."
+    )]
+    pub fn new(db_path: impl AsRef<Path>, _use_unsafe_no_lock: bool) -> Result<Self, Error> {
+        Self::open(db_path)
     }
 
     fn get_now(&self) -> u64 {
@@ -230,15 +233,39 @@ impl QueryTracker {
 
         entry.last_opened = now;
 
-        self.query_file_db
-            .put(&mut wtxn, &query_key, &entry)
-            .map_err(Error::DbWrite)?;
+        if let Err(e) = self.query_file_db.put(&mut wtxn, &query_key, &entry) {
+            if is_map_full(&e) {
+                tracing::error!(
+                    ?query,
+                    "Query tracker DB hit MDB_MAP_FULL; dropping write — db will \
+                     be erased on next open"
+                );
+                return Ok(());
+            }
+            return Err(Error::DbWrite(e));
+        }
 
         // Update query history database
         let project_key = Self::create_project_key(project_path)?;
-        Self::append_to_history(&self.query_history_db, &mut wtxn, &project_key, query, now)?;
+        if let Err(e) =
+            Self::append_to_history(&self.query_history_db, &mut wtxn, &project_key, query, now)
+        {
+            if let Error::DbWrite(ref inner) = e
+                && is_map_full(inner)
+            {
+                tracing::error!(?query, "Query tracker DB map full while appending history");
+                return Ok(());
+            }
+            return Err(e);
+        }
 
-        wtxn.commit().map_err(Error::DbCommit)?;
+        if let Err(e) = wtxn.commit() {
+            if is_map_full(&e) {
+                tracing::error!(?query, "Query tracker DB map full on commit");
+                return Ok(());
+            }
+            return Err(Error::DbCommit(e));
+        }
 
         tracing::debug!(?query, ?file_path, "Tracked query completion");
         Ok(())
@@ -307,15 +334,29 @@ impl QueryTracker {
         let project_key = Self::create_project_key(project_path)?;
         let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
 
-        Self::append_to_history(
+        if let Err(e) = Self::append_to_history(
             &self.grep_query_history_db,
             &mut wtxn,
             &project_key,
             query,
             now,
-        )?;
+        ) {
+            if let Error::DbWrite(ref inner) = e
+                && is_map_full(inner)
+            {
+                tracing::error!(?query, "Grep query history DB map full; dropping write");
+                return Ok(());
+            }
+            return Err(e);
+        }
 
-        wtxn.commit().map_err(Error::DbCommit)?;
+        if let Err(e) = wtxn.commit() {
+            if is_map_full(&e) {
+                tracing::error!(?query, "Grep query history DB map full on commit");
+                return Ok(());
+            }
+            return Err(Error::DbCommit(e));
+        }
 
         tracing::debug!(?query, "Tracked grep query");
         Ok(())
@@ -343,7 +384,7 @@ mod tests {
         let temp_dir = env::temp_dir().join("fff_test_query_tracking_new");
         let _ = std::fs::remove_dir_all(&temp_dir);
 
-        let mut tracker = QueryTracker::new(temp_dir.to_str().unwrap(), true).unwrap();
+        let mut tracker = QueryTracker::open(temp_dir.to_str().unwrap()).unwrap();
 
         let project_path = PathBuf::from("/test/project");
         let file_path = PathBuf::from("/test/project/src/main.rs");

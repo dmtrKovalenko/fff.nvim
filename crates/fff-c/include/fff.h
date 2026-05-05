@@ -352,13 +352,16 @@ typedef struct FffMixedSearchResult {
  * cache-budget configuration. This function delegates to `fff_create_instance2`
  * with NULL log paths and auto cache budget, so behaviour is unchanged.
  *
+ * The `use_unsafe_no_lock` parameter is deprecated and ignored; see
+ * [`fff_create_instance2`] for details.
+ *
  * ## Safety
  * See `fff_create_instance2`.
  */
 struct FffResult *fff_create_instance(const char *base_path,
                                       const char *frecency_db_path,
                                       const char *history_db_path,
-                                      bool use_unsafe_no_lock,
+                                      bool _use_unsafe_no_lock,
                                       bool enable_mmap_cache,
                                       bool enable_content_indexing,
                                       bool watch,
@@ -375,7 +378,7 @@ struct FffResult *fff_create_instance(const char *base_path,
  * * `base_path`                   – directory to index (required)
  * * `frecency_db_path`            – frecency LMDB database path (NULL/empty to skip)
  * * `history_db_path`             – query history LMDB database path (NULL/empty to skip)
- * * `use_unsafe_no_lock`          – use MDB_NOLOCK for LMDB (useful in single-process setups)
+ * * `use_unsafe_no_lock`          – **deprecated, ignored.** Previously enabled
  * * `enable_mmap_cache`           – pre-populate mmap caches after the initial scan
  * * `enable_content_indexing`     – build content index after the initial scan
  * * `watch`                       – start a background file-system watcher for live updates
@@ -399,7 +402,7 @@ struct FffResult *fff_create_instance(const char *base_path,
 struct FffResult *fff_create_instance2(const char *base_path,
                                        const char *frecency_db_path,
                                        const char *history_db_path,
-                                       bool use_unsafe_no_lock,
+                                       bool _use_unsafe_no_lock,
                                        bool enable_mmap_cache,
                                        bool enable_content_indexing,
                                        bool watch,
