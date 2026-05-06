@@ -475,6 +475,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
+name = "ctor"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a2785755761f3ddc1492979ce1e48d2c00d09311c39e4466429188f3dd6501"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "ctrlc"
 version = "3.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -629,7 +639,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fff-c"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "fff-query-parser",
  "fff-search",
@@ -642,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "fff-grep"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bstr",
  "memchr",
@@ -650,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "fff-mcp"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "clap",
  "fff-query-parser",
@@ -681,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "fff-nvim"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ahash",
  "blake3",
@@ -715,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "fff-query-parser"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "zlob",
@@ -723,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "fff-search"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ahash",
  "aho-corasick",
@@ -731,6 +741,7 @@ dependencies = [
  "blake3",
  "chrono",
  "criterion",
+ "ctor",
  "dirs",
  "dunce",
  "fff-grep",
@@ -2823,7 +2834,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

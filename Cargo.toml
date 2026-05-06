@@ -10,8 +10,8 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-fff-grep = { version = "0.7.0", path = "crates/fff-grep" }
-fff-query-parser = { version = "0.7.0", path = "crates/fff-query-parser", default-features = false }
+fff-grep = { version = "0.7.1", path = "crates/fff-grep" }
+fff-query-parser = { version = "0.7.1", path = "crates/fff-query-parser", default-features = false }
 
 # Shared dependencies
 ahash = "0.8"

@@ -1,6 +1,6 @@
-use crate::db_healthcheck::DbHealthChecker;
+use super::db_healthcheck::DbHealthChecker;
+use super::lmdb::{LmdbStore, is_map_full};
 use crate::error::Error;
-use crate::lmdb::{LmdbStore, is_map_full};
 use heed::types::{Bytes, SerdeBincode};
 use heed::{Database, Env};
 use serde::{Deserialize, Serialize};
@@ -78,19 +78,9 @@ impl QueryTracker {
         let db_path = db_path.as_ref();
         let env = Self::open_env(db_path)?;
 
-        let mut wtxn = env.write_txn().map_err(Error::DbStartWriteTxn)?;
-
-        let query_file_db = env
-            .create_database(&mut wtxn, Some("query_file_associations"))
-            .map_err(Error::DbCreate)?;
-        let query_history_db = env
-            .create_database(&mut wtxn, Some("query_history"))
-            .map_err(Error::DbCreate)?;
-        let grep_query_history_db = env
-            .create_database(&mut wtxn, Some("grep_query_history"))
-            .map_err(Error::DbCreate)?;
-
-        wtxn.commit().map_err(Error::DbCommit)?;
+        let query_file_db = Self::open_database_safe(&env, Some("query_file_associations"))?;
+        let query_history_db = Self::open_database_safe(&env, Some("query_history"))?;
+        let grep_query_history_db = Self::open_database_safe(&env, Some("grep_query_history"))?;
 
         Ok(QueryTracker {
             env,

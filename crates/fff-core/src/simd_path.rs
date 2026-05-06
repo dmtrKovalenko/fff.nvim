@@ -172,10 +172,12 @@ impl ChunkedString {
         let usable_chunks = total.div_ceil(SIMD_CHUNK_BYTES);
         let chunks_to_copy = usable_chunks.min(self.indices.len());
         let base = arena.as_ptr();
+
         for (i, &idx) in self.indices[..chunks_to_copy].iter().enumerate() {
             let src = unsafe { base.add(idx as usize * SIMD_CHUNK_BYTES) };
             let dst_offset = i * SIMD_CHUNK_BYTES;
             let take = SIMD_CHUNK_BYTES.min(total - dst_offset);
+
             unsafe {
                 core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr().add(dst_offset), take);
             }

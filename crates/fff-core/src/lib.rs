@@ -99,7 +99,6 @@ mod scan;
 pub mod bigram_filter;
 pub mod bigram_query;
 mod constraints;
-mod db_healthcheck;
 mod error;
 mod score;
 mod sort_buffer;
@@ -113,10 +112,9 @@ pub(crate) mod simd_path;
 /// See [`FilePicker`](file_picker::FilePicker) for the main entry point.
 pub mod file_picker;
 
-/// Frecency (frequency + recency) database for file access scoring.
-///
-/// Backed by LMDB for persistent, crash-safe storage.
-pub mod frecency;
+/// Database-backed persistence: frecency, query history, LMDB plumbing.
+pub mod dbs;
+pub use dbs::frecency;
 
 /// Git status caching and repository detection utilities.
 pub mod git;
@@ -134,23 +132,18 @@ pub mod log;
 /// directory distance penalties for search scoring.
 pub mod path_utils;
 
-/// Search query history tracker for combo-boost scoring.
-///
-/// Records which files a user selects for each query, enabling the scorer
-/// to boost files that were previously chosen for similar searches.
-pub mod query_tracker;
+pub use dbs::query_tracker;
 
 /// Core data types shared across the crate.
 pub mod types;
 
 mod ignore;
-mod lmdb;
 /// Thread-safe shared handles for [`FilePicker`], [`FrecencyTracker`],
 /// and [`QueryTracker`].
 pub mod shared;
 
 pub use bigram_filter::*;
-pub use db_healthcheck::{DbHealth, DbHealthChecker};
+pub use dbs::db_healthcheck::{DbHealth, DbHealthChecker};
 pub use error::{Error, Result};
 pub use fff_query_parser::*;
 pub use file_picker::*;

@@ -1,6 +1,6 @@
 [package]
 name = "fff-search"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 license = "MIT"
 authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
@@ -79,6 +79,7 @@ dunce = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+ctor = "0.2"
 proptest = { version = "1", default-features = false, features = ["std", "fork"] }
 rand = { version = "0.8", features = ["small_rng"] }
 tempfile = "3.8"

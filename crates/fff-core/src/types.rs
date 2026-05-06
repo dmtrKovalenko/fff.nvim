@@ -362,15 +362,16 @@ impl FileItem {
         let base = base_path.as_os_str().as_encoded_bytes();
         let base_len = base.len();
         buf[..base_len].copy_from_slice(base);
-        let sep_len = if base_len > 0 && base[base_len - 1] != b'/' {
-            buf[base_len] = b'/';
+        let sep_len = if base_len > 0 && base[base_len - 1] != std::path::MAIN_SEPARATOR as u8 {
+            buf[base_len] = std::path::MAIN_SEPARATOR as u8;
             1
         } else {
             0
         };
-        let rel_start = base_len + sep_len;
-        let rel = self.path.read_to_buf(arena, &mut buf[rel_start..]);
-        let total = rel_start + rel.len();
+
+        let base_end_idx = base_len + sep_len;
+        let relative_portion_str = self.path.read_to_buf(arena, &mut buf[base_end_idx..]);
+        let total = base_end_idx + relative_portion_str.len();
         Path::new(unsafe { std::str::from_utf8_unchecked(&buf[..total]) })
     }
 

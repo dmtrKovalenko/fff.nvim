@@ -1,8 +1,8 @@
-use crate::db_healthcheck::DbHealthChecker;
+use super::db_healthcheck::DbHealthChecker;
+use super::lmdb::{LmdbStore, is_map_full};
 use crate::error::{Error, Result};
 use crate::file_picker::FFFMode;
 use crate::git::is_modified_status;
-use crate::lmdb::{LmdbStore, is_map_full};
 use crate::shared::SharedFrecency;
 use heed::types::{Bytes, SerdeBincode};
 use heed::{Database, Env};
@@ -76,28 +76,7 @@ impl FrecencyTracker {
         let db_path = db_path.as_ref();
         let env = Self::open_env(db_path)?;
 
-        // Try read-only open first — avoids blocking on the LMDB write lock
-        // when another process (Neovim, another fff-mcp) already has it.
-        // Only fall back to create_database (which needs a write txn) if the
-        // database doesn't exist yet.
-        let rtxn = env.read_txn().map_err(Error::DbStartReadTxn)?;
-        let maybe_db: Option<Database<Bytes, SerdeBincode<VecDeque<u64>>>> =
-            env.open_database(&rtxn, None).map_err(Error::DbOpen)?;
-
-        drop(rtxn);
-
-        let db = match maybe_db {
-            Some(db) => db,
-            None => {
-                // First time: create the database (requires write lock).
-                let mut wtxn = env.write_txn().map_err(Error::DbStartWriteTxn)?;
-                let db = env
-                    .create_database(&mut wtxn, None)
-                    .map_err(Error::DbCreate)?;
-                wtxn.commit().map_err(Error::DbCommit)?;
-                db
-            }
-        };
+        let db = Self::open_database_safe(&env, None)?;
 
         Ok(FrecencyTracker { db, env })
     }
@@ -135,13 +114,6 @@ impl FrecencyTracker {
     fn run_frecency_gc(shared: SharedFrecency, db_path: String) {
         let start = std::time::Instant::now();
 
-        // Purge stale entries under a read lock on the Rust `Option`. LMDB
-        // serialises the internal write txn itself, so cross-process contention
-        // is handled below the heed layer. In-place compaction is intentionally
-        // skipped: it would require deleting `data.mdb`/`lock.mdb` while other
-        // processes may still hold the env, risking a split-brain on the same
-        // inode. Oversize reclamation happens at open time via
-        // `LmdbStore::erase_if_oversized` instead.
         let (deleted, pruned) = {
             let guard = match shared.read() {
                 Ok(g) => g,
@@ -153,6 +125,14 @@ impl FrecencyTracker {
             let Some(ref tracker) = *guard else {
                 return;
             };
+
+            // Clear stale readers here (on a background thread) rather than in
+            // open_env — clear_stale_readers needs the writer mutex which can
+            // block indefinitely on a stuck lock if called on the main thread.
+            if let Err(e) = tracker.env.clear_stale_readers() {
+                tracing::debug!("clear_stale_readers failed: {e}");
+            }
+
             match tracker.purge_stale_entries() {
                 Ok(result) => result,
                 Err(e) => {
@@ -233,10 +213,13 @@ impl FrecencyTracker {
     }
 
     fn get_accesses(&self, path: &Path) -> Result<Option<VecDeque<u64>>> {
-        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
-
         let key_hash = Self::path_to_hash_bytes(path)?;
-        self.db.get(&rtxn, &key_hash).map_err(Error::DbRead)
+
+        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
+        let result = self.db.get(&rtxn, &key_hash).map_err(Error::DbRead)?;
+        rtxn.commit().map_err(Error::DbCommit)?;
+
+        Ok(result)
     }
 
     fn get_now(&self) -> u64 {
@@ -263,8 +246,6 @@ impl FrecencyTracker {
     }
 
     pub fn track_access(&self, path: &Path) -> Result<()> {
-        let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
-
         let key_hash = Self::path_to_hash_bytes(path)?;
         let mut accesses = self.get_accesses(path)?.unwrap_or_default();
 
@@ -284,6 +265,7 @@ impl FrecencyTracker {
         accesses.push_back(now);
         tracing::debug!(?path, accesses = accesses.len(), "Tracking access");
 
+        let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
         if let Err(e) = self.db.put(&mut wtxn, &key_hash, &accesses) {
             if is_map_full(&e) {
                 tracing::error!(
@@ -296,18 +278,16 @@ impl FrecencyTracker {
             return Err(Error::DbWrite(e));
         }
 
-        if let Err(e) = wtxn.commit() {
-            if is_map_full(&e) {
-                tracing::error!(
-                    ?path,
-                    "Frecency DB hit MDB_MAP_FULL on commit; dropping write"
-                );
-                return Ok(());
-            }
-            return Err(Error::DbCommit(e));
-        }
-
-        Ok(())
+        wtxn.commit()
+            .inspect_err(|e| {
+                if is_map_full(e) {
+                    tracing::error!(
+                        ?path,
+                        "Frecency DB hit MDB_MAP_FULL on commit; dropping write"
+                    );
+                }
+            })
+            .map_err(Error::DbCommit)
     }
 
     pub fn get_access_score(&self, file_path: &Path, mode: FFFMode) -> i64 {

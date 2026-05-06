@@ -393,17 +393,9 @@ fn build_file_path_fallback(lua: &Lua, path: &Path, total_files: usize) -> LuaRe
 }
 
 pub fn track_access(_: &Lua, file_path: String) -> LuaResult<bool> {
-    // Called from the nvim main thread on every BufEnter via a libuv
-    // async chain. The body does an LMDB write (~100-200 ms) and takes
-    // `FILE_PICKER.write()`, which — if it has to queue behind any
-    // concurrent writer (post-scan install, background watcher event
-    // apply) — can stall the UI for multiple seconds. Hand the work off
-    // to a detached OS thread and return immediately so the main loop
-    // never waits on us.
-    //
-    // Losing a frecency update on shutdown is acceptable: frecency is
-    // a best-effort signal and the next BufEnter for the same file will
-    // produce an equivalent update.
+    // must be async and capture a local copy of the path because the write lock
+    // is unsafe and can be held forever which is unavoidable, but at least we can
+    // prevent users from deadlock of the main thread if someone deletes a lock
     let file_path = PathBuf::from(&file_path);
     std::thread::spawn(move || {
         {
