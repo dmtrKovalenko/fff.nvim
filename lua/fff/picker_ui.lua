@@ -895,8 +895,18 @@ local function move_list_cursor(direction)
   local items = M.state.filtered_items
   if #items == 0 then return end
 
+  local wrap_around = M.state.config and M.state.config.wrap_around or false
   local new_cursor = M.state.cursor + direction
-  new_cursor = math.max(1, math.min(new_cursor, #items))
+
+  if wrap_around then
+    if new_cursor < 1 then
+      new_cursor = #items
+    elseif new_cursor > #items then
+      new_cursor = 1
+    end
+  else
+    new_cursor = math.max(1, math.min(new_cursor, #items))
+  end
 
   if new_cursor ~= M.state.cursor then
     M.state.cursor = new_cursor
@@ -2036,6 +2046,7 @@ function M.move_up()
 
   local prompt_position = get_prompt_position()
   local items_count = #M.state.filtered_items
+  local wrap_around = M.state.config and M.state.config.wrap_around or false
 
   -- Pagination logic depends on prompt position
   if prompt_position == 'bottom' then
@@ -2059,9 +2070,14 @@ function M.move_up()
           return
         end
       end
-    end
 
-    M.state.cursor = math.min(M.state.cursor + 1, items_count)
+      -- Wrap around: at last item with no more pages, jump to first
+      if wrap_around then
+        M.state.cursor = 1
+      end
+    else
+      M.state.cursor = math.min(M.state.cursor + 1, items_count)
+    end
   else
     -- Top prompt: scrolling UP means going to BETTER results (previous page)
     if M.state.cursor <= M.state.pagination.prefetch_margin + 1 and M.state.cursor <= 1 then
@@ -2069,9 +2085,14 @@ function M.move_up()
         vim.schedule(M.load_previous_page)
         return
       end
-    end
 
-    M.state.cursor = math.max(M.state.cursor - 1, 1)
+      -- Wrap around: at first item with no previous pages, jump to last
+      if wrap_around then
+        M.state.cursor = items_count
+      end
+    else
+      M.state.cursor = math.max(M.state.cursor - 1, 1)
+    end
   end
 
   M.render_list()
@@ -2101,6 +2122,7 @@ function M.move_down()
 
   local prompt_position = get_prompt_position()
   local items_count = #M.state.filtered_items
+  local wrap_around = M.state.config and M.state.config.wrap_around or false
 
   -- Pagination logic depends on prompt position
   if prompt_position == 'bottom' then
@@ -2111,9 +2133,14 @@ function M.move_down()
         vim.schedule(M.load_previous_page)
         return
       end
-    end
 
-    M.state.cursor = math.max(M.state.cursor - 1, 1)
+      -- Wrap around: at first item with no previous pages, jump to last
+      if wrap_around then
+        M.state.cursor = items_count
+      end
+    else
+      M.state.cursor = math.max(M.state.cursor - 1, 1)
+    end
   else
     -- Top prompt: scrolling DOWN means going to WORSE results (next page)
     local near_bottom = M.state.cursor >= (items_count - M.state.pagination.prefetch_margin)
@@ -2134,9 +2161,14 @@ function M.move_down()
           return
         end
       end
-    end
 
-    M.state.cursor = math.min(M.state.cursor + 1, items_count)
+      -- Wrap around: at last item with no more pages, jump to first
+      if wrap_around then
+        M.state.cursor = 1
+      end
+    else
+      M.state.cursor = math.min(M.state.cursor + 1, items_count)
+    end
   end
 
   M.render_list()
