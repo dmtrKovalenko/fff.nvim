@@ -2056,24 +2056,24 @@ function M.move_up()
     local at_last_item = M.state.cursor >= items_count
 
     if near_bottom and at_last_item then
-      local page_size = M.state.pagination.page_size
-      if page_size > 0 then
-        local has_more
-        if M.state.mode == 'grep' then
-          has_more = M.state.pagination.grep_next_file_offset > 0
-        else
-          local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
-          has_more = M.state.pagination.page_index < max_page
-        end
-        if has_more then
-          M.load_next_page()
-          return
-        end
-      end
-
-      -- Wrap around: at last item with no more pages, jump to first
+      -- Wrap around takes priority: at last item, jump to first
       if wrap_around then
         M.state.cursor = 1
+      else
+        local page_size = M.state.pagination.page_size
+        if page_size > 0 then
+          local has_more
+          if M.state.mode == 'grep' then
+            has_more = M.state.pagination.grep_next_file_offset > 0
+          else
+            local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
+            has_more = M.state.pagination.page_index < max_page
+          end
+          if has_more then
+            M.load_next_page()
+            return
+          end
+        end
       end
     else
       M.state.cursor = math.min(M.state.cursor + 1, items_count)
@@ -2081,14 +2081,12 @@ function M.move_up()
   else
     -- Top prompt: scrolling UP means going to BETTER results (previous page)
     if M.state.cursor <= M.state.pagination.prefetch_margin + 1 and M.state.cursor <= 1 then
-      if M.state.pagination.page_index > 0 then
-        vim.schedule(M.load_previous_page)
-        return
-      end
-
-      -- Wrap around: at first item with no previous pages, jump to last
+      -- Wrap around takes priority: at first item, jump to last
       if wrap_around then
         M.state.cursor = items_count
+      elseif M.state.pagination.page_index > 0 then
+        vim.schedule(M.load_previous_page)
+        return
       end
     else
       M.state.cursor = math.max(M.state.cursor - 1, 1)
@@ -2129,14 +2127,12 @@ function M.move_down()
     -- Bottom prompt with reverse rendering: visually moving DOWN means cursor DECREASES
     -- because lower index items (better) are rendered at higher line numbers
     if M.state.cursor <= M.state.pagination.prefetch_margin + 1 and M.state.cursor <= 1 then
-      if M.state.pagination.page_index > 0 then
-        vim.schedule(M.load_previous_page)
-        return
-      end
-
-      -- Wrap around: at first item with no previous pages, jump to last
+      -- Wrap around takes priority: at first item, jump to last
       if wrap_around then
         M.state.cursor = items_count
+      elseif M.state.pagination.page_index > 0 then
+        vim.schedule(M.load_previous_page)
+        return
       end
     else
       M.state.cursor = math.max(M.state.cursor - 1, 1)
@@ -2147,24 +2143,24 @@ function M.move_down()
     local at_last_item = M.state.cursor >= items_count
 
     if near_bottom and at_last_item then
-      local page_size = M.state.pagination.page_size
-      if page_size > 0 then
-        local has_more
-        if M.state.mode == 'grep' then
-          has_more = M.state.pagination.grep_next_file_offset > 0
-        else
-          local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
-          has_more = M.state.pagination.page_index < max_page
-        end
-        if has_more then
-          M.load_next_page()
-          return
-        end
-      end
-
-      -- Wrap around: at last item with no more pages, jump to first
+      -- Wrap around takes priority: at last item, jump to first
       if wrap_around then
         M.state.cursor = 1
+      else
+        local page_size = M.state.pagination.page_size
+        if page_size > 0 then
+          local has_more
+          if M.state.mode == 'grep' then
+            has_more = M.state.pagination.grep_next_file_offset > 0
+          else
+            local max_page = math.max(0, math.ceil(M.state.pagination.total_matched / page_size) - 1)
+            has_more = M.state.pagination.page_index < max_page
+          end
+          if has_more then
+            M.load_next_page()
+            return
+          end
+        end
       end
     else
       M.state.cursor = math.min(M.state.cursor + 1, items_count)
