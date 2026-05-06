@@ -496,8 +496,8 @@ export default function fffExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     try {
       activeCwd = ctx.cwd;
+      if (shouldEnableMentions()) applyEditorMode(ctx);
       await ensureFinder(activeCwd);
-      applyEditorMode(ctx);
     } catch (e: unknown) {
       ctx.ui.notify(
         `FFF init failed: ${e instanceof Error ? e.message : String(e)}`,
