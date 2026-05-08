@@ -2564,7 +2564,7 @@ mod tests {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "overflow unicorn entry").unwrap();
             drop(f);
-            picker.on_create_or_modify(&path);
+            picker.handle_create_or_modify(&path);
         }
         assert_eq!(picker.get_files().len(), 8);
 

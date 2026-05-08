@@ -113,7 +113,7 @@ fn modified_file_findable_via_overlay() {
     {
         let mut guard = shared_picker.write().unwrap();
         let picker = guard.as_mut().unwrap();
-        let result = picker.on_create_or_modify(&modified_path);
+        let result = picker.handle_create_or_modify(&modified_path);
         assert!(
             result.is_some(),
             "on_create_or_modify should return the file"
@@ -273,7 +273,7 @@ fn new_file_findable_after_add() {
     {
         let mut guard = shared_picker.write().unwrap();
         let picker = guard.as_mut().unwrap();
-        let result = picker.on_create_or_modify(&new_path);
+        let result = picker.handle_create_or_modify(&new_path);
         assert!(
             result.is_some(),
             "on_create_or_modify should return the new file"
@@ -350,7 +350,7 @@ fn modified_file_findable_via_regex_overlay() {
     {
         let mut guard = shared_picker.write().unwrap();
         let picker = guard.as_mut().unwrap();
-        assert!(picker.on_create_or_modify(&modified_path).is_some());
+        assert!(picker.handle_create_or_modify(&modified_path).is_some());
     }
 
     // Regex grep should find the modified file through the overlay.

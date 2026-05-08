@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::file_picker::{FFFMode, FilePicker};
+use crate::file_picker::{FFFMode, MAX_OVERFLOW_FILES};
 use crate::git::GitStatusCache;
 use crate::shared::{SharedFilePicker, SharedFrecency};
 use crate::sort_buffer::sort_with_buffer;
@@ -33,7 +33,6 @@ const MAX_MACOS_NONRECURSIVE_WATCHES: usize = 4096;
 /// Minimum seconds between frecency tracks of the same file in AI mode.
 /// Prevents score inflation from rapid burst edits by AI agents.
 const AI_MODE_COOLDOWN_SECS: u64 = 5 * 60;
-const MAX_OVERFLOW_FILES: usize = 1024;
 
 impl BackgroundWatcher {
     pub fn new(
@@ -468,12 +467,11 @@ fn handle_debounced_events(
             //   - Remove events are not always emitted (macOS often sends
             //     Modify(Name(Any)) instead of Remove).
             let is_removal = matches!(debounced_event.event.kind, EventKind::Remove(_));
-            // Directory-level remove: macOS FSEvents delivers a single
+
+            // Directory-level remove: both fsevents and inotify delivers a single
             // `Remove(Folder)` event for a whole directory tree (e.g.
             // after `git reset --hard` wipes a dir full of staged-but-
-            // uncommitted files). Individual per-file Remove events for
-            // the children do *not* arrive. Treat the folder removal as
-            // "evict every indexed descendant".
+            // uncommitted files).
             let is_folder_removal = matches!(
                 debounced_event.event.kind,
                 EventKind::Remove(notify::event::RemoveKind::Folder)
@@ -536,9 +534,20 @@ fn handle_debounced_events(
         new_dirs_to_watch.len()
     );
 
-    // Apply file index updates (add/remove) unconditionally — these must
-    // happen even when there is no git repository.
-    let (files_to_update_git_status, overflow_count) = if !paths_to_remove.is_empty()
+    if paths_to_remove.is_empty()
+        && dirs_to_remove.is_empty()
+        && paths_to_add_or_modify.is_empty()
+        && !need_full_git_rescan
+    {
+        debug!("No file index changes to apply");
+        return new_dirs_to_watch;
+    }
+
+    let mut files_to_update_git_status = Vec::new();
+    let mut need_full_rescan = false;
+    let mut overflow_count = 0;
+
+    if !paths_to_remove.is_empty()
         || !dirs_to_remove.is_empty()
         || !paths_to_add_or_modify.is_empty()
     {
@@ -549,39 +558,6 @@ fn handle_debounced_events(
             paths_to_add_or_modify.len(),
         );
 
-        let apply_changes = |picker: &mut FilePicker| -> (Vec<PathBuf>, usize) {
-            // Remove whole directories first so any subsequent single-file
-            // remove event for a path that lived under them becomes a cheap
-            // no-op rather than a failed lookup.
-            for dir in &dirs_to_remove {
-                let count = picker.remove_all_files_in_dir(dir);
-                debug!("remove_all_files_in_dir({:?}) -> {} files", dir, count);
-            }
-
-            for path in &paths_to_remove {
-                let removed = picker.remove_file_by_path(path);
-                debug!("remove_file_by_path({:?}) -> {}", path, removed);
-            }
-
-            let mut files_to_update = Vec::with_capacity(paths_to_add_or_modify.len());
-            for path in &paths_to_add_or_modify {
-                let added = picker.on_create_or_modify(path).is_some();
-                if added {
-                    debug!("on_create_or_modify({:?}) -> Some", path);
-                    files_to_update.push(path.to_path_buf());
-                } else {
-                    error!("on_create_or_modify({:?}) -> None (file not added!)", path);
-                }
-            }
-            let overflow_count = picker.get_overflow_files().len();
-            info!(
-                "apply_changes complete: {} files to update git status, overflow={}",
-                files_to_update.len(),
-                overflow_count,
-            );
-            (files_to_update, overflow_count)
-        };
-
         let Ok(mut guard) = shared_picker.write() else {
             error!("Failed to acquire file picker write lock");
             return new_dirs_to_watch;
@@ -590,27 +566,38 @@ fn handle_debounced_events(
             error!("File picker not initialized");
             return new_dirs_to_watch;
         };
-        apply_changes(picker)
-    } else {
-        debug!("No file index changes to apply");
-        (Vec::new(), 0)
-    };
 
-    // The overflow arena grows monotonically as new files are created — a
-    // file's chunks are added on creation but never reclaimed on removal.
-    // On directories with high churn (e.g. `$HOME` with editor temp files,
-    // browser caches) this inflates RSS unboundedly. Once overflow exceeds
-    // the threshold, fall back to a full rescan: that replaces `sync_data`
-    // and drops the builder arena, which is the only path that reclaims it.
-    if overflow_count > MAX_OVERFLOW_FILES {
-        warn!(
-            ?overflow_count,
-            "Overflow count exceeded the threshold, triggering full rescan.",
+        for dir in &dirs_to_remove {
+            let count = picker.remove_all_files_in_dir(dir);
+            debug!("remove_all_files_in_dir({:?}) -> {} files", dir, count);
+        }
+
+        for path in &paths_to_remove {
+            let removed = picker.remove_file_by_path(path);
+            debug!("remove_file_by_path({:?}) -> {}", path, removed);
+        }
+
+        files_to_update_git_status.reserve(paths_to_add_or_modify.len());
+        for path in &paths_to_add_or_modify {
+            if picker.handle_create_or_modify(path).is_some() {
+                files_to_update_git_status.push(path.to_path_buf());
+            } else {
+                need_full_rescan = true;
+            }
+        }
+
+        overflow_count = picker.get_overflow_files().len();
+        info!(
+            files_updated = files_to_update_git_status.len(),
+            overflow_count, "File index changes applied",
         );
+    }
+
+    if need_full_rescan || overflow_count > MAX_OVERFLOW_FILES {
+        info!("Watcher faced limit of index overflow. Triggering rescan");
         if let Err(e) = shared_picker.trigger_full_rescan_async(shared_frecency) {
             error!("Failed to trigger full rescan: {:?}", e);
         }
-        return new_dirs_to_watch;
     }
 
     // AI mode: auto-track frecency for all modified/created files.
@@ -663,25 +650,16 @@ fn handle_debounced_events(
         return new_dirs_to_watch;
     };
 
-    if need_full_git_rescan {
+    if need_full_git_rescan && !need_full_rescan {
         info!("Triggering full git rescan");
 
         if let Err(e) = shared_picker.refresh_git_status(shared_frecency) {
             error!("Failed to refresh git status: {:?}", e);
         }
-        // IMPORTANT: do NOT return here. When a batch contains both
-        // `.git/index` events (e.g. from `git add`) AND worktree-file
-        // Modify events (e.g. a subsequent edit to the same file),
-        // `refresh_git_status` might run while libgit2 sees an
-        // intermediate state — lock-wait mitigates this but can't fully
-        // eliminate it, and refresh doesn't always observe the final
-        // worktree contents if the edit event landed just before the
-        // batch flushed. Re-running the per-path query for explicitly
-        // changed files overrides any stale bits from refresh with an
-        // authoritative per-file status read.
     }
 
-    if !files_to_update_git_status.is_empty() {
+    // do not update the git status if the
+    if !files_to_update_git_status.is_empty() && !need_full_git_rescan {
         info!(
             "Fetching git status for {} files",
             files_to_update_git_status.len()
@@ -739,7 +717,6 @@ fn track_files_from_new_directories(
         return;
     }
 
-    // brief read lock
     {
         let Ok(mut guard) = shared_picker.write() else {
             return;
@@ -750,7 +727,7 @@ fn track_files_from_new_directories(
         };
 
         for path in &files_to_add {
-            picker.on_create_or_modify(path);
+            picker.handle_create_or_modify(path);
         }
     }
 

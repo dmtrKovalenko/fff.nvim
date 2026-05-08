@@ -102,6 +102,7 @@ mod constraints;
 mod error;
 mod score;
 mod sort_buffer;
+pub(crate) mod stable_vec;
 // this is pub only for benchmarks
 pub mod case_insensitive_memmem;
 

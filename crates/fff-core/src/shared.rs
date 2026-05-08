@@ -159,14 +159,12 @@ impl SharedFilePicker {
     /// Performs a safe async rescan. Guarantees only single active rescan per picker.
     /// If many rescans requested the last one guaranteed to be finished.
     pub fn trigger_full_rescan_async(&self, shared_frecency: &SharedFrecency) -> Result<(), Error> {
-        match ScanJob::new(self, shared_frecency, /*install_watcher=*/ false)? {
+        match ScanJob::new_rescan(self, shared_frecency)? {
             Some(job) => {
                 job.spawn();
             }
             None => {
-                // A scan is already in flight — mark a follow-up as
-                // needed. The running scan's `run()` drains this flag
-                // and reschedules itself.
+                // we can not abort the ongoing sync, but if the events
                 if let Ok(guard) = self.read()
                     && let Some(picker) = guard.as_ref()
                 {
@@ -194,25 +192,18 @@ impl SharedFilePicker {
                 return Err(Error::FilePickerMissing);
             };
 
-            debug!(
-                "Refreshing git statuses for picker: {:?}",
-                picker.git_root()
-            );
+            let git_root = picker.git_root().map(|p| p.to_path_buf());
+            drop(guard); // updating git status could take very long time, there is not risky as we
+            // do not allow any mutations and deletions of files from the sync
 
-            // Wait briefly for any in-progress git operation to release
-            // its `.git/index.lock`. libgit2 reads `.git/index` directly
-            // and does NOT coordinate with the filesystem lock; if a
-            // writer is mid-atomic-rename (lock file exists, new index
-            // not yet swapped in), we would observe stale status data.
-            // This matters most for the background watcher, which
-            // typically fires refresh in response to the very events
-            // produced by that in-flight git write.
-            if let Some(root) = picker.git_root() {
+            debug!(?git_root, "Refreshing git status for picker");
+
+            if let Some(ref root) = git_root {
                 wait_for_git_index_lock_release(root);
             }
 
             GitStatusCache::read_git_status(
-                picker.git_root(),
+                git_root.as_deref(),
                 &mut crate::git::default_status_options(),
             )
         };

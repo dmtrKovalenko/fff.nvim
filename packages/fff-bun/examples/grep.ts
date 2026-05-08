@@ -137,9 +137,13 @@ async function main() {
   const scanTime = Date.now() - startTime;
   const finalProgress = finder.getScanProgress();
   const totalFiles = finalProgress.ok ? finalProgress.value.scannedFilesCount : 0;
+  const warmupDone = finalProgress.ok ? finalProgress.value.isWarmupComplete : false;
 
   console.log(
-    `\r${GREEN}✓${RESET} Indexed ${BOLD}${totalFiles}${RESET} files in ${scanTime}ms\n`,
+    `\r${GREEN}✓${RESET} Indexed ${BOLD}${totalFiles}${RESET} files in ${scanTime}ms`,
+  );
+  console.log(
+    `  Content index: ${warmupDone ? `${GREEN}ready${RESET}` : `${YELLOW}building in background...${RESET}`}\n`,
   );
 
   console.log(
@@ -159,8 +163,11 @@ async function main() {
   const prompt = () => {
     const modeLabel =
       currentMode === "plain" ? "txt" : currentMode === "regex" ? "re" : "fzy";
+    const prog = finder.getScanProgress();
+    const indexed = prog.ok && prog.value.isWarmupComplete;
+    const indexLabel = indexed ? `${GREEN}idx${RESET}` : `${YELLOW}no-idx${RESET}`;
 
-    rl.question(`${CYAN}grep[${modeLabel}]>${RESET} `, (query) => {
+    rl.question(`${CYAN}grep[${modeLabel}|${indexLabel}]>${RESET} `, (query) => {
       if (query.toLowerCase() === "q" || query.toLowerCase() === "quit") {
         console.log(`\n${DIM}Goodbye!${RESET}`);
         finder.destroy();

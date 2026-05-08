@@ -639,7 +639,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fff-c"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "fff-query-parser",
  "fff-search",
@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "fff-grep"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "bstr",
  "memchr",
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "fff-mcp"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "clap",
  "fff-query-parser",
@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "fff-nvim"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "ahash",
  "blake3",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "fff-query-parser"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "criterion",
  "zlob",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "fff-search"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "ahash",
  "aho-corasick",
@@ -1533,9 +1533,9 @@ dependencies = [
 
 [[package]]
 name = "neo_frizbee"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b216854d8c3752f8dbda56703c708de44bccb0542ca3924976c5977d6fb0724"
+checksum = "728e0731ad3a0083b9f72a82df72c298641ba970d4e308e0897ec4c89212c31d"
 dependencies = [
  "itertools 0.14.0",
  "raw-cpuid",

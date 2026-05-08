@@ -379,7 +379,7 @@ fn fuzz_file_operations_stress() {
                 let mut guard = shared_picker.write().unwrap();
                 let picker = guard.as_mut().unwrap();
                 assert!(
-                    picker.on_create_or_modify(base.join(name)).is_some(),
+                    picker.handle_create_or_modify(base.join(name)).is_some(),
                     "round {round}: on_create_or_modify({name}) should succeed for edit"
                 );
             }
@@ -399,7 +399,7 @@ fn fuzz_file_operations_stress() {
                 let mut guard = shared_picker.write().unwrap();
                 let picker = guard.as_mut().unwrap();
                 assert!(
-                    picker.on_create_or_modify(base.join(&name)).is_some(),
+                    picker.handle_create_or_modify(base.join(&name)).is_some(),
                     "round {round}: on_create_or_modify({name}) should succeed for create"
                 );
             }
@@ -453,7 +453,9 @@ fn fuzz_file_operations_stress() {
                 let mut guard = shared_picker.write().unwrap();
                 let picker = guard.as_mut().unwrap();
                 assert!(
-                    picker.on_create_or_modify(base.join(&new_name)).is_some(),
+                    picker
+                        .handle_create_or_modify(base.join(&new_name))
+                        .is_some(),
                     "round {round}: on_create_or_modify({new_name}) should succeed for rename"
                 );
             }

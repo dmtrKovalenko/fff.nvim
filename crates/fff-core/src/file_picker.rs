@@ -43,6 +43,7 @@ use crate::scan::{ScanConfig, ScanJob, ScanSignals};
 use crate::score::fuzzy_match_and_score_files;
 use crate::shared::{SharedFilePicker, SharedFrecency};
 use crate::simd_path::{ArenaPtr, PATH_BUF_SIZE};
+use crate::stable_vec::StableVec;
 use crate::types::{
     ContentCacheBudget, DirItem, DirSearchResult, FileItem, MixedItemRef, MixedSearchResult,
     PaginationArgs, Score, ScoringContext, SearchResult,
@@ -60,6 +61,11 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 use tracing::{Level, debug, error, info, warn};
+
+/// Max overflow files before the watcher triggers a full rescan.
+/// `walk_filesystem` reserves this much extra capacity so the Vec never
+/// reallocates while raw pointers are held during post-scan.
+pub(crate) const MAX_OVERFLOW_FILES: usize = 1024;
 
 /// Dedicated thread pool for background work (scan, warmup, bigram build).
 /// Uses fewer threads than the global rayon pool so Neovim's event loop
@@ -128,7 +134,7 @@ pub(crate) struct FileSync {
     ///   `files[..indexable_count]` - indexable
     ///   `files[indexable_count..base_count]` - original-unindexable
     ///   `files[base_count..]`— overflow (created on demand)
-    files: Vec<FileItem>,
+    files: StableVec<FileItem>,
     indexable_count: usize,
     base_count: usize,
     /// Sorted directory table. Each entry is a unique parent directory of at
@@ -152,7 +158,7 @@ pub(crate) struct FileSync {
 impl FileSync {
     fn new() -> Self {
         Self {
-            files: Vec::new(),
+            files: StableVec::from_vec_with_reserve(Vec::new(), MAX_OVERFLOW_FILES),
             indexable_count: 0,
             base_count: 0,
             dirs: Vec::new(),
@@ -1230,33 +1236,60 @@ impl FilePicker {
         self.sync_data.bigram_overlay = Some(Arc::new(parking_lot::RwLock::new(overlay)));
     }
 
-    pub(crate) fn cache_budget_arc(&self) -> Arc<ContentCacheBudget> {
-        Arc::clone(&self.cache_budget)
-    }
-
-    /// Bundle the atomic flags the scan orchestrator needs. One method
-    /// instead of four separate getters so every callsite passes a
-    /// single `ScanSignals` value.
     pub(crate) fn scan_signals(&self) -> crate::scan::ScanSignals {
-        crate::scan::ScanSignals {
-            scanning: Arc::clone(&self.signals.scanning),
-            watcher_ready: Arc::clone(&self.signals.watcher_ready),
-            cancelled: Arc::clone(&self.signals.cancelled),
-            post_scan_busy: Arc::clone(&self.signals.post_scan_busy),
-            rescan_pending: Arc::clone(&self.signals.rescan_pending),
-        }
+        self.signals.clone()
     }
 
     pub(crate) fn scanned_files_counter(&self) -> Arc<AtomicUsize> {
         Arc::clone(&self.scanned_files_count)
     }
 
-    pub(crate) fn sync_data_snapshot(&self) -> (&[FileItem], usize, ArenaPtr) {
-        (
-            self.sync_data.files(),
-            self.sync_data.indexable_count,
-            self.sync_data.arena_base_ptr(),
-        )
+    /// Capture raw pointers to the picker's internal arrays for off-lock use.
+    ///
+    /// Sets `post_scan_indexing_active` and returns a snapshot that clears it
+    /// on drop. This is the ONLY approved way to escape the lock for
+    /// long-running parallel work (git status, warmup, bigram).
+    ///
+    /// Returns `None` if `post_scan_indexing_active` is already set — this
+    /// means another post-scan is in flight and we must not create a second
+    /// set of dangling pointers.
+    ///
+    /// # Safety
+    /// 1. `walk_filesystem` reserved `MAX_OVERFLOW_FILES` capacity on the
+    ///    files Vec at creation — watcher pushes cannot reallocate it.
+    /// 2. `post_scan_indexing_active` is set — prevents `commit_new_sync`
+    ///    from replacing the Vec (ScanJob::new checks this flag).
+    /// 3. Only `[..base_count]` is accessed — base files use the immutable
+    ///    base arena. Overflow files use a different arena.
+    pub(crate) unsafe fn post_scan_snapshot(&self) -> Option<PostScanUnsafeSnapshot> {
+        if self
+            .signals
+            .post_scan_indexing_active
+            .load(Ordering::Acquire)
+        {
+            tracing::error!(
+                "Can not acquire post scan unsafe snapshot, someone already acquired it"
+            );
+            return None;
+        }
+
+        self.signals
+            .post_scan_indexing_active
+            .store(true, Ordering::Release);
+
+        let files = &self.sync_data.files;
+        let dirs = &self.sync_data.dirs;
+        Some(PostScanUnsafeSnapshot {
+            files: files.as_ptr() as *mut FileItem,
+            base_count: self.sync_data.base_count,
+            indexable_count: self.sync_data.indexable_count,
+            dirs: dirs.as_ptr(),
+            dirs_len: dirs.len(),
+            arena: self.sync_data.arena_base_ptr(),
+            budget: &*self.cache_budget as *const _,
+            base_path: self.base_path.clone(),
+            post_scan_flag: Arc::clone(&self.signals.post_scan_indexing_active),
+        })
     }
 
     pub(crate) fn commit_new_sync(&mut self, sync: FileSync) {
@@ -1359,8 +1392,11 @@ impl FilePicker {
         index.and_then(|i| self.sync_data.get_file_mut(i))
     }
 
+    /// Handle the event of certain file being modified or adds a neww file if it is not added
+    /// If this function returns `None` it means that picker is in the invalid state, or the capacity
+    /// of index is exhausted and a new rescan needs to be triggered.
     #[tracing::instrument(skip(self),level = Level::DEBUG)]
-    pub fn on_create_or_modify(&mut self, path: impl AsRef<Path> + Debug) -> Option<&FileItem> {
+    pub fn handle_create_or_modify(&mut self, path: impl AsRef<Path> + Debug) -> Option<&FileItem> {
         let path = path.as_ref();
 
         if let Ok(idx) = self.sync_data.find_file_index(path, &self.base_path) {
@@ -1420,7 +1456,8 @@ impl FilePicker {
         Some(&*self.sync_data.get_file_mut(pos)?)
     }
 
-    /// Adds a new file from path to the picker, even if it should be ignored
+    /// Adds a new file to picker, if the file can not be added returns `None`
+    /// which indicates that it's time to trigger a new sync
     #[tracing::instrument(skip(self))]
     pub fn add_new_file(&mut self, path: &Path) -> Option<&FileItem> {
         // On Windows `pathdiff::diff_paths` is byte-wise, so a short-name
@@ -1456,7 +1493,10 @@ impl FilePicker {
         file_item.set_path(chunked_path);
         file_item.set_overflow(true);
 
-        self.sync_data.files.push(file_item);
+        if !self.sync_data.files.push(file_item) {
+            return None;
+        }
+
         self.sync_data.files.last()
     }
 
@@ -1600,6 +1640,36 @@ impl FileSlot {
         }
     }
 }
+
+/// Raw pointers captured from the picker for off-lock parallel work.
+/// Created by [`FilePicker::post_scan_snapshot`]. See its safety docs.
+///
+/// Clears `post_scan_indexing_active` on drop — the flag is set by
+/// `post_scan_snapshot` and MUST only be cleared by dropping this struct.
+pub(crate) struct PostScanUnsafeSnapshot {
+    pub files: *mut FileItem,
+    pub base_count: usize,
+    pub indexable_count: usize,
+    pub dirs: *const crate::types::DirItem,
+    pub dirs_len: usize,
+    pub arena: ArenaPtr,
+    pub budget: *const crate::types::ContentCacheBudget,
+    pub base_path: PathBuf,
+    /// Holds the flag reference so it is automatically flips
+    /// when the pointsr
+    post_scan_flag: Arc<AtomicBool>,
+}
+
+impl Drop for PostScanUnsafeSnapshot {
+    fn drop(&mut self) {
+        self.post_scan_flag.store(false, Ordering::Release);
+    }
+}
+
+// SAFETY: the pointers are derived from Vec/Arc storage that outlives
+// any use of this struct (guaranteed by reserve + post_scan_indexing_active).
+unsafe impl Send for PostScanUnsafeSnapshot {}
+unsafe impl Sync for PostScanUnsafeSnapshot {}
 
 /// A point-in-time snapshot of the file-scanning progress.
 ///
@@ -1883,7 +1953,7 @@ impl FileSync {
         let base_count = files.len();
 
         Ok(FileSync {
-            files,
+            files: StableVec::from_vec_with_reserve(files, MAX_OVERFLOW_FILES),
             indexable_count,
             base_count,
             dirs,
@@ -1940,105 +2010,6 @@ fn populates_dirs_files_chunked_storage<'a>(
     }
 
     dirs
-}
-
-pub(crate) fn apply_git_status_and_frecency(
-    shared_picker: &SharedFilePicker,
-    shared_frecency: &SharedFrecency,
-    git_handle: std::thread::JoinHandle<Option<GitStatusCache>>,
-    mode: FFFMode,
-) {
-    let join_start = std::time::Instant::now();
-    let git_cache = match git_handle.join() {
-        Ok(cache) => cache,
-        Err(_) => {
-            error!("Git status thread panicked");
-            return;
-        }
-    };
-    info!("SCAN: Git status ready in {:?}", join_start.elapsed());
-
-    let Some(git_cache) = git_cache else { return };
-
-    // Take a snapshot of the raw pointers + metadata under a brief read
-    // lock, then drop the guard BEFORE running the rayon loop. Previously
-    // we held the picker write lock for the whole loop (multi-second:
-    // 500k files × LMDB read per file), which froze every FFI caller on
-    // the main nvim thread — searches, progress polls, BufEnter tracking.
-    //
-    // SAFETY: the scan thread is the only writer that replaces
-    // `sync_data` during post-scan. `post_scan_busy` blocks rescans; git
-    // status is applied exactly once per scan, on this thread, before
-    // anything else races for the files slice. The overflow watcher only
-    // appends to `files[base_count..]` — we only mutate `files[..]` here,
-    // and we deliberately do not touch or dereference the overflow tail.
-    #[allow(clippy::type_complexity)]
-    let snapshot: Option<(
-        *mut FileItem,
-        usize,
-        *const crate::types::DirItem,
-        usize,
-        PathBuf,
-        ArenaPtr,
-    )> = shared_picker.read().ok().and_then(|guard| {
-        guard.as_ref().map(|picker| {
-            let files = &picker.sync_data.files;
-            let dirs = &picker.sync_data.dirs;
-            (
-                files.as_ptr() as *mut FileItem,
-                files.len(),
-                dirs.as_ptr(),
-                dirs.len(),
-                picker.base_path.clone(),
-                picker.arena_base_ptr(),
-            )
-        })
-    });
-
-    let Some((files_ptr, files_len, dirs_ptr, dirs_len, bp, arena)) = snapshot else {
-        return;
-    };
-
-    let frecency = shared_frecency.read().ok();
-    let frecency_ref = frecency.as_ref().and_then(|f| f.as_ref());
-
-    // SAFETY: the scan thread is the sole replacer of `sync_data`; it
-    // won't run again until this function returns. See module-level
-    // comments on the post-scan phase for the full ordering argument.
-    let files: &mut [FileItem] = unsafe { std::slice::from_raw_parts_mut(files_ptr, files_len) };
-    let dirs: &[crate::types::DirItem] = unsafe { std::slice::from_raw_parts(dirs_ptr, dirs_len) };
-
-    // Reset dir frecency before recomputation.
-    for dir in dirs.iter() {
-        dir.reset_frecency();
-    }
-
-    BACKGROUND_THREAD_POOL.install(|| {
-        files.par_iter_mut().for_each(|file| {
-            let mut buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
-            let absolute_path = file.write_absolute_path(arena, &bp, &mut buf);
-
-            file.git_status = git_cache.lookup_status(absolute_path);
-            if let Some(frecency) = frecency_ref {
-                let _ = file.update_frecency_scores(frecency, arena, &bp, mode);
-            }
-
-            let score = file.access_frecency_score as i32;
-            if score > 0 {
-                let dir_idx = file.parent_dir_index() as usize;
-                if let Some(dir) = dirs.get(dir_idx) {
-                    dir.update_frecency_if_larger(score);
-                }
-            }
-        });
-    });
-    drop(frecency);
-
-    info!(
-        "SCAN: Applied git status to {} files ({} dirty)",
-        files_len,
-        git_cache.statuses_len(),
-    );
 }
 
 /// Fast extension-based binary detection. Avoids opening files during scan.
