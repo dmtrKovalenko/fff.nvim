@@ -5,13 +5,13 @@
  * @-mention autocomplete suggestions in the interactive editor.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { CustomEditor } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import {
   Text,
   type AutocompleteItem,
   type AutocompleteProvider,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { FileFinder } from "@ff-labs/fff-node";
 import type {
