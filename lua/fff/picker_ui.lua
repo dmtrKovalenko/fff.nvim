@@ -170,8 +170,8 @@ local function compute_layout(config)
   --   col: -1 for left (internal +1 on list_col makes it flush)
   --        -2 for right (internal +1 plus the preview window's independent right border)
   --   row: -1 for top/bottom (internal +1 on rows; bottom also accounts for chrome via bottom_edge)
-  local center_col = math.floor((terminal_width - width) / 2)
-  local center_row = top_edge + math.floor((usable_height - height) / 2)
+  local center_col = math.floor((terminal_width - width) / 2) - 1
+  local center_row = top_edge + math.floor((usable_height - height) / 2) - 1
   local anchor_positions = {
     center = {
       col = center_col,
@@ -253,7 +253,7 @@ local function compute_layout(config)
 
   local layout_config = {
     total_width = width,
-    total_height = height,
+    total_height = height + 1,
     start_col = col,
     start_row = row,
     preview_position = preview_position,
@@ -437,10 +437,10 @@ function M.calculate_layout_dimensions(cfg)
 
     layout.list_col = cfg.start_col + 1
     layout.list_width = total_width
-    layout.list_height = list_height
+    layout.list_height = list_height + 1
     layout.input_col = layout.list_col
     layout.input_width = total_width
-    layout.list_start_row = cfg.start_row + (preview_enabled and (cfg.preview_height + separator_height) or 0) + 1
+    layout.list_start_row = cfg.start_row + (preview_enabled and (cfg.preview_height + separator_height) or 0) + 2
 
     if preview_enabled then
       layout.preview = {
@@ -465,7 +465,7 @@ function M.calculate_layout_dimensions(cfg)
       layout.preview = {
         col = cfg.start_col + 1,
         width = total_width,
-        height = cfg.preview_height,
+        height = cfg.preview_height + 1,
       }
     end
   end
@@ -502,9 +502,10 @@ function M.calculate_layout_dimensions(cfg)
 
     if cfg.preview_position == 'bottom' and layout.preview then
       if cfg.prompt_position == 'top' then
-        layout.preview.row = layout.list_row + layout.list_height + 1
+        layout.preview.row = layout.list_row + layout.list_height + 2
       else
-        layout.preview.row = layout.input_row + PROMPT_HEIGHT
+        layout.preview.row = layout.input_row + PROMPT_HEIGHT + 1
+        layout.preview.height = cfg.preview_height - 1
       end
     end
   end
