@@ -1,0 +1,166 @@
+name: python-wheels
+
+on:
+  push:
+    tags:
+      - "fff-py-v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to PyPI (requires PYPI_API_TOKEN secret)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: linux ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheels (manylinux)
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path crates/fff-py/Cargo.toml
+          manylinux: auto
+          working-directory: .
+      - name: Build sdist (x86_64 only)
+        if: matrix.target == 'x86_64'
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist --manifest-path crates/fff-py/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: dist
+
+  musllinux:
+    name: musllinux ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheels (musllinux)
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path crates/fff-py/Cargo.toml
+          manylinux: musllinux_1_2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-musllinux-${{ matrix.target }}
+          path: dist
+
+  macos:
+    name: macos ${{ matrix.target }}
+    runs-on: ${{ matrix.target == 'aarch64' && 'macos-14' || 'macos-13' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path crates/fff-py/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: dist
+
+  windows:
+    name: windows ${{ matrix.target }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: ${{ matrix.target == 'x64' && 'x64' || 'x86' }}
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --manifest-path crates/fff-py/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.target }}
+          path: dist
+
+  smoke-test:
+    name: smoke-test ${{ matrix.os }} py${{ matrix.python }}
+    needs: [linux, macos, windows]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-13, windows-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - name: Install built wheel
+        shell: bash
+        run: |
+          pip install --no-index --find-links=dist fff-search
+      - name: Smoke test
+        shell: bash
+        run: |
+          python -c "from fff_search import FileFinder, __version__; print('fff_search', __version__); f = FileFinder.create(base_path='.'); f.wait_for_scan(timeout_ms=10000); print('files indexed:', f.get_scan_progress().scanned_files_count); r = f.file_search('readme'); print('matched:', r.total_matched); f.destroy()"
+
+  release:
+    name: release to PyPI
+    needs: [linux, musllinux, macos, windows, smoke-test]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/fff-py-v') || github.event.inputs.publish == 'true'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/fff-search
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - name: Publish via maturin
+        uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --non-interactive --skip-existing dist/*
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}

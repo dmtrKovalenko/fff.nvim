@@ -366,6 +366,32 @@ Every method returns a `Result<T>` (`{ ok: true, value } | { ok: false, error }`
 
 TypeScript wrapper over the C library for nodejs and bun. Build custom agent tools, CLIs, or IDE integrations on top of FFF.
 
+<details id="python-sdk">
+<summary>
+<h2>Python SDK</h2>
+</summary>
+
+```bash
+pip install fff-search
+```
+
+```python
+from fff_search import FileFinder
+
+with FileFinder.create(base_path=".", ai_mode=True) as f:
+    f.wait_for_scan(timeout_ms=10_000)
+    files = f.file_search("incognito profile", page_size=20)
+    hits = f.grep("GetOffTheRecordProfile", classify_definitions=True)
+```
+
+Errors raise `FffError`. Type stubs bundled (`py.typed`). Wheels for Linux (x86_64, aarch64), macOS (x86_64, aarch64), Windows (x86_64) on Python 3.9+ via abi3.
+
+Source: [`crates/fff-py/`](./crates/fff-py/).
+
+</details>
+
+PyO3 bindings on the same Rust core.
+
 <details id="rust-crate">
 <summary>
 <h2>Rust crate</h2>
@@ -540,6 +566,7 @@ If you are running one grep from a terminal, `rg` is still the right tool. If yo
 - `crates/fff-c` - C FFI used by every language binding.
 - `crates/fff-nvim` - Lua/mlua bindings for the Neovim plugin.
 - `crates/fff-mcp` - MCP server binary.
+- `crates/fff-py` - Python SDK (PyO3, `pip install fff-search`).
 - `packages/fff-node` - Node.js SDK (`@ff-labs/fff-node`).
 - `packages/fff-bun` - Bun SDK (`@ff-labs/fff-node`).
 - `packages/pi-fff` - pi extension (`@ff-labs/pi-fff`).
