@@ -1,6 +1,14 @@
 doc/tags
 big-repo
 target/
+
+# Python (fff-py SDK)
+.venv-py/
+.venv*/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+*.pyc
 .archive.lua
 _*.lua
 .lazy.lua
@@ -27,3 +35,6 @@ scripts/benchmark-results/
 
 # Instruments traces
 *.trace/
+# Built python extension
+*.pyd
+*.so

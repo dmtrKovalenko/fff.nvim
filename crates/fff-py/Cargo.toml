@@ -1,0 +1,24 @@
+[package]
+name = "fff-py"
+version = "0.7.2"
+edition = "2024"
+description = "Python bindings for fff: fuzzy file finder and content grep"
+license = "MIT"
+authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
+repository = "https://github.com/dmtrKovalenko/fff.nvim"
+publish = false
+
+[lib]
+name = "fff_search_native"
+crate-type = ["cdylib"]
+
+[features]
+default = []
+zlob = ["fff/zlob"]
+
+[dependencies]
+fff = { package = "fff-search", path = "../fff-core", version = "0.7.2" }
+fff-query-parser = { path = "../fff-query-parser", version = "0.7.2" }
+mimalloc.workspace = true
+tracing.workspace = true
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }

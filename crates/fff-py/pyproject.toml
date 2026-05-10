@@ -1,0 +1,49 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "fff-search"
+description = "Python bindings for fff: fuzzy file finder and content grep."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [
+  { name = "Dmitriy Kovalenko", email = "dmtr.kovalenko@outlook.com" },
+]
+keywords = [
+  "file-finder",
+  "fuzzy-search",
+  "grep",
+  "ai-agents",
+  "llm-tools",
+  "fast",
+  "rust",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Rust",
+  "Topic :: Software Development",
+  "Topic :: Text Processing :: Indexing",
+  "Topic :: Utilities",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/dmtrKovalenko/fff.nvim"
+Repository = "https://github.com/dmtrKovalenko/fff.nvim"
+Issues = "https://github.com/dmtrKovalenko/fff.nvim/issues"
+
+[tool.maturin]
+python-source = "python"
+module-name = "fff_search._native"
+features = ["pyo3/extension-module"]
+strip = true
