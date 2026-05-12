@@ -46,6 +46,7 @@
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
         cargoToml = builtins.fromTOML (builtins.readFile ./crates/fff-nvim/Cargo.toml);
+        fffMcpCargoToml = builtins.fromTOML (builtins.readFile ./crates/fff-mcp/Cargo.toml);
 
         # Common arguments can be set here to avoid repeating them later
         # Note: changes here will rebuild all dependency crates
@@ -81,6 +82,21 @@
             doCheck = false;
           }
         );
+
+        fff-mcp-args = commonArgs // {
+          pname = fffMcpCargoToml.package.name;
+          version = fffMcpCargoToml.package.version;
+          cargoExtraArgs = "-p fff-mcp --bin fff-mcp";
+        };
+
+        fff-mcp = craneLib.buildPackage (
+          fff-mcp-args
+          // {
+            cargoArtifacts = craneLib.buildDepsOnly fff-mcp-args;
+            doCheck = false;
+          }
+        );
+
         # Copies the dynamic library into the target/release folder
         copy-dynamic-library = /* bash */ ''
           set -eo pipefail
@@ -95,11 +111,12 @@
       in
       {
         checks = {
-          inherit my-crate;
+          inherit my-crate fff-mcp;
         };
 
         packages = {
           default = my-crate;
+          inherit fff-mcp;
 
           # Neovim plugin
           fff-nvim = pkgs.vimUtils.buildVimPlugin {
@@ -113,6 +130,10 @@
 
         apps.default = flake-utils.lib.mkApp {
           drv = my-crate;
+        };
+
+        apps.fff-mcp = flake-utils.lib.mkApp {
+          drv = fff-mcp;
         };
 
         # Add the release command
