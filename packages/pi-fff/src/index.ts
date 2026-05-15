@@ -464,14 +464,12 @@ export default function fffExtension(pi: ExtensionAPI) {
       ) => void;
     };
   }) {
-    if (!shouldEnableMentions()) {
-      ctx.ui.setEditorComponent(undefined);
-    } else {
-      ctx.ui.setEditorComponent(
-        (tui: any, theme: any, keybindings: any) =>
-          new FffEditor(tui, theme, keybindings),
-      );
-    }
+    if (!shouldEnableMentions()) return;
+
+    ctx.ui.setEditorComponent(
+      (tui: any, theme: any, keybindings: any) =>
+        new FffEditor(tui, theme, keybindings),
+    );
   }
 
   // --- Flags / lifecycle ---
