@@ -2050,16 +2050,12 @@ function M.wrap_to_first()
 
   -- For non-grep mode, jump directly to page 0
   if M.state.mode ~= 'grep' then
-    return M.load_page_at_index(0, function()
-      M.state.cursor = 1
-    end)
+    return M.load_page_at_index(0, function() M.state.cursor = 1 end)
   end
 
   -- For grep mode, we can only go back if page 0 offset is recorded
   if M.state.pagination.grep_file_offsets[1] ~= nil then
-    return M.load_page_at_index(0, function()
-      M.state.cursor = 1
-    end)
+    return M.load_page_at_index(0, function() M.state.cursor = 1 end)
   end
 
   M.state.cursor = 1
@@ -2082,9 +2078,7 @@ function M.wrap_to_last()
       return true
     end
 
-    return M.load_page_at_index(max_page_index, function(result_count)
-      M.state.cursor = result_count
-    end)
+    return M.load_page_at_index(max_page_index, function(result_count) M.state.cursor = result_count end)
   end
 
   -- For grep mode, we can't jump to last page (sequential offsets required)

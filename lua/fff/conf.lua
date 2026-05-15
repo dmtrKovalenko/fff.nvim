@@ -38,7 +38,6 @@ local M = {}
 --- @field send_to_quickfix string
 --- @field focus_list string
 --- @field focus_preview string
---- @field wrap_around boolean
 
 --- @class FffFrecencyConfig
 --- @field enabled boolean
