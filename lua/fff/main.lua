@@ -20,7 +20,8 @@ end
 function M.find_help_pages(opts)
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
   if picker_ok then
-    picker_ui.open({cwd = vim.env.VIMRUNTIME .. "/doc"})
+    local vimruntime = vim.env.VIMRUNTIME or vim.fn.stdpath('data')
+    picker_ui.open({cwd = vimruntime .. "/doc"})
   else
     vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
   end
