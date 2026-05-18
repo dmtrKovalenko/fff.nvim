@@ -292,6 +292,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   // deadlock at the native layer (issue #403).
   let finderPromise: Promise<FileFinder> | null = null;
   let activeCwd = process.cwd();
+  let lifecycleId = 0;
 
   // Mode resolution: flag > env > default
   let currentMode: FffMode =
@@ -345,10 +346,14 @@ export default function fffExtension(pi: ExtensionAPI) {
       if (!result.ok)
         throw new Error(`Failed to create FFF file finder: ${result.error}`);
 
-      finder = result.value;
+      const createdFinder = result.value;
+      finder = createdFinder;
       finderCwd = cwd;
-      await finder.waitForScan(15000);
-      return finder;
+      await createdFinder.waitForScan(15000);
+      if (createdFinder.isDestroyed || finder !== createdFinder || finderCwd !== cwd) {
+        throw new Error("FFF finder was destroyed before initialization completed");
+      }
+      return createdFinder;
     })().finally(() => {
       finderPromise = null;
     });
@@ -479,8 +484,21 @@ export default function fffExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     try {
       activeCwd = ctx.cwd;
+      const sessionLifecycleId = ++lifecycleId;
       if (shouldEnableMentions()) applyEditorMode(ctx);
-      await ensureFinder(activeCwd);
+      // Warm the finder after session startup returns. Tool calls still await
+      // the same in-flight promise on first use, but /new and /resume are not
+      // blocked by FileFinder.create() or waitForScan().
+      setTimeout(() => {
+        if (sessionLifecycleId !== lifecycleId) return;
+        ensureFinder(activeCwd).catch((e: unknown) => {
+          if (sessionLifecycleId !== lifecycleId) return;
+          ctx.ui.notify(
+            `FFF init failed: ${e instanceof Error ? e.message : String(e)}`,
+            "error",
+          );
+        });
+      }, 0);
     } catch (e: unknown) {
       ctx.ui.notify(
         `FFF init failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -490,6 +508,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    lifecycleId++;
     destroyFinder();
   });
 
