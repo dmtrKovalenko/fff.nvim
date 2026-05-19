@@ -22,7 +22,7 @@ end
 function M.find_help_pages(opts)
     local options = opts
     opts.cwd = vim.env.VIMRUNTIME .. "/doc"
-    M.find_files(opts)
+    M.find_files(options)
 end
 
 --- Live grep: search file contents in the current directory
