@@ -17,8 +17,10 @@ function M.find_files(opts)
   end
 end
 
-function M.fuzzy_find_help_pages(opts)
-    M.live_grep({ cwd = vim.env.VIMRUNTIME .. "/doc", grep = { modes = "fuzzy" } })
+function M.find_help_pages(opts)
+    local options = opts
+    opts.cwd = vim.env.VIMRUNTIME .. "/doc"
+    M.find_files({ cwd = vim.env.VIMRUNTIME .. "/doc", grep = {modes = "fuzzy"}})
 end
 
 --- Live grep: search file contents in the current directory
