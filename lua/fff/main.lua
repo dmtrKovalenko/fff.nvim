@@ -17,16 +17,9 @@ function M.find_files(opts)
   end
 end
 
-function M.find_help_pages(opts)
-  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
-  if picker_ok then
-    local vimruntime = vim.env.VIMRUNTIME or vim.fn.stdpath('data')
-    picker_ui.open({cwd = vimruntime .. "/doc"})
-  else
-    vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
-  end
+function M.fuzzy_find_help_pages(opts)
+    M.live_grep({ cwd = vim.api.VIMRUNTIME, grep = { modes = "fuzzy" } })
 end
-
 
 --- Live grep: search file contents in the current directory
 --- @param opts? {cwd?: string, title?: string, prompt?: string, layout?: table, grep?: {max_file_size?: number, smart_case?: boolean, max_matches_per_file?: number, modes?: string[]}, query?: string} Optional configuration overrides
