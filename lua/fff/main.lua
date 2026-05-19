@@ -17,10 +17,12 @@ function M.find_files(opts)
   end
 end
 
+--- Find help pages
+--- @param opts? table Optional configuration {renderer = custom_renderer}
 function M.find_help_pages(opts)
     local options = opts
     opts.cwd = vim.env.VIMRUNTIME .. "/doc"
-    M.find_files({ cwd = vim.env.VIMRUNTIME .. "/doc", grep = {modes = "fuzzy"}})
+    M.find_files(opts)
 end
 
 --- Live grep: search file contents in the current directory
