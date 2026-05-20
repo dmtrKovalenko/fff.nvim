@@ -10,10 +10,9 @@ export function normalizePathConstraint(
   if (path.isAbsolute(trimmed)) {
     const relative = path.relative(cwd, trimmed).replaceAll(path.sep, "/");
     if (relative === "") return null;
+    // Allow absolute paths outside workspace - pass through unchanged
     if (relative.startsWith("../") || relative === ".." || path.isAbsolute(relative)) {
-      throw new Error(
-        `Path constraint must be relative to the workspace: ${pathConstraint}`,
-      );
+      return trimmed.replaceAll(path.sep, "/");
     }
     trimmed = relative;
   }

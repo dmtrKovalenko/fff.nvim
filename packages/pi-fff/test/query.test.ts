@@ -11,9 +11,12 @@ describe("path constraint normalization", () => {
     );
   });
 
-  test("rejects absolute paths outside the workspace", () => {
-    expect(() => normalizePathConstraint("/tmp/other/.agents/**", cwd)).toThrow(
-      "Path constraint must be relative to the workspace",
+  test("allows absolute paths outside the workspace", () => {
+    expect(normalizePathConstraint("/tmp/other/.agents/**", cwd)).toBe(
+      "/tmp/other/.agents/**",
+    );
+    expect(normalizePathConstraint("/home/user/.pi/docs/", cwd)).toBe(
+      "/home/user/.pi/docs/",
     );
   });
 
