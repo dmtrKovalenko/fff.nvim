@@ -49,6 +49,10 @@ end, {
   desc = 'Find files with FFF (use directory path or search query)',
 })
 
+vim.api.nvim_create_user_command('FFFOldFiles', function() require('fff').find_oldfiles() end, {
+  desc = 'Find recently opened files',
+})
+
 vim.api.nvim_create_user_command('FFFScan', function() require('fff').scan_files() end, {
   desc = 'Scan files for FFF',
 })

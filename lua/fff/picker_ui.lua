@@ -1407,7 +1407,12 @@ function M.update_results_sync()
   end
 
   local results
-  if M.state.mode == 'grep' then
+  if M.state.mode == 'oldfiles' then
+    local oldfiles = require('fff.oldfiles')
+    results = oldfiles.search(M.state.query, page_size)
+    M.state.pagination.total_matched = #results
+    M.state.location = nil
+  elseif M.state.mode == 'grep' then
     M.state.grep_regex_fallback_error = nil
     if M.state.query == '' then
       -- Empty query: show empty state (no search needed)

@@ -17,6 +17,23 @@ function M.find_files(opts)
   end
 end
 
+--- Find recently opened files (oldfiles)
+--- @param opts? table Optional configuration overrides
+function M.find_oldfiles(opts)
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  if not picker_ok then
+    vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
+    return
+  end
+
+  local picker_opts = vim.tbl_deep_extend('force', {
+    title = 'Recent Files',
+    mode = 'oldfiles',
+  }, opts or {})
+
+  picker_ui.open(picker_opts)
+end
+
 --- Live grep: search file contents in the current directory
 --- @param opts? {cwd?: string, title?: string, prompt?: string, layout?: table, grep?: {max_file_size?: number, smart_case?: boolean, max_matches_per_file?: number, modes?: string[]}, query?: string} Optional configuration overrides
 function M.live_grep(opts)
