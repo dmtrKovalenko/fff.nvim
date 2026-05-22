@@ -312,19 +312,21 @@ export default function fffExtension(pi: ExtensionAPI) {
   };
   (globalThis as any).__piFff = fffHandle;
 
-  // Inject FFF engine into pi-hashline-readmap if already loaded
-  const hashlineApi = (globalThis as any).__piHashlineReadmapApi as
+  // Primary: pi.events handoff (synchronous, fires during emit())
+  pi.events.on("hashline:ready", () => {
+    pi.events.emit("fff:engine-ready", fffHandle);
+  });
+  pi.events.emit("fff:engine-ready", fffHandle);
+
+  // Fallback: globalThis injection
+  const api = (globalThis as any).__piHashlineReadmapApi as
     { setFffEngine?: (engine: typeof fffHandle) => void } | undefined;
-  if (hashlineApi?.setFffEngine) {
-    hashlineApi.setFffEngine(fffHandle);
+  if (api?.setFffEngine) {
+    api.setFffEngine(fffHandle);
   }
 
-  // Detect pi-hashline-readmap presence — auto-enter ui-only mode
-  const hasHashlineReadmap = !!(globalThis as any).__piHashlineReadmap;
-  if (hasHashlineReadmap) {
-    currentMode = "ui-only";
-  }
-
+  // Tool registration is deferred to queueMicrotask so __piHashlineReadmap
+  // is reliably set (all synchronous factories finish first).
   const toolNames = resolveToolNames(currentMode);
 
   // DB path resolution: flag > env > undefined (use fff-node defaults)
@@ -585,7 +587,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     ),
   });
 
-  if (!hasHashlineReadmap) {
+  queueMicrotask(() => { if (!(globalThis as any).__piHashlineReadmap) {
 
   pi.registerTool({
     name: toolNames.grep,
@@ -721,9 +723,9 @@ export default function fffExtension(pi: ExtensionAPI) {
     },
   });
 
-  } // end: if (!hasHashlineReadmap)
+  } }); // end: microtask
 
-  if (!hasHashlineReadmap) {
+  queueMicrotask(() => { if (!(globalThis as any).__piHashlineReadmap) {
 
   // --- find tool ---
 
@@ -855,9 +857,9 @@ export default function fffExtension(pi: ExtensionAPI) {
     },
   });
 
-  } // end: if (!hasHashlineReadmap)
+  } }); // end: microtask
 
-  if (!hasHashlineReadmap) {
+  queueMicrotask(() => { if (!(globalThis as any).__piHashlineReadmap) {
 
   // --- multi_grep tool ---
   // My latest tests are showing that the multi grep tool is only harmful, trying to get rid of it
@@ -956,7 +958,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       },
     });
   } // end if (enableMultiGrep)
-  } // end: if (!hasHashlineReadmap)
+  } }); // end: microtask
 
   // --- commands ---
 
