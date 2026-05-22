@@ -323,6 +323,9 @@ export default function fffExtension(pi: ExtensionAPI) {
   const hasHashlineReadmap = !!(globalThis as any).__piHashlineReadmap;
   if (hasHashlineReadmap) {
     currentMode = "ui-only";
+  } else if (currentMode === "ui-only") {
+    // ui-only mode without pi-hashline-readmap is meaningless — fall back
+    currentMode = "tools-and-ui";
   }
 
   const toolNames = resolveToolNames(currentMode);
@@ -981,6 +984,11 @@ export default function fffExtension(pi: ExtensionAPI) {
       }
 
       const newMode = arg as FffMode;
+
+		if (newMode === "ui-only" && !hasHashlineReadmap) {
+			ctx.ui.notify("ui-only mode requires pi-hashline-readmap", "warning");
+			return;
+		}
       const oldMode = getMode();
       setMode(newMode);
 
