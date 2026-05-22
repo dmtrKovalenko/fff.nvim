@@ -17,6 +17,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "prepare": "tsc",
     "test": "node test/e2e.mjs",
     "typecheck": "tsc --noEmit"
   },
