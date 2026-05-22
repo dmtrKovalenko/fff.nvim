@@ -32,9 +32,9 @@ const DEFAULT_FIND_LIMIT = 30;
 const GREP_MAX_LINE_LENGTH = 500;
 const MENTION_MAX_RESULTS = 20;
 
-type FffMode = "tools-and-ui" | "tools-only" | "override";
+type FffMode = "tools-and-ui" | "tools-only" | "override" | "ui-only";
 
-const VALID_MODES: FffMode[] = ["tools-and-ui", "tools-only", "override"];
+const VALID_MODES: FffMode[] = ["tools-and-ui", "tools-only", "override", "ui-only"];
 
 interface ToolNames {
   grep: string;
@@ -54,7 +54,9 @@ const OVERRIDE_TOOL_NAMES: ToolNames = {
 };
 
 function resolveToolNames(mode: FffMode): ToolNames {
-  return mode === "override" ? OVERRIDE_TOOL_NAMES : FFF_TOOL_NAMES;
+  if (mode === "override") return OVERRIDE_TOOL_NAMES;
+  if (mode === "ui-only") return { grep: "", find: "", multiGrep: "" };
+  return FFF_TOOL_NAMES;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +300,30 @@ export default function fffExtension(pi: ExtensionAPI) {
     (pi.getFlag("fff-mode") as FffMode) ??
     (process.env.PI_FFF_MODE as FffMode) ??
     "tools-and-ui";
+
+  // ── Cross-extension protocol: expose FFF engine to pi-hashline-readmap ──
+  const fffHandle = {
+    getOrCreateFinder: async (cwd: string): Promise<FileFinder> => {
+      return ensureFinder(cwd);
+    },
+    destroyFinder: () => {
+      destroyFinder();
+    },
+  };
+  (globalThis as any).__piFff = fffHandle;
+
+  // Inject FFF engine into pi-hashline-readmap if already loaded
+  const hashlineApi = (globalThis as any).__piHashlineReadmapApi as
+    { setFffEngine?: (engine: typeof fffHandle) => void } | undefined;
+  if (hashlineApi?.setFffEngine) {
+    hashlineApi.setFffEngine(fffHandle);
+  }
+
+  // Detect pi-hashline-readmap presence — auto-enter ui-only mode
+  const hasHashlineReadmap = !!(globalThis as any).__piHashlineReadmap;
+  if (hasHashlineReadmap) {
+    currentMode = "ui-only";
+  }
 
   const toolNames = resolveToolNames(currentMode);
 
@@ -559,6 +585,8 @@ export default function fffExtension(pi: ExtensionAPI) {
     ),
   });
 
+  if (!hasHashlineReadmap) {
+
   pi.registerTool({
     name: toolNames.grep,
     label: toolNames.grep,
@@ -693,6 +721,10 @@ export default function fffExtension(pi: ExtensionAPI) {
     },
   });
 
+  } // end: if (!hasHashlineReadmap)
+
+  if (!hasHashlineReadmap) {
+
   // --- find tool ---
 
   const findSchema = Type.Object({
@@ -823,6 +855,10 @@ export default function fffExtension(pi: ExtensionAPI) {
     },
   });
 
+  } // end: if (!hasHashlineReadmap)
+
+  if (!hasHashlineReadmap) {
+
   // --- multi_grep tool ---
   // My latest tests are showing that the multi grep tool is only harmful, trying to get rid of it
   const enableMultiGrep = process.env.PI_FFF_MULTIGREP === "1";
@@ -920,6 +956,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       },
     });
   } // end if (enableMultiGrep)
+  } // end: if (!hasHashlineReadmap)
 
   // --- commands ---
 
