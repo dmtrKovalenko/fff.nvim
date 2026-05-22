@@ -1,7 +1,5 @@
 local M = {}
 
-M.state = { initialized = false }
-
 --- Setup the file picker with the given configuration
 --- @param config table Configuration options
 function M.setup(config) vim.g.fff = config end
@@ -39,6 +37,12 @@ function M.live_grep(opts)
   }, opts or {})
 
   picker_ui.open(picker_opts)
+end
+
+--- Resume the last search.
+--- @param opts? table Optional configuration overrides.
+function M.resume(opts)
+  require('fff.picker_ui').open(opts, true)
 end
 
 --- Changes the directory indexed by the file picker to the git root and opens the file picker

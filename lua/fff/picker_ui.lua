@@ -235,7 +235,6 @@ function M.create_ui()
   vim.api.nvim_set_current_win(M.state.input_win)
 
   M.update_results_sync()
-  M.clear_preview()
   M.update_status()
 
   return true
@@ -2255,6 +2254,12 @@ function M.close()
     end
   end
 
+  -- Clean up picker focus autocmds
+  pcall(vim.api.nvim_del_augroup_by_name, 'fff_picker_focus')
+end
+
+--- Reset picker state
+function M.reset_state()
   if M.state.preview_timer then
     M.state.preview_timer:stop()
     M.state.preview_timer:close()
@@ -2291,8 +2296,6 @@ function M.close()
   M.state.combo_visible = true
   M.state.combo_initial_cursor = nil
   M.reset_history_state()
-  -- Clean up picker focus autocmds
-  pcall(vim.api.nvim_del_augroup_by_name, 'fff_picker_focus')
 end
 
 --- Helper function to determine current file cache for deprioritization
@@ -2348,7 +2351,9 @@ end
 --- @param location table|nil Pre-fetched location data
 --- @param merged_config table Merged configuration
 --- @param current_file_cache string|nil Current file cache
-local function open_ui_with_state(query, results, location, merged_config, current_file_cache)
+--- @param resume? boolean Resume previous search
+local function open_ui_with_state(query, results, location, merged_config, current_file_cache, resume)
+  if not resume then M.reset_state() end
   M.state.config = merged_config
 
   if not M.create_ui() then
@@ -2362,10 +2367,9 @@ local function open_ui_with_state(query, results, location, merged_config, curre
   -- Set up initial state
   if query then
     M.state.query = query
-    vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { M.state.config.prompt .. query })
-  else
-    M.state.query = ''
+    resume = false
   end
+  vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { M.state.config.prompt .. M.state.query })
 
   if results then
     -- Use prefetched results
@@ -2377,7 +2381,7 @@ local function open_ui_with_state(query, results, location, merged_config, curre
     M.render_list()
     M.update_preview()
     M.update_status()
-  else
+  elseif not resume then
     M.update_results()
     M.clear_preview()
     M.update_status()
@@ -2405,8 +2409,9 @@ end
 --- @param query string The search query to execute
 --- @param callback function Function called with results: function(results, metadata, location, get_file_score) -> boolean
 --- @param opts? table Optional configuration to override defaults (same as M.open)
+--- @param resume? boolean Resume previous search
 --- @return boolean true if callback handled results, false if UI was opened
-function M.open_with_callback(query, callback, opts)
+function M.open_with_callback(query, callback, opts, resume)
   if M.state.active then return false end
 
   local merged_config, base_path = initialize_picker(opts)
@@ -2429,14 +2434,15 @@ function M.open_with_callback(query, callback, opts)
   end
 
   if callback_handled then return true end
-  open_ui_with_state(query, results, location, merged_config, current_file_cache)
+  open_ui_with_state(query, results, location, merged_config, current_file_cache, resume)
 
   return false
 end
 
 --- Open the file picker UI
 --- @param opts? {cwd?: string, title?: string, prompt?: string, max_results?: number, max_threads?: number, layout?: {width?: number|function, height?: number|function, prompt_position?: string|function, preview_position?: string|function, preview_size?: number|function}, renderer?: table, mode?: string, grep_config?: table, query?: string} Optional configuration to override defaults
-function M.open(opts)
+--- @param resume? boolean Resume previous search
+function M.open(opts, resume)
   if M.state.active then return end
 
   M.state.selected_files = {}
@@ -2462,7 +2468,7 @@ function M.open(opts)
 
   local current_file_cache = get_current_file_cache(base_path)
   local query = opts and opts.query or nil ---@type string|nil
-  return open_ui_with_state(query, nil, nil, merged_config, current_file_cache)
+  return open_ui_with_state(query, nil, nil, merged_config, current_file_cache, resume)
 end
 
 function M.monitor_scan_progress(iteration)

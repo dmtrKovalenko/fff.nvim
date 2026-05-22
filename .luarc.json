@@ -4,12 +4,6 @@
     "version": "LuaJIT"
   },
   "workspace": {
-    "library": [
-      "/opt/homebrew/share/nvim/runtime/lua/vim/_meta",
-      "/opt/homebrew/share/nvim/runtime/lua/vim/shared.lua",
-      "${3rd}/luv/library",
-      "${3rd}/busted/library"
-    ],
     "checkThirdParty": false
   },
   "diagnostics": {
