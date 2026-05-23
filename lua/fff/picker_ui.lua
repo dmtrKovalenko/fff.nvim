@@ -47,7 +47,7 @@ M.state = {
   cursor = 1,
   top = 1,
   query = '',
-  item_line_map = {},
+  line_to_item = {},
   location = nil, -- Current location from search results
 
   -- History cycling state
@@ -396,6 +396,36 @@ function M.focus_preview_win()
   vim.api.nvim_set_current_win(M.state.preview_win)
 end
 
+local function handle_mouse_click_or_fallback(action, fallback)
+  local pos = vim.fn.getmousepos()
+
+  if M.state.active and pos.winid == M.state.list_win then
+    local item_idx = M.state.line_to_item[pos.line]
+    if not item_idx then return '' end
+
+    vim.schedule(function()
+      if not M.state.active then return end
+      if not M.state.filtered_items[item_idx] then return end
+
+      if M.state.cursor ~= item_idx then
+        M.state.cursor = item_idx
+        M.render_list()
+        if M.state.mode == 'grep' or M.state.suggestion_source == 'grep' then
+          M.update_preview_smart()
+        else
+          M.update_preview()
+        end
+        M.update_status()
+      end
+
+      if action then M.select(action) end
+    end)
+    return ''
+  end
+
+  return fallback
+end
+
 local function move_list_cursor(direction)
   if not M.state.active then return end
 
@@ -474,6 +504,14 @@ function M.setup_keymaps()
   set_keymap({ 'i', 'n' }, keymaps.send_to_quickfix, M.send_to_quickfix, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.cycle_grep_modes, M.cycle_grep_modes, input_opts)
 
+  local input_mouse_opts = vim.tbl_extend('force', input_opts, { expr = true, replace_keycodes = true })
+  set_keymap({ 'i', 'n' }, '<LeftMouse>', function()
+    return handle_mouse_click_or_fallback(nil, '<LeftMouse>')
+  end, input_mouse_opts)
+  set_keymap({ 'i', 'n' }, '<2-LeftMouse>', function()
+    return handle_mouse_click_or_fallback('edit', '<2-LeftMouse>')
+  end, input_mouse_opts)
+
   -- List buffer
   set_keymap('n', keymaps.close, M.close, list_opts)
   set_keymap('n', 'q', M.close, list_opts)
@@ -490,6 +528,14 @@ function M.setup_keymaps()
   set_keymap('n', keymaps.toggle_debug, M.toggle_debug, list_opts)
   set_keymap('n', keymaps.toggle_select, M.toggle_select, list_opts)
   set_keymap('n', keymaps.send_to_quickfix, M.send_to_quickfix, list_opts)
+
+  local list_mouse_opts = vim.tbl_extend('force', list_opts, { expr = true, replace_keycodes = true })
+  set_keymap('n', '<LeftMouse>', function()
+    return handle_mouse_click_or_fallback(nil, '<LeftMouse>')
+  end, list_mouse_opts)
+  set_keymap('n', '<2-LeftMouse>', function()
+    return handle_mouse_click_or_fallback('edit', '<2-LeftMouse>')
+  end, list_mouse_opts)
 
   -- Preview buffer
   if M.state.preview_buf then
@@ -1254,11 +1300,21 @@ function M.render_list()
 
   local ctx = build_render_context()
   if M.state.mode == 'grep' and #ctx.items == 0 then
+    M.state.line_to_item = {}
     render_grep_empty_state(ctx)
     return
   end
 
-  local separator_line = list_renderer.render(ctx, M.state.list_buf, M.state.list_win, M.state.ns_id)
+  local item_to_lines, separator_line = list_renderer.render(ctx, M.state.list_buf, M.state.list_win, M.state.ns_id)
+
+  local line_to_item = {}
+  for item_idx, mapping in pairs(item_to_lines) do
+    for line = mapping.first, mapping.last do
+      line_to_item[line] = item_idx
+    end
+  end
+  M.state.line_to_item = line_to_item
+
   -- For bottom prompt, always ensure content is anchored at the bottom after rendering
   -- This prevents results from appearing in the middle when there are few items
   if ctx.prompt_position == 'bottom' then scroll_to_bottom() end

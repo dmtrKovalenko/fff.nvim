@@ -223,6 +223,7 @@ end
 --- @param list_buf number List buffer handle
 --- @param list_win number List window handle
 --- @param ns_id number Highlight namespace
+--- @return table<number, ItemLineMapping> item_to_lines
 --- @return number|nil separator_line 1-based buffer line of the separator (post-padding), nil if none
 function M.render(ctx, list_buf, list_win, ns_id)
   local lines, item_to_lines, separator_line = generate_item_lines(ctx)
@@ -251,7 +252,7 @@ function M.render(ctx, list_buf, list_win, ns_id)
     end
   end
 
-  return separator_line
+  return item_to_lines, separator_line
 end
 
 return M
