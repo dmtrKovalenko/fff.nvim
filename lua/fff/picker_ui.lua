@@ -505,12 +505,18 @@ function M.setup_keymaps()
   set_keymap({ 'i', 'n' }, keymaps.cycle_grep_modes, M.cycle_grep_modes, input_opts)
 
   local input_mouse_opts = vim.tbl_extend('force', input_opts, { expr = true, replace_keycodes = true })
-  set_keymap({ 'i', 'n' }, '<LeftMouse>', function()
-    return handle_mouse_click_or_fallback(nil, '<LeftMouse>')
-  end, input_mouse_opts)
-  set_keymap({ 'i', 'n' }, '<2-LeftMouse>', function()
-    return handle_mouse_click_or_fallback('edit', '<2-LeftMouse>')
-  end, input_mouse_opts)
+  set_keymap(
+    { 'i', 'n' },
+    '<LeftMouse>',
+    function() return handle_mouse_click_or_fallback(nil, '<LeftMouse>') end,
+    input_mouse_opts
+  )
+  set_keymap(
+    { 'i', 'n' },
+    '<2-LeftMouse>',
+    function() return handle_mouse_click_or_fallback('edit', '<2-LeftMouse>') end,
+    input_mouse_opts
+  )
 
   -- List buffer
   set_keymap('n', keymaps.close, M.close, list_opts)
@@ -530,12 +536,18 @@ function M.setup_keymaps()
   set_keymap('n', keymaps.send_to_quickfix, M.send_to_quickfix, list_opts)
 
   local list_mouse_opts = vim.tbl_extend('force', list_opts, { expr = true, replace_keycodes = true })
-  set_keymap('n', '<LeftMouse>', function()
-    return handle_mouse_click_or_fallback(nil, '<LeftMouse>')
-  end, list_mouse_opts)
-  set_keymap('n', '<2-LeftMouse>', function()
-    return handle_mouse_click_or_fallback('edit', '<2-LeftMouse>')
-  end, list_mouse_opts)
+  set_keymap(
+    'n',
+    '<LeftMouse>',
+    function() return handle_mouse_click_or_fallback(nil, '<LeftMouse>') end,
+    list_mouse_opts
+  )
+  set_keymap(
+    'n',
+    '<2-LeftMouse>',
+    function() return handle_mouse_click_or_fallback('edit', '<2-LeftMouse>') end,
+    list_mouse_opts
+  )
 
   -- Preview buffer
   if M.state.preview_buf then
