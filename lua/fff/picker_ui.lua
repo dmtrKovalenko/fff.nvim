@@ -453,6 +453,7 @@ function M.setup_keymaps()
   set_keymap('i', keymaps.cycle_forward_query, M.cycle_forward_query, input_opts)
   set_keymap('n', 'j', M.move_down, input_opts)
   set_keymap('n', 'k', M.move_up, input_opts)
+  set_keymap('n', 'q', M.close, input_opts)
   set_keymap('n', keymaps.focus_list, M.focus_list_win, input_opts)
   set_keymap('n', keymaps.focus_preview, M.focus_preview_win, input_opts)
 
