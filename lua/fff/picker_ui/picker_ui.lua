@@ -133,6 +133,7 @@ local function restore_from_state(state, source_label)
   M.state.grep_config = state.grep_config
   M.state.grep_mode = state.grep_mode
   M.state.selected_files = vim.deepcopy(state.selected_files or {})
+  M.state.selected_file_order = vim.deepcopy(state.selected_file_order or {})
   M.state.selected_items = vim.deepcopy(state.selected_items or {})
 
   -- Restore the saved base_path for the indexer if it differs from the current CWD
@@ -266,6 +267,7 @@ function M.toggle_debug()
     local current_grep_config = M.state.grep_config
     local current_filtered_items = M.state.filtered_items
     local current_selected_files = M.state.selected_files
+    local current_selected_file_order = M.state.selected_file_order
     local current_selected_items = M.state.selected_items
 
     M.close()
@@ -281,6 +283,7 @@ function M.toggle_debug()
     M.state.grep_mode = current_grep_mode
     M.state.filtered_items = current_filtered_items
     M.state.selected_files = current_selected_files
+    M.state.selected_file_order = current_selected_file_order
     M.state.selected_items = current_selected_items
     M.render_list()
     M.update_preview()
@@ -461,6 +464,12 @@ function M.select(action)
 
   -- In grep mode (or when selecting a grep suggestion), derive location from the match item
   local is_grep_item = mode == 'grep' or suggestion_source == 'grep'
+
+  -- When opening with selections active, open every selected file. The first
+  -- selected file is focused; the rest are added as listed buffers.
+  local selected_file_entries = {}
+  if action == 'edit' and not is_grep_item then selected_file_entries = picker_ui_state.get_selected_file_entries() end
+
   if is_grep_item and item.line_number and item.line_number > 0 then
     location = { line = item.line_number }
     if item.col and item.col > 0 then
@@ -484,6 +493,10 @@ function M.select(action)
       end
     end
   end
+
+  -- The focused file is the first selection, which may differ from the cursor
+  -- item; a cursor-derived location no longer applies, so drop it.
+  if #selected_file_entries > 0 and selected_file_entries[1].relative_path ~= item.relative_path then location = nil end
 
   vim.cmd('stopinsert')
   M.close()
@@ -514,15 +527,23 @@ function M.select(action)
       end
 
       if action == 'edit' then
+        -- Add every additional selection as a listed buffer before focusing one.
+        for _, entry in ipairs(selected_file_entries) do
+          local buf = vim.fn.bufadd(entry.edit_path)
+          vim.bo[buf].buflisted = true
+        end
+
+        local edit_path = #selected_file_entries > 0 and selected_file_entries[1].edit_path or relative_path
+
         -- Hard guard against E1513 ("Cannot switch buffer. 'winfixbuf' is enabled"):
         -- if the (post-hook) current window is pinned, fall back to :split.
         local opened_via_split = false
         if window_has_winfixbuf(vim.api.nvim_get_current_win()) then
-          vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
+          vim.cmd('split ' .. vim.fn.fnameescape(edit_path))
           opened_via_split = true
         end
 
-        if not opened_via_split then vim.cmd('edit ' .. vim.fn.fnameescape(relative_path)) end
+        if not opened_via_split then vim.cmd('edit ' .. vim.fn.fnameescape(edit_path)) end
       elseif action == 'split' then
         vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
       elseif action == 'vsplit' then
@@ -541,6 +562,10 @@ function M.select(action)
         -- Track in background thread (non-blocking, handled by Rust)
         if mode == 'grep' then
           pcall(fff.track_grep_query, query)
+        elseif #selected_file_entries > 0 then
+          for _, entry in ipairs(selected_file_entries) do
+            pcall(fff.track_query_completion, query, entry.relative_path)
+          end
         else
           pcall(fff.track_query_completion, query, item.relative_path)
         end
@@ -700,6 +725,7 @@ function M.open(opts)
   if M.state.active then return end
 
   M.state.selected_files = {}
+  M.state.selected_file_order = {}
   M.state.selected_items = {}
   M.state.renderer = opts and opts.renderer or nil
   M.state.mode = opts and opts.mode or nil

@@ -131,6 +131,7 @@ function M.close()
   S.current_file_cache = nil
   S.location = nil
   S.selected_files = {}
+  S.selected_file_order = {}
   S.selected_items = {}
   S.mode = nil
   S.grep_config = nil
