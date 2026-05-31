@@ -7,7 +7,7 @@ use tracing::{error, info};
 
 use crate::FileSync;
 use crate::background_watcher::BackgroundWatcher;
-use crate::bigram_filter::build_bigram_index;
+use crate::bigram_filter::{build_bigram_index, classify_binary_tail};
 use crate::error::Error;
 use crate::file_picker::{BACKGROUND_THREAD_POOL, FFFMode};
 use crate::git::GitStatusCache;
@@ -302,13 +302,20 @@ impl ScanJob {
         }
 
         if config.content_indexing {
-            let indexable_files = &files[..unsafe_snapshot.indexable_count.min(files.len())];
+            let split = unsafe_snapshot.indexable_count.min(files.len());
+            let (indexable_files, tail_files) = files.split_at(split);
             let index = build_bigram_index(indexable_files, &unsafe_snapshot.base_path, arena);
 
             if let Ok(mut guard) = shared_picker.write()
                 && let Some(picker) = guard.as_mut()
             {
                 picker.set_bigram_index(index);
+            }
+
+            // Sniff oversized files the bigram pass skipped so grep can drop
+            // ones with embedded NUL bytes (issue #546).
+            if !signals.cancelled.load(Ordering::Acquire) {
+                classify_binary_tail(tail_files, &unsafe_snapshot.base_path, arena);
             }
         }
 

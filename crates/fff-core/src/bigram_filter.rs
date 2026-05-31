@@ -1,5 +1,5 @@
 use ahash::AHashMap;
-use rayon::iter::{IndexedParallelIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rayon::slice::ParallelSlice;
 use std::cell::UnsafeCell;
 use std::sync::OnceLock;
@@ -595,6 +595,11 @@ impl BigramOverlay {
 pub(crate) const MAX_INDEXABLE_FILE_SIZE: usize = 2 * 1024 * 1024;
 const BIGRAM_CHUNK_FILES: usize = 4 * 64;
 
+/// Bytes read from the head of each oversized file to classify binary content.
+/// Files larger than `MAX_INDEXABLE_FILE_SIZE` skip the bigram pass, so the
+/// classifier never sees them; this pass plugs that gap so grep can drop them.
+const BINARY_SCAN_HEAD_BYTES: usize = 64 * 1024;
+
 /// Sparse-column cutoff for the skip-1 sub-index. Rare skip columns add
 /// little filtering power but ~25-30% of index memory, so we drop
 /// anything appearing in < 12 % of populated files.
@@ -704,6 +709,60 @@ pub(crate) fn build_bigram_index(
     crate::file_picker::hint_allocator_collect();
 
     index
+}
+
+/// Classify oversized / unindexed files as binary by sniffing the head bytes.
+///
+/// The bigram pass already does this implicitly for indexable files, but
+/// anything above `MAX_INDEXABLE_FILE_SIZE` (or otherwise excluded) never sees
+/// the classifier and reaches grep with `is_binary == false`. Without this
+/// pass embedded NUL bytes leak into the renderer (see issue #546).
+#[tracing::instrument(skip_all, name = "Classify Binary Tail Files", level = tracing::Level::DEBUG)]
+pub(crate) fn classify_binary_tail(
+    files: &[crate::types::FileItem],
+    base_path: &std::path::Path,
+    arena: crate::simd_path::ArenaPtr,
+) {
+    if files.is_empty() {
+        return;
+    }
+
+    #[cfg(unix)]
+    let base_fd: libc::c_int = open_base_dir_fd(base_path);
+    #[cfg(not(unix))]
+    let base_fd: i32 = -1;
+
+    crate::file_picker::BACKGROUND_THREAD_POOL.install(|| {
+        files.par_iter().for_each(|file: &crate::types::FileItem| {
+            if file.is_binary() || file.size == 0 {
+                return;
+            }
+
+            let mut buf = [0u8; BINARY_SCAN_HEAD_BYTES];
+            let mut path_buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
+            let want = (file.size as usize).min(BINARY_SCAN_HEAD_BYTES);
+            let filled = file.read_trimmed_into_buf(
+                base_fd,
+                base_path,
+                arena,
+                &mut path_buf,
+                &mut buf[..want],
+            );
+            if filled == 0 {
+                return;
+            }
+            if crate::file_picker::detect_binary_content(&buf[..filled]) {
+                file.set_binary(true);
+            }
+        });
+    });
+
+    #[cfg(unix)]
+    if base_fd >= 0 {
+        unsafe { libc::close(base_fd) };
+    }
+
+    crate::file_picker::hint_allocator_collect();
 }
 
 /// Open the base directory for the `openat` fast path. Returns `-1` on

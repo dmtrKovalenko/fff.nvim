@@ -49,6 +49,14 @@ local function render_match_line(item, ctx)
   if type(raw_content) ~= 'string' then raw_content = raw_content and tostring(raw_content) or '' end
   local content = raw_content
 
+  -- Last-resort guard: if a NUL byte slipped past binary detection, render a
+  -- placeholder instead of the raw bytes. `strdisplaywidth` would otherwise
+  -- raise E976 (Vim treats NUL-bearing strings as Blob). Issue #546.
+  if content:find('\0', 1, true) then
+    content = '<binary content>'
+    item._is_binary_match = true
+  end
+
   -- Indent + location + separator + content
   local indent = ' '
   local prefix_display_w = #indent + #location + #separator
