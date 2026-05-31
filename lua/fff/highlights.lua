@@ -165,27 +165,27 @@ function M.setup()
   git_cursor_border_cache = {}
 
   vim.cmd([[
-    " Symbol highlights
-    highlight default FFFGitStaged guifg=#10B981 ctermfg=2
-    highlight default FFFGitModified guifg=#F59E0B ctermfg=3
-    highlight default FFFGitDeleted guifg=#EF4444 ctermfg=1
-    highlight default FFFGitRenamed guifg=#8B5CF6 ctermfg=5
-    highlight default FFFGitUntracked guifg=#10B981 ctermfg=2
-    highlight default FFFGitIgnored guifg=#4B5563 ctermfg=8
-
-    " Thin border highlights
-    highlight default FFFGitSignStaged guifg=#10B981 ctermfg=2
-    highlight default FFFGitSignModified guifg=#F59E0B ctermfg=3
-    highlight default FFFGitSignDeleted guifg=#EF4444 ctermfg=1
-    highlight default FFFGitSignRenamed guifg=#8B5CF6 ctermfg=5
-    highlight default FFFGitSignUntracked guifg=#10B981 ctermfg=2
-    highlight default FFFGitSignIgnored guifg=#4B5563 ctermfg=8
+    " Symbol highlights (Fallback to standard Vim Diff groups if no overrides exist)
+    highlight default link FFFGitStaged    DiffAdd
+    highlight default link FFFGitModified  DiffChange
+    highlight default link FFFGitDeleted   DiffDelete
+    highlight default link FFFGitRenamed   DiffChange
+    highlight default link FFFGitUntracked DiffAdd
+    highlight default link FFFGitIgnored   Comment
 
     " Fallback to GitSigns highlights if they exist
-    highlight default link FFFGitSignStaged GitSignsAdd
-    highlight default link FFFGitSignModified GitSignsChange
-    highlight default link FFFGitSignDeleted GitSignsDelete
+    highlight default link FFFGitSignStaged    GitSignsAdd
+    highlight default link FFFGitSignModified  GitSignsChange
+    highlight default link FFFGitSignDeleted   GitSignsDelete
     highlight default link FFFGitSignUntracked GitSignsAdd
+
+    "Fall back to internal symbol groups if GitSigns is not installed/loaded
+    highlight default link FFFGitSignStaged    FFFGitStaged
+    highlight default link FFFGitSignModified  FFFGitModified
+    highlight default link FFFGitSignDeleted   FFFGitDeleted
+    highlight default link FFFGitSignRenamed   FFFGitRenamed
+    highlight default link FFFGitSignUntracked FFFGitUntracked
+    highlight default link FFFGitSignIgnored   FFFGitIgnored
 
     " File info panel highlights — defaults link to good fallbacks; users can override.
     " FFFFileInfoValue is set explicitly below (Normal's fg only) so it doesn't
@@ -202,7 +202,7 @@ function M.setup()
 
     " Bold for the total score and the match-type tag.
     highlight default FFFFileInfoTotalScore gui=bold cterm=bold
-    highlight default FFFFileInfoMatchType gui=bold cterm=bold
+    highlight default FFFFileInfoMatchType  gui=bold cterm=bold
   ]])
 
   -- Resolve an attribute by walking the link chain.
@@ -240,26 +240,30 @@ function M.setup()
 
   -- Highlights for git signs both for selected and normal states
   local git_highlights = {
-    { 'FFFGitSignStaged', 'FFFGitSignStagedSelected', '#10B981', 2 },
-    { 'FFFGitSignModified', 'FFFGitSignModifiedSelected', '#F59E0B', 3 },
-    { 'FFFGitSignDeleted', 'FFFGitSignDeletedSelected', '#EF4444', 1 },
-    { 'FFFGitSignRenamed', 'FFFGitSignRenamedSelected', '#8B5CF6', 5 },
-    { 'FFFGitSignUntracked', 'FFFGitSignUntrackedSelected', '#10B981', 2 },
-    { 'FFFGitSignIgnored', 'FFFGitSignIgnoredSelected', '#4B5563', 8 },
+    { 'FFFGitSignStaged', 'FFFGitSignStagedSelected' },
+    { 'FFFGitSignModified', 'FFFGitSignModifiedSelected' },
+    { 'FFFGitSignDeleted', 'FFFGitSignDeletedSelected' },
+    { 'FFFGitSignRenamed', 'FFFGitSignRenamedSelected' },
+    { 'FFFGitSignUntracked', 'FFFGitSignUntrackedSelected' },
+    { 'FFFGitSignIgnored', 'FFFGitSignIgnoredSelected' },
   }
 
   local visual_bg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'gui')
   local visual_bg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Visual')), 'bg', 'cterm')
 
   for _, hl in ipairs(git_highlights) do
-    local _, selected_hl, gui_fg, cterm_fg = hl[1], hl[2], hl[3], hl[4]
+    local base_hl, selected_hl = hl[1], hl[2]
+    local gui_fg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(base_hl)), 'fg', 'gui')
+    local cterm_fg = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID(base_hl)), 'fg', 'cterm')
 
     local gui_bg = visual_bg_gui ~= '' and visual_bg_gui or 'NONE'
     local cterm_bg = visual_bg_cterm ~= '' and visual_bg_cterm or 'NONE'
+    gui_fg = (gui_fg ~= '' and gui_fg ~= '-1') and gui_fg or 'NONE'
+    cterm_fg = (cterm_fg ~= '' and cterm_fg ~= '-1') and cterm_fg or 'NONE'
 
     vim.cmd(
       string.format(
-        'highlight default %s guifg=%s guibg=%s ctermfg=%d ctermbg=%s',
+        'highlight default %s guifg=%s guibg=%s ctermfg=%s ctermbg=%s',
         selected_hl,
         gui_fg,
         gui_bg,
@@ -276,15 +280,15 @@ function M.setup()
   local dir_fg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Directory')), 'fg', 'cterm')
 
   if dir_fg_gui == '' or dir_fg_gui == '-1' then
-    -- Directory not defined, try Number
+    -- Directory foreground missing or unconfigured, try Number
     dir_fg_gui = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Number')), 'fg', 'gui')
     dir_fg_cterm = vim.fn.synIDattr(vim.fn.synIDtrans(vim.fn.hlID('Number')), 'fg', 'cterm')
   end
 
   -- Fallback to blue if neither Directory nor Number have colors
   local is_dark_bg = vim.o.background == 'dark'
-  local gui_fg = dir_fg_gui ~= '' and dir_fg_gui or (is_dark_bg and '#60A5FA' or '#0369A1')
-  local cterm_fg = dir_fg_cterm ~= '' and dir_fg_cterm or (is_dark_bg and '12' or '4')
+  local gui_fg = (dir_fg_gui ~= '' and dir_fg_gui ~= '-1') and dir_fg_gui or (is_dark_bg and '#60A5FA' or '#0369A1')
+  local cterm_fg = (dir_fg_cterm ~= '' and dir_fg_cterm ~= '-1') and dir_fg_cterm or (is_dark_bg and '12' or '4')
 
   local gui_bg = visual_bg_gui ~= '' and visual_bg_gui or 'NONE'
   local cterm_bg = visual_bg_cterm ~= '' and visual_bg_cterm or 'NONE'
