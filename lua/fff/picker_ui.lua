@@ -140,31 +140,14 @@ local function open_preview(win_cfg)
   M.state.preview_win = vim.api.nvim_open_win(M.state.preview_buf, false, win_cfg)
 
   local win_hl = M.resolve_winhl('preview')
-  local cursorlineopt = utils.resolve_config_value(
-    preview_config.cursorlineopt,
-    vim.o.columns,
-    vim.o.lines,
-    function(value)
-      if type(value) ~= 'string' or #value == 0 then return false end
-      local has_line, has_screenline = false, false
-      for opt in value:gmatch('[^,]+') do
-        if not utils.is_one_of(opt:gsub('%s+', ''), { 'line', 'screenline', 'number', 'both' }) then return false end
-        if opt == 'line' or opt == 'both' then has_line = true end
-        if opt == 'screenline' then has_screenline = true end
-      end
-      return not (has_line and has_screenline)
-    end,
-    'both',
-    'preview.cursorlineopt'
-  )
 
   vim.api.nvim_set_option_value('wrap', false, { win = M.state.preview_win })
-  vim.api.nvim_set_option_value('cursorline', M.state.mode == 'grep', { win = M.state.preview_win })
-  vim.api.nvim_set_option_value(
-    'cursorlineopt',
-    M.state.mode == 'grep' and cursorlineopt or vim.o.cursorlineopt,
-    { win = M.state.preview_win }
-  )
+  -- Match line is highlighted via extmark (line_hl_group + number_hl_group)
+  -- in location_utils, so the preview window itself keeps cursorline off.
+  -- This way paging with <C-d>/<C-u> moves the cursor freely without dragging
+  -- the highlight off the actual match line.
+  vim.api.nvim_set_option_value('cursorline', false, { win = M.state.preview_win })
+  vim.api.nvim_set_option_value('cursorlineopt', vim.o.cursorlineopt, { win = M.state.preview_win })
   vim.api.nvim_set_option_value(
     'number',
     M.state.mode == 'grep' or (preview_config and preview_config.line_numbers or false),

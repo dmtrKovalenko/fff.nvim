@@ -677,12 +677,12 @@ function M.scroll(lines)
     M.state.scroll_offset = new_offset
     M.state.content_height = content_height
 
-    local topline = math.min(content_height, math.max(1, new_offset + 1))
+    local target_line = math.min(content_height, math.max(1, new_offset + 1))
 
-    -- Move only the viewport (topline). Leave the cursor parked on the match
-    -- line so the location highlight / cursorline keeps tracking the match
-    -- when user pages through preview with <C-d>/<C-u>.
-    vim.api.nvim_win_call(M.state.winid, function() vim.fn.winrestview({ topline = topline }) end)
+    vim.api.nvim_win_call(M.state.winid, function()
+      vim.api.nvim_win_set_cursor(M.state.winid, { target_line, 0 })
+      vim.cmd('normal! zt')
+    end)
   end
 end
 
