@@ -337,8 +337,8 @@ function M.setup_keymaps()
     return ''
   end, input_opts)
 
-  set_keymap('i', keymaps.move_up, P.move_up, input_opts)
-  set_keymap('i', keymaps.move_down, P.move_down, input_opts)
+  set_keymap({ 'n', 'i' }, keymaps.move_up, P.move_up, input_opts)
+  set_keymap({ 'n', 'i' }, keymaps.move_down, P.move_down, input_opts)
   set_keymap('i', keymaps.cycle_previous_query, P.recall_query_from_history, input_opts)
   set_keymap('i', keymaps.cycle_forward_query, P.cycle_forward_query, input_opts)
   set_keymap('n', 'j', P.move_down, input_opts)
