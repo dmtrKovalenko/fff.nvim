@@ -1,0 +1,60 @@
+# `fff.picker_ui` — Picker UI Module
+
+This directory contains the full implementation of the FFF file picker UI.  
+Originally a single monolithic ~2535-line file, it has been split into focused submodules.
+
+## Entry point
+
+**`init.lua`** — requires `require('fff.picker_ui')`.
+
+This is the coordinator. It wires all submodules together and exposes the public API:
+
+| Function | Purpose |
+|---|---|
+| `M.open(opts)` | Open the file picker |
+| `M.open_with_callback(query, callback, opts)` | Search with a callback, fall back to opening the picker |
+| `M.select(action)` | Open the selected file (edit/split/vsplit/tab) |
+| `M.toggle_select()` | Toggle multi-selection for the current item |
+| `M.send_to_quickfix()` | Send selected items to the quickfix list |
+| `M.toggle_debug()` | Toggle debug score display |
+| `M.monitor_scan_progress()` | Poll indexing progress during initial scan |
+
+## Submodules
+
+| Module | File | Purpose | Key exports via `init.lua` |
+|---|---|---|---|
+| **state_manager** | `state_manager.lua` | Single source of truth for all picker state | `M.state`, `M.clear_selections`, `M.reset_history_state` |
+| **ui_creator** | `ui_creator.lua` | Creates buffers, windows, and keymaps for the picker UI | `M.create_ui`, `M.setup_buffers`, `M.setup_windows`, `M.setup_keymaps`, `M.focus_*_win`, `M.open_preview`, `M.close_preview` |
+| **search_manager** | `search_manager.lua` | Executes searches, manages pagination, handles query history | `M.update_results_sync`, `M.update_results`, `M.load_*_page`, `M.on_input_change`, `M.cycle_grep_modes`, `M.recall_query_from_history`, `M.cycle_forward_query` |
+| **renderer** | `renderer.lua` | Renders the file list, handles combo separator, scrollbar, and empty state | `M.render_list`, `M.scroll_to_bottom` |
+| **preview_manager** | `preview_manager.lua` | Manages file preview rendering, debounced updates, and preview title | `M.update_preview`, `M.update_preview_smart`, `M.update_preview_debounced`, `M.update_preview_title`, `M.clear_preview` |
+| **navigation** | `navigation.lua` | Handles cursor movement, pagination wrap-around, and preview scrolling | `M.move_up`, `M.move_down`, `M.wrap_to_first`, `M.wrap_to_last`, `M.scroll_preview_up`, `M.scroll_preview_down` |
+| **layout_manager** | `layout_manager.lua` | Recalculates layout on terminal resize (VimResized) and cleans up on close | `M.relayout`, `M.close` |
+
+## Architecture
+
+All submodules follow the same pattern:
+
+```lua
+local M = {}
+local P = nil  -- parent module reference
+
+function M.init(parent_module) P = parent_module end
+
+local S = state_manager.state  -- shared state
+
+-- ... functions that use S.* and P.* ...
+
+return M
+```
+
+The starter module (`init.lua`) calls `module.init(M)` on each submodule, passing itself as the parent. This lets submodules call back into `init.lua` for cross-module coordination — for example, `navigation.lua` calls `P.render_list()` and `P.update_preview()` after moving the cursor.
+
+State is shared via a single table reference (`state_manager.state`). Every submodule writes to and reads from the same table — no message passing or event bus.
+
+## Key design decisions
+
+- **`state_manager` is a pure data store** — no parent module reference, no `init()`. It owns the state table and selection helpers.
+- **`init.lua` keeps cross-cutting concerns** — `update_status`, `select`, `toggle_debug`, `open` lives here because they coordinate across multiple submodules.
+- **Module purpose is reflected in the filename** — anything with `_manager` in the name manages state or lifecycle; `renderer` and `navigation` are purely behavioral.
+- **`vim.schedule` usage is intentional** — deferred calls prevent re-entrancy issues during buffer mutations and window teardown.
