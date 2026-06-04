@@ -140,13 +140,13 @@ function M.highlight_location(bufnr, location, namespace)
 end
 
 --- Highlight all occurrences of a grep pattern in the preview buffer.
---- For plain text and regex modes: highlights every match on all loaded lines
---- using Lua string.find with the query text.
---- For fuzzy mode: uses the pre-computed match byte offsets from Rust on the
---- target line only, since the fuzzy needle (e.g. "shcema") won't match via
---- literal search against the actual content (e.g. "schema").
+--- Preferred path: location.file_matches contains per-line ranges supplied by
+--- ripgrep (or fuzzy Smith-Waterman traceback) for every match in the file —
+--- highlights all of them using exact byte offsets.
+--- Fallback (no file_matches): scan ±200 lines around the target with
+--- vim.pesc + smart-case literal search.
 --- @param bufnr number Buffer number
---- @param location table Location with .grep_query, .line, optional .col, optional .fuzzy_match_ranges
+--- @param location table Location with .grep_query, .line, optional .col, optional .file_matches
 --- @param namespace number Namespace for extmarks
 --- @return table|nil Highlight extmark details for cleanup
 function M.highlight_grep_matches(bufnr, location, namespace)
@@ -169,24 +169,24 @@ function M.highlight_grep_matches(bufnr, location, namespace)
     if ok then table.insert(extmarks, { id = mark_id, line = target_line - 1 }) end
   end
 
-  -- Fuzzy mode: use pre-computed byte offsets from Rust's match_indices.
-  -- These are the exact matched character positions within the line, already
-  -- computed by the SIMD scoring + reference smith-waterman traceback.
-  -- We only highlight the target line since each fuzzy result has its own
-  -- unique set of matched positions.
-  if location.fuzzy_match_ranges and location.line then
-    local target_line = math.max(1, math.min(location.line, line_count))
-    for _, range in ipairs(location.fuzzy_match_ranges) do
-      local start_byte = range[1] -- 0-based byte offset
-      local end_byte = range[2] -- 0-based exclusive end
-      local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, target_line - 1, start_byte, {
-        end_col = end_byte,
-        hl_group = 'IncSearch',
-        priority = 1000,
-      })
-      if ok then table.insert(extmarks, { id = mark_id, line = target_line - 1 }) end
+  -- Use ripgrep-supplied byte offsets for every match in the file. Works for
+  -- both plain/regex (literal byte spans) and fuzzy (Smith-Waterman traceback
+  -- positions) modes since both populate match_byte_offsets in Rust.
+  if location.file_matches and #location.file_matches > 0 then
+    for _, m in ipairs(location.file_matches) do
+      if m.line and m.line >= 1 and m.line <= line_count and m.ranges then
+        for _, range in ipairs(m.ranges) do
+          local start_byte = range[1]
+          local end_byte = range[2]
+          local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, m.line - 1, start_byte, {
+            end_col = end_byte,
+            hl_group = 'IncSearch',
+            priority = 1000,
+          })
+          if ok then table.insert(extmarks, { id = mark_id, line = m.line - 1 }) end
+        end
+      end
     end
-    -- Fuzzy mode: only target line has matches; skip the plain-text scan below.
     return #extmarks > 0 and extmarks or nil
   end
 

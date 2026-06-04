@@ -1438,12 +1438,23 @@ function M.update_preview()
       effective_location.col = item.col + 1 -- Convert 0-based byte col to 1-based for highlight_location
     end
     -- Pass the query for multi-occurrence highlighting in preview (plain/regex modes).
-    -- For fuzzy mode, also pass the per-match byte offsets so the preview can highlight
-    -- the exact matched characters on the target line without re-searching.
     effective_location.grep_query = M.state.query
-    if M.state.grep_mode == 'fuzzy' and item.match_ranges then
-      effective_location.fuzzy_match_ranges = item.match_ranges
+
+    -- Collect every match in the same file across all loaded items so the preview
+    -- can highlight ALL hits (not just the cursor's), using ripgrep-supplied byte
+    -- offsets — exact for both fuzzy and plain/regex modes.
+    local file_matches = {}
+    for _, it in ipairs(M.state.items or {}) do
+      if
+        it.relative_path == item.relative_path
+        and it.line_number
+        and it.line_number > 0
+        and it.match_ranges
+      then
+        table.insert(file_matches, { line = it.line_number, ranges = it.match_ranges })
+      end
     end
+    if #file_matches > 0 then effective_location.file_matches = file_matches end
   end
 
   local location_changed = not vim.deep_equal(M.state.last_preview_location, effective_location)
