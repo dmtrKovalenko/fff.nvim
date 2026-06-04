@@ -43,7 +43,7 @@ The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`]
 brew install jellydn/tap/fff-mcp
 ```
 
-Tap and formula: [jellydn/homebrew-tap](https://github.com/jellydn/homebrew-tap). Installs the prebuilt `fff-mcp` binary from [GitHub releases](https://github.com/dmtrKovalenko/fff.nvim/releases).
+Tap and formula: [jellydn/homebrew-tap](https://github.com/jellydn/homebrew-tap). Installs the prebuilt `fff-mcp` binary from [GitHub releases](https://github.com/dmtrKovalenko/fff.nvim/releases). The tap [auto-updates on new stable releases](https://github.com/jellydn/homebrew-tap/blob/main/.github/workflows/README-fff-mcp.md) (scheduled poll; optional instant bump when `HOMEBREW_TAP_DISPATCH_TOKEN` is set on this repo).
 
 It prints the exact wiring instructions for your client. Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
 

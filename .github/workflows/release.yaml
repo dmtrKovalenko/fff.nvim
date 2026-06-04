@@ -466,6 +466,39 @@ jobs:
             curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
             ```
 
+  bump-homebrew-tap:
+    name: Bump Homebrew tap (fff-mcp)
+    needs: release
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push'
+      && (github.ref == 'refs/heads/main'
+        || github.ref == 'refs/heads/fix/use-trusted-publishing'
+        || startsWith(github.ref, 'refs/tags/v'))
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Lua
+        uses: leafo/gh-actions-lua@v12
+
+      - name: Determine version
+        id: version
+        run: lua scripts/determine-version.lua
+
+      - name: Notify Homebrew tap
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_DISPATCH_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "HOMEBREW_TAP_DISPATCH_TOKEN not set; jellydn/homebrew-tap will sync via scheduled workflow"
+            exit 0
+          fi
+          gh api repos/jellydn/homebrew-tap/dispatches \
+            -f event_type=fff-release-published \
+            -f "client_payload[version]=${VERSION}"
+
   crates-publish:
     name: Publish Rust crates
     needs: [build-nvim, build-c, build-mcp]
