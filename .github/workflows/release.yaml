@@ -472,6 +472,7 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       github.event_name == 'push'
+      && github.repository_owner == 'dmtrKovalenko'
       && (github.ref == 'refs/heads/main'
         || github.ref == 'refs/heads/fix/use-trusted-publishing'
         || startsWith(github.ref, 'refs/tags/v'))
@@ -489,15 +490,17 @@ jobs:
         if: steps.version.outputs.is_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_DISPATCH_TOKEN }}
+          BUMP_SECRET: ${{ secrets.FFF_RELEASE_BUMP_SECRET }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if [[ -z "${GH_TOKEN}" ]]; then
-            echo "HOMEBREW_TAP_DISPATCH_TOKEN not set; jellydn/homebrew-tap will sync via scheduled workflow"
+          if [[ -z "${GH_TOKEN}" || -z "${BUMP_SECRET}" ]]; then
+            echo "HOMEBREW_TAP_DISPATCH_TOKEN or FFF_RELEASE_BUMP_SECRET not set; tap syncs via scheduled workflow"
             exit 0
           fi
           gh api repos/jellydn/homebrew-tap/dispatches \
             -f event_type=fff-release-published \
-            -f "client_payload[version]=${VERSION}"
+            -f "client_payload[version]=${VERSION}" \
+            -f "client_payload[bump_secret]=${BUMP_SECRET}"
 
   crates-publish:
     name: Publish Rust crates
