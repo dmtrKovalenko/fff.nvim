@@ -56,6 +56,7 @@ local M = {}
 --- @field smart_case boolean
 --- @field time_budget_ms number
 --- @field modes string[]
+--- @field classify_definitions boolean
 --- @field trim_whitespace boolean
 --- @field location_format string
 
@@ -376,6 +377,7 @@ local function init()
       smart_case = true, -- Case-insensitive unless query has uppercase
       time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
       modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
+      classify_definitions = false, -- Mark definition lines like fn/struct/class
       trim_whitespace = false, -- Strip leading whitespace from matched lines (useful for cleaner display)
       -- Format string for the line/column location prefix in grep results.
       -- Uses vim's printf-style format: %d placeholders for line and column (1-based).

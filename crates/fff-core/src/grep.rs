@@ -1404,6 +1404,25 @@ fn collect_grep_results<'a>(
         }
     }
 
+    // Prioritize definition matches within each file while preserving
+    // contiguous per-file grouping for downstream renderers.
+    // A global sort would split matches from the same file into non-contiguous
+    // blocks, causing duplicate file headers in the Lua renderer.
+    if options.classify_definitions {
+        let mut start = 0;
+        while start < all_matches.len() {
+            let file_index = all_matches[start].file_index;
+            let mut end = start + 1;
+            while end < all_matches.len() && all_matches[end].file_index == file_index {
+                end += 1;
+            }
+            crate::sort_buffer::sort_by_key_with_buffer(&mut all_matches[start..end], |m| {
+                !m.is_definition
+            });
+            start = end;
+        }
+    }
+
     // If no file had any match, we searched the entire slice.
     if result_files.is_empty() {
         files_consumed = files_to_search_len;
@@ -2478,6 +2497,70 @@ mod tests {
             1,
             "Single pattern should find 1 match"
         );
+
+        // Test that classify_definitions sorts defs first within each file group
+        // without breaking contiguous per-file ordering.
+        let options_with_defs = super::GrepSearchOptions {
+            classify_definitions: true,
+            ..options.clone()
+        };
+        // file1 has: "pub enum GrepMode" (def), "pub struct GrepMatch" (def)
+        // file2 has: "struct PlainTextMatcher" (def)
+        // Search for both files using a pattern that hits non-def lines too.
+        let result_defs = super::multi_grep_search(
+            &files,
+            &["pub"],
+            &[],
+            &options_with_defs,
+            &ContentCacheBudget::unlimited(),
+            None,
+            None,
+            None,
+        );
+        // All matches for a given file must be contiguous (no interleaving).
+        if !result_defs.matches.is_empty() {
+            let mut last_file = result_defs.matches[0].file_index;
+            let mut seen_files = std::collections::HashSet::new();
+            seen_files.insert(last_file);
+            for m in result_defs.matches.iter().skip(1) {
+                if m.file_index != last_file {
+                    assert!(
+                        !seen_files.contains(&m.file_index),
+                        "classify_definitions broke file contiguity: file {} appeared non-contiguously",
+                        m.file_index
+                    );
+                    seen_files.insert(m.file_index);
+                    last_file = m.file_index;
+                }
+            }
+        }
+        // Within each file group, definition matches must precede non-definition matches.
+        {
+            let mut i = 0;
+            while i < result_defs.matches.len() {
+                let file_index = result_defs.matches[i].file_index;
+                let group_start = i;
+                while i < result_defs.matches.len()
+                    && result_defs.matches[i].file_index == file_index
+                {
+                    i += 1;
+                }
+                let group = &result_defs.matches[group_start..i];
+                // Definitions should not appear after a non-definition in the same file.
+                let mut saw_non_def = false;
+                for m in group {
+                    if !m.is_definition {
+                        saw_non_def = true;
+                    } else {
+                        assert!(
+                            !saw_non_def,
+                            "classify_definitions: definition appeared after non-definition in file {}",
+                            file_index
+                        );
+                    }
+                }
+            }
+        }
 
         // Test with empty patterns
         let result3 = super::multi_grep_search(

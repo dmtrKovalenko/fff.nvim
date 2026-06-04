@@ -245,6 +245,7 @@ impl IntoLua for GrepResultLua<'_> {
             let is_binary_content = m.line_content.as_bytes().contains(&0u8);
             item.set("is_binary_content", is_binary_content)?;
             item.set("line_content", m.line_content.as_str())?;
+            item.set("is_definition", m.is_definition)?;
 
             // Match byte ranges within line_content
             let ranges = lua.create_table()?;

@@ -53,6 +53,7 @@ local BINARY_PLACEHOLDER = '<binary content>'
 local function render_match_line(item, ctx)
   local location = format_location(item, ctx)
   local separator = '  '
+
   -- vim.json.decode may return Blobs for strings with NUL bytes; coerce to string.
   local raw_content = item.line_content
   if type(raw_content) ~= 'string' then raw_content = raw_content and tostring(raw_content) or '' end
@@ -209,6 +210,15 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
         priority = 1001,
       })
     end
+  end
+
+  -- 7. Definition indicator as virtual text
+  if item.is_definition then
+    pcall(vim.api.nvim_buf_set_extmark, buf, ns_id, row, 0, {
+      virt_text = { { ' [def]', config.hl.combo_header or 'Number' } },
+      virt_text_pos = 'right_align',
+      priority = 250,
+    })
   end
 end
 
