@@ -6,7 +6,8 @@ local preview = require('fff.file_picker.preview')
 local utils = require('fff.utils')
 local location_utils = require('fff.location_utils')
 local layout = require('fff.layout')
-local state_manager = require('fff.picker_ui.state_manager')
+local picker_ui_state = require('fff.picker_ui.picker_ui_state')
+local picker_ui_utils = require('fff.picker_ui.utils')
 local ui_creator = require('fff.picker_ui.ui_creator')
 local search_manager = require('fff.picker_ui.search_manager')
 local renderer = require('fff.picker_ui.renderer')
@@ -21,12 +22,12 @@ if preview_config then preview.setup(preview_config) end
 
 local function get_prompt_position() return layout.resolve_prompt_position(M.state.config) end
 
--- Wire state from state_manager module
-M.state = state_manager.state
+-- Wire state from picker_ui_state module
+M.state = picker_ui_state.state
 
--- Alias pure state functions from state_manager
-M.clear_selections = state_manager.clear_selections
-M.reset_history_state = state_manager.reset_history_state
+-- Alias pure state functions from picker_ui_state
+M.clear_selections = picker_ui_state.clear_selections
+M.reset_history_state = picker_ui_state.reset_history_state
 
 -- Wire ui_creator module (UI creation, window/buffer/keymap setup)
 ui_creator.init(M)
@@ -260,7 +261,7 @@ end
 function M.toggle_select()
   if not M.state.active then return end
 
-  local was_selected = state_manager.toggle_selection()
+  local was_selected = picker_ui_state.toggle_selection()
 
   M.render_list()
 
@@ -274,25 +275,7 @@ function M.toggle_select()
   end
 end
 
---- Send selected files/matches to quickfix list and close picker.
---- Normal file mode: entries at line 1, col 1.
---- Grep mode with selections: selected occurrences with exact line/col.
---- Grep mode without selections: re-runs search with large limit to collect all matches.
-function M.send_to_quickfix()
-  if not M.state.active then return end
-
-  local qf_list, is_grep = state_manager.send_to_quickfix()
-  if not qf_list then return end
-
-  M.close()
-
-  vim.fn.setqflist(qf_list)
-  vim.cmd('copen')
-
-  local count = #qf_list
-  local unit = is_grep and (count == 1 and 'match' or 'matches') or (count == 1 and 'file' or 'files')
-  vim.notify(string.format('Added %d %s to quickfix list', count, unit), vim.log.levels.INFO)
-end
+M.send_to_quickfix = picker_ui_utils.send_to_quickfix
 
 function M.select(action)
   if not M.state.active then return end

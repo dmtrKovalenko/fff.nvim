@@ -5,7 +5,7 @@ local layout = require('fff.layout')
 local list_separator = require('fff.list_separator')
 local scrollbar = require('fff.scrollbar')
 local preview = require('fff.file_picker.preview')
-local state_manager = require('fff.picker_ui.state_manager')
+local picker_ui_state = require('fff.picker_ui.picker_ui_state')
 
 -- Parent module reference (set by picker_ui.lua during initialization).
 ---@type table
@@ -13,19 +13,11 @@ local P = nil
 
 function M.init(parent_module) P = parent_module end
 
-local S = state_manager.state
-
---------------------------------------------------------------------
--- Local helpers
---------------------------------------------------------------------
+local S = picker_ui_state.state
 
 local function restore_paste(should_restore)
   if should_restore then vim.o.paste = true end
 end
-
---------------------------------------------------------------------
--- Public API
---------------------------------------------------------------------
 
 function M.relayout()
   if not P.state.active then return end

@@ -9,7 +9,7 @@ function M.setup(config) vim.g.fff = config end
 --- Find files in current directory
 --- @param opts? table Optional configuration {renderer = custom_renderer}
 function M.find_files(opts)
-  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui.picker_ui')
   if picker_ok then
     picker_ui.open(opts)
   else
@@ -20,7 +20,7 @@ end
 --- Live grep: search file contents in the current directory
 --- @param opts? {cwd?: string, title?: string, prompt?: string, layout?: table, grep?: {max_file_size?: number, smart_case?: boolean, max_matches_per_file?: number, modes?: string[]}, query?: string} Optional configuration overrides
 function M.live_grep(opts)
-  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui.picker_ui')
   if not picker_ok then
     vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
     return
@@ -411,7 +411,7 @@ function M.find_files_in_dir(directory)
     return
   end
 
-  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui.picker_ui')
   if picker_ok then
     picker_ui.open({
       title = 'Files in ' .. vim.fn.fnamemodify(directory, ':t'),
@@ -575,7 +575,7 @@ function M.open_file_under_cursor(open_cb)
     end
   end
 
-  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui')
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui.picker_ui')
   if not picker_ok then
     vim.notify('Failed to load picker UI', vim.log.levels.ERROR)
     return

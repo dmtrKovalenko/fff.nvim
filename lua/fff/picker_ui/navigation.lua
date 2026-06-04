@@ -3,7 +3,7 @@ local M = {}
 local list_separator = require('fff.list_separator')
 local preview = require('fff.file_picker.preview')
 local layout = require('fff.layout')
-local state_manager = require('fff.picker_ui.state_manager')
+local picker_ui_state = require('fff.picker_ui.picker_ui_state')
 
 -- Parent module reference (set by picker_ui.lua during initialization).
 ---@type table
@@ -11,11 +11,7 @@ local P = nil
 
 function M.init(parent_module) P = parent_module end
 
-local S = state_manager.state
-
---------------------------------------------------------------------
--- Local helpers
---------------------------------------------------------------------
+local S = picker_ui_state.state
 
 local function get_prompt_position() return layout.resolve_prompt_position(S.config) end
 
@@ -32,10 +28,6 @@ local function maybe_hide_combo_separator()
   P.render_list()
   if get_prompt_position() == 'bottom' then P.scroll_to_bottom() end
 end
-
---------------------------------------------------------------------
--- Public API
---------------------------------------------------------------------
 
 function M.wrap_to_first()
   if S.pagination.page_index == 0 then

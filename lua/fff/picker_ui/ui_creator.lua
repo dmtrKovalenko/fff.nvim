@@ -4,7 +4,7 @@ local conf = require('fff.conf')
 local layout = require('fff.layout')
 local preview = require('fff.file_picker.preview')
 local list_separator = require('fff.list_separator')
-local state_manager = require('fff.picker_ui.state_manager')
+local picker_ui_state = require('fff.picker_ui.picker_ui_state')
 
 -- Parent module reference (set by picker_ui.lua during initialization).
 -- Allows ui_creator functions to call back into the main picker module.
@@ -14,11 +14,7 @@ local P = nil
 function M.init(parent_module) P = parent_module end
 
 -- Convenience alias
-local S = state_manager.state
-
---------------------------------------------------------------------
--- Local helpers
---------------------------------------------------------------------
+local S = picker_ui_state.state
 
 local function resolve_winhl(kind)
   local hl = S.config.hl
@@ -153,10 +149,6 @@ local function move_list_cursor(direction)
     P.update_status()
   end
 end
-
---------------------------------------------------------------------
--- Public API
---------------------------------------------------------------------
 
 function M.create_ui()
   local config = S.config

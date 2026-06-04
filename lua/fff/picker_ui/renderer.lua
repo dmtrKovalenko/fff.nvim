@@ -7,7 +7,7 @@ local list_renderer = require('fff.list_renderer')
 local combo_renderer = require('fff.combo_renderer')
 local file_picker = require('fff.file_picker')
 local layout = require('fff.layout')
-local state_manager = require('fff.picker_ui.state_manager')
+local picker_ui_state = require('fff.picker_ui.picker_ui_state')
 
 -- Parent module reference (set by picker_ui.lua during initialization).
 -- Allows renderer functions to call back into the main picker module.
@@ -17,11 +17,7 @@ local P = nil
 function M.init(parent_module) P = parent_module end
 
 -- Convenience alias
-local S = state_manager.state
-
---------------------------------------------------------------------
--- Local helpers
---------------------------------------------------------------------
+local S = picker_ui_state.state
 
 local function get_prompt_position() return layout.resolve_prompt_position(S.config) end
 
@@ -252,10 +248,6 @@ local function finalize_render(separator_line, ctx)
     scrollbar.render(S.layout, ctx.config, S.list_win, S.pagination, ctx.prompt_position)
   end
 end
-
---------------------------------------------------------------------
--- Public API
---------------------------------------------------------------------
 
 function M.render_list()
   if not P.state.active then return end

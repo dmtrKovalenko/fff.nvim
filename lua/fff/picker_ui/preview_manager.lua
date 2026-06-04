@@ -2,7 +2,7 @@ local M = {}
 
 local preview = require('fff.file_picker.preview')
 local utils = require('fff.utils')
-local state_manager = require('fff.picker_ui.state_manager')
+local picker_ui_state = require('fff.picker_ui.picker_ui_state')
 
 local canonicalize_fff_path = utils.canonicalize_fff_path
 
@@ -12,11 +12,7 @@ local P = nil
 
 function M.init(parent_module) P = parent_module end
 
-local S = state_manager.state
-
---------------------------------------------------------------------
--- Preview debounce
---------------------------------------------------------------------
+local S = picker_ui_state.state
 
 function M.update_preview_debounced()
   if S.preview_timer then
@@ -62,10 +58,6 @@ function M.update_preview_smart()
 
   M.update_preview_debounced()
 end
-
---------------------------------------------------------------------
--- Preview title
---------------------------------------------------------------------
 
 function M.update_preview_title(item, location)
   if not S.preview_win or not vim.api.nvim_win_is_valid(S.preview_win) then return end
@@ -132,10 +124,6 @@ function M.update_preview_title(item, location)
     title_pos = 'left',
   })
 end
-
---------------------------------------------------------------------
--- Preview update
---------------------------------------------------------------------
 
 function M.update_preview()
   if not S.preview_visible then return end
@@ -216,10 +204,6 @@ function M.update_preview()
   preview.set_preview_window(S.preview_win)
   preview.preview(canonicalize_fff_path(item.relative_path), S.preview_buf, effective_location, item.is_binary)
 end
-
---------------------------------------------------------------------
--- Clear preview
---------------------------------------------------------------------
 
 function M.clear_preview()
   if not P.state.active then return end

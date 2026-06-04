@@ -2,7 +2,7 @@ local M = {}
 
 local file_picker = require('fff.file_picker')
 local grep = require('fff.grep')
-local state_manager = require('fff.picker_ui.state_manager')
+local picker_ui_state = require('fff.picker_ui.picker_ui_state')
 
 -- Parent module reference (set by picker_ui.lua during initialization).
 -- Allows search_manager functions to call back into the main picker module.
@@ -12,11 +12,7 @@ local P = nil
 function M.init(parent_module) P = parent_module end
 
 -- Convenience alias
-local S = state_manager.state
-
---------------------------------------------------------------------
--- Search & Pagination
---------------------------------------------------------------------
+local S = picker_ui_state.state
 
 function M.update_results() M.update_results_sync() end
 
@@ -220,10 +216,6 @@ function M.load_previous_page()
   return M.load_page_at_index(S.pagination.page_index - 1, function(result_count) S.cursor = result_count end)
 end
 
---------------------------------------------------------------------
--- Input change handling
---------------------------------------------------------------------
-
 function M.on_input_change()
   if not P.state.active then return end
 
@@ -259,10 +251,6 @@ function M.on_input_change()
   M.update_results_sync()
 end
 
---------------------------------------------------------------------
--- Grep mode cycling
---------------------------------------------------------------------
-
 function M.cycle_grep_modes()
   if not P.state.active or S.mode ~= 'grep' then return end
 
@@ -287,10 +275,6 @@ function M.cycle_grep_modes()
 
   if S.query ~= '' then M.update_results_sync() end
 end
-
---------------------------------------------------------------------
--- Query history
---------------------------------------------------------------------
 
 function M.recall_query_from_history()
   if not P.state.active then return end
@@ -357,10 +341,6 @@ function M.cycle_forward_query()
     end
   end)
 end
-
---------------------------------------------------------------------
--- Suggestion renderer lookup
---------------------------------------------------------------------
 
 function M.get_suggestion_renderer()
   if S.suggestion_source == 'grep' then
