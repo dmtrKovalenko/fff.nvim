@@ -1,7 +1,7 @@
 local M = {}
 
 local file_picker = require('fff.file_picker')
-local grep = require('fff.grep')
+local grep = require('fff.picker_ui.grep_renderer')
 local picker_ui_state = require('fff.picker_ui.picker_ui_state')
 
 -- Parent module reference (set by picker_ui.lua during initialization).
@@ -344,9 +344,9 @@ end
 
 function M.get_suggestion_renderer()
   if S.suggestion_source == 'grep' then
-    return require('fff.grep.grep_renderer')
+    return require('fff.picker_ui.grep_renderer')
   else
-    return require('fff.file_renderer')
+    return require('fff.picker_ui.file_renderer')
   end
 end
 

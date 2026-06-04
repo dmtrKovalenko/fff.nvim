@@ -1,12 +1,63 @@
---- Grep Renderer
---- Custom renderer for live grep results with file grouping.
---- Consecutive matches from the same file are grouped under a file header line.
---- The header reuses the same rendering as the file picker list (file_renderer)
---- for visual consistency — same icon, filename, directory path, git highlights.
+--- Grep search bridge and renderer.
+--- Wraps the Rust `live_grep` FFI function with file-based pagination state tracking.
+--- Also provides renderer for live grep results with file grouping.
 local M = {}
 
-local file_renderer = require('fff.file_renderer')
+local fuzzy = require('fff.fuzzy')
+local file_renderer = require('fff.picker_ui.file_renderer')
 local tresitter_highlight = require('fff.treesitter_hl')
+
+-- ===== Search Bridge =====
+
+---@class fff.grep.SearchResult
+---@field items table[] Array of grep match items
+---@field total_matched number Total matches found in this call
+---@field total_files_searched number Files actually searched in this call
+---@field total_files number Total indexed files
+---@field filtered_file_count number Total searchable files after filtering
+---@field next_file_offset number File offset to pass for the next page (0 = no more results)
+---@field regex_fallback_error string|nil Error message if regex compilation failed and search fell back to literal
+
+local last_result = nil
+
+--- Perform a grep search.
+---@param query string The search query (may contain file constraints like *.rs)
+---@param file_offset? number Index into sorted file list to start from (default 0)
+---@param page_size? number Max matches to collect (default 50)
+---@param config? table Grep configuration overrides
+---@param grep_mode? string Search mode: "plain" (default), "regex", or "fuzzy"
+---@return fff.grep.SearchResult
+function M.search(query, file_offset, page_size, config, grep_mode)
+  local conf = config or {}
+  last_result = fuzzy.live_grep(
+    query or '',
+    file_offset or 0,
+    page_size or 50,
+    conf.max_file_size,
+    conf.max_matches_per_file,
+    conf.smart_case,
+    grep_mode or 'plain',
+    conf.time_budget_ms,
+    conf.trim_whitespace
+  )
+  return last_result
+end
+
+--- Get metadata from the last search result.
+---@return { total_matched: number, total_files_searched: number, total_files: number, next_file_offset: number }
+function M.get_search_metadata()
+  if not last_result then
+    return { total_matched = 0, total_files_searched = 0, total_files = 0, next_file_offset = 0 }
+  end
+  return {
+    total_matched = last_result.total_matched or 0,
+    total_files_searched = last_result.total_files_searched or 0,
+    total_files = last_result.total_files or 0,
+    next_file_offset = last_result.next_file_offset or 0,
+  }
+end
+
+-- ===== Renderer =====
 
 --- Build the file group header line using the same layout as file_renderer.
 --- Delegates to file_renderer.render_line (with combo disabled).
@@ -19,8 +70,6 @@ local function build_group_header(item, ctx)
 end
 
 --- Apply highlights for a file group header line using file_renderer.
---- Delegates to file_renderer.apply_highlights so all highlight groups
---- (icon, filename, git text color, directory path, git sign) match exactly.
 ---@param item FileItem Grep match item
 ---@param ctx ListRenderContext Render context
 ---@param buf number Buffer handle
@@ -28,19 +77,16 @@ end
 ---@param row number 0-based row in buffer (header line)
 local function apply_group_header_highlights(item, ctx, buf, ns_id, row)
   local line_content = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ''
-  -- file_renderer.apply_highlights uses 1-based line_idx and checks (cursor == item_idx).
-  -- Pass item_idx=0 so the header is never treated as the cursor item.
   local saved_cursor = ctx.cursor
   ctx.cursor = -1
   file_renderer.apply_highlights(item, ctx, 0, buf, ns_id, row + 1, line_content)
   ctx.cursor = saved_cursor
 end
 
---- Render a grep match line (grouped: no filename, just location + content).
---- Format: " :line:col  matched line content"
+--- Format a grep match location string.
 ---@param item table Grep match item
 ---@param ctx table Render context
----@return string The match line string
+---@return string
 local function format_location(item, ctx)
   local fmt = (ctx.config and ctx.config.grep and ctx.config.grep.location_format) or ':%d:%d'
   local ok, str = pcall(string.format, fmt, item.line_number or 0, (item.col or 0) + 1)
@@ -50,24 +96,24 @@ end
 
 local BINARY_PLACEHOLDER = '<binary content>'
 
+--- Render a single grep match line.
+---@param item table Grep match item
+---@param ctx table Render context
+---@return string
 local function render_match_line(item, ctx)
   local location = format_location(item, ctx)
   local separator = '  '
-  -- vim.json.decode may return Blobs for strings with NUL bytes; coerce to string.
   local raw_content = item.line_content
   if type(raw_content) ~= 'string' then raw_content = raw_content and tostring(raw_content) or '' end
   local content = raw_content
   if item.is_binary_content then content = BINARY_PLACEHOLDER end
 
-  -- Indent + location + separator + content
   local indent = ' '
   local prefix_display_w = #indent + #location + #separator
   local available = ctx.win_width - prefix_display_w - 2
   local content_display_w = vim.fn.strdisplaywidth(content)
 
   if content_display_w > available and available > 3 then
-    -- UTF-8 aware truncation: binary search for the character count that
-    -- fits within the available display width (handles multi-byte and wide chars)
     local nchars = vim.fn.strchars(content)
     local lo, hi = 0, nchars
     while lo < hi do
@@ -85,21 +131,20 @@ local function render_match_line(item, ctx)
   local padding = math.max(0, ctx.win_width - vim.fn.strdisplaywidth(line) + 5)
 
   item._match_indent = #indent
-  item._content_offset = prefix_display_w -- byte offset where content starts in the line
-  item._trimmed_content = content -- trimmed content string for treesitter parsing
+  item._content_offset = prefix_display_w
+  item._trimmed_content = content
 
   return line .. string.rep(' ', padding)
 end
 
 --- Apply highlights for a grouped match line.
 ---@param item table Grep match item
----@param ctx table Render context
 ---@param item_idx number 1-based item index
 ---@param buf number Buffer handle
 ---@param ns_id number Namespace id
 ---@param row number 0-based row in buffer
 ---@param line_content string The rendered line text
-local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line_content)
+local function apply_match_highlights(item, item_idx, buf, ns_id, row, line_content, ctx)
   local config = ctx.config
   local is_cursor = item_idx == ctx.cursor
   local indent = item._match_indent or 1
@@ -114,7 +159,6 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
     })
   end
 
-  -- 2. Location (:line:col) dimmed — use extmark with priority so it layers with cursor
   local location_str = format_location(item, ctx)
   local loc_start = indent
   local loc_end = loc_start + #location_str
@@ -126,7 +170,6 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
     })
   end
 
-  -- 3. Separator dimmed
   local sep_start = loc_end
   local sep_end = sep_start + 2
   if sep_end <= #line_content then
@@ -137,9 +180,6 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
     })
   end
 
-  -- 4. Treesitter syntax highlighting for the content portion.
-  -- Priority 120: above CursorLine (100) so syntax is visible on cursor line,
-  -- below IncSearch match ranges (200) so search matches take precedence.
   local content_start = sep_end
 
   if item.is_binary_content then
@@ -152,7 +192,6 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
       })
     end
   elseif item._trimmed_content and item.name then
-    -- Resolve language once per file group (cache on the render context)
     ctx._ts_lang_cache = ctx._ts_lang_cache or {}
     local lang = ctx._ts_lang_cache[item.name]
     if lang == nil then
@@ -176,9 +215,6 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
     end
   end
 
-  -- 5. Match ranges highlighted with IncSearch
-  -- Use extmarks with priority > cursor line (100) so IncSearch renders
-  -- properly on the selected line instead of being overridden by CursorLine.
   if item.match_ranges and not item.is_binary_content then
     for _, range in ipairs(item.match_ranges) do
       local raw_start = range[1] or 0
@@ -199,7 +235,6 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
     end
   end
 
-  -- 6. Selection marker (per-occurrence in grep mode)
   if ctx.selected_items then
     local key = string.format('%s:%d:%d', item.relative_path, item.line_number or 0, item.col or 0)
     if ctx.selected_items[key] then
@@ -212,15 +247,13 @@ local function apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line
   end
 end
 
---- Render a single item's lines (called by list_renderer's generate_item_lines).
+--- Render a single item's lines (called by list_renderer).
 --- Returns 2 lines [header, match] for the first match of a file group,
 --- or 1 line [match] for subsequent matches in the same file.
 ---@param item FileItem Grep match item
 ---@param ctx table Render context
 ---@return string[]
 function M.render_line(item, ctx)
-  -- Track file grouping across the render pass via ctx
-  -- ctx._grep_last_file is reset each render (ctx is fresh per render_list call)
   local is_new_group = (item.relative_path ~= ctx._grep_last_file)
   ctx._grep_last_file = item.relative_path
 
@@ -238,9 +271,7 @@ function M.render_line(item, ctx)
   end
 end
 
---- Apply highlights for rendered lines (called by list_renderer's apply_all_highlights).
---- line_idx is the 1-based index of the item's LAST line (the match line).
---- If the item has a group header, it's at line_idx - 1.
+--- Apply highlights for rendered lines (called by list_renderer).
 ---@param item FileItem Grep match item
 ---@param ctx ListRenderContext Render context
 ---@param item_idx number 1-based item index
@@ -249,13 +280,10 @@ end
 ---@param line_idx number 1-based line index of the match line
 ---@param line_content string The rendered match line text
 function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_content)
-  local row = line_idx - 1 -- 0-based for nvim API
+  local row = line_idx - 1
 
-  -- Apply match line highlights
-  apply_match_highlights(item, ctx, item_idx, buf, ns_id, row, line_content)
+  apply_match_highlights(item, item_idx, buf, ns_id, row, line_content, ctx)
 
-  -- If this item has a group header, highlight it (the line above)
-  -- using file_renderer for identical appearance to the file picker list.
   ---@diagnostic disable-next-line: undefined-field
   if item._has_group_header then apply_group_header_highlights(item, ctx, buf, ns_id, row - 1) end
 end

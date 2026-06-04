@@ -27,7 +27,7 @@ function M.live_grep(opts)
   end
 
   local config = require('fff.conf').get()
-  local grep_renderer = require('fff.grep.grep_renderer')
+  local grep_renderer = require('fff.picker_ui.grep_renderer')
 
   local grep_config = vim.tbl_deep_extend('force', config.grep or {}, (opts and opts.grep) or {})
 
@@ -328,7 +328,7 @@ function M.content_search(query, opts)
 
   local config = require('fff.conf').get()
   local grep_cfg = config.grep or {}
-  local grep = require('fff.grep')
+  local grep = require('fff.picker_ui.grep_renderer')
   local merged_grep_cfg = {
     max_file_size = opts.max_file_size or grep_cfg.max_file_size,
     max_matches_per_file = opts.max_matches_per_file or grep_cfg.max_matches_per_file,

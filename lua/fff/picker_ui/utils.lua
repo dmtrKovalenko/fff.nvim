@@ -30,7 +30,7 @@ function M.send_to_quickfix()
         end
       end
     else
-      local grep = require('fff.grep')
+      local grep = require('fff.picker_ui.grep_renderer')
       local exhaustive_config = vim.tbl_extend('force', S.grep_config or {}, { max_matches_per_file = 0 })
       local exhaustive = grep.search(S.query, 0, 10000, exhaustive_config, S.grep_mode)
       local all_items = exhaustive and exhaustive.items or {}
