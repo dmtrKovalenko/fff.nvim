@@ -9,8 +9,9 @@ use crate::FileSync;
 use crate::background_watcher::BackgroundWatcher;
 use crate::bigram_filter::{build_bigram_index, sniff_binary_for_non_indexable};
 use crate::error::Error;
-use crate::file_picker::{BACKGROUND_THREAD_POOL, FFFMode};
+use crate::file_picker::FFFMode;
 use crate::git::GitStatusCache;
+use crate::parallelism::BACKGROUND_THREAD_POOL;
 use crate::shared::{SharedFilePicker, SharedFrecency};
 use crate::simd_path::ArenaPtr;
 use crate::types::ContentCacheBudget;
@@ -40,6 +41,8 @@ pub(crate) struct ScanConfig {
     pub(crate) auto_cache_budget: bool,
     pub(crate) install_watcher: bool,
     pub(crate) follow_symlinks: bool,
+    pub(crate) enable_fs_root_scanning: bool,
+    pub(crate) enable_home_dir_scanning: bool,
 }
 
 /// A fully-configured scan job ready to run on a background thread.
@@ -89,6 +92,8 @@ impl ScanJob {
             auto_cache_budget: !picker.has_explicit_cache_budget(),
             install_watcher: false, // the watcher is independent of rescan, it is not restarting EVER
             follow_symlinks: picker.follows_symlinks(),
+            enable_fs_root_scanning: picker.fs_root_scanning_enabled(),
+            enable_home_dir_scanning: picker.home_dir_scanning_enabled(),
         };
 
         drop(guard); // just a sanity check
@@ -243,6 +248,8 @@ impl ScanJob {
                 shared_picker.clone(),
                 shared_frecency.clone(),
                 mode,
+                config.enable_fs_root_scanning,
+                config.enable_home_dir_scanning,
             ) {
                 Ok(watcher) => {
                     if let Ok(mut guard) = shared_picker.write()

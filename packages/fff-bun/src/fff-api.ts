@@ -1,3 +1,25 @@
+// ----------------------------------------------------------------------------
+// GENERATED FILE - DO NOT EDIT.
+// Source of truth: packages/shared/fff-api.ts
+// Run make sync-js-api from the repo root to regenerate.
+// ----------------------------------------------------------------------------
+
+/**
+ * The shared public API surface for the fff file finder, implemented identically
+ * by `@ff-labs/fff-node` and `@ff-labs/fff-bun`.
+ *
+ * This file is the single source of truth for every type, helper, and the
+ * `FileFinderApi` interface that crosses the package boundary. It is copied
+ * verbatim into each package's `src/fff-api.ts` by `make sync-api`.
+ *
+ * Anything that is not part of the public API (FFI struct layouts, binary
+ * loading, platform detection, etc.) stays as per-package internal
+ * implementation and must NOT live here.
+ *
+ * Keep this file self-contained: it must not import from any package-local
+ * module, since each package compiles its own copy.
+ */
+
 /**
  * Result type for all operations - follows the Result pattern
  */
@@ -27,12 +49,16 @@ export interface InitOptions {
   frecencyDbPath?: string;
   /** Path to query history database (optional, omit to skip query tracker initialization) */
   historyDbPath?: string;
-  /** Use unsafe no-lock mode for databases (optional, defaults to false) */
+  /**
+   * @deprecated No-op. The no-lock LMDB flags showed no measurable win under
+   * realistic contention and are now ignored. Kept for source-compat.
+   */
   useUnsafeNoLock?: boolean;
   /**
    * Disable mmap cache warmup after the initial scan. When mmap cache is
    * enabled (the default), the first grep search is as fast as subsequent
-   * ones at the cost of background resources spent on awarming up the cache
+   * ones at the cost of a longer scan time and higher initial memory usage.
+   * (default: false)
    */
   disableMmapCache?: boolean;
   /**
@@ -70,6 +96,18 @@ export interface InitOptions {
   cacheBudgetMaxBytes?: number;
   /** Override for the per-file byte cap in the content cache. */
   cacheBudgetMaxFileSize?: number;
+  /**
+   * Allow indexing the filesystem root (`/`). Off by default — root is
+   * rarely the intended target and floods the watcher with churn-prone
+   * events. Setting this true is opt-in and the caller is responsible for
+   * the resulting fs-event volume.
+   */
+  enableFsRootScanning?: boolean;
+  /**
+   * Allow indexing the user's home directory. Same trade-off as
+   * `enableFsRootScanning`.
+   */
+  enableHomeDirScanning?: boolean;
 }
 
 /**
@@ -87,6 +125,23 @@ export interface SearchOptions {
   /** Page index for pagination (default: 0) */
   pageIndex?: number;
   /** Page size for pagination (default: 100) */
+  pageSize?: number;
+}
+
+/**
+ * Options for `glob`, the constraint-only search.
+ *
+ * The pattern is applied as a single pass SIMD optimized prefiltering
+ * without any fuzzy matching involved. Faster and 100% compatible to npm `glob`.
+ */
+export interface GlobOptions {
+  /** Maximum threads for parallel filtering (0 = auto). */
+  maxThreads?: number;
+  /** Current file path (for deprioritization in results). */
+  currentFile?: string;
+  /** Page index for pagination (default: 0). */
+  pageIndex?: number;
+  /** Page size for pagination (default: 100). */
   pageSize?: number;
 }
 
@@ -363,6 +418,12 @@ export interface GrepOptions {
   afterContext?: number;
   /** Maximum matches to return in this page across all files (default: 50) */
   pageSize?: number;
+  /**
+   * When true, classify each match line as a code definition (struct/fn/class/...)
+   * and expose it via `GrepMatch.isDefinition`. Let callers re-rank defs first
+   * without a TS-side regex port. (default: false)
+   */
+  classifyDefinitions?: boolean;
 }
 
 /**
@@ -403,6 +464,8 @@ export interface GrepMatch {
   contextBefore?: string[];
   /** Lines after the match (context). Empty array when context is 0. */
   contextAfter?: string[];
+  /** Whether this line is a code definition (only populated when `classifyDefinitions: true`). */
+  isDefinition?: boolean;
 }
 
 /**
@@ -461,4 +524,94 @@ export interface MultiGrepOptions {
   afterContext?: number;
   /** Maximum matches to return in this page across all files (default: 50) */
   pageSize?: number;
+  /**
+   * When true, classify each match line as a code definition (struct/fn/class/...)
+   * and expose it via `GrepMatch.isDefinition`. (default: false)
+   */
+  classifyDefinitions?: boolean;
+}
+
+/**
+ * The shared instance surface implemented by `FileFinder` in both
+ * `@ff-labs/fff-node` and `@ff-labs/fff-bun`.
+ *
+ * Both packages must implement this identically. Only instance members belong
+ * here. Static helpers (`create`, `isAvailable`, `ensureLoaded`,
+ * `healthCheckStatic`) are package-specific and intentionally excluded.
+ */
+export interface FileFinderApi {
+  /** Whether the instance has been destroyed. */
+  readonly isDestroyed: boolean;
+
+  /** Destroy and free all native resources. */
+  destroy(): void;
+
+  /** Fuzzy file search. */
+  fileSearch(query: string, options?: SearchOptions): Result<SearchResult>;
+
+  /** Glob-only filtering (no fuzzy matching). */
+  glob(pattern: string, options?: GlobOptions): Result<SearchResult>;
+
+  /** Fuzzy directory search. */
+  directorySearch(query: string, options?: DirSearchOptions): Result<DirSearchResult>;
+
+  /** Fuzzy search over files and directories interleaved by score. */
+  mixedSearch(query: string, options?: SearchOptions): Result<MixedSearchResult>;
+
+  /** Content search (live grep). */
+  grep(query: string, options?: GrepOptions): Result<GrepResult>;
+
+  /** Multi-pattern OR content search (Aho-Corasick). */
+  multiGrep(options: MultiGrepOptions): Result<GrepResult>;
+
+  /** Trigger an async rescan of the indexed directory. */
+  scanFiles(): Result<void>;
+
+  /** Whether a scan is currently in progress. */
+  isScanning(): boolean;
+
+  /** The root directory being indexed. */
+  getBasePath(): Result<string | null>;
+
+  /** Current scan progress snapshot. */
+  getScanProgress(): Result<ScanProgress>;
+
+  /**
+   * Wait for the initial file scan to complete.
+   *
+   * Non-blocking: polls `isScanning` and yields to the event loop between
+   * checks, so other async work keeps running while waiting.
+   */
+  waitForScan(timeoutMs?: number): Promise<Result<boolean>>;
+
+  /**
+   * Wait for the initial file scan to complete, blocking the calling thread.
+   *
+   * Backed by the native `fff_wait_for_scan` call. Prefer `waitForScan` unless
+   * you specifically need synchronous blocking behaviour.
+   */
+  waitForScanBlocking(timeoutMs?: number): Result<boolean>;
+
+  /**
+   * Wait until the index is fully ready: the scan has finished and the warmup
+   * (content indexing / bigram) phase has completed.
+   *
+   * Non-blocking: polls `getScanProgress` and yields to the event loop.
+   */
+  waitForIndexReady(timeoutMs?: number): Promise<Result<boolean>>;
+
+  /** Restart indexing in a new directory. */
+  reindex(newPath: string): Result<void>;
+
+  /** Refresh the git status cache. Returns the number of updated files. */
+  refreshGitStatus(): Result<number>;
+
+  /** Record that `selectedFilePath` was chosen for `query`. */
+  trackQuery(query: string, selectedFilePath: string): Result<boolean>;
+
+  /** Get a historical query by offset (0 = most recent). */
+  getHistoricalQuery(offset: number): Result<string | null>;
+
+  /** Health/diagnostics information for this instance. */
+  healthCheck(testPath?: string): Result<HealthCheck>;
 }

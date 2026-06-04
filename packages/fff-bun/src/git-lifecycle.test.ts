@@ -10,8 +10,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { FileItem } from "./fff-api";
 import { FileFinder } from "./index";
-import type { FileItem } from "./types";
 
 /**
  * Integration test: full git lifecycle with a real repository.
@@ -149,7 +149,7 @@ describe.skipIf(process.platform === "win32")("Git lifecycle integration", () =>
     finder = result.value;
 
     // Wait for the initial scan to finish
-    const scanResult = finder.waitForScan(10_000);
+    const scanResult = finder.waitForScanBlocking(10_000);
     expect(scanResult.ok).toBe(true);
 
     // Poll getScanProgress until the watcher is ready so that

@@ -10,8 +10,8 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-fff-grep = { version = "0.8.4", path = "crates/fff-grep" }
-fff-query-parser = { version = "0.8.4", path = "crates/fff-query-parser", default-features = false }
+fff-grep = { version = "0.9.1", path = "crates/fff-grep" }
+fff-query-parser = { version = "0.9.1", path = "crates/fff-query-parser", default-features = false }
 
 # Shared dependencies
 ahash = "0.8"
@@ -30,7 +30,7 @@ heed = "0.22.0"
 ignore = "0.4.22"
 memmap2 = "0.9"
 mimalloc = "0.1.47"
-zlob = "1.3.3"
+zlob = "1.4.1"
 
 mlua = { version = "0.11.1", features = ["module", "luajit"] }
 neo_frizbee = { version = "0.10.2", features = ["match_end_col"] }

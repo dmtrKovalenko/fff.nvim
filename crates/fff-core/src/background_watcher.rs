@@ -41,6 +41,8 @@ impl BackgroundWatcher {
         shared_picker: SharedFilePicker,
         shared_frecency: SharedFrecency,
         mode: FFFMode,
+        enable_fs_root_scanning: bool,
+        enable_home_dir_scanning: bool,
     ) -> Result<Self, Error> {
         info!(
             "Initializing background watcher for path: {}, mode: {:?}",
@@ -48,34 +50,31 @@ impl BackgroundWatcher {
             mode,
         );
 
-        // Refuse to watch the filesystem root or the user's home directory.
-        // These are prone to high-volume event churn (editor temp files,
-        // browser caches, log rotations) which inflates the overflow arena
-        // and, on macOS, can exhaust the per-process FSEvents stream limit.
-        if base_path.parent().is_none()
-            || Some(base_path.as_os_str()) == dirs::home_dir().as_ref().map(|p| p.as_os_str())
-        {
+        // by default we do not want to allow users to search their FS root, this is very error prone
+        // though some consumers would specifically allow that e.g. unikernels, windows disc
+        // partition or sub file systems. By default - fail, unless user permits
+        let is_fs_root = base_path.parent().is_none();
+        // use rust's path api for maximum reliability of the comparison
+        let is_home_dir = Some(&base_path) == dirs::home_dir().as_ref();
+
+        if (is_fs_root && !enable_fs_root_scanning) || (is_home_dir && !enable_home_dir_scanning) {
             return Err(Error::FilesystemRoot(base_path));
         }
 
         // macOS: always use a single recursive FSEvent stream.
-        //
         // Per-dir NonRecursive watches create one FSEvent stream per dir.
         // The per-process FSEvent cap is lower than expected in practice
         // (4096 per process, but FFF usually is running within code editors),
         // and each failed `watch()` after the cap blocks ~40 ms on kernel retry.
         // Yes we pay for filtering events on handler phase but it is usable
         //
-        // macOS and Windows use a single recursive watch. FSEvents and
-        // ReadDirectoryChangesW both support true kernel-level recursion
-        // on one handle — per-dir NonRecursive watches burn streams/handles
-        // for no benefit and, on Windows, have been observed to silently
-        // drop Modify events for nested paths.
+        // Windows doesn't seem to have a hard cap, but in practice non recursive watching
+        // does a way worse job and often looses events which is not an option for us.
         //
         // Linux keeps the per-dir NonRecursive strategy: inotify has no
-        // kernel-level recursion, so Recursive here would still register
-        // one watch per subdir but without the ignored-dir filtering we
-        // get by iterating `picker.for_each_dir` ourselves.
+        // kernel-level watcher recursion, so we have to manually watch every single interested
+        // directory for watch events which is in practice stable and fast if system has enough
+        // spare watcher (configurable by the user, usually 100k - 1m)
         let use_recursive = cfg!(any(target_os = "macos", target_os = "windows"));
 
         let (watch_tx, watch_rx) = mpsc::channel::<PathBuf>();
@@ -656,7 +655,7 @@ fn handle_debounced_events(
 
         // git status query even with a pathspec could be really slow, if we do this syncrhronously
         // within the event handler, we actually risk of forming a snow ball of conflicting events
-        crate::file_picker::BACKGROUND_THREAD_POOL.spawn(move || {
+        crate::parallelism::BACKGROUND_THREAD_POOL.spawn(move || {
             let Some(git_path) = git_workdir else { return };
             let Ok(repo) = Repository::open(&git_path) else {
                 error!("Failed to open git repo for async status update");

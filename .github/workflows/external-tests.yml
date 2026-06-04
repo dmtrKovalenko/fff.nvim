@@ -111,10 +111,12 @@ jobs:
         shell: bash
         run: make test-version
 
-      - name: Run bun tests
+      - name: Run non windows tests
         shell: bash
         if: ${{ matrix.os != 'windows-latest' }}
-        run: make test-bun
+        run: |
+          make test-bun
+          make test-c-api
 
       - name: Install Node.js
         if: ${{ matrix.os != 'ubuntu-latest' }}

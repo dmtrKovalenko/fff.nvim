@@ -486,7 +486,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-edit
-        run: cargo install cargo-edit
+        run: cargo install cargo-edit --force --locked
 
       - name: Determine version
         id: version

@@ -23,6 +23,21 @@ pub struct FFFQuery<'a> {
     pub location: Option<Location>,
 }
 
+impl<'a> FFFQuery<'a> {
+    /// Parse query and execute, perfectly paired with zero sized configuration presets
+    ///
+    /// ```
+    /// use fff_query_parser::{FFFQuery, FileSearchConfig};
+    ///
+    /// let query = FFFQuery::parse("file *.rs", FileSearchConfig);
+    /// ```
+    pub fn parse(query: &'a str, config: impl ParserConfig) -> Self {
+        let query_parser = QueryParser::new(config);
+
+        query_parser.parse(query.as_ref())
+    }
+}
+
 /// Main query parser - zero-cost wrapper around configuration
 #[derive(Debug)]
 pub struct QueryParser<C: ParserConfig> {

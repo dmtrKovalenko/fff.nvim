@@ -475,6 +475,9 @@ const hits = finder.value.grep("GetOffTheRecordProfile", {
   classifyDefinitions: true,
 });
 
+// Run extremely fast glob matching which is significantly (10-100 times) faster than Bun's and Node implementation
+const rustFiles = finder.value.glob("**/*.rs", { pageSize: 100 });
+
 finder.value.destroy();
 ```
 
@@ -578,6 +581,35 @@ int main(void) {
     fff_destroy(handle);
     return 0;
 }
+```
+
+### Versioned options struct (preferred)
+
+For instance creation use [`FffCreateOptions`](./crates/fff-c/include/fff.h) — a
+versioned struct that evolves without ABI breaks. C99 designated
+initializers keep call sites readable and zero-init unspecified fields:
+
+```c
+FffResult *res = fff_create_instance_with(&(FffCreateOptions){
+    .version = FFF_CREATE_OPTIONS_VERSION,
+    .base_path = "/path/to/repo",
+    .ai_mode = true,
+    .watch = true, 
+    .enable_fs_root_scanning = false,   // off by default
+    .enable_home_dir_scanning = false,  // off by default
+});
+```
+
+### Glob-only search
+
+`fff_glob` filters indexed files by a single glob pattern, ranks by frecency,
+paginates — bypasses the regular query parser entirely. Use this when you
+already have a literal glob (`*.rs`, `**/*.test.ts`, `src/**`) and don't want
+fuzzy matching layered on top.
+
+```c
+FffResult *res = fff_glob(handle, "**/*.rs", "", 0, 0, 100);
+// FffSearchResult in res->handle, free with fff_free_search_result.
 ```
 
 ### Notes

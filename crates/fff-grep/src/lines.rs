@@ -68,8 +68,7 @@ pub fn count(bytes: &[u8], line_term: u8) -> u64 {
     memchr::memchr_iter(line_term, bytes).count() as u64
 }
 
-/// Given a line that possibly ends with a terminator, return that line without
-/// the terminator.
+/// Given a line that possibly ends with a terminator, return that line without the terminator.
 #[inline(always)]
 pub fn without_terminator(bytes: &[u8], line_term: LineTerminator) -> &[u8] {
     let line_term = line_term.as_bytes();

@@ -10,9 +10,16 @@
 #include <stddef.h>
 
 /**
+ * Current used version of [`FffCreateOptions`].
+ */
+#define FFF_CREATE_OPTIONS_VERSION 1
+
+/**
  * Result envelope returned by all `fff_*` functions.
  *
- * Heap-allocated — the caller must free it with `fff_free_result`.
+ * Heap-allocated. The caller must free it with `fff_free_result`. Calling `fff_free_result`
+ * **does not** deallocate the underlying `handle` pointer. It needs to be cleaned separately.
+ * see (`fff_destroy`, `fff_free_search_result`, `fff_free_grep_result`, `fff_free_string`, etc.).
  *
  * Depending on the function, the payload is delivered through different fields:
  *
@@ -32,11 +39,6 @@
  * | `fff_restart_index`        | (none)        | success flag only             |
  *
  * On failure, `success` is false and `error` contains the message.
- *
- * **Important:** `fff_free_result` frees `error` but does **not** free `handle`.
- * The caller must free the handle with the appropriate function
- * (`fff_destroy`, `fff_free_search_result`, `fff_free_grep_result`,
- *  `fff_free_string`, etc.).
  */
 typedef struct FffResult {
   /**
@@ -48,7 +50,7 @@ typedef struct FffResult {
    */
   char *error;
   /**
-   * Opaque pointer payload (instance handle, typed result struct, or string). May be null.
+   * Opaque pointer payload. May be null.
    */
   void *handle;
   /**
@@ -56,6 +58,79 @@ typedef struct FffResult {
    */
   int64_t int_value;
 } FffResult;
+
+/**
+ * Options for `fff_create_instance_with`.
+ *
+ * Versioned struct: you populate the struct at your call level, we guarantee that
+ * the version is stable across the version changes, new fields only appended!
+ */
+typedef struct FffCreateOptions {
+  /**
+   * Set to [`FFF_CREATE_OPTIONS_VERSION`] when allocating. Used by the
+   * library to determine which trailing fields are populated.
+   */
+  uint32_t version;
+  /**
+   * Directory to index (required, non-NULL).
+   */
+  const char *base_path;
+  /**
+   * Frecency LMDB database path. NULL/empty to skip frecency tracking.
+   */
+  const char *frecency_db_path;
+  /**
+   * Query history LMDB database path. NULL/empty to skip query tracking.
+   */
+  const char *history_db_path;
+  /**
+   * Pre-populate mmap caches for top-frecency files after the initial scan.
+   */
+  bool enable_mmap_cache;
+  /**
+   * Build content index after the initial scan for faster grep.
+   */
+  bool enable_content_indexing;
+  /**
+   * Start a background file-system watcher for live updates.
+   */
+  bool watch;
+  /**
+   * Enable AI-agent optimizations.
+   */
+  bool ai_mode;
+  /**
+   * Tracing log file path. NULL/empty to skip log init.
+   */
+  const char *log_file_path;
+  /**
+   * Log level: `"trace" | "debug" | "info" | "warn" | "error"`.
+   * NULL/empty defaults to `"info"`. Ignored when `log_file_path` is unset.
+   */
+  const char *log_level;
+  /**
+   * Content cache file-count cap. 0 = auto.
+   */
+  uint64_t cache_budget_max_files;
+  /**
+   * Content cache byte cap. 0 = auto.
+   */
+  uint64_t cache_budget_max_bytes;
+  /**
+   * Per-file byte cap inside the content cache. 0 = auto.
+   */
+  uint64_t cache_budget_max_file_size;
+  /**
+   * Allow indexing the filesystem root (`/`). Off by default — root is
+   * rarely the intended target and floods the watcher with churn.
+   */
+  bool enable_fs_root_scanning;
+  /**
+   * Allow indexing the user's home directory. Same trade-off as
+   * `enable_fs_root_scanning`.
+   */
+  bool enable_home_dir_scanning;
+} FffCreateOptions;
 
 /**
  * A file item returned by `fff_search`.
@@ -346,18 +421,18 @@ typedef struct FffMixedSearchResult {
 } FffMixedSearchResult;
 
 /**
- * Create a new file finder instance (legacy signature).
+ * Create a new file finder instance (legacy 8-arg positional signature).
  *
- * @deprecated prefer `fff_create_instance2`, which also exposes log file and
- * cache-budget configuration. This function delegates to `fff_create_instance2`
- * with NULL log paths and auto cache budget, so behaviour is unchanged.
- *
- * The `use_unsafe_no_lock` parameter is deprecated and ignored; see
- * [`fff_create_instance2`] for details.
+ * @deprecated Use [`fff_create_instance_with`] (or
+ * [`fff_create_instance_with_value`] for FFI bindings) — both take the
+ * versioned [`FffCreateOptions`] struct that evolves without ABI breaks.
+ * This function delegates to `fff_create_instance_with` internally; the
+ * `use_unsafe_no_lock` parameter is deprecated and ignored.
  *
  * ## Safety
- * See `fff_create_instance2`.
+ * See `fff_create_instance_with`.
  */
+__attribute__((deprecated("Use fff_create_instance_with (by pointer) or fff_create_instance_with_value (by value) with FffCreateOptions instead. The struct evolves without ABI breaks.")))
 struct FffResult *fff_create_instance(const char *base_path,
                                       const char *frecency_db_path,
                                       const char *history_db_path,
@@ -368,37 +443,17 @@ struct FffResult *fff_create_instance(const char *base_path,
                                       bool ai_mode);
 
 /**
- * Create a new file finder instance (v2, with full options).
+ * Create a new file finder instance (legacy 13-arg positional signature).
  *
- * Returns an opaque pointer that must be passed to all other `fff_*` calls
- * and eventually freed with `fff_destroy`.
- *
- * # Parameters
- *
- * * `base_path`                   – directory to index (required)
- * * `frecency_db_path`            – frecency LMDB database path (NULL/empty to skip)
- * * `history_db_path`             – query history LMDB database path (NULL/empty to skip)
- * * `use_unsafe_no_lock`          – **deprecated, ignored.** Previously enabled
- * * `enable_mmap_cache`           – pre-populate mmap caches after the initial scan
- * * `enable_content_indexing`     – build content index after the initial scan
- * * `watch`                       – start a background file-system watcher for live updates
- * * `ai_mode`                     – enable AI-agent optimizations
- * * `log_file_path`               – tracing log file path (NULL/empty to skip).
- *   Only the first successful call in a process installs the subscriber;
- *   subsequent calls are no-ops at the log layer.
- * * `log_level`                   – `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`
- *   (NULL/empty defaults to `"info"`). Ignored when `log_file_path` is not set.
- * * `cache_budget_max_files`      – content cache file-count cap (0 = auto)
- * * `cache_budget_max_bytes`      – content cache byte cap (0 = auto)
- * * `cache_budget_max_file_size`  – per-file byte cap (0 = auto)
- *
- * When all three `cache_budget_*` values are 0 the budget is auto-computed
- * from repo size after the initial scan. Otherwise an explicit budget is
- * used: any field left at 0 falls back to its `unlimited()` default.
+ * @deprecated Use [`fff_create_instance_with`] (or
+ * [`fff_create_instance_with_value`] for FFI bindings) — both take the
+ * versioned [`FffCreateOptions`] struct that evolves without ABI breaks.
+ * The `use_unsafe_no_lock` parameter is deprecated and ignored.
  *
  * ## Safety
- * String parameters must be valid null-terminated UTF-8 or NULL.
+ * See `fff_create_instance_with`.
  */
+__attribute__((deprecated("Use fff_create_instance_with (by pointer) or fff_create_instance_with_value (by value) with FffCreateOptions instead. The struct evolves without ABI breaks.")))
 struct FffResult *fff_create_instance2(const char *base_path,
                                        const char *frecency_db_path,
                                        const char *history_db_path,
@@ -412,6 +467,50 @@ struct FffResult *fff_create_instance2(const char *base_path,
                                        uint64_t cache_budget_max_files,
                                        uint64_t cache_budget_max_bytes,
                                        uint64_t cache_budget_max_file_size);
+
+/**
+ * Create a new file finder instance from an [`FffCreateOptions`] struct.
+ *
+ * **Direct C consumers** populate the struct (designated initializers
+ * recommended), set `version` to [`FFF_CREATE_OPTIONS_VERSION`], and pass
+ * it by pointer. New fields are appended in future versions; old callers
+ * passing `version = 1` keep working forever.
+ *
+ * **FFI consumers** that prefer struct-by-value semantics (e.g. ffi-rs's
+ * `paramsType: [structDef]`) should use [`fff_create_instance_with_value`]
+ * instead — it's a thin calling-convention adapter that delegates here.
+ *
+ * Required: `opts.base_path` must be non-NULL and non-empty.
+ *
+ * When all three `cache_budget_*` values are 0 the budget is auto-computed
+ * from repo size after the initial scan. Otherwise an explicit budget is
+ * used: any field left at 0 falls back to its `unlimited()` default.
+ *
+ * ## Safety
+ * * `opts` must be a valid pointer to an `FffCreateOptions` whose `version`
+ *   is in the range `1..=FFF_CREATE_OPTIONS_VERSION`.
+ * * All string pointers inside `opts` must be valid null-terminated UTF-8
+ *   or NULL.
+ */
+struct FffResult *fff_create_instance_with(const struct FffCreateOptions *opts);
+
+/**
+ * Calling-convention adapter for [`fff_create_instance_with`].
+ *
+ * Same logic, but takes the [`FffCreateOptions`] struct **by value**. This
+ * makes the function callable from FFI libraries whose native struct
+ * support passes structs by value on the wire (e.g. Node's `ffi-rs` with
+ * `paramsType: [structDef]`).
+ *
+ * This is **not** a versioned wrapper — when new fields are appended to
+ * `FffCreateOptions`, both this function and `fff_create_instance_with`
+ * pick them up automatically with no signature change.
+ *
+ * ## Safety
+ * All `*const c_char` fields inside `opts` must be valid null-terminated
+ * UTF-8 or NULL. The struct itself is consumed by value.
+ */
+struct FffResult *fff_create_instance_with_value(struct FffCreateOptions opts);
 
 /**
  * Destroy a file finder instance and free all its resources.
@@ -447,6 +546,35 @@ struct FffResult *fff_search(void *fff_handle,
                              uint32_t page_size,
                              int32_t combo_boost_multiplier,
                              uint32_t min_combo_count);
+
+/**
+ * Glob-only search: filter indexed files by a single glob pattern, rank by
+ * frecency, and paginate. Bypasses the regular query parser entirely.
+ *
+ * Use this when you already have a literal glob pattern (e.g. `*.rs`, a
+ * recursive `**` match, or `src/components` prefix) and want neither fuzzy
+ * matching nor multi-token constraint parsing. Ranking falls back to
+ * frecency because there is no fuzzy score to combine with.
+ *
+ * # Parameters
+ *
+ * * `fff_handle`   - instance from `fff_create_instance`
+ * * `pattern`      - glob pattern (required, no parsing - passed through verbatim)
+ * * `current_file` - path of the currently open file for deprioritization (NULL/empty to skip)
+ * * `max_threads`  - maximum worker threads (0 = auto-detect)
+ * * `page_index`   - pagination offset (0 = first page)
+ * * `page_size`    - results per page (0 = default 100)
+ *
+ * ## Safety
+ * * `fff_handle` must be a valid instance pointer from `fff_create_instance`.
+ * * `pattern` and `current_file` must be valid null-terminated UTF-8 strings or NULL.
+ */
+struct FffResult *fff_glob(void *fff_handle,
+                           const char *pattern,
+                           const char *current_file,
+                           uint32_t max_threads,
+                           uint32_t page_index,
+                           uint32_t page_size);
 
 /**
  * Perform fuzzy search on indexed directories.
@@ -752,6 +880,12 @@ const void *fff_ptr_offset(const void *base, uintptr_t byte_offset);
 
 /**
  * Free a result returned by any `fff_*` function.
+ * **IMPORTANT:** this doesn't clean the the internal handle, so it is safe to call right after
+ * you handle the error case.
+ *
+ * Note: Many non-libffi implementations are not supporting struct-by-value returns, so it's more
+ * convenient to have pointer returned at most of the time, though allocating result for every call
+ * is annoying, so we just rely on the fact that our allocator is good enough.
  *
  * ## Safety
  * `result_ptr` must be a valid pointer returned by a `fff_*` function.

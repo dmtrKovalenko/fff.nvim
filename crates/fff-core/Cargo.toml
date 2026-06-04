@@ -1,6 +1,6 @@
 [package]
 name = "fff-search"
-version = "0.8.4"
+version = "0.9.1"
 edition = "2024"
 license = "MIT"
 authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
@@ -22,6 +22,11 @@ harness = false
 name = "memmem_bench"
 harness = false
 
+[[bench]]
+name = "glob_bench"
+harness = false
+required-features = ["zlob"]
+
 [features]
 default = []
 # Enable C FFI exports
@@ -39,14 +44,14 @@ rayon = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-fff-query-parser = { workspace = true , version = "0.8.2" }
+fff-query-parser = { workspace = true , version = "0.9.0" }
 blake3 = { workspace = true }
 dirs = { workspace = true }
 libc = "0.2"
 git2 = { workspace = true }
 glidesort = { workspace = true }
 globset = { workspace = true }
-fff-grep = { workspace = true , version = "0.8.2" }
+fff-grep = { workspace = true , version = "0.9.0" }
 aho-corasick = "1"
 memchr = "2"
 heed = { workspace = true }

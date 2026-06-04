@@ -98,7 +98,7 @@ impl Clone for DirItem {
 impl DirItem {
     #[inline(always)]
     pub fn is_overflow(&self) -> bool {
-        self.flags & DirFlags::OVERFLOW == 0
+        self.flags & DirFlags::OVERFLOW != 0
     }
 
     pub(crate) fn new(path: crate::simd_path::ChunkedString, last_segment_offset: u16) -> Self {

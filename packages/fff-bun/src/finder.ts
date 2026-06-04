@@ -15,6 +15,7 @@ import {
   ffiGetBasePath,
   ffiGetHistoricalQuery,
   ffiGetScanProgress,
+  ffiGlob,
   ffiHealthCheck,
   ffiIsScanning,
   ffiLiveGrep,
@@ -27,7 +28,6 @@ import {
   ffiSearchMixed,
   ffiTrackQuery,
   ffiWaitForScan,
-  ffiWaitForWatcher,
   isAvailable,
   type NativeHandle,
 } from "./ffi";
@@ -35,19 +35,21 @@ import {
 import type {
   DirSearchOptions,
   DirSearchResult,
+  InitOptions as FFFInitOptions,
+  FileFinderApi,
+  GlobOptions,
   GrepOptions,
   GrepResult,
   HealthCheck,
-  InitOptions as FFFInitOptions,
   MixedSearchResult,
   MultiGrepOptions,
   Result,
   ScanProgress,
   SearchOptions,
   SearchResult,
-} from "./types";
+} from "./fff-api";
 
-import { err } from "./types";
+import { err } from "./fff-api";
 
 /**
  * FileFinder - Fast file finder with fuzzy search
@@ -67,7 +69,7 @@ import { err } from "./types";
  * }
  *
  * // Wait for initial scan
- * finder.value.waitForScan(5000);
+ * await finder.value.waitForScan(5000);
  *
  * // Search for files
  * const search = finder.value.search("main.ts");
@@ -81,7 +83,7 @@ import { err } from "./types";
  * finder.value.destroy();
  * ```
  */
-export class FileFinder {
+export class FileFinder implements FileFinderApi {
   private handle: NativeHandle | null;
 
   private constructor(handle: NativeHandle) {
@@ -122,6 +124,8 @@ export class FileFinder {
       BigInt(options.cacheBudgetMaxFiles ?? 0),
       BigInt(options.cacheBudgetMaxBytes ?? 0),
       BigInt(options.cacheBudgetMaxFileSize ?? 0),
+      options.enableFsRootScanning ?? false,
+      options.enableHomeDirScanning ?? false,
     );
 
     if (!result.ok) {
@@ -199,6 +203,30 @@ export class FileFinder {
       options?.pageSize ?? 0,
       options?.comboBoostMultiplier ?? 0,
       options?.minComboCount ?? 0,
+    );
+  }
+
+  /**
+   * Glob-only search.
+   *
+   * The pattern is applied as a single pass SIMD optimized prefiltering
+   * without any fuzzy matching involved. Faster and 100% compatible to npm `glob`.
+   *
+   * @param pattern - Glob pattern (required, non-empty)
+   * @param options - Glob search options (pagination, max threads, current file)
+   * @returns Search results with files matching the glob
+   */
+  glob(pattern: string, options?: GlobOptions): Result<SearchResult> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+
+    return ffiGlob(
+      guard.value,
+      pattern,
+      options?.currentFile ?? "",
+      options?.maxThreads ?? 0,
+      options?.pageIndex ?? 0,
+      options?.pageSize ?? 0,
     );
   }
 
@@ -325,7 +353,7 @@ export class FileFinder {
       options?.timeBudgetMs ?? 0,
       options?.beforeContext ?? 0,
       options?.afterContext ?? 0,
-      false,
+      options?.classifyDefinitions ?? false,
     );
   }
 
@@ -374,7 +402,7 @@ export class FileFinder {
       options.timeBudgetMs ?? 0,
       options.beforeContext ?? 0,
       options.afterContext ?? 0,
-      false,
+      options.classifyDefinitions ?? false,
     );
   }
 
@@ -419,6 +447,9 @@ export class FileFinder {
   /**
    * Wait for the initial file scan to complete.
    *
+   * Non-blocking: polls `isScanning` and yields to the event loop between
+   * checks, so other async work keeps running while waiting.
+   *
    * @param timeoutMs - Maximum time to wait in milliseconds (default: 5000)
    * @returns true if scan completed, false if timed out
    *
@@ -426,33 +457,67 @@ export class FileFinder {
    * ```typescript
    * const finder = FileFinder.create({ basePath: "/path/to/project" });
    * if (finder.ok) {
-   *   const completed = finder.value.waitForScan(10000);
+   *   const completed = await finder.value.waitForScan(10000);
    *   if (!completed.ok || !completed.value) {
    *     console.warn("Scan did not complete in time");
    *   }
    * }
    * ```
    */
-  waitForScan(timeoutMs: number = 5000): Result<boolean> {
+  async waitForScan(timeoutMs: number = 5000): Promise<Result<boolean>> {
+    const guard = this.ensureAlive();
+    if (!guard.ok) return guard;
+
+    const deadline = Date.now() + timeoutMs;
+    while (this.isScanning()) {
+      if (Date.now() >= deadline) {
+        return { ok: true, value: false };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return { ok: true, value: true };
+  }
+
+  /**
+   * Wait for the initial file scan to complete, blocking the calling thread.
+   *
+   * Backed by the native `fff_wait_for_scan` call. Prefer {@link waitForScan}
+   * unless you specifically need synchronous blocking behaviour.
+   *
+   * @param timeoutMs - Maximum time to wait in milliseconds (default: 5000)
+   * @returns true if scan completed, false if timed out
+   */
+  waitForScanBlocking(timeoutMs: number = 5000): Result<boolean> {
     const guard = this.ensureAlive();
     if (!guard.ok) return guard;
     return ffiWaitForScan(guard.value, timeoutMs);
   }
 
   /**
-   * Wait for the background file watcher to be ready.
+   * Wait until the index is fully ready: the scan has finished and the warmup
+   * (content indexing / bigram) phase has completed.
    *
-   * The watcher is created after the initial scan, git status, and optional
-   * warmup phases complete. Useful for tests that need to ensure filesystem
-   * events will be detected.
+   * Non-blocking — polls `getScanProgress` and yields to the event loop.
    *
-   * @param timeoutMs - Maximum time to wait in milliseconds (default: 10000)
-   * @returns true if watcher is ready, false if timed out
+   * @param timeoutMs - Maximum time to wait in milliseconds (default: 5000)
+   * @returns true if the index became ready, false if timed out
    */
-  waitForWatcher(timeoutMs: number = 10000): Result<boolean> {
+  async waitForIndexReady(timeoutMs: number = 5000): Promise<Result<boolean>> {
     const guard = this.ensureAlive();
     if (!guard.ok) return guard;
-    return ffiWaitForWatcher(guard.value, timeoutMs);
+
+    const deadline = Date.now() + timeoutMs;
+    while(true) {
+      const progress = this.getScanProgress();
+      if (!progress.ok) return progress;
+      if (!progress.value.isScanning && progress.value.isWarmupComplete) {
+        return { ok: true, value: true };
+      }
+      if (Date.now() >= deadline) {
+        return { ok: true, value: false };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 
   /**

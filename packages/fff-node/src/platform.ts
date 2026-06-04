@@ -37,11 +37,11 @@ function detectLinuxLibc(): string {
       timeout: 5000,
     });
   } catch (e: unknown) {
-    // Alpine/musl: `ldd --version` exits with code 1 but still prints
-    // "musl libc ..." — execSync surfaces that on the error object.
     const err = e as { stdout?: string | Buffer; stderr?: string | Buffer };
     output = String(err?.stdout ?? "") + String(err?.stderr ?? "");
   }
+
+  // ldd on musl can produce stdout with musl either with exit code 1 or 0
   if (output.toLowerCase().includes("musl")) {
     return "unknown-linux-musl";
   }

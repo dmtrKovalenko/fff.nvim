@@ -1,6 +1,6 @@
 # fff - Fast File Finder
 
-High-performance fuzzy file finder for Bun, powered by Rust. Extremely fast live file, content, and directory search with a typo-resistant algorithm. As well as regex, plain-text, multi-occurrence and typo-resistant content search.
+High-performance fuzzy file finder for Node.js, powered by Rust. Extremely fast live file, content, and directory search with a typo-resistant algorithm. As well as regex, plain-text, multi-occurrence and typo-resistant content search.
 
 Comes with built-in git status support, frecency access tracking, and a real-time file watcher, content indexing and many more! Designed for LLM agent tools that search through codebases or agentic RAG document search.
 
@@ -9,7 +9,7 @@ Faster than ripgrep & fzf on any workflow that runs more than once per process.
 ## Installation
 
 ```bash
-bun add @ff-labs/fff-bun
+npm install @ff-labs/fff-node
 ```
 
 The correct native binary for your platform is installed automatically via platform-specific packages (e.g. `@ff-labs/fff-bin-darwin-arm64`, `@ff-labs/fff-bin-linux-x64-gnu`)
@@ -35,7 +35,7 @@ Each `FileFinder` instance owns an independent native index. Create one, wait
 for the initial scan, then run as many searches as you like.
 
 ```typescript
-import { FileFinder } from "@ff-labs/fff-bun";
+import { FileFinder } from "@ff-labs/fff-node";
 
 // Create an instance bound to a directory
 const created = FileFinder.create({ basePath: "/path/to/project" });
@@ -43,7 +43,7 @@ if (!created.ok) throw new Error(created.error);
 
 const finder = created.value;
 
-// Wait for the initial scan (non-blocking)
+// Wait for the initial scan (async, non-blocking)
 await finder.waitForScan(5000);
 
 // 1. Fuzzy file search (typo resistant)
@@ -74,7 +74,6 @@ if (dirs.ok) console.log(dirs.value.items.map((d) => d.relativePath));
 finder.destroy();
 ```
 
-
 ## API Reference
 
 Verify the latest API in the local interface at [`./src/fff-api.ts`](./src/fff-api.ts). Every field and type is documented.
@@ -82,7 +81,6 @@ Verify the latest API in the local interface at [`./src/fff-api.ts`](./src/fff-a
 ### Result Types
 
 All methods return a `Result<T>` type for explicit error handling:
-
 
 ```typescript
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -96,7 +94,7 @@ if (result.ok) {
 }
 ```
 
-This SDK calls a native compiled library for your platform at runtime. This is generally safe — fff is battle-tested and stable, and written in a memory-safe language — but there is a class of errors that can't be caught at the Bun/Node level. If you hit one, please report an issue!
+This SDK calls a native compiled library for your platform at runtime. This is generally safe — fff is battle-tested and stable, and written in a memory-safe language — but there is a class of errors that can't be caught at the Node.js level. If you hit one, please report an issue!
 
 ## Building from Source
 
@@ -117,10 +115,10 @@ cargo build --release -p fff-c
 
 ```bash
 # Download binary manually (fallback if npm package unavailable)
-bunx fff download [tag]
+npx @ff-labs/fff-node download [tag]
 
 # Show platform info and binary location
-bunx fff info
+npx @ff-labs/fff-node info
 ```
 
 ## License

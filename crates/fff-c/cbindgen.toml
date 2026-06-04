@@ -26,3 +26,8 @@ include = [
 
 [fn]
 sort_by = "None"
+# Translate `#[deprecated]` on extern "C" fns into a real C compiler
+# attribute so callers get a warning when they use a removed/legacy entry.
+# `{}` is substituted with the Rust deprecation note as a C string literal
+# (already quoted) — do not wrap in extra quotes.
+deprecated_with_note = "__attribute__((deprecated({})))"

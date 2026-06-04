@@ -24,12 +24,11 @@ fi
 
 echo "Releasing $VERSION..."
 
+echo "→ Ensuring cargo-edit is installed (force avoids a shadowing cargo-set-version binary)"
+cargo install cargo-edit --force --locked
+
 echo "→ Updating Cargo.toml versions to $VERSION"
-cargo set-version "$VERSION" 2>/dev/null || {
-  echo "cargo-edit not found, installing..."
-  cargo install cargo-edit
-  cargo set-version "$VERSION"
-}
+cargo set-version "$VERSION"
 
 git add -A
 git commit -m "chore: release $VERSION"

@@ -13,6 +13,8 @@
 //!    exists but is dead code — never called from the grep path.
 //!    See: grep.rs lines ~1787-1855.
 
+mod overflow_frecency_segfault;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

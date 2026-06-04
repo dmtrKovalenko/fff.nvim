@@ -270,6 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .max_cached_files
                 .map(fff::ContentCacheBudget::new_for_repo),
             follow_symlinks: false,
+            ..Default::default()
         },
     )
     .map_err(|e| format!("Failed to init file picker: {}", e))?;

@@ -204,6 +204,11 @@ describe('programmatic search APIs', function()
       fd:write('-- ' .. marker .. '\n')
       fd:close()
 
+      -- on windows metadata cache is updated lazily if we programmatically start searching
+      -- the new directory right after we update it we can sometimes see a race window especially on CI
+      -- this is fine in practice cause this is not a real use case for fff to search RIGHT AFTER mkdir
+      if vim.fn.has('win32') == 1 then vim.wait(250, function() return false end) end
+
       -- Marker must not exist anywhere in the primary fff.nvim tree.
       local before = fff.content_search(marker)
       assert.are.equal(0, #before.items, 'marker leaked into primary fff.nvim tree')

@@ -1,14 +1,8 @@
-//! High-performance grep engine for live content search.
-//!
-//! Searches file contents using the `grep-searcher` crate with mmap-backed
-//! file access. Files are searched in frecency order for optimal pagination
-//! performance — the most relevant files are searched first, enabling early
-//! termination once enough results are collected.
-
 use crate::{
     BigramFilter, BigramOverlay,
     bigram_query::{fuzzy_to_bigram_query, regex_to_bigram_query},
-    constraints::apply_constraints,
+    case_insensitive_memmem,
+    constraints::{ConstraintPlan, ConstraintsBuffers},
     extract_bigrams,
     sort_buffer::sort_with_buffer,
     types::{ContentCacheBudget, FileItem, FileSliceExt, MmapSlot},
@@ -1012,39 +1006,35 @@ pub(crate) fn multi_grep_search<'a>(
         None
     };
 
-    let (mut files_to_search, mut filtered_file_count) =
-        prepare_files_to_search(files, constraints, options, arena);
+    let base_file_count = match bigram_overlay {
+        Some(bigram_overlay) => bigram_overlay.base_file_count(),
+        None => files.len(),
+    };
+
+    let (mut files_to_search, mut filtered_file_count) = prefilter_files(
+        files,
+        constraints,
+        bigram_candidates.as_deref(),
+        base_file_count,
+        options,
+        arena,
+    );
 
     // If constraints yielded 0 files and we had FilePath constraints,
     // retry without them (the path token was likely part of the search text).
     if files_to_search.is_empty()
-        && let Some(stripped) = strip_file_path_constraints(constraints)
+        && let Some(stripped) = strip_file_path_constraint_if_present(constraints)
     {
-        let (retry_files, retry_count) = prepare_files_to_search(files, &stripped, options, arena);
+        let (retry_files, retry_count) = prefilter_files(
+            files,
+            &stripped,
+            bigram_candidates.as_deref(),
+            base_file_count,
+            options,
+            arena,
+        );
         files_to_search = retry_files;
         filtered_file_count = retry_count;
-    }
-
-    // Apply bigram prefilter to the file list. Bigram columns only cover
-    // the indexable region — `bigram_overlay.base_file_count()` is the
-    // authoritative boundary. Files past it (unindexable base, overflow)
-    // are always retained and searched directly.
-    if let Some(ref candidates) = bigram_candidates {
-        let base_ptr = files.as_ptr();
-        let bigram_boundary = bigram_overlay
-            .map(|o| o.base_file_count())
-            .unwrap_or(files.len());
-
-        files_to_search.retain(|f| {
-            if f.is_overflow() {
-                return true;
-            }
-            let file_idx = unsafe { (*f as *const FileItem).offset_from(base_ptr) as usize };
-            if file_idx >= bigram_boundary {
-                return true;
-            }
-            BigramFilter::is_candidate(candidates, file_idx)
-        });
     }
 
     if files_to_search.is_empty() {
@@ -1194,14 +1184,11 @@ fn char_indices_to_byte_offsets(line: &str, char_indices: &[usize]) -> SmallVec<
     result
 }
 
-use crate::case_insensitive_memmem;
-
-/// Minimum chunk size for paginated search. Must be large enough for good
-/// thread utilization across rayon's pool (~28 threads on modern hardware)
-/// but small enough to allow early termination after few chunks.
-const PAGINATED_CHUNK_SIZE: usize = 512;
-
-#[tracing::instrument(skip_all, level = Level::DEBUG, fields(prefiltered_count = files_to_search.len()))]
+#[tracing::instrument(
+    skip_all,
+    level = Level::DEBUG,
+    fields(prefiltered_count = files_to_search.len())
+)]
 fn perform_grep<'a, F>(
     files_to_search: &[&'a FileItem],
     options: &GrepSearchOptions,
@@ -1221,52 +1208,59 @@ where
     let page_limit = options.page_limit;
     let budget_exceeded = AtomicBool::new(false);
 
-    // For paginated searches, process files in chunks to enable early
-    // termination. Each chunk is searched in parallel with rayon; between
-    // chunks we check whether enough matches have been collected.
-    //
-    // For full searches (page_limit = MAX), one chunk = all files — same
-    // throughput as before, no overhead from the chunking loop.
-    //
-    // For common queries ("x", "if") with ~99% hit rate: the first 512-file
-    // chunk yields ~500 matches, far exceeding page_limit=50. We stop after
-    // one chunk (~1ms) instead of searching all 93K files (~175ms).
-    let chunk_size = if page_limit < usize::MAX {
-        PAGINATED_CHUNK_SIZE
-    } else {
-        files_to_search.len().max(1)
-    };
-
     let mut result_files: Vec<&'a FileItem> = Vec::new();
     let mut all_matches: Vec<GrepMatch> = Vec::new();
     let mut files_consumed: usize = 0;
     let mut page_filled = false;
 
-    for chunk in files_to_search.chunks(chunk_size) {
+    // Each chunk is a rayon barrier. A flat small chunk over 500k files = ~7800
+    // barriers; ×2 growth makes it logarithmic. But a too-aggressive growth
+    // over-scans: when a page fills mid-chunk, the whole submitted chunk still
+    // runs. So only grow when the prefilter is weak (large candidate set);
+    // when bigram cut the set in half, keep fixed small chunks for cheap
+    // page-fill termination.
+    let base_chunk = rayon::current_num_threads() * 4;
+    let prefilter_strong = ctx.total_files > 0 && files_to_search.len() * 2 < ctx.total_files;
+    let max_chunk = if prefilter_strong {
+        base_chunk
+    } else {
+        (base_chunk * 256).max(8 * 1024)
+    };
+    let growth = if prefilter_strong { 1 } else { 2 };
+    let mut chunk_size = base_chunk;
+    let mut chunk_start = 0;
+
+    while chunk_start < files_to_search.len() {
+        let chunk_end = (chunk_start + chunk_size).min(files_to_search.len());
+        let chunk = &files_to_search[chunk_start..chunk_end];
+        chunk_start = chunk_end;
+        chunk_size = (chunk_size * growth).min(max_chunk);
         let chunk_offset = files_consumed;
 
         let chunk_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)> = chunk
             .par_iter()
             .enumerate()
             .map_init(
-                // Per-thread scratch: a reusable read buffer for small files
-                // and an mmap slot for cache-miss large files (≥ FRESH_MMAP_THRESHOLD).
-                || {
-                    tracing::info!("LMAOTHREAD");
-                    (Vec::with_capacity(64 * 1024), MmapSlot::default())
-                },
+                // tested it out a few times, this is just fine for rayon worker in this specific
+                // case it doesn't reallocate this many times and it is actually faster than using
+                // scoped threads with a predefined local scratch buffers because of spawn cost
+                || (Vec::with_capacity(64 * 1024), MmapSlot::default()),
                 |(buf, mmap_slot), (local_idx, file)| {
-                    if ctx.abort_signal.load(Ordering::Relaxed) {
-                        budget_exceeded.store(true, Ordering::Relaxed);
-                        return None;
-                    }
+                    // perform all the atomic machinery on every 8th
+                    if local_idx % 8 == 0 {
+                        let mut need_abort = ctx.abort_signal.load(Ordering::Relaxed);
+                        if !need_abort
+                            && let Some(budget) = time_budget
+                            && all_matches.len() > 1
+                            && search_start.elapsed() > budget
+                        {
+                            need_abort = true;
+                        }
 
-                    if let Some(budget) = time_budget
-                        && all_matches.len() > 1
-                        && search_start.elapsed() > budget
-                    {
-                        budget_exceeded.store(true, Ordering::Relaxed);
-                        return None;
+                        if need_abort {
+                            budget_exceeded.store(true, Ordering::Relaxed);
+                            return None;
+                        }
                     }
 
                     let content = file.get_content_for_search(
@@ -1436,73 +1430,134 @@ fn collect_grep_results<'a>(
     }
 }
 
-/// Filter files by constraints and size/binary checks, sort by frecency,
-/// and apply file-based pagination.
-///
-/// Returns `(paginated_files, filtered_file_count)`. The paginated slice
-/// is empty if the offset is past the end of available files.
-fn prepare_files_to_search<'a>(
+/// Single pass prefilter that doesn't involve file reading
+/// allocates only amount of memory required for storing references of the FileItems have to be
+/// opened for grepping unaviodably, in the worst case allocates N * <word> memory if no prefilter needed
+fn prefilter_files<'a>(
     files: &'a [FileItem],
     constraints: &[fff_query_parser::Constraint<'_>],
+    bigram_candidates: Option<&[u64]>,
+    base_count: usize,
     options: &GrepSearchOptions,
     arena: crate::simd_path::ArenaPtr,
 ) -> (Vec<&'a FileItem>, usize) {
-    let prefiltered: Vec<&FileItem> = if constraints.is_empty() {
-        files
-            .iter()
-            .filter(|f| {
-                !f.is_deleted() && !f.is_binary() && f.size > 0 && f.size <= options.max_file_size
-            })
-            .collect()
+    let max_file_size = options.max_file_size;
+    let plan = if constraints.is_empty() {
+        None
     } else {
-        match apply_constraints(files, constraints, arena) {
-            Some(constrained) => constrained
-                .into_iter()
-                .filter(|f| {
-                    !f.is_deleted()
-                        && !f.is_binary()
-                        && f.size > 0
-                        && f.size <= options.max_file_size
-                })
-                .collect(),
-            None => files
-                .iter()
-                .filter(|f| {
-                    !f.is_deleted()
-                        && !f.is_binary()
-                        && f.size > 0
-                        && f.size <= options.max_file_size
-                })
-                .collect(),
+        Some(ConstraintPlan::build(constraints, files, arena))
+    };
+
+    let mut scratch = ConstraintsBuffers::new();
+
+    #[inline(always)]
+    fn basic_prefilter(file: &FileItem, max: u64) -> bool {
+        !file.is_deleted() && !file.is_binary() && file.size > 0 && file.size <= max
+    }
+
+    // squeeze as much prefilters into a single loop as possible
+    let mut prefiltered: Vec<&FileItem> = match bigram_candidates {
+        Some(candidates) => {
+            let boundary = base_count.min(files.len());
+            let (indexed, tail) = files.split_at(boundary);
+
+            let cap = BigramFilter::count_candidates(candidates) + tail.len();
+            let mut out: Vec<&FileItem> = Vec::with_capacity(cap);
+
+            let full_words = boundary / 64;
+            let last_word_bits = boundary % 64;
+
+            // we need this because we already had a regression of the wrong bit
+            // has been set for the very last word based on the overlay, it's pretty cheap
+            macro_rules! evaluate_bigram_match_word {
+                ($word:expr, $base:expr) => {{
+                    let mut bits: u64 = $word;
+                    while bits != 0 {
+                        let bit = bits.trailing_zeros() as usize;
+                        let file_idx = $base + bit;
+                        bits &= bits - 1;
+
+                        let f = unsafe { indexed.get_unchecked(file_idx) };
+                        if !basic_prefilter(f, max_file_size) {
+                            continue;
+                        }
+                        if let Some(plan) = plan.as_ref()
+                            && !plan.matches(f, file_idx, arena, &mut scratch)
+                        {
+                            continue;
+                        }
+                        out.push(f);
+                    }
+                }};
+            }
+
+            // Full words: every set bit guaranteed `< boundary`.
+            for (word_idx, &word) in candidates.iter().take(full_words).enumerate() {
+                if word != 0 {
+                    evaluate_bigram_match_word!(word, word_idx * 64);
+                }
+            }
+
+            // Last partial word: mask bits past `boundary` once at word load.
+            if last_word_bits != 0 {
+                // this will get only (mod 64) bits from the last word guaratee that it's 0 padded
+                let last_mask: u64 = (1u64 << last_word_bits) - 1;
+                let word = candidates[full_words] & last_mask;
+                if word != 0 {
+                    evaluate_bigram_match_word!(word, full_words * 64);
+                }
+            }
+
+            // Sequential processing for non-bigrammable files: they are always in the end
+            for (offset, f) in tail.iter().enumerate() {
+                if !basic_prefilter(f, max_file_size) {
+                    continue;
+                }
+                if let Some(ref p) = plan
+                    && !p.matches(f, boundary + offset, arena, &mut scratch)
+                {
+                    continue;
+                }
+                out.push(f);
+            }
+
+            out
+        }
+        // this will be executed if there is no bigram, in the worst case it will allocate
+        // whole array of files but probability in the real repo of NO preflter working is so
+        // low that we just ignore that, usually there would be at least a few files excluded
+        None => {
+            let mut out: Vec<&FileItem> = Vec::new();
+            for (idx, f) in files.iter().enumerate() {
+                if !basic_prefilter(f, max_file_size) {
+                    continue;
+                }
+                if let Some(ref p) = plan
+                    && !p.matches(f, idx, arena, &mut scratch)
+                {
+                    continue;
+                }
+                out.push(f);
+            }
+            out
         }
     };
 
     let total_count = prefiltered.len();
-    let mut sorted_files = prefiltered;
 
-    // Only sort when there is meaningful frecency or modification data to rank by.
-    // On large repos (500k+ files) with no frecency data (fresh session, benchmark),
-    // skipping the O(n log n) sort saves ~200ms per query.
-    let needs_sort = sorted_files
-        .iter()
-        .any(|f| f.total_frecency_score() != 0 || f.modified != 0);
-
-    if needs_sort {
-        sort_with_buffer(&mut sorted_files, |a, b| {
-            b.total_frecency_score()
-                .cmp(&a.total_frecency_score())
-                .then(b.modified.cmp(&a.modified))
-        });
-    }
+    sort_with_buffer(&mut prefiltered, |a, b| {
+        b.total_frecency_score()
+            .cmp(&a.total_frecency_score())
+            .then(b.modified.cmp(&a.modified))
+    });
 
     if options.file_offset > 0 && options.file_offset < total_count {
-        let paginated = sorted_files.split_off(options.file_offset);
+        let paginated = prefiltered.split_off(options.file_offset);
         (paginated, total_count)
     } else if options.file_offset >= total_count {
         (Vec::new(), total_count)
     } else {
-        // offset == 0: no split needed, return as-is
-        (sorted_files, total_count)
+        (prefiltered, total_count)
     }
 }
 
@@ -1520,19 +1575,6 @@ fn prepare_files_to_search<'a>(
 /// or pattern test. The `Matcher::find_at` trait forces per-line calls to
 /// the *reference* (scalar) smith-waterman, which is O(needle × line_len)
 /// per line. For a 10k-line file that's 10k sequential reference calls.
-///
-/// `neo_frizbee::match_list` solves this by batching lines into
-/// fixed-width SIMD buckets (4, 8, 12 … 512 bytes) and scoring 16+
-/// haystacks per SIMD invocation. A single `match_list` call over the
-/// entire file replaces 10k individual `match_indices` calls. We then
-/// call `match_indices` *only* on the ~5-20 lines that pass `min_score`
-/// to extract character highlight positions.
-///
-/// Line splitting uses `memchr::memchr` (the same SIMD-accelerated byte
-/// search that `grep-searcher` and `bstr::ByteSlice::find_byte` use
-/// internally) to locate `\n` terminators. This gives us the same
-/// performance as the searcher's `LineStep` iterator without pulling in
-/// the full searcher machinery.
 ///
 /// For each file:
 ///   1. mmap the file, split lines via memchr '\n' (tracking line numbers + byte offsets)
@@ -1671,6 +1713,7 @@ fn fuzzy_grep_search<'a>(
                 } else {
                     arena
                 };
+
                 let file_bytes =
                     file.get_content_for_search(buf, mmap_slot, file_arena, base_path, budget)?;
 
@@ -1924,31 +1967,10 @@ pub(crate) fn grep_search<'a>(
     let regex = match options.mode {
         GrepMode::PlainText => None,
         GrepMode::Fuzzy => {
-            let (mut files_to_search, mut filtered_file_count) =
-                prepare_files_to_search(files, constraints_from_query, options, arena);
-
-            if files_to_search.is_empty()
-                && let Some(stripped) = strip_file_path_constraints(constraints_from_query)
-            {
-                let (retry_files, retry_count) =
-                    prepare_files_to_search(files, &stripped, options, arena);
-                files_to_search = retry_files;
-                filtered_file_count = retry_count;
-            }
-
-            if files_to_search.is_empty() {
-                return GrepResult {
-                    total_files,
-                    filtered_file_count,
-                    next_file_offset: 0,
-                    ..Default::default()
-                };
-            }
-
             // Bigram prefilter: pick 5 evenly-spaced probe bigrams, require
             // (5 - max_typos) of them to appear. Widely-spaced probes are
             // far more selective than sliding windows of adjacent bigrams.
-            if let Some(idx) = bigram_index
+            let bigram_candidates = if let Some(idx) = bigram_index
                 && idx.is_ready()
             {
                 let bq = fuzzy_to_bigram_query(&grep_text, 7);
@@ -1967,33 +1989,52 @@ pub(crate) fn grep_search<'a>(
                             }
                         }
                     }
-
-                    // Bigram columns only cover the indexable region at
-                    // `files[..overlay.base_file_count()]` — which equals
-                    // `indexable_count` today. Files past that boundary
-                    // (unindexable base files, overflow) are not tracked by
-                    // the bigram filter, so we always retain them and let
-                    // the full text search decide.
-                    let base_ptr = files.as_ptr();
-                    let bigram_boundary = bigram_overlay
-                        .map(|o| o.base_file_count())
-                        .unwrap_or(files.len());
-
-                    files_to_search.retain(|f| {
-                        if f.is_overflow() {
-                            return true;
-                        }
-
-                        let file_idx =
-                            unsafe { (*f as *const FileItem).offset_from(base_ptr) as usize };
-
-                        if file_idx >= bigram_boundary {
-                            return true;
-                        }
-
-                        BigramFilter::is_candidate(&candidates, file_idx)
-                    });
+                    Some(candidates)
+                } else {
+                    None
                 }
+            } else {
+                None
+            };
+
+            let base_count = match bigram_overlay {
+                Some(bigram_overlay) => bigram_overlay.base_file_count(),
+                None => files.len(),
+            };
+
+            let (mut files_to_search, mut filtered_file_count) = prefilter_files(
+                files,
+                constraints_from_query,
+                bigram_candidates.as_deref(),
+                base_count,
+                options,
+                arena,
+            );
+
+            if files_to_search.is_empty()
+                && let Some(stripped) =
+                    strip_file_path_constraint_if_present(constraints_from_query)
+            {
+                let (retry_files, retry_count) = prefilter_files(
+                    files,
+                    &stripped,
+                    bigram_candidates.as_deref(),
+                    base_count,
+                    options,
+                    arena,
+                );
+
+                files_to_search = retry_files;
+                filtered_file_count = retry_count;
+            }
+
+            if files_to_search.is_empty() {
+                return GrepResult {
+                    total_files,
+                    filtered_file_count,
+                    next_file_offset: 0,
+                    ..Default::default()
+                };
             }
 
             return fuzzy_grep_search(
@@ -2086,108 +2127,36 @@ pub(crate) fn grep_search<'a>(
         None
     };
 
-    // Overflow files (added after the bigram index was built) are not in
-    // the candidate bitset. They're few by definition, so just search all
-    // of them directly via memchr — no bigram tracking needed.
-    let overflow_start = bigram_overlay
+    // Bigram bitset only covers `files[..bigram_boundary]`. Overflow + unindexable
+    // tail files past the boundary are always retained — `prefilter_files` walks them
+    // via the linear sweep after the bitset walk.
+    let bigram_boundary = bigram_overlay
         .map(|o| o.base_file_count())
         .unwrap_or(files.len());
 
-    // it is important that this step is coming as early as possible
-    let (files_to_search, filtered_file_count) = match bigram_candidates {
-        Some(ref candidates) if constraints_from_query.is_empty() => {
-            // this call is essentially free and much more efficient than allowing a recollection
-            let overflow_count = files.len().saturating_sub(overflow_start);
-            let cap = BigramFilter::count_candidates(candidates) + overflow_count;
-            let mut result: Vec<&FileItem> = Vec::with_capacity(cap);
+    let (mut files_to_search, mut filtered_file_count) = prefilter_files(
+        files,
+        constraints_from_query,
+        bigram_candidates.as_deref(),
+        bigram_boundary,
+        options,
+        arena,
+    );
 
-            for (word_idx, &word) in candidates.iter().enumerate() {
-                if word == 0 {
-                    continue;
-                }
-                let base = word_idx * 64;
-                let mut bits = word;
-                while bits != 0 {
-                    let bit = bits.trailing_zeros() as usize;
-                    let file_idx = base + bit;
-                    // Stop at the overflow boundary: the loop below walks
-                    // every overflow file, so counting them here too would duplicate.
-                    if file_idx < overflow_start {
-                        let f = unsafe { files.get_unchecked(file_idx) };
-                        if !f.is_binary() && f.size <= options.max_file_size {
-                            result.push(f);
-                        }
-                    }
-                    bits &= bits - 1;
-                }
-            }
-
-            // Append all overflow files — they're not in the bigram index
-            // so we search them unconditionally (typically few files).
-            for f in &files[overflow_start..] {
-                if !f.is_binary() && !f.is_deleted() && f.size <= options.max_file_size {
-                    result.push(f);
-                }
-            }
-
-            let total_searchable = files.len();
-            let needs_sort = result
-                .iter()
-                .any(|f| f.total_frecency_score() != 0 || f.modified != 0);
-
-            if needs_sort {
-                sort_with_buffer(&mut result, |a, b| {
-                    b.total_frecency_score()
-                        .cmp(&a.total_frecency_score())
-                        .then(b.modified.cmp(&a.modified))
-                });
-            }
-
-            if options.file_offset > 0 && options.file_offset < result.len() {
-                let paginated = result.split_off(options.file_offset);
-                (paginated, total_searchable)
-            } else if options.file_offset >= result.len() {
-                (Vec::new(), total_searchable)
-            } else {
-                (result, total_searchable)
-            }
-        }
-        _ => {
-            let (mut fts, mut fc) =
-                prepare_files_to_search(files, constraints_from_query, options, arena);
-
-            if fts.is_empty()
-                && let Some(stripped) = strip_file_path_constraints(constraints_from_query)
-            {
-                let (retry_files, retry_count) =
-                    prepare_files_to_search(files, &stripped, options, arena);
-                fts = retry_files;
-                fc = retry_count;
-            }
-
-            if let Some(ref candidates) = bigram_candidates {
-                let base_ptr = files.as_ptr();
-                fts.retain(|f| {
-                    if f.is_overflow() {
-                        return true;
-                    }
-
-                    let file_idx =
-                        unsafe { (*f as *const FileItem).offset_from(base_ptr) as usize };
-
-                    // Files past the bigram boundary (unindexable base files)
-                    // are not tracked by the bigram filter — always search them.
-                    if file_idx >= overflow_start {
-                        return true;
-                    }
-
-                    BigramFilter::is_candidate(candidates, file_idx)
-                });
-            }
-
-            (fts, fc)
-        }
-    };
+    if files_to_search.is_empty()
+        && let Some(stripped) = strip_file_path_constraint_if_present(constraints_from_query)
+    {
+        let (retry_files, retry_count) = prefilter_files(
+            files,
+            &stripped,
+            bigram_candidates.as_deref(),
+            bigram_boundary,
+            options,
+            arena,
+        );
+        files_to_search = retry_files;
+        filtered_file_count = retry_count;
+    }
 
     if files_to_search.is_empty() {
         return GrepResult {
@@ -2273,7 +2242,7 @@ pub fn parse_grep_query(query: &str) -> FFFQuery<'_> {
     parser.parse(query)
 }
 
-fn strip_file_path_constraints<'a>(
+fn strip_file_path_constraint_if_present<'a>(
     constraints: &[Constraint<'a>],
 ) -> Option<fff_query_parser::ConstraintVec<'a>> {
     if !constraints
