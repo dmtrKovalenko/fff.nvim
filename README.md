@@ -35,7 +35,7 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.ps1 | iex
 ```
 
-The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`](./install-mcp.ps1) if you want to read them first.
+The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`](./install-mcp.ps1) if you want to read them first. They print the exact wiring instructions for your client.
 
 ### Homebrew (macOS / Linux)
 
@@ -43,9 +43,9 @@ The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`]
 brew install jellydn/tap/fff-mcp
 ```
 
-Tap and formula: [jellydn/homebrew-tap](https://github.com/jellydn/homebrew-tap). Installs the prebuilt `fff-mcp` binary from [GitHub releases](https://github.com/dmtrKovalenko/fff.nvim/releases). The tap [auto-updates on new stable releases](https://github.com/jellydn/homebrew-tap/blob/main/.github/workflows/README-fff-mcp.md) (6h poll; instant bump from official `dmtrKovalenko` releases when secrets are configured). Manual bumps and dispatches are limited to **jellydn** and **dmtrKovalenko**.
+Tap and formula: [jellydn/homebrew-tap](https://github.com/jellydn/homebrew-tap). Installs the prebuilt `fff-mcp` binary from [GitHub releases](https://github.com/dmtrKovalenko/fff.nvim/releases). The tap [auto-updates on new stable releases](https://github.com/jellydn/homebrew-tap/blob/main/.github/workflows/README-fff-mcp.md) (6h poll; instant bump from official `dmtrKovalenko` releases when secrets are configured). Manual bumps and dispatches are limited to **jellydn** and **dmtrKovalenko**. Wire the installed `fff-mcp` binary in your MCP client config the same way as a curl install.
 
-It prints the exact wiring instructions for your client. Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
+Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
 
 ### Recommended agent prompt
 
