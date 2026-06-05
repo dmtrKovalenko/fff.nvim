@@ -37,6 +37,42 @@ irm https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.ps
 
 The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`](./install-mcp.ps1) if you want to read them first.
 
+### Homebrew
+
+Installs both `fff-mcp` and `fff-engine` to the same Homebrew `bin/` directory. Co-location is required: `fff-mcp` finds `fff-engine` via its own executable path at runtime.
+
+**From the published tap** (once `abhijit-s/homebrew-fff` exists on GitHub):
+
+```bash
+brew tap abhijit-s/fff
+brew install fff
+```
+
+**From a local clone** (for development or pre-release):
+
+```bash
+# 1. Create a managed tap and symlink the formula from this repo
+brew tap-new abhijit-s/fff
+rm -rf /opt/homebrew/Library/Taps/abhijit-s/homebrew-fff/Formula
+ln -s /path/to/fff/packaging/homebrew/Formula \
+      /opt/homebrew/Library/Taps/abhijit-s/homebrew-fff/Formula
+
+# 2. Install HEAD (builds from the current branch of your local clone)
+brew install --HEAD abhijit-s/fff/fff
+```
+
+To rebuild after new commits:
+
+```bash
+brew reinstall --HEAD abhijit-s/fff/fff
+```
+
+**Register with Claude Code** after install:
+
+```bash
+claude mcp add -s user fff -- $(brew --prefix)/bin/fff-mcp
+```
+
 It prints the exact wiring instructions for your client. Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
 
 ### Recommended agent prompt
