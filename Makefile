@@ -65,7 +65,7 @@ run-engine: build-daemon
 	@touch $(ENGINE_LOG)
 	@tail -F $(ENGINE_LOG) &
 	PATH="$(CURDIR)/target/release:$$PATH" \
-	./target/release/fff-engine --base-path $(BUILD_BASE_PATH) --log-level debug; \
+	./target/release/fff-engine --base-path $(BUILD_BASE_PATH) --log-level "fff_engine=debug,warn"; \
 	kill %1 2>/dev/null; true
 
 # Start fff-mcp (proxy mode), streaming its logs to the terminal.

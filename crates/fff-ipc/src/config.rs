@@ -42,7 +42,10 @@ pub struct LogConfig {
 impl Default for LogConfig {
     fn default() -> Self {
         Self {
-            level: "info".into(),
+            // Target our crates at info; suppress library noise at warn.
+            // Use RUST_LOG-style syntax for finer control:
+            //   "fff_engine=debug,fff_mcp=debug,warn"
+            level: "fff_engine=info,fff_mcp=info,warn".into(),
             file: None,
         }
     }
