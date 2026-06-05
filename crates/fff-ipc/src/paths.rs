@@ -14,12 +14,17 @@ pub fn lockfile_path(base_path: &Path) -> PathBuf {
     cache_dir().join("fff").join("locks").join(format!("{hash}.lock"))
 }
 
-/// Unix domain sockets have a path limit of 104 bytes on macOS (SUN_LEN).
-/// A full blake3 hex (64 chars) + ~/.../Library/Caches/fff/sockets/ prefix
-/// exceeds that. Use the first 16 hex chars (8 bytes / 64 bits) — sufficient
-/// for collision-resistant local disambiguation.
+/// Canonicalize before hashing so that `.`, `./`, `/abs/path`, and
+/// `/abs/path/` all produce the same hash. This ensures fff-engine (started
+/// with `--base-path .`) and fff-mcp (which resolves the git workdir to an
+/// absolute path) derive the same socket and lockfile paths.
+///
+/// Unix socket path limit on macOS is 104 bytes (SUN_LEN). Using 16 hex
+/// chars (64-bit prefix) keeps the full path well under that limit.
 fn path_hash(base_path: &Path) -> String {
-    let bytes = base_path.as_os_str().as_encoded_bytes();
+    let canonical = std::fs::canonicalize(base_path)
+        .unwrap_or_else(|_| base_path.to_path_buf());
+    let bytes = canonical.as_os_str().as_encoded_bytes();
     let hash = blake3::hash(bytes);
     hash.to_hex()[..16].to_string()
 }
