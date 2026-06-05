@@ -6,7 +6,7 @@ class Fff < Formula
   license "MIT"
   # Local dev: brew install --HEAD abhijit-s/fff/fff
   head do
-    url "https://github.com/abhijit-s/fff.git", branch: "main"
+    url "https://github.com/abhijit-s/fff.git", branch: "feat/engine-singleton-ipc"
   end
 
   depends_on "rust" => :build
