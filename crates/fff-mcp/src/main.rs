@@ -13,6 +13,8 @@ mod server;
 mod update_check;
 #[cfg(unix)]
 pub(crate) mod client;
+#[cfg(unix)]
+mod recovery;
 
 use clap::Parser;
 use fff::file_picker::FilePicker;
@@ -243,7 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !args.no_update_check {
                     update_check::spawn_update_check();
                 }
-                let server = FffServer::new_proxy(engine_client);
+                let server = FffServer::new_proxy(engine_client, base_path_ref.to_path_buf());
                 let service = server
                     .serve(stdio())
                     .await

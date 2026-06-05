@@ -190,6 +190,9 @@ pub struct FffServer {
     /// calling fff-core directly.
     #[cfg(unix)]
     engine_client: Option<Arc<std::sync::Mutex<crate::client::EngineClient>>>,
+    /// Base path used for crash recovery respawn.
+    #[cfg(unix)]
+    engine_base_path: Option<std::path::PathBuf>,
 }
 
 impl FffServer {
@@ -201,12 +204,14 @@ impl FffServer {
             update_notice_sent: Arc::new(AtomicBool::new(false)),
             #[cfg(unix)]
             engine_client: None,
+            #[cfg(unix)]
+            engine_base_path: None,
         }
     }
 
     /// Create a proxy server backed by fff-engine (Unix only).
     #[cfg(unix)]
-    pub fn new_proxy(client: crate::client::EngineClient) -> Self {
+    pub fn new_proxy(client: crate::client::EngineClient, base_path: std::path::PathBuf) -> Self {
         use fff::{SharedFilePicker, SharedFrecency};
         Self {
             picker: SharedFilePicker::default(),
@@ -214,6 +219,8 @@ impl FffServer {
             cursor_store: Arc::new(Mutex::new(CursorStore::new())),
             update_notice_sent: Arc::new(AtomicBool::new(false)),
             engine_client: Some(Arc::new(std::sync::Mutex::new(client))),
+            #[cfg(unix)]
+            engine_base_path: Some(base_path),
         }
     }
 
@@ -428,6 +435,7 @@ impl FffServer {
         use crate::output::wire::WireGrepFormatter;
 
         let client_arc = self.engine_client.as_ref()?;
+        let base_path = self.engine_base_path.as_deref()?;
 
         let file_offset = cursor_id
             .and_then(|id| self.cursor_store.lock().ok()?.get(id))
@@ -466,11 +474,7 @@ impl FffServer {
             },
         };
 
-        let response = client_arc
-            .lock()
-            .ok()?
-            .search(&req)
-            .ok()?;
+        let response = client_arc.lock().ok()?.search_with_recovery(&req, base_path);
 
         match response {
             SearchResponse::GrepResults(wire) => {
@@ -506,6 +510,7 @@ impl FffServer {
         use crate::output::wire::format_wire_find_files;
 
         let client_arc = self.engine_client.as_ref()?;
+        let base_path = self.engine_base_path.as_deref()?;
 
         let page_offset = cursor_id
             .and_then(|id| self.cursor_store.lock().ok()?.get(id))
@@ -523,7 +528,7 @@ impl FffServer {
             },
         };
 
-        let response = client_arc.lock().ok()?.search(&req).ok()?;
+        let response = client_arc.lock().ok()?.search_with_recovery(&req, base_path);
 
         match response {
             SearchResponse::SearchResults(items) => {
@@ -552,6 +557,7 @@ impl FffServer {
         use crate::output::wire::WireGrepFormatter;
 
         let client_arc = self.engine_client.as_ref()?;
+        let base_path = self.engine_base_path.as_deref()?;
 
         let file_offset = params
             .cursor
@@ -583,7 +589,7 @@ impl FffServer {
             },
         };
 
-        let response = client_arc.lock().ok()?.search(&req).ok()?;
+        let response = client_arc.lock().ok()?.search_with_recovery(&req, base_path);
 
         match response {
             SearchResponse::GrepResults(wire) => {

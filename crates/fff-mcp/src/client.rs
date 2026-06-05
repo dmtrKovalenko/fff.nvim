@@ -87,10 +87,36 @@ impl EngineClient {
         Ok(Self { reader, writer })
     }
 
-    /// Send a search request and receive the response.
+    /// Send a search request, with transparent crash recovery.
     ///
-    /// Returns `Err` on socket failure. Caller (crash recovery) is responsible
-    /// for reconnecting and retrying.
+    /// On `Err` (broken pipe, ECONNREFUSED), calls `recovery::respawn` to
+    /// reconnect and retries up to 3 times with 100→200→400 ms backoff.
+    /// Returns `SearchResponse::Error` only after all retries are exhausted.
+    pub fn search_with_recovery(
+        &mut self,
+        req: &SearchRequest,
+        base_path: &std::path::Path,
+    ) -> SearchResponse {
+        match self.search(req) {
+            Ok(resp) => return resp,
+            Err(e) => {
+                tracing::warn!("fff-engine socket error: {e}; attempting recovery");
+            }
+        }
+
+        match crate::recovery::respawn(base_path) {
+            Ok(new_client) => {
+                *self = new_client;
+                match self.search(req) {
+                    Ok(resp) => resp,
+                    Err(e) => SearchResponse::Error(format!("fff-engine unavailable after respawn: {e}")),
+                }
+            }
+            Err(e) => SearchResponse::Error(format!("fff-engine recovery failed: {e}")),
+        }
+    }
+
+    /// Low-level send with no retry — used internally and by recovery.
     pub fn search(&mut self, req: &SearchRequest) -> Result<SearchResponse, IpcError> {
         write_message_sync(&mut self.writer, req)?;
         use std::io::Write;
