@@ -47,14 +47,7 @@ impl EngineClient {
 
         if won_lock {
             // We won the race: spawn fff-engine and write the child PID.
-            let frecency_path = dirs::data_dir()
-                .unwrap_or_else(|| {
-                    dirs::home_dir()
-                        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-                        .join(".local/share")
-                })
-                .join("fff")
-                .join("frecency");
+            let frecency_path = fff_ipc::xdg_data_dir().join("fff").join("frecency");
 
             // Prefer fff-engine co-located with fff-mcp (both live in the same
             // install dir) so $PATH doesn't need to include the binary directory.
@@ -64,11 +57,17 @@ impl EngineClient {
                 .filter(|p| p.exists())
                 .unwrap_or_else(|| std::path::PathBuf::from("fff-engine"));
 
+            // Null out stdio: fff-engine writes to its own log file. Inheriting
+            // fff-mcp's stdio would corrupt the MCP JSON-RPC stream on stdout
+            // and leak engine startup logs into the Claude Code session via stderr.
             let child = Command::new(&engine_bin)
                 .arg("--base-path")
                 .arg(base_path)
                 .arg("--frecency-db")
                 .arg(&frecency_path)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .spawn()
                 .map_err(|e| format!("Failed to spawn {}: {e}", engine_bin.display()))?;
 
