@@ -11,6 +11,10 @@ mod healthcheck;
 mod output;
 mod server;
 mod update_check;
+#[cfg(unix)]
+pub(crate) mod client;
+#[cfg(unix)]
+mod recovery;
 
 use clap::Parser;
 use fff::file_picker::FilePicker;
@@ -159,12 +163,46 @@ pub(crate) struct Args {
     /// Run a health check and print diagnostic information, then exit.
     #[arg(long = "healthcheck")]
     pub(crate) healthcheck: bool,
+
+    /// Hot-reload the running fff-engine's log level and exit.
+    /// Accepts any RUST_LOG-style string: "debug", "info", "fff_engine=debug,info".
+    #[arg(long = "set-log-level", value_name = "LEVEL")]
+    pub(crate) set_log_level: Option<String>,
 }
 
-/// Resolve default paths for the log file.
-/// Database paths (frecency, history) must be explicitly provided via flags.
-fn resolve_defaults(args: &mut Args) {
-    // Ensure parent directories exist for database paths when provided
+/// Merge CLI args with config file, then apply hardcoded defaults for anything
+/// still unset. Priority: CLI > config > hardcoded default.
+fn resolve_defaults(args: &mut Args, cfg: &fff_ipc::config::FffConfig) {
+    let home = dirs_home();
+
+    // log_level: CLI > config > "info"
+    if args.log_level.is_none() {
+        args.log_level = Some(cfg.log.level.clone());
+    }
+
+    // log_file: CLI > config > ~/.cache/fff_mcp.log
+    if args.log_file.is_none() {
+        args.log_file = Some(
+            cfg.log.file.clone().unwrap_or_else(|| {
+                if cfg!(target_os = "windows") {
+                    format!("{}\\AppData\\Local\\fff_mcp.log", home)
+                } else {
+                    format!("{}/.cache/fff_mcp.log", home)
+                }
+            }),
+        );
+    }
+
+    // max_cached_files: CLI > config
+    if args.max_cached_files.is_none() {
+        args.max_cached_files = cfg.index.max_cached_files;
+    }
+
+    // Booleans: CLI flag OR config flag (either can disable)
+    args.no_watch = args.no_watch || cfg.index.no_watch;
+    args.no_warmup = args.no_warmup || cfg.index.no_warmup;
+
+    // Ensure parent dirs exist for any explicitly provided db paths
     for path in [&args.frecency_db_path, &args.history_db_path]
         .into_iter()
         .flatten()
@@ -172,16 +210,6 @@ fn resolve_defaults(args: &mut Args) {
         if let Some(parent) = std::path::Path::new(path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-    }
-
-    if args.log_file.is_none() {
-        let home = dirs_home();
-        let is_windows = cfg!(target_os = "windows");
-        args.log_file = Some(if is_windows {
-            format!("{}\\AppData\\Local\\fff_mcp.log", home)
-        } else {
-            format!("{}/.cache/fff_mcp.log", home)
-        });
     }
 }
 
@@ -194,14 +222,43 @@ fn dirs_home() -> String {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
-    resolve_defaults(&mut args);
+    let cfg = fff_ipc::config::load();
+    resolve_defaults(&mut args, &cfg);
 
     if args.healthcheck {
         return healthcheck::run_healthcheck(&args);
     }
 
+    #[cfg(unix)]
+    if let Some(ref level) = args.set_log_level {
+        let base_path = args.base_path.as_deref().unwrap_or(".");
+        let mut engine = client::EngineClient::connect(std::path::Path::new(base_path))
+            .map_err(|e| format!("Could not connect to fff-engine: {e}"))?;
+        match engine.set_log_level(level) {
+            Ok(fff_ipc::types::SearchResponse::Ack) => {
+                println!("fff-engine log level set to {level:?}");
+            }
+            Ok(fff_ipc::types::SearchResponse::Error(e)) => {
+                eprintln!("fff-engine error: {e}");
+                std::process::exit(1);
+            }
+            Ok(_) => eprintln!("Unexpected response"),
+            Err(e) => {
+                eprintln!("IPC error: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     let log_file = args.log_file.as_deref().unwrap_or("");
-    if let Err(e) = fff::log::init_tracing(log_file, args.log_level.as_deref()) {
+    if std::env::var("RUST_LOG").is_err() {
+        if let Some(level) = args.log_level.as_deref() {
+            // SAFETY: single-threaded at this point — no other threads exist yet.
+            unsafe { std::env::set_var("RUST_LOG", level) };
+        }
+    }
+    if let Err(e) = fff::log::init_tracing(log_file, Some("info")) {
         eprintln!("Warning: Failed to init tracing: {}", e);
     }
 
@@ -232,6 +289,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // ── Unix proxy path: connect to fff-engine daemon ─────────────────────────
+    #[cfg(unix)]
+    {
+        let base_path_ref = std::path::Path::new(&base_path);
+        match client::EngineClient::connect(base_path_ref) {
+            Ok(engine_client) => {
+                if !args.no_update_check {
+                    update_check::spawn_update_check();
+                }
+                let server = FffServer::new_proxy(engine_client, base_path_ref.to_path_buf());
+                let service = server
+                    .serve(stdio())
+                    .await
+                    .map_err(|e| format!("Failed to start MCP server: {}", e))?;
+                service.waiting().await?;
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!("Failed to connect to fff-engine ({e}), falling back to direct mode");
+            }
+        }
+    }
+
+    // ── Direct path (Windows, or Unix fallback when engine unavailable) ───────
     let shared_picker = SharedFilePicker::default();
     let shared_frecency = SharedFrecency::default();
     if let Some(frecency_db_path) = args.frecency_db_path {

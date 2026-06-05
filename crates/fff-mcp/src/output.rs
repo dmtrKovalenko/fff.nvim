@@ -541,6 +541,344 @@ fn collect_file_preview<'a>(
     file_preview
 }
 
+// ── Wire-type formatters (proxy path) ────────────────────────────────────────
+
+#[cfg(unix)]
+pub mod wire {
+    use fff::grep::is_import_line;
+    use fff_ipc::types::{WireGrepResponse, WireSearchResult};
+
+    use crate::cursor::CursorStore;
+    use super::{
+        OutputMode, MAX_DEF_EXPAND, MAX_DEF_EXPAND_FIRST, MAX_FIRST_MATCH_EXPAND, MAX_LINE_LEN,
+        MAX_PREVIEW, file_suffix, size_tag, trauncate_line_for_ai,
+    };
+
+    pub struct WireGrepFormatter<'a> {
+        pub response: &'a WireGrepResponse,
+        pub output_mode: OutputMode,
+        pub max_results: usize,
+        pub show_context: bool,
+        pub auto_expand_defs: bool,
+    }
+
+    impl WireGrepFormatter<'_> {
+        pub fn format(&self, cursor_store: &mut CursorStore) -> String {
+            // Flatten grouped-by-file structure into a match list with file indices.
+            let mut flat: Vec<(usize, &fff_ipc::types::WireGrepMatch)> = Vec::new();
+            for (file_idx, fm) in self.response.matches.iter().enumerate() {
+                for m in &fm.matches {
+                    flat.push((file_idx, m));
+                }
+            }
+
+            let items = if flat.len() > self.max_results {
+                &flat[..self.max_results]
+            } else {
+                &flat[..]
+            };
+
+            if self.output_mode == OutputMode::FilesWithMatches {
+                return format_wire_files_with_matches(
+                    items,
+                    &self.response.matches,
+                    self.response.next_file_offset,
+                    self.auto_expand_defs,
+                    cursor_store,
+                );
+            }
+
+            if self.output_mode == OutputMode::Count {
+                return format_wire_count(items, &self.response.matches, self.response.next_file_offset, cursor_store);
+            }
+
+            let unique_files = {
+                let mut seen = std::collections::HashSet::new();
+                for (fi, _) in items {
+                    seen.insert(fi);
+                }
+                seen.len()
+            };
+
+            let max_output_chars: usize = if self.output_mode == OutputMode::Usage || unique_files <= 3 {
+                5000
+            } else if unique_files <= 8 {
+                3500
+            } else {
+                2500
+            };
+
+            let file_preview = collect_wire_file_preview(items, &self.response.matches);
+            let mut content_def_file = String::new();
+            let mut content_first_file = String::new();
+            for fm in &file_preview {
+                if content_first_file.is_empty() {
+                    content_first_file = fm.path.to_owned();
+                }
+                if content_def_file.is_empty() && fm.is_definition {
+                    content_def_file = fm.path.to_owned();
+                }
+            }
+
+            let content_suggest = if !content_def_file.is_empty() {
+                &content_def_file
+            } else {
+                &content_first_file
+            };
+
+            let mut lines: Vec<String> = Vec::new();
+            if !content_suggest.is_empty() {
+                let file_count = file_preview.len();
+                if file_count == 1 {
+                    lines.push(format!("→ Read {} (only match)", content_suggest));
+                } else if !content_def_file.is_empty() {
+                    lines.push(format!("→ Read {} [def]", content_suggest));
+                } else if file_count <= 3 {
+                    lines.push(format!("→ Read {} (best match)", content_suggest));
+                }
+            }
+
+            if flat.len() > items.len() {
+                lines.push(format!("{}/{} matches shown", items.len(), flat.len()));
+            }
+
+            let mut def_expanded_files = std::collections::HashSet::new();
+            let mut char_count = 0usize;
+            let mut shown_count = 0usize;
+            let mut current_file = String::new();
+
+            let sorted_items: Vec<usize> = if self.auto_expand_defs {
+                let mut indices: Vec<usize> = (0..items.len()).collect();
+                indices.sort_unstable_by_key(|&i| {
+                    if items[i].1.is_definition { 0 } else if is_import_line(&items[i].1.line_text) { 2 } else { 1 }
+                });
+                indices
+            } else {
+                (0..items.len()).collect()
+            };
+
+            for &idx in &sorted_items {
+                let (file_idx, m) = &items[idx];
+                let file = &self.response.matches[*file_idx];
+                let mut match_lines: Vec<String> = Vec::new();
+
+                if file.path != current_file {
+                    current_file.clone_from(&file.path);
+                    match_lines.push(current_file.clone());
+                }
+
+                if self.auto_expand_defs && is_import_line(&m.line_text) && !def_expanded_files.is_empty() {
+                    continue;
+                }
+
+                if self.show_context && !m.context_before.is_empty() {
+                    let start_line = m.line_number.saturating_sub(m.context_before.len() as u64);
+                    for (i, ctx) in m.context_before.iter().enumerate() {
+                        match_lines.push(format!(" {}-{}", start_line + i as u64, trauncate_line_for_ai(ctx, None, MAX_LINE_LEN)));
+                    }
+                }
+
+                match_lines.push(format!(
+                    " {}: {}",
+                    m.line_number,
+                    trauncate_line_for_ai(&m.line_text, Some(m.match_byte_offsets.as_ref()), MAX_LINE_LEN)
+                ));
+
+                if self.show_context && !m.context_after.is_empty() {
+                    let start_line = m.line_number + 1;
+                    for (i, ctx) in m.context_after.iter().enumerate() {
+                        match_lines.push(format!(" {}-{}", start_line + i as u64, trauncate_line_for_ai(ctx, None, MAX_LINE_LEN)));
+                    }
+                    match_lines.push("--".to_string());
+                }
+
+                if self.auto_expand_defs && !self.show_context && m.is_definition && !m.context_after.is_empty() && !def_expanded_files.contains(&file.path) {
+                    let expand_limit = if def_expanded_files.is_empty() { MAX_DEF_EXPAND_FIRST } else { MAX_DEF_EXPAND };
+                    def_expanded_files.insert(file.path.clone());
+                    let start_line = m.line_number + 1;
+                    for (i, ctx) in m.context_after.iter().take(expand_limit).enumerate() {
+                        if ctx.trim().is_empty() { break; }
+                        match_lines.push(format!("  {}| {}", start_line + i as u64, trauncate_line_for_ai(ctx, None, MAX_LINE_LEN)));
+                    }
+                }
+
+                let chunk = match_lines.join("\n");
+                if char_count + chunk.len() > max_output_chars && shown_count > 0 {
+                    break;
+                }
+                char_count += chunk.len();
+                lines.push(chunk);
+                shown_count += 1;
+            }
+
+            if self.response.next_file_offset > 0 {
+                let cursor_id = cursor_store.store(self.response.next_file_offset);
+                lines.push(format!("\ncursor: {}", cursor_id));
+            }
+
+            lines.join("\n")
+        }
+    }
+
+    struct WireFileMeta<'a> {
+        path: &'a str,
+        is_definition: bool,
+        line_number: u64,
+        line_text: String,
+        match_ranges: Vec<(u32, u32)>,
+        context_after: Vec<String>,
+        size: u64,
+    }
+
+    fn collect_wire_file_preview<'a>(
+        items: &[(usize, &'a fff_ipc::types::WireGrepMatch)],
+        files: &'a [fff_ipc::types::WireGrepFileMatches],
+    ) -> Vec<WireFileMeta<'a>> {
+        let mut out: Vec<WireFileMeta<'a>> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (fi, m) in items {
+            let file = &files[*fi];
+            if seen.insert(file.path.as_str()) {
+                out.push(WireFileMeta {
+                    path: &file.path,
+                    is_definition: m.is_definition,
+                    line_number: m.line_number,
+                    line_text: m.line_text.clone(),
+                    match_ranges: m.match_byte_offsets.clone(),
+                    context_after: m.context_after.clone(),
+                    size: file.size,
+                });
+            }
+        }
+        out
+    }
+
+    fn format_wire_files_with_matches(
+        items: &[(usize, &fff_ipc::types::WireGrepMatch)],
+        files: &[fff_ipc::types::WireGrepFileMatches],
+        next_file_offset: usize,
+        auto_expand_defs: bool,
+        cursor_store: &mut CursorStore,
+    ) -> String {
+        let file_map = collect_wire_file_preview(items, files);
+        let mut lines: Vec<String> = Vec::new();
+        let file_count = file_map.len();
+
+        let mut first_def = String::new();
+        let mut first_file = String::new();
+        for fm in &file_map {
+            if first_file.is_empty() { first_file = fm.path.to_owned(); }
+            if first_def.is_empty() && fm.is_definition { first_def = fm.path.to_owned(); }
+        }
+        let suggest = if !first_def.is_empty() { &first_def } else { &first_file };
+        if !suggest.is_empty() {
+            if file_count == 1 { lines.push(format!("→ Read {} (only match — no need to search further)", suggest)); }
+            else if !first_def.is_empty() && file_count <= 5 { lines.push(format!("→ Read {} (definition found)", suggest)); }
+            else if !first_def.is_empty() { lines.push(format!("→ Read {} (definition)", suggest)); }
+            else if file_count <= 3 { lines.push(format!("→ Read {} (best match)", suggest)); }
+            else { lines.push(format!("→ Read {}", suggest)); }
+        }
+
+        let is_small_set = file_count <= 5;
+        let mut def_count = 0usize;
+        for (file_idx, fm) in file_map.iter().enumerate() {
+            let def_tag = if fm.is_definition { " [def]" } else { "" };
+            lines.push(format!("{}{}{}", fm.path, def_tag, size_tag(fm.size)));
+            let expand_limit = if fm.is_definition {
+                let lim = if def_count == 0 { MAX_DEF_EXPAND_FIRST } else { MAX_DEF_EXPAND };
+                def_count += 1;
+                lim
+            } else if is_small_set && file_idx == 0 { MAX_FIRST_MATCH_EXPAND }
+            else if is_small_set { MAX_DEF_EXPAND }
+            else { 0 };
+
+            if !fm.line_text.is_empty() && (fm.is_definition || file_idx == 0 || is_small_set) {
+                let ranges_ref: Option<&[(u32, u32)]> = if fm.match_ranges.is_empty() { None } else { Some(&fm.match_ranges) };
+                lines.push(format!("  {}: {}", fm.line_number, trauncate_line_for_ai(&fm.line_text, ranges_ref, MAX_PREVIEW)));
+                if auto_expand_defs && !fm.context_after.is_empty() && expand_limit > 0 {
+                    let start = fm.line_number + 1;
+                    for (i, ctx) in fm.context_after.iter().take(expand_limit).enumerate() {
+                        if ctx.trim().is_empty() { break; }
+                        lines.push(format!("  {}| {}", start + i as u64, trauncate_line_for_ai(ctx, None, MAX_PREVIEW)));
+                    }
+                }
+            }
+        }
+
+        if next_file_offset > 0 {
+            let cursor_id = cursor_store.store(next_file_offset);
+            lines.push(format!("\ncursor: {}", cursor_id));
+        }
+        lines.join("\n")
+    }
+
+    fn format_wire_count(
+        items: &[(usize, &fff_ipc::types::WireGrepMatch)],
+        files: &[fff_ipc::types::WireGrepFileMatches],
+        next_file_offset: usize,
+        cursor_store: &mut CursorStore,
+    ) -> String {
+        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut order: Vec<&str> = Vec::new();
+        for (fi, _) in items {
+            let path = files[*fi].path.as_str();
+            let count = counts.entry(path).or_insert_with(|| { order.push(path); 0 });
+            *count += 1;
+        }
+        let mut lines: Vec<String> = order.iter().map(|p| format!("{}: {}", p, counts[p])).collect();
+        if next_file_offset > 0 {
+            let cursor_id = cursor_store.store(next_file_offset);
+            lines.push(format!("\ncursor: {}", cursor_id));
+        }
+        lines.join("\n")
+    }
+
+    /// Format find_files results from wire types.
+    pub fn format_wire_find_files(
+        items: &[WireSearchResult],
+        total_matched: usize,
+        page_offset: usize,
+        cursor_store: &mut CursorStore,
+    ) -> String {
+        if items.is_empty() {
+            return String::new();
+        }
+
+        let git_status_from_bits = |bits: Option<u32>| -> Option<git2::Status> {
+            bits.map(git2::Status::from_bits_truncate)
+        };
+
+        let mut lines: Vec<String> = Vec::new();
+        let top = &items[0];
+        let next_offset = page_offset + items.len();
+        let has_more = next_offset < total_matched;
+
+        // top-of-list suggestion
+        if page_offset == 0 {
+            lines.push(format!("→ Read {} (best match)", top.path));
+        }
+
+        if has_more {
+            lines.push(format!("{}/{} matches", items.len(), total_matched));
+        }
+
+        for item in items {
+            lines.push(format!(
+                "{}{}",
+                item.path,
+                file_suffix(git_status_from_bits(item.git_status), item.frecency_score)
+            ));
+        }
+
+        if has_more {
+            let cursor_id = cursor_store.store(next_offset);
+            lines.push(format!("cursor: {}", cursor_id));
+        }
+
+        lines.join("\n")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

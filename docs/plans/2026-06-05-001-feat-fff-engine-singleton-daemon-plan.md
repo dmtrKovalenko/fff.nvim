@@ -1,7 +1,7 @@
 ---
 title: "feat: Add fff-engine singleton daemon and rewrite fff-mcp as stateless proxy"
 date: 2026-06-05
-status: active
+status: completed
 origin: docs/brainstorms/2026-06-05-fff-engine-singleton-requirements.md
 type: feat
 ---

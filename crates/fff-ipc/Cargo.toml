@@ -1,0 +1,18 @@
+[package]
+name = "fff-ipc"
+version = "0.9.0"
+edition = "2024"
+description = "Shared IPC types, framing codec, and path helpers for fff-engine <-> fff-mcp communication"
+license = "MIT"
+
+[dependencies]
+bincode = { workspace = true }
+blake3 = { workspace = true }
+dirs = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["io-util"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread"] }
