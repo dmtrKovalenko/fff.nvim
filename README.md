@@ -40,10 +40,13 @@ The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`]
 ### Homebrew (macOS / Linux)
 
 ```bash
-brew install jellydn/tap/fff-mcp
+brew install dmtrKovalenko/fff/fff-mcp
+brew upgrade fff-mcp   # after new stable releases
 ```
 
-Tap and formula: [jellydn/homebrew-tap](https://github.com/jellydn/homebrew-tap). Installs the prebuilt `fff-mcp` binary from [GitHub releases](https://github.com/dmtrKovalenko/fff.nvim/releases). The tap [auto-updates on new stable releases](https://github.com/jellydn/homebrew-tap/blob/main/.github/workflows/README-fff-mcp.md) (6h poll; instant bump from official `dmtrKovalenko` releases when secrets are configured). Manual bumps and dispatches are limited to **jellydn** and **dmtrKovalenko**. Wire the installed `fff-mcp` binary in your MCP client config the same way as a curl install.
+Formula lives in [`Formula/fff-mcp.rb`](./Formula/fff-mcp.rb) in this repo and is **auto-bumped on every stable release** (see `bump-homebrew-formula` in [`.github/workflows/release.yaml`](./.github/workflows/release.yaml)). Installs the prebuilt `fff-mcp` binary from [GitHub releases](https://github.com/dmtrKovalenko/fff.nvim/releases).
+
+Originally contributed by [@jellydn](https://github.com/jellydn/homebrew-tap).
 
 Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
 

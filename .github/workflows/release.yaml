@@ -466,8 +466,8 @@ jobs:
             curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
             ```
 
-  bump-homebrew-tap:
-    name: Bump Homebrew tap (fff-mcp)
+  bump-homebrew-formula:
+    name: Bump Homebrew formula (fff-mcp)
     needs: release
     runs-on: ubuntu-latest
     if: >-
@@ -476,6 +476,8 @@ jobs:
       && (github.ref == 'refs/heads/main'
         || github.ref == 'refs/heads/fix/use-trusted-publishing'
         || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
@@ -486,21 +488,24 @@ jobs:
         id: version
         run: lua scripts/determine-version.lua
 
-      - name: Notify Homebrew tap
+      - name: Regenerate Formula/fff-mcp.rb
         if: steps.version.outputs.is_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_DISPATCH_TOKEN }}
-          BUMP_SECRET: ${{ secrets.FFF_RELEASE_BUMP_SECRET }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if [[ -z "${GH_TOKEN}" || -z "${BUMP_SECRET}" ]]; then
-            echo "HOMEBREW_TAP_DISPATCH_TOKEN or FFF_RELEASE_BUMP_SECRET not set; tap syncs via scheduled workflow"
+          chmod +x scripts/bump-fff-mcp.sh
+          ./scripts/bump-fff-mcp.sh "${{ steps.version.outputs.version }}"
+
+      - name: Commit formula bump
+        if: steps.version.outputs.is_release == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/fff-mcp.rb
+          if git diff --staged --quiet; then
+            echo "Formula already up to date"
             exit 0
           fi
-          gh api repos/jellydn/homebrew-tap/dispatches \
-            -f event_type=fff-release-published \
-            -f "client_payload[version]=${VERSION}" \
-            -f "client_payload[bump_secret]=${BUMP_SECRET}"
+          git commit -m "chore(homebrew): bump fff-mcp to v${{ steps.version.outputs.version }}"
+          git push
 
   crates-publish:
     name: Publish Rust crates
