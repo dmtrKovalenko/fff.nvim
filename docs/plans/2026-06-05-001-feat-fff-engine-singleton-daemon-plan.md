@@ -57,6 +57,9 @@ The OS guarantees exactly one winner on `O_CREAT|O_EXCL`. The winner spawns fff-
 **KTD-6: fff-mcp retains --base-path and frecency-related flags are removed**
 fff-mcp's `--frecency-db`, `--max-cached-files`, `--content-indexing`, and `--no-watch` flags all controlled FilePicker/FrecencyTracker initialization that now lives in fff-engine. fff-mcp removes these flags from its own CLI. fff-engine acquires equivalent flags. `--base-path` stays in fff-mcp (it needs the root to derive the socket path).
 
+**KTD-7: daemon architecture is `#[cfg(unix)]` only; Windows uses the existing per-process model**
+`tokio::net::UnixListener` and `UnixStream` are Unix-only APIs — they do not compile on Windows targets. The codebase actively supports Windows (`install-mcp.ps1`, Windows release assets, `#[cfg(not(target_os = "windows"))]` guards in fff-core). The daemon + proxy rewrite is gated behind `#[cfg(unix)]` throughout fff-engine and the new fff-mcp client layer. On Windows, fff-mcp retains its current standalone behaviour (direct fff-core calls, per-process index). This is not a regression — Windows never had the daemon path.
+
 ---
 
 ## High-Level Technical Design
@@ -186,13 +189,28 @@ crates/
 `types.rs` — define:
 ```
 SearchRequest { Grep, FindFiles, MultiGrep, RecordAccess }
-SearchResponse { SearchResults(Vec<SearchResult>), Error(String) }
+SearchResponse { SearchResults(Vec<WireSearchResult>), Error(String) }
 GrepOptions  — mirrors GrepSearchOptions fields (serialisable subset)
 FindOptions  — mirrors FuzzySearchOptions fields (serialisable subset)
-SearchResult — serialisable representation of a match (path, line, snippet, score)
+
+// Owned wire types — NOT the fff-core types (which are lifetime-bound arena borrows)
+WireSearchResult {
+    path: String,          // materialised from ChunkedString arena while guard is held
+    line: Option<u32>,     // grep line number; None for find_files
+    snippet: Option<String>,
+    score: i64,
+    git_status: Option<u32>,  // raw git2::Status bits; None if unknown
+}
+WireGrepMatch {
+    line_number: u32,
+    line_text: String,
+    match_byte_offsets: Vec<(u32, u32)>,   // converted from SmallVec — serde-compatible
+}
 ```
 
-All types derive `serde::Serialize + serde::Deserialize`. `RecordAccess` variant carries the path string; fff-mcp never sends it in this track but the variant exists for forward compatibility.
+**Critical:** `fff-core`'s `SearchResult<'a>`, `GrepResult<'a>`, and `FileItem` are **not serializable** — `FileItem` contains `AtomicU8`, `OnceLock<memmap2::Mmap>`, and `ChunkedString` (a private arena-indexed type with raw pointers). None derive `Serialize`. U4 must project results into these owned wire types while holding the picker read-lock.
+
+All fff-ipc types derive `serde::Serialize + serde::Deserialize`. `RecordAccess` variant carries the path string; fff-mcp never sends it in this track but the variant exists for forward compatibility.
 
 `codec.rs` — two async functions:
 - `write_message<W, T>(writer, &T)` — serialise with bincode, prepend 4-byte LE length, write to `AsyncWrite`
@@ -312,10 +330,16 @@ handle_find_files(state: &EngineState, req: FindRequest) -> SearchResponse
 handle_multi_grep(state: &EngineState, req: MultiGrepRequest) -> SearchResponse
 ```
 
-Each function:
-1. Clones `state.shared_picker` (cheap Arc clone)
-2. Calls `tokio::task::spawn_blocking(move || { let guard = picker.read(); let picker = guard.as_ref()?; picker.<method>(...) })`
-3. Maps the fff-core result type to `SearchResponse::SearchResults` or `SearchResponse::Error`
+Each function follows this exact pattern — **lock acquisition and wire projection must both happen inside `spawn_blocking`**:
+
+1. Clone `state.shared_picker` (`Arc::clone` — cheap, the clone crosses the `Send` boundary into the blocking thread; `parking_lot::RwLockReadGuard` is NOT `Send` and must never cross it)
+2. Inside `tokio::task::spawn_blocking(move || { ... })`:
+   a. Acquire the read guard: `let guard = picker.read(); let picker_ref = guard.as_ref()?;`
+   b. Call the fff-core method (`picker_ref.grep(...)`, `picker_ref.fuzzy_search(...)`, etc.)
+   c. **Project results into owned wire types while the guard is still held** — `WireSearchResult { path: item.path.to_string(), ... }` — because `FileItem.path` is a `ChunkedString` (arena-relative pointer) that becomes invalid once the guard drops
+   d. Drop the guard (implicit at end of scope)
+   e. Return `Vec<WireSearchResult>`
+3. Map to `SearchResponse::SearchResults(results)` or `SearchResponse::Error`
 
 `GrepRequest`, `FindRequest`, `MultiGrepRequest` are extracted from the `SearchRequest` enum variants. The mapping from `GrepOptions` (IPC type) → `GrepSearchOptions` (fff-core type) is a straightforward field copy; any IPC field not present in fff-core is defaulted.
 
@@ -337,6 +361,8 @@ Each function:
 ### U5. fff-engine Unix socket server
 
 **Goal:** Stand up the Tokio `UnixListener`, accept concurrent client connections, and dispatch each request through the handlers from U4.
+
+> `fff-engine` as a whole is a Unix-only binary (KTD-7). The entire crate is compiled only on `#[cfg(unix)]` targets; Windows is out of scope per Non-Goals.
 
 **Requirements:** R1, R4
 
@@ -424,11 +450,12 @@ Startup order in `main.rs`:
 - `crates/fff-mcp/src/client.rs` (new)
 - `crates/fff-mcp/src/main.rs` (modified)
 - `crates/fff-mcp/src/server.rs` (modified)
+- `crates/fff-mcp/src/healthcheck.rs` (modified — rewrite to probe daemon socket)
 - `crates/fff-mcp/Cargo.toml` (add `fff-ipc` dep; remove unused deps if any)
 
 **Approach:**
 
-`client.rs` — `EngineClient` struct:
+`client.rs` — `EngineClient` struct (entire module gated `#[cfg(unix)]`; on Windows, fff-mcp keeps its current standalone startup path):
 - Holds a `tokio::net::UnixStream` to fff-engine
 - `connect(base_path: &Path) -> Result<Self>` — runs spawn-if-absent, then connects:
   1. Resolve `socket_path` and `lockfile_path` from fff-ipc `paths`
@@ -449,7 +476,11 @@ Startup order in `main.rs`:
 - `FffServer` replaces `SharedFilePicker` + `SharedFrecency` fields with `EngineClient`
 - Each tool handler (`grep`, `find_files`, `multi_grep`): replace `picker.read()... picker.grep(...)` with `self.client.search(SearchRequest::Grep { ... })`; map `SearchResponse::SearchResults` to the existing output formatting; map `SearchResponse::Error` to `CallToolResult` error
 - Existing output formatting code (`output.rs`, cursor handling) is preserved unchanged
-- Healthcheck: connect and send a trivial `FindFiles` request; any successful response → healthy
+
+`healthcheck.rs` rewrite (KTD-6 removes `--frecency-db` / `--history-db` from fff-mcp, breaking the current path-based checks):
+- Remove checks on `args.frecency_db_path` and `args.history_db_path` (both flags gone)
+- Replace with a daemon connectivity check: attempt `UnixStream::connect(socket_path)` for the derived socket path; report `ENOENT` (daemon not started) vs `ECONNREFUSED` (daemon crashed) vs success as the health signal
+- `--healthcheck` flag still triggers this path; exit code semantics unchanged
 
 **Execution note:** Rewrite tool handlers one at a time (grep → find_files → multi_grep), running existing inline tests after each to catch regressions before touching the next.
 
@@ -463,6 +494,8 @@ Startup order in `main.rs`:
 - A second `fff-mcp` started when fff-engine is already running connects without spawning a second daemon
 - Healthcheck passes after startup completes
 - fff-mcp `--help` no longer shows `--frecency-db` / `--max-cached-files` / `--content-indexing` flags
+- `--healthcheck` with daemon running returns exit 0
+- `--healthcheck` with no daemon socket present returns a non-zero exit code with a human-readable "daemon not started" message
 
 **Verification:** `cargo test -p fff-mcp` passes; an end-to-end smoke test (MCP client → fff-mcp stdio → fff-engine socket → grep result) completes without error.
 
@@ -554,7 +587,7 @@ Startup order in `main.rs`:
 - Changing `fff-core`, `fff-grep`, or `fff-query-parser`
 - Remote / TCP connections
 - Changing fff-mcp's external MCP interface
-- Windows support for Unix socket (out of scope; existing platform support unchanged)
+- Windows daemon path — `#[cfg(unix)]` gates the entire daemon architecture; Windows retains the existing per-process standalone model (KTD-7)
 
 ---
 
