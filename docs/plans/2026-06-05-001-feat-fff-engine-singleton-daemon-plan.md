@@ -39,8 +39,12 @@ From the origin document:
 
 ## Key Technical Decisions
 
-**KTD-1: Shared IPC types in a new `fff-ipc` crate**
-Both `fff-engine` and `fff-mcp` need the `SearchRequest`/`SearchResponse` types and the framing codec. A shared crate avoids duplication and gives each binary a single source of truth for the wire format. Alternative (inline types in each crate) was rejected because any divergence silently breaks the protocol.
+**KTD-1: Shared IPC (Inter-Process Communication) types in a new `fff-ipc` crate**
+Both `fff-engine` and `fff-mcp` need the `SearchRequest`/`SearchResponse` types and the framing codec. A shared crate gives each binary a single source of truth for the wire format — divergence between the two copies silently breaks the protocol with a bincode deserialization error that is hard to diagnose.
+
+**Why a crate rather than a module in fff-core:** fff-core is the search engine library. Embedding daemon IPC types in it couples search logic with transport concerns, and any future consumer of fff-core (e.g. a C FFI binding or a WASM build) would pull in socket and serialization dependencies they don't need. A separate `fff-ipc` crate has zero runtime logic of its own — it is types + codec + path helpers — and any future client (fff-nvim, fff TUI, a CLI tool) can depend on it without depending on fff-core.
+
+**The counter-argument acknowledged:** At plan time fff-ipc has exactly two consumers. The prior mmap design put shared types in `fff-core/src/ipc.rs` (one file, no new crate) which is a lighter-weight choice for two-consumer scenarios. If the scope stays at two consumers and this codebase is never published upstream, the module-in-fff-core approach is equally valid. The crate boundary is a defensible choice given the planned upstream RFC, but not a hard requirement.
 
 **KTD-2: bincode + 4-byte LE length prefix for wire framing**
 `bincode` is compact, fast, and serde-compatible. JSON was rejected (unnecessary overhead on a same-machine socket). The length prefix enables streaming reads on a Tokio `UnixStream` without knowing message boundaries in advance. The workspace currently has no `bincode` dep; it will be added.
@@ -125,11 +129,17 @@ fff-mcp receives MCP tool call (e.g. grep)
 ```
 fff-mcp sends request → ECONNREFUSED or broken pipe
     │
-    ├─ delete stale lockfile
-    ├─ retry O_CREAT|O_EXCL → spawn fff-engine again
-    │       (one fff-mcp wins the race; others re-poll)
-    ├─ wait for socket
-    └─ reconnect → retry request
+    ├─ read PID from lockfile
+    │       ├─ kill(pid, 0) succeeds → daemon starting slowly
+    │       │         wait 100 ms → retry connect (backoff: 100→200→400 ms, 3 attempts)
+    │       └─ kill(pid, 0) fails (dead) OR lockfile missing/unreadable
+    │                 → delete stale lockfile + stale socket file
+    │                 → retry O_CREAT|O_EXCL (one fff-mcp wins the race)
+    │                 → winner: write PID, spawn fff-engine, wait for socket
+    │                 → losers: poll for socket
+    │
+    └─ reconnect → retry original request
+       on 3rd failure → return SearchResponse::Error
 ```
 
 ---
@@ -516,18 +526,22 @@ Startup order in `main.rs`:
 **Approach:**
 
 `recovery.rs` — `respawn(base_path: &Path) -> Result<EngineClient>`:
-1. Remove stale lockfile if present
-2. Retry `EngineClient::connect(base_path)` — this re-runs spawn-if-absent (O_CREAT|O_EXCL race; one fff-mcp wins)
-3. Return new connected `EngineClient`
+1. Read the PID from the lockfile (written by the spawner at connect time — see U7 `client.rs` spawn path below)
+2. Check `kill(pid, 0)` — if the process is still alive, the daemon is starting slowly (between spawn and listen); wait with backoff rather than deleting the lockfile
+3. If the PID is dead (or the lockfile is absent/unreadable): delete the stale lockfile, then retry `EngineClient::connect(base_path)` — this re-runs spawn-if-absent (`O_CREAT|O_EXCL` race; one fff-mcp wins)
+4. Return new connected `EngineClient`
 
 `client.rs` changes:
-- `search` wraps its inner call with a retry: on `Err(broken-pipe)` or `Err(ECONNREFUSED)`, call `respawn`, replace `self.stream`, retry the request once. On second failure, return `SearchResponse::Error`.
-- Retry is exactly once — if the respawned daemon fails immediately, surface the error rather than looping.
+- In the spawn-if-absent path (U7), after winning `O_CREAT|O_EXCL`, write the spawned child's PID into the lockfile before awaiting the socket. This lets crash recovery distinguish a slow-starting daemon from a dead one.
+- `search` wraps its inner call with a retry loop using exponential backoff (100 ms → 200 ms → 400 ms, max 3 attempts): on `Err(broken-pipe)` or `Err(ECONNREFUSED)`, call `respawn`, replace `self.stream`, retry. On third failure, return `SearchResponse::Error`.
+- Backoff absorbs the window between daemon spawn and socket-ready, preventing a race where fff-mcp kills a live lockfile belonging to a daemon that hasn't bound yet.
 
 **Test scenarios:**
-- `search` on a client whose server has been killed returns a valid result after transparent recovery (stream replaced, request retried)
-- If fff-engine crashes and respawn also fails (simulate with bad binary path), `search` returns `SearchResponse::Error` rather than panicking or hanging
-- Two concurrent fff-mcp instances both attempting respawn: exactly one spawns fff-engine; both end up connected
+- `search` on a client whose server has been killed returns a valid result after transparent recovery (stream replaced, request retried within backoff window)
+- Lockfile present with a live PID (`kill(pid, 0)` succeeds) — recovery waits with backoff instead of deleting the lockfile
+- Lockfile present with a dead PID — recovery deletes the stale lockfile and respawns
+- If fff-engine crashes and respawn also fails (simulate with bad binary path), `search` returns `SearchResponse::Error` after 3 attempts rather than panicking or hanging
+- Two concurrent fff-mcp instances both attempting respawn: exactly one spawns fff-engine (PID written to lockfile); both end up connected
 
 **Verification:** Kill the fff-engine process mid-session; the next MCP tool call succeeds without the caller (Claude Code) seeing an error.
 
@@ -549,8 +563,7 @@ Startup order in `main.rs`:
 **Approach:**
 
 `install-mcp.sh`:
-- Add fff-engine binary download alongside fff-mcp (same release tag, platform-specific binary name: `fff-engine-<platform>`). The current install script uses an awk filter keyed on `fff-mcp-{target}` to locate release assets — this filter must be generalised or a parallel download function added for fff-engine. The GitHub Actions release workflow (not in this plan's file list) will also need updating to publish fff-engine binaries.
-- Place fff-engine binary in the same install directory as fff-mcp
+- Binary distribution (downloading fff-engine from GitHub releases, updating the awk asset filter, GitHub Actions (GHA) release workflow) is deferred to follow-up — see Scope Boundaries. The install script change in this track is limited to removing any stale references to removed fff-mcp flags.
 - Printed `.mcp.json` template: the current template does not include `--frecency-db` (it was never in the template). No change needed here; fff-engine is spawned internally by fff-mcp.
 
 `.mcp.json` (root dev template):
@@ -582,6 +595,7 @@ Startup order in `main.rs`:
 - BigramFilter mmap redesign (original "follow-on" from the mmap design; still applies)
 - Upstream RFC to `dmtrKovalenko/fff` — decide fork vs. contribution after implementation is stable
 - fff-engine idle timeout (auto-shutdown when no clients connected for N minutes)
+- install-mcp.sh binary distribution for fff-engine — current script uses an awk filter keyed on `fff-mcp-{target}`; generalising it + adding GHA release workflow changes is a distribution task separate from the daemon implementation
 
 ### Non-Goals
 - Changing `fff-core`, `fff-grep`, or `fff-query-parser`
