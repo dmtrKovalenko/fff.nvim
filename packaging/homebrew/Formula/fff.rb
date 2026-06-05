@@ -1,12 +1,12 @@
 class Fff < Formula
   desc "Fast frecency-ranked file finder MCP server for AI code assistants"
   homepage "https://github.com/abhijit-s/fff"
-  url "https://github.com/abhijit-s/fff/archive/refs/tags/v0.9.1.tar.gz"
+  url "https://github.com/abhijit-s/fff/archive/refs/tags/v0.10.0.tar.gz"
   sha256 "PLACEHOLDER_SHA256_UPDATE_ON_RELEASE"
   license "MIT"
   # Local dev: brew install --HEAD abhijit-s/fff/fff
   head do
-    url "https://github.com/abhijit-s/fff.git", branch: "feat/engine-singleton-ipc"
+    url "https://github.com/abhijit-s/fff.git", branch: "main"
   end
 
   depends_on "rust" => :build
