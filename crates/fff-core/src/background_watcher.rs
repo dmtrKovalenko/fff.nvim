@@ -655,7 +655,7 @@ fn handle_debounced_events(
 
         // git status query even with a pathspec could be really slow, if we do this syncrhronously
         // within the event handler, we actually risk of forming a snow ball of conflicting events
-        crate::file_picker::BACKGROUND_THREAD_POOL.spawn(move || {
+        crate::parallelism::BACKGROUND_THREAD_POOL.spawn(move || {
             let Some(git_path) = git_workdir else { return };
             let Ok(repo) = Repository::open(&git_path) else {
                 error!("Failed to open git repo for async status update");

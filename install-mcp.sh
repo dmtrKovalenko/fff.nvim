@@ -4,8 +4,9 @@ set -eo pipefail
 # FFF MCP Server installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
 
-REPO="dmtrKovalenko/fff.nvim"
+REPO="abhijit-s/fff"
 BINARY_NAME="fff-mcp"
+ENGINE_NAME="fff-engine"
 INSTALL_DIR="${FFF_MCP_INSTALL_DIR:-$HOME/.local/bin}"
 
 info() { printf '\033[1;34m%s\033[0m\n' "$*"; }
@@ -78,6 +79,47 @@ get_latest_release_tag() {
     echo "$tag"
 }
 
+download_one() {
+    local name="$1"
+    local target="$2"
+    local tag="$3"
+    local ext="$4"
+
+    local filename="${name}-${target}${ext}"
+    local url="https://github.com/${REPO}/releases/download/${tag}/${filename}"
+    local checksum_url="${url}.sha256"
+
+    info "Downloading ${filename}..."
+
+    local tmp_dir="$5"
+
+    if ! curl -fsSL -o "${tmp_dir}/${filename}" "$url" 2>/dev/null; then
+        echo "" >&2
+        printf '\033[1;31mError: Failed to download %s for your platform.\033[0m\n' "$name" >&2
+        echo "" >&2
+        echo "  URL: ${url}" >&2
+        echo "  Release: ${tag}" >&2
+        echo "  Platform: ${target}" >&2
+        echo "" >&2
+        echo "Check available releases at: https://github.com/${REPO}/releases" >&2
+        exit 1
+    fi
+
+    if command -v sha256sum &>/dev/null; then
+        if curl -fsSL -o "${tmp_dir}/${filename}.sha256" "$checksum_url" 2>/dev/null; then
+            info "Verifying checksum for ${name}..."
+            (cd "$tmp_dir" && sha256sum -c "${filename}.sha256") \
+                || error "Checksum verification failed for ${name}!"
+        else
+            warn "Checksum file not available for ${name}, skipping verification."
+        fi
+    fi
+
+    mkdir -p "$INSTALL_DIR"
+    mv "${tmp_dir}/${filename}" "${INSTALL_DIR}/${name}${ext}"
+    chmod +x "${INSTALL_DIR}/${name}${ext}"
+}
+
 download_binary() {
     local target="$1"
     local tag="$2"
@@ -87,47 +129,17 @@ download_binary() {
         *windows*) ext=".exe" ;;
     esac
 
-    local filename="${BINARY_NAME}-${target}${ext}"
-    local url="https://github.com/${REPO}/releases/download/${tag}/${filename}"
-    local checksum_url="${url}.sha256"
-
-    info "Downloading ${filename} from release ${tag}..."
-
     local tmp_dir
     tmp_dir="$(mktemp -d)"
     trap 'rm -rf "$tmp_dir"' EXIT
 
-    if ! curl -fsSL -o "${tmp_dir}/${filename}" "$url" 2>/dev/null; then
-        echo "" >&2
-        printf '\033[1;31mError: Failed to download binary for your platform.\033[0m\n' >&2
-        echo "" >&2
-        echo "  URL: ${url}" >&2
-        echo "  Release: ${tag}" >&2
-        echo "  Platform: ${target}" >&2
-        echo "" >&2
-        echo "This likely means the MCP binary hasn't been built for this release yet." >&2
-        echo "Check available releases at: https://github.com/${REPO}/releases" >&2
-        exit 1
-    fi
-
-    # Verify checksum if sha256sum is available
-    if command -v sha256sum &>/dev/null; then
-        if curl -fsSL -o "${tmp_dir}/${filename}.sha256" "$checksum_url" 2>/dev/null; then
-            info "Verifying checksum..."
-            (cd "$tmp_dir" && sha256sum -c "${filename}.sha256") \
-                || error "Checksum verification failed!"
-        else
-            warn "Checksum file not available, skipping verification."
-        fi
-    fi
-
-    # Install
-    mkdir -p "$INSTALL_DIR"
-    mv "${tmp_dir}/${filename}" "${INSTALL_DIR}/${BINARY_NAME}${ext}"
-    chmod +x "${INSTALL_DIR}/${BINARY_NAME}${ext}"
+    # Both binaries must land in the same directory: fff-mcp finds fff-engine
+    # via current_exe().parent() at runtime.
+    download_one "$BINARY_NAME" "$target" "$tag" "$ext" "$tmp_dir"
+    download_one "$ENGINE_NAME" "$target" "$tag" "$ext" "$tmp_dir"
 
     if [ "$IS_UPDATE" != true ]; then
-        success "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}${ext}"
+        success "Installed ${BINARY_NAME} and ${ENGINE_NAME} to ${INSTALL_DIR}/"
     fi
 }
 
@@ -226,8 +238,8 @@ print_setup_instructions() {
         echo ""
     fi
 
-    echo "Binary: ${binary_path}"
-    echo "Docs:   https://github.com/${REPO}"
+    echo "Binaries: ${binary_path}, ${INSTALL_DIR}/${ENGINE_NAME}"
+    echo "Docs:     https://github.com/${REPO}"
     echo ""
     info "Tip: Add this to your CLAUDE.md or AGENTS.md to make AI use fff for all searches:"
     echo "\""

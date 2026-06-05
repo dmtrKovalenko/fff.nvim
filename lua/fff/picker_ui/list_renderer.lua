@@ -79,7 +79,7 @@ local function generate_item_lines(ctx)
   end
 
   local renderer = ctx.renderer
-  if not renderer then renderer = require('fff.file_renderer') end
+  if not renderer then renderer = require('fff.picker_ui.file_renderer') end
 
   -- Insert a gap on the side of the anchor away from the prompt.
   -- Bottom prompt: gap BEFORE anchor in iter — anchor renders last with
@@ -197,7 +197,7 @@ end
 --- @param ns_id number
 local function apply_all_highlights(lines, item_to_lines, ctx, list_buf, ns_id)
   local renderer = ctx.renderer
-  if not renderer then renderer = require('fff.file_renderer') end
+  if not renderer then renderer = require('fff.picker_ui.file_renderer') end
 
   for i = ctx.display_start, ctx.display_end do
     local item = ctx.items[i]

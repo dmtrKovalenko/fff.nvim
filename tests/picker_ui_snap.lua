@@ -85,7 +85,9 @@ local function assert_snapshot_match(opts)
 end
 
 local function open_picker(prompt_position, query)
-  child.lua(string.format('require("fff.picker_ui").open({ layout = { prompt_position = %q } })', prompt_position))
+  child.lua(
+    string.format('require("fff.picker_ui.picker_ui").open({ layout = { prompt_position = %q } })', prompt_position)
+  )
   vim.loop.sleep(400)
 
   if query and query ~= '' then

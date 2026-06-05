@@ -6,7 +6,7 @@
 -- opened as phantom buffers and previews showed "No preview available".
 
 local fff_rust = require('fff.rust')
-local picker_ui = require('fff.picker_ui')
+local picker_ui = require('fff.picker_ui.picker_ui')
 local file_picker = require('fff.file_picker')
 
 --- Normalise a path so that comparisons work on every OS.

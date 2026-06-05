@@ -29,16 +29,40 @@ fn path_hash(base_path: &Path) -> String {
     hash.to_hex()[..16].to_string()
 }
 
-/// Resolves the XDG cache dir with the correct fallback for macOS (which does
-/// not set `$XDG_CACHE_HOME` by default). `dirs::cache_dir()` encodes this:
-/// `$XDG_CACHE_HOME` if set, else `$HOME/.cache` on Linux and
-/// `$HOME/Library/Caches` on macOS.
+/// XDG cache directory: `$XDG_CACHE_HOME` → `$HOME/.cache` → `dirs::cache_dir()` → `/tmp`.
+///
+/// Matches the XDG Base Directory Specification rather than macOS-canonical
+/// `~/Library/Caches`. All fff cache artefacts (sockets, lockfiles, logs)
+/// land here so they are consistent and easy to inspect on any platform.
+pub fn xdg_cache_dir() -> PathBuf {
+    if let Ok(v) = std::env::var("XDG_CACHE_HOME") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    // XDG spec default
+    if let Some(home) = dirs::home_dir() {
+        return home.join(".cache");
+    }
+    // Platform-canonical fallback (e.g. ~/Library/Caches on macOS)
+    dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
+/// XDG data directory: `$XDG_DATA_HOME` → `$HOME/.local/share` → `dirs::data_dir()` → `/tmp`.
+pub fn xdg_data_dir() -> PathBuf {
+    if let Ok(v) = std::env::var("XDG_DATA_HOME") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        return home.join(".local").join("share");
+    }
+    dirs::data_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
 fn cache_dir() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(|| {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".cache")
-    })
+    xdg_cache_dir()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

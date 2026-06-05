@@ -126,7 +126,7 @@ pub fn init_tracing(log_file_path: &str, log_level: Option<&str>) -> Result<Stri
                     .with_thread_ids(false)
                     .with_thread_names(false)
                     .with_ansi(false)
-                    .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE),
+                    .with_span_events(FmtSpan::NONE),
             )
             .with(
                 EnvFilter::builder()
