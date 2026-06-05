@@ -72,11 +72,33 @@ async fn handle_connection(stream: tokio::net::UnixStream, state: Arc<EngineStat
 
 async fn dispatch(state: &EngineState, req: SearchRequest) -> fff_ipc::types::SearchResponse {
     use crate::handlers::{handle_find_files, handle_grep, handle_multi_grep};
+    use std::time::Instant;
 
-    match req {
-        SearchRequest::Grep { query, options } => handle_grep(state, query, options).await,
-        SearchRequest::FindFiles { query, options } => handle_find_files(state, query, options).await,
-        SearchRequest::MultiGrep { patterns, constraints, options } => handle_multi_grep(state, patterns, constraints, options).await,
+    let start = Instant::now();
+
+    let (label, response) = match req {
+        SearchRequest::Grep { query, options } => {
+            let label = format!("grep({:?})", query);
+            (label, handle_grep(state, query, options).await)
+        }
+        SearchRequest::FindFiles { query, options } => {
+            let label = format!("find_files({:?})", query);
+            (label, handle_find_files(state, query, options).await)
+        }
+        SearchRequest::MultiGrep { patterns, constraints, options } => {
+            let label = format!("multi_grep({:?})", patterns);
+            (label, handle_multi_grep(state, patterns, constraints, options).await)
+        }
         SearchRequest::RecordAccess { .. } => unreachable!("handled before dispatch"),
-    }
+    };
+
+    let elapsed = start.elapsed();
+    let result_count = match &response {
+        fff_ipc::types::SearchResponse::GrepResults(r) => r.matches.iter().map(|f| f.matches.len()).sum::<usize>(),
+        fff_ipc::types::SearchResponse::SearchResults(r) => r.len(),
+        fff_ipc::types::SearchResponse::Error(_) => 0,
+    };
+    tracing::debug!("{label} → {result_count} results in {elapsed:.1?}");
+
+    response
 }
