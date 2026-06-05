@@ -157,10 +157,14 @@ fff-engine handles concurrent connections from N fff-mcp instances:
 
 - **Connection handling**: Tokio async task per connected fff-mcp client
 - **CPU-bound search**: delegated to Rayon via `tokio::task::spawn_blocking`. Rayon's work-stealing pool parallelises file scanning across available cores.
-- **FilePicker reads**: protected by the existing `Arc<RwLock<Option<FilePicker>>>`. Multiple concurrent readers are allowed; FS watcher takes a write lock only during index rebuild.
+- **FilePicker reads**: protected by the existing `Arc<parking_lot::RwLock<Option<FilePicker>>>`. Multiple concurrent readers are allowed; FS watcher takes a write lock only during index rebuild.
 - **Frecency writes**: serialised by LMDB's internal write lock. Fire-and-forget from fff-mcp; buffered and flushed async in fff-engine.
 
-> **Pre-implementation check required**: verify that concurrent Rayon-dispatched search queries against the same `FilePicker` and `BigramFilter` are thread-safe. Both use `Arc<>` internally; the read path should be safe under concurrent access, but this must be confirmed against fff-core before implementation begins.
+**Thread-safety confirmed** (pre-implementation audit complete):
+- `SharedFilePicker` wraps `Arc<parking_lot::RwLock<Option<FilePicker>>>` — `parking_lot::RwLock` allows true concurrent readers with no blocking between them.
+- `BigramFilter` has no interior mutability (`Cell`, `RefCell`, `Mutex`). All query methods are `&self`. Concurrent reads are safe.
+- All grep/find_files/fuzzy_search query paths on `FilePicker` are `&self`. The only `&mut` methods (FS watcher callbacks, post-scan indexing) are never called during a search.
+- fff-core already uses Rayon internally (grep uses `.par_iter()` on the global pool). fff-engine calling into fff-core from Tokio `spawn_blocking` tasks introduces no nested pool deadlock — the blocking task runs on Tokio's blocking thread pool and Rayon runs on its own separate global pool.
 
 ---
 
@@ -202,6 +206,11 @@ These existed solely to share a memory-mapped index across process boundaries. W
 | `fff-grep` | **Unchanged** |
 | `fff-query-parser` | **Unchanged** |
 | `fff-nvim`, `fff` TUI | **Minor** — connect to fff-engine socket instead of building standalone index (follow-on, not in scope here) |
+| Install script + `.mcp.json` | **Updated** — `--frecency-db` flag moves from fff-mcp to fff-engine CLI; install script and default `.mcp.json` template updated accordingly |
+
+### Frecency flag migration detail
+
+`--frecency-db` is currently absent from the default `.mcp.json`, silently disabling frecency for all MCP sessions. With fff-engine owning `FrecencyTracker`, the flag becomes an fff-engine CLI argument instead. Frecency is enabled by default when fff-engine is spawned by fff-mcp — fff-mcp passes the standard path (`$XDG_DATA_HOME/fff/frecency/`) when it spawns fff-engine, so users who previously had frecency disabled get it for free with no config change required.
 
 ---
 
@@ -210,4 +219,3 @@ These existed solely to share a memory-mapped index across process boundaries. W
 - **fff-engine naming**: `fff-engine` is the chosen name. Confirm this is the name used in `Cargo.toml` and binary output before implementation begins.
 - **fff-nvim / fff TUI integration**: minor modification to attach to fff-engine instead of building their own index. Deferred — not in scope for this track.
 - **Upstream RFC**: file the design as an RFC to `dmtrKovalenko/fff` or maintain as a downstream fork? Deferred — decide after implementation is stable.
-- **`fff-mcp` frecency flag**: `--frecency-db` is currently absent from the default `.mcp.json`, silently disabling frecency. With fff-engine owning frecency, this flag moves to fff-engine's CLI. The install script and `.mcp.json` template need updating.
