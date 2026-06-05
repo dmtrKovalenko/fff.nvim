@@ -49,10 +49,11 @@ For any file search or grep in the current git-indexed directory, use fff tools.
 
 ### What changes
 
-- Frecency memory. Files you actually open rank higher next time. Warm-up from git touch history runs automatically.
+- Frecency memory. Files you actually open rank higher next time. Warm-up from git touch history runs automatically. Frecency data is stored at `$XDG_DATA_HOME/fff/frecency/` (Linux: `~/.local/share/fff/frecency/`, macOS: `~/Library/Application Support/fff/frecency/`) and survives restarts.
 - Definition-first hinting. Lines that look like code definitions are classified on the Rust side, no regex overhead in your prompt.
 - Smart-case with auto-fuzzy fallback. `IsOffTheRecord` finds snake_case variants; zero-match queries retry as fuzzy and surface the best approximate hits.
 - Git-aware annotations. Modified, untracked, and staged files are tagged so the agent reaches for what you are actively changing.
+- Singleton daemon. On Linux and macOS, `fff-mcp` connects to a shared `fff-engine` daemon per project root. Multiple Claude Code sessions share one file index and one BigramFilter — no duplicate scanning, less RAM.
 
 Source: [`crates/fff-mcp/`](./crates/fff-mcp/).
 
