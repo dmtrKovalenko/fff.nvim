@@ -56,7 +56,18 @@ Daemon socket and lockfile paths are derived from `blake3(canonical_base_path)` 
 The OS guarantees exactly one winner on `O_CREAT|O_EXCL`. The winner spawns fff-engine; losers poll for the socket to appear. Same approach used by proven IPC daemons (Neovim server, language servers). No in-process synchronization is needed.
 
 **KTD-5: RecordAccess defined but not sent in this track**
-`FrecencyTracker::track_access()` was never called from fff-mcp tool handlers (frecency writes were disabled by default). `SearchRequest::RecordAccess` is defined in the IPC types for future use, but fff-mcp does not send it in this implementation. Frecency scoring (reads) works immediately from any existing LMDB data. The write trigger semantics (which result counts as "accessed") are deferred.
+`FrecencyTracker::track_access()` was never called from fff-mcp tool handlers — frecency writes were silently disabled (no `--frecency-db` in the default `.mcp.json`). `SearchRequest::RecordAccess` is defined in fff-ipc's `types.rs` and handled with a no-op in fff-engine's `handlers.rs`, but fff-mcp never sends it in this implementation. Frecency *scoring* (reads) works immediately from any pre-existing LMDB data.
+
+**What the follow-on track needs to resolve before enabling writes:**
+
+1. **Trigger decision** — fff-mcp has no "file opened" signal from Claude Code; it only sees search calls. Options: (a) send `RecordAccess` for the top-ranked result of every search (cheap heuristic, starts accumulating signal immediately), (b) add a new MCP tool `record_access(path)` that Claude Code calls explicitly when it reads a file (accurate but requires MCP client changes), (c) batch-record all results above a score threshold. Pick one before implementing.
+
+2. **Implementation path (once trigger is decided):**
+   - `fff-mcp/src/client.rs`: call `self.record_access(path)` after a successful search (fire-and-forget, already stubbed)
+   - `fff-engine/src/handlers.rs`: replace the `RecordAccess` no-op with `shared_frecency.write().as_mut()?.track_access(Path::new(&path))`
+   - No new IPC types or codec changes needed — `SearchRequest::RecordAccess { path: String }` is already in the wire format
+
+3. **Test gap to fill:** frecency scores for recently accessed files rise over repeated searches (integration test across multiple search calls).
 
 **KTD-6: fff-mcp retains --base-path and frecency-related flags are removed**
 fff-mcp's `--frecency-db`, `--max-cached-files`, `--content-indexing`, and `--no-watch` flags all controlled FilePicker/FrecencyTracker initialization that now lives in fff-engine. fff-mcp removes these flags from its own CLI. fff-engine acquires equivalent flags. `--base-path` stays in fff-mcp (it needs the root to derive the socket path).
