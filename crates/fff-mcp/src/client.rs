@@ -29,38 +29,32 @@ impl EngineClient {
         let sock = socket_path(base_path);
         let lock = lockfile_path(base_path);
 
-        // If socket already exists, try to connect directly.
-        if sock.exists() && let Ok(stream) = UnixStream::connect(&sock) {
-            return Self::from_stream(stream);
-        }
-
-        // Try to become the spawner via O_CREAT|O_EXCL on the lockfile.
-        if let Some(parent) = lock.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let mut won_lock = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock)
-            .is_ok();
-
-        // Lost the race — but the lockfile may be stale (engine crashed before
-        // binding its socket). If the PID it recorded is dead, clear the stale
-        // state and take ownership so we can spawn a fresh engine.
-        if !won_lock && is_lockfile_stale(&lock) {
-            tracing::info!("Removing stale fff-engine lockfile (dead PID)");
-            let _ = std::fs::remove_file(&lock);
+        // Fast path: socket already exists and is live.
+        if sock.exists() {
+            if let Ok(stream) = UnixStream::connect(&sock) {
+                return Self::from_stream(stream);
+            }
+            // Socket file exists but connection refused — remove stale socket.
             let _ = std::fs::remove_file(&sock);
-            won_lock = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&lock)
-                .is_ok();
         }
 
-        if won_lock {
-            // We won the race: spawn fff-engine and write the child PID.
+        // fff-engine is the daemon and owns its lockfile exclusively.
+        // fff-mcp only decides whether to spawn: if a live engine already holds
+        // the lock, just wait for its socket; otherwise spawn and let the engine
+        // acquire the lock itself.
+        let engine_running = lock.exists() && !is_lockfile_stale(&lock);
+
+        if !engine_running {
+            // Clear any stale lockfile so fff-engine can acquire it cleanly.
+            if lock.exists() {
+                tracing::info!("Removing stale fff-engine lockfile (dead PID)");
+                let _ = std::fs::remove_file(&lock);
+            }
+
+            if let Some(parent) = sock.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
             let frecency_path = fff_ipc::xdg_data_dir().join("fff").join("frecency");
 
             // Prefer fff-engine co-located with fff-mcp (both live in the same
@@ -85,15 +79,12 @@ impl EngineClient {
                 .spawn()
                 .map_err(|e| format!("Failed to spawn {}: {e}", engine_bin.display()))?;
 
-            // Write the child PID so crash recovery can distinguish slow-start from dead.
-            let _ = std::fs::write(&lock, child.id().to_string());
-
             tracing::info!("Spawned fff-engine PID={} for {}", child.id(), base_path.display());
         } else {
-            tracing::info!("fff-engine already being spawned by another fff-mcp instance");
+            tracing::info!("fff-engine already running, waiting for socket");
         }
 
-        // Both winner and loser wait for the socket file to appear.
+        // Wait for fff-engine to bind its socket.
         wait_for_socket(&sock, SPAWN_TIMEOUT)?;
 
         let stream = UnixStream::connect(&sock)
