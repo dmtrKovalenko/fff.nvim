@@ -89,10 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Warning: failed to init tracing: {e}");
     }
 
-    tracing::info!(
-        "fff-engine starting (config: {}, log: {log_path}, level: {log_level})",
-        fff_ipc::config::config_path().display()
-    );
+    tracing::info!("fff-engine starting (level: {log_level})");
 
     // Effective flags: CLI flag OR config flag (either can disable a feature)
     let eff_no_watch = args.no_watch || cfg.index.no_watch;

@@ -40,10 +40,9 @@ pub fn init(args: &EffectiveArgs) -> Result<EngineState, Box<dyn std::error::Err
     match FrecencyTracker::open(&frecency_path) {
         Ok(tracker) => {
             let _ = shared_frecency.init(tracker);
-            tracing::info!("Frecency DB opened at {}", frecency_path.display());
         }
         Err(e) => {
-            tracing::warn!("Failed to open frecency DB at {}: {e}", frecency_path.display());
+            tracing::warn!("frecency DB unavailable at {}: {e}", frecency_path.display());
         }
     }
 
@@ -63,8 +62,6 @@ pub fn init(args: &EffectiveArgs) -> Result<EngineState, Box<dyn std::error::Err
         },
     )?;
 
-    tracing::info!("FilePicker initialized for {}", base_path.display());
-
     Ok(EngineState {
         shared_picker,
         shared_frecency,
@@ -75,19 +72,11 @@ pub fn init(args: &EffectiveArgs) -> Result<EngineState, Box<dyn std::error::Err
 fn resolve_base_path(supplied: &std::path::Path) -> PathBuf {
     let s = supplied.to_string_lossy();
     match Repository::discover(&*s) {
-        Ok(repo) => {
-            if let Some(workdir) = repo.workdir() {
-                tracing::info!("Discovered git root: {}", workdir.display());
-                workdir.to_path_buf()
-            } else {
-                tracing::info!("Git repo is bare, using supplied path");
-                supplied.to_path_buf()
-            }
-        }
-        Err(_) => {
-            tracing::info!("No git repo found, using supplied path");
-            supplied.to_path_buf()
-        }
+        Ok(repo) => repo
+            .workdir()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| supplied.to_path_buf()),
+        Err(_) => supplied.to_path_buf(),
     }
 }
 
