@@ -173,24 +173,19 @@ pub(crate) struct Args {
 /// Merge CLI args with config file, then apply hardcoded defaults for anything
 /// still unset. Priority: CLI > config > hardcoded default.
 fn resolve_defaults(args: &mut Args, cfg: &fff_ipc::config::FffConfig) {
-    let home = dirs_home();
-
     // log_level: CLI > config > "info"
     if args.log_level.is_none() {
         args.log_level = Some(cfg.log.level.clone());
     }
 
-    // log_file: CLI > config > ~/.cache/fff_mcp.log
+    // log_file: CLI > config > $XDG_CACHE_HOME/fff_mcp.log
     if args.log_file.is_none() {
-        args.log_file = Some(
-            cfg.log.file.clone().unwrap_or_else(|| {
-                if cfg!(target_os = "windows") {
-                    format!("{}\\AppData\\Local\\fff_mcp.log", home)
-                } else {
-                    format!("{}/.cache/fff_mcp.log", home)
-                }
-            }),
-        );
+        args.log_file = Some(cfg.log.file.clone().unwrap_or_else(|| {
+            fff_ipc::xdg_cache_dir()
+                .join("fff_mcp.log")
+                .to_string_lossy()
+                .into_owned()
+        }));
     }
 
     // max_cached_files: CLI > config
@@ -211,12 +206,6 @@ fn resolve_defaults(args: &mut Args, cfg: &fff_ipc::config::FffConfig) {
             let _ = std::fs::create_dir_all(parent);
         }
     }
-}
-
-fn dirs_home() -> String {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| "/tmp".to_string())
 }
 
 #[tokio::main]

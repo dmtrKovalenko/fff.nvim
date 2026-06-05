@@ -66,16 +66,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(&cfg.log.level)
         .to_string();
 
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| "/tmp".to_string());
-    let default_log = format!("{}/.cache/fff_engine.log", home);
+    let default_log = fff_ipc::xdg_cache_dir().join("fff_engine.log");
+    let default_log_str = default_log.to_string_lossy().into_owned();
     let log_path = args
         .log_file
         .as_deref()
         .and_then(|p| p.to_str())
         .or(cfg.log.file.as_deref())
-        .unwrap_or(&default_log)
+        .unwrap_or(&default_log_str)
         .to_string();
 
     // fff::log::init_tracing uses EnvFilter::from_env_lossy() which reads RUST_LOG.

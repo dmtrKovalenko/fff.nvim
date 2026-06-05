@@ -81,12 +81,5 @@ fn resolve_base_path(supplied: &std::path::Path) -> PathBuf {
 }
 
 fn default_frecency_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".local/share")
-        })
-        .join("fff")
-        .join("frecency")
+    fff_ipc::xdg_data_dir().join("fff").join("frecency")
 }
