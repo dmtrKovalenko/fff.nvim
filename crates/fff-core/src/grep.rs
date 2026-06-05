@@ -1213,8 +1213,28 @@ where
     let mut files_consumed: usize = 0;
     let mut page_filled = false;
 
-    let chunk_size = rayon::current_num_threads() * 4;
-    for chunk in files_to_search.chunks(chunk_size) {
+    // Each chunk is a rayon barrier. A flat small chunk over 500k files = ~7800
+    // barriers; ×2 growth makes it logarithmic. But a too-aggressive growth
+    // over-scans: when a page fills mid-chunk, the whole submitted chunk still
+    // runs. So only grow when the prefilter is weak (large candidate set);
+    // when bigram cut the set in half, keep fixed small chunks for cheap
+    // page-fill termination.
+    let base_chunk = rayon::current_num_threads() * 4;
+    let prefilter_strong = ctx.total_files > 0 && files_to_search.len() * 2 < ctx.total_files;
+    let max_chunk = if prefilter_strong {
+        base_chunk
+    } else {
+        (base_chunk * 256).max(8 * 1024)
+    };
+    let growth = if prefilter_strong { 1 } else { 2 };
+    let mut chunk_size = base_chunk;
+    let mut chunk_start = 0;
+
+    while chunk_start < files_to_search.len() {
+        let chunk_end = (chunk_start + chunk_size).min(files_to_search.len());
+        let chunk = &files_to_search[chunk_start..chunk_end];
+        chunk_start = chunk_end;
+        chunk_size = (chunk_size * growth).min(max_chunk);
         let chunk_offset = files_consumed;
 
         let chunk_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)> = chunk
@@ -1226,17 +1246,21 @@ where
                 // scoped threads with a predefined local scratch buffers because of spawn cost
                 || (Vec::with_capacity(64 * 1024), MmapSlot::default()),
                 |(buf, mmap_slot), (local_idx, file)| {
-                    if ctx.abort_signal.load(Ordering::Relaxed) {
-                        budget_exceeded.store(true, Ordering::Relaxed);
-                        return None;
-                    }
+                    // perform all the atomic machinery on every 8th
+                    if local_idx % 8 == 0 {
+                        let mut need_abort = ctx.abort_signal.load(Ordering::Relaxed);
+                        if !need_abort
+                            && let Some(budget) = time_budget
+                            && all_matches.len() > 1
+                            && search_start.elapsed() > budget
+                        {
+                            need_abort = true;
+                        }
 
-                    if let Some(budget) = time_budget
-                        && all_matches.len() > 1
-                        && search_start.elapsed() > budget
-                    {
-                        budget_exceeded.store(true, Ordering::Relaxed);
-                        return None;
+                        if need_abort {
+                            budget_exceeded.store(true, Ordering::Relaxed);
+                            return None;
+                        }
                     }
 
                     let content = file.get_content_for_search(

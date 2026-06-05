@@ -56,43 +56,14 @@ use std::fmt::Debug;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, LazyLock,
+    Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 use tracing::{Level, debug, error, info, warn};
 
-/// Dedicated thread pool for background work (scan, warmup, bigram build).
-/// Uses fewer threads than the global rayon pool so Neovim's event loop
-/// and search queries can still get CPU time.
-pub(crate) static BACKGROUND_THREAD_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
-    let total = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(4);
-
-    // benchmarks show that most of the work background tasks spend on waiting for syscalls,
-    // by halfing available parallelism we loose some performance, but it is mostly nothing
-    let bg_threads = (total / 2).max(2);
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(bg_threads)
-        .thread_name(|i| format!("fff-bg-{i}"))
-        .start_handler(|_| {
-            // Pin workers to the USER_INITIATED QoS class on macOS so the
-            // scheduler keeps them on P-cores. Without this the kernel is
-            // free to drift them to E-cores, which are ~2× slower for the
-            // bigram scan and per-file syscalls.
-            #[cfg(target_os = "macos")]
-            unsafe {
-                let _ = libc::pthread_set_qos_class_self_np(
-                    libc::qos_class_t::QOS_CLASS_USER_INITIATED,
-                    0,
-                );
-            }
-        })
-        .build()
-        .expect("failed to create background rayon pool")
-});
+use crate::parallelism::{BACKGROUND_THREAD_POOL, SEARCH_THREAD_POOL};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FFFMode {
@@ -1208,18 +1179,20 @@ impl FilePicker {
             .as_deref()
             .unwrap_or(&self.signals.cancelled);
 
-        grep_search(
-            self.get_files(),
-            query,
-            options,
-            self.cache_budget(),
-            self.sync_data.bigram_index.as_deref(),
-            overlay_guard.as_deref(),
-            cancel,
-            &self.base_path,
-            arena,
-            overflow_arena,
-        )
+        SEARCH_THREAD_POOL.install(|| {
+            grep_search(
+                self.get_files(),
+                query,
+                options,
+                self.cache_budget(),
+                self.sync_data.bigram_index.as_deref(),
+                overlay_guard.as_deref(),
+                cancel,
+                &self.base_path,
+                arena,
+                overflow_arena,
+            )
+        })
     }
 
     /// Multi-pattern grep search across indexed files.
@@ -1237,19 +1210,21 @@ impl FilePicker {
             .as_deref()
             .unwrap_or(&self.signals.cancelled);
 
-        multi_grep_search(
-            self.get_files(),
-            patterns,
-            constraints,
-            options,
-            self.cache_budget(),
-            self.sync_data.bigram_index.as_deref(),
-            overlay_guard.as_deref(),
-            cancel,
-            &self.base_path,
-            arena,
-            overflow_arena,
-        )
+        SEARCH_THREAD_POOL.install(|| {
+            multi_grep_search(
+                self.get_files(),
+                patterns,
+                constraints,
+                options,
+                self.cache_budget(),
+                self.sync_data.bigram_index.as_deref(),
+                overlay_guard.as_deref(),
+                cancel,
+                &self.base_path,
+                arena,
+                overflow_arena,
+            )
+        })
     }
 
     // Returns an ongoing or finisshed scan progress

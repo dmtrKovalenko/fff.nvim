@@ -17,6 +17,14 @@ const MAX_BIGRAM_COLUMNS: usize = 5000;
 /// Sentinel value: bigram has no allocated column.
 const NO_COLUMN: u16 = u16::MAX;
 
+/// 1024 × u64 = 8 KB covers all 65536 possible bigram keys.
+const SEEN_WORDS: usize = 1024;
+
+thread_local! {
+    static NORM_BUF: std::cell::RefCell<Vec<u8>> =
+        std::cell::RefCell::new(Vec::with_capacity(4096));
+}
+
 /// Temporary sync dense builder for the bigram index.
 /// Builds from the many threads reading file contents in parallel
 pub struct BigramIndexBuilder {
@@ -90,17 +98,6 @@ impl BigramIndexBuilder {
         }
     }
 
-    /// SAFETY: caller must not access the same `word_idx` slot from
-    /// another thread concurrently. Partitioning in
-    /// `file_picker::build_bigram_index` enforces this.
-    #[inline(always)]
-    unsafe fn column_word_ptr(&self, col: u16, word_idx: usize) -> *mut u64 {
-        unsafe {
-            self.col_data_ptr()
-                .add(col as usize * self.words + word_idx)
-        }
-    }
-
     /// Test/bench accessor for a column's raw bitset words. Assumes the
     /// caller has joined all writers (no concurrent mutation).
     #[cfg(test)]
@@ -122,35 +119,67 @@ impl BigramIndexBuilder {
 
         // Stack-local dedup bitsets: 1024 × u64 = 8 KB each, covers all 65536
         // bigram keys with margin. Has to fit in L1 cache.
-        let mut seen_consec = [0u64; 1024];
-        let mut seen_skip = [0u64; 1024];
+        let mut seen_consec = [0u64; SEEN_WORDS];
+        let mut seen_skip = [0u64; SEEN_WORDS];
 
-        let bytes = content;
-        let len = bytes.len();
+        let consec_base = self.col_data_ptr();
+        let consec_words = self.words;
+        let skip_base = skip_builder.col_data_ptr();
+        let skip_words = skip_builder.words;
 
-        let mut n0 = normalize_byte_scalar(bytes[0]);
-        let mut n1 = normalize_byte_scalar(bytes[1]);
-
-        if n0 != u16::MAX && n1 != u16::MAX {
-            let key = (n0 << 8) | n1;
-            self.record_bigram(&mut seen_consec, key, word_idx, bit_mask);
-        }
-
-        for &b in &bytes[2..len] {
-            let cur = normalize_byte_scalar(b);
-            if cur != u16::MAX {
-                if n1 != u16::MAX {
-                    let key = (n1 << 8) | cur;
-                    self.record_bigram(&mut seen_consec, key, word_idx, bit_mask);
-                }
-                if n0 != u16::MAX {
-                    let key = (n0 << 8) | cur;
-                    skip_builder.record_bigram(&mut seen_skip, key, word_idx, bit_mask);
-                }
+        NORM_BUF.with_borrow_mut(|buf| {
+            let len = content.len();
+            if buf.len() < len {
+                buf.resize(len.next_power_of_two().max(4096), 0);
             }
-            n0 = n1;
-            n1 = cur;
-        }
+
+            normalize_bytes(content, &mut buf[..len]);
+            let n = &buf[..len];
+
+            let mut n0 = n[0];
+            let mut n1 = n[1];
+
+            if n0 != 0 && n1 != 0 {
+                let key = (n0 as u16) << 8 | n1 as u16;
+                self.record_bigram(
+                    &mut seen_consec,
+                    key,
+                    word_idx,
+                    bit_mask,
+                    consec_base,
+                    consec_words,
+                );
+            }
+
+            for &cur in &n[2..] {
+                if cur != 0 {
+                    if n1 != 0 {
+                        let key = (n1 as u16) << 8 | cur as u16;
+                        self.record_bigram(
+                            &mut seen_consec,
+                            key,
+                            word_idx,
+                            bit_mask,
+                            consec_base,
+                            consec_words,
+                        );
+                    }
+                    if n0 != 0 {
+                        let key = (n0 as u16) << 8 | cur as u16;
+                        skip_builder.record_bigram(
+                            &mut seen_skip,
+                            key,
+                            word_idx,
+                            bit_mask,
+                            skip_base,
+                            skip_words,
+                        );
+                    }
+                }
+                n0 = n1;
+                n1 = cur;
+            }
+        });
 
         self.populated.fetch_add(1, Ordering::Relaxed);
         skip_builder.populated.fetch_add(1, Ordering::Relaxed);
@@ -160,22 +189,29 @@ impl BigramIndexBuilder {
     /// and bit position is `bit_mask`, de-duplicating via the caller-owned
     /// `seen` bitmap so we only touch the shared column slab at most once
     /// per unique bigram per file.
-    ///
-    /// SAFETY: under the partitioning invariant on `add_file_content`
-    /// the `word_idx` slot this touches is owned exclusively by the
-    /// current thread, so a plain `|=` through the raw pointer is
-    /// race-free (no atomic RMW needed).
     #[inline(always)]
-    fn record_bigram(&self, seen: &mut [u64; 1024], key: u16, word_idx: usize, bit_mask: u64) {
+    fn record_bigram(
+        &self,
+        seen: &mut [u64; SEEN_WORDS],
+        key: u16,
+        word_idx: usize,
+        bit_mask: u64,
+        col_base: *mut u64,
+        words: usize,
+    ) {
         let k = key as usize;
         let w = k >> 6;
         let bit = 1u64 << (k & 63);
-        if seen[w] & bit == 0 {
-            seen[w] |= bit;
+        // SAFETY: w = key/64 with key: u16, so w < 1024 = SEEN_WORDS.
+        let prev = unsafe { *seen.get_unchecked(w) };
+        if prev & bit == 0 {
+            unsafe {
+                *seen.get_unchecked_mut(w) = prev | bit;
+            }
             let col = self.get_or_alloc_column(key);
             if col != NO_COLUMN {
                 unsafe {
-                    let p = self.column_word_ptr(col, word_idx);
+                    let p = col_base.add(col as usize * words + word_idx);
                     *p |= bit_mask;
                 }
             }
@@ -468,22 +504,117 @@ impl BigramFilter {
     }
 }
 
-/// Map a single input byte to its normalised form used by the bigram
-/// builder: `u16::MAX` when not printable ASCII (outside `32..=126`),
-/// otherwise the lowercased byte value in `0..=126`. The `u16::MAX`
-/// sentinel can never collide with a printable-ASCII byte so the consumer
-/// can test `!= u16::MAX` without false positives.
-///
-/// Branchless and `#[inline(always)]`: LLVM lifts the ASCII-range check
-/// and the conditional-lowercase OR into a handful of instructions per
-/// call, so calling this inside a hot loop matches a hand-unrolled
-/// equivalent.
+/// Single-byte normalize: 0 for non-printable, lowercased byte otherwise.
+/// 0 is a safe sentinel: lowered printable bytes are 32..=126.
 #[inline(always)]
-fn normalize_byte_scalar(b: u8) -> u16 {
+fn normalize_byte_scalar(b: u8) -> u8 {
     let printable = b.wrapping_sub(32) <= 94;
-    // Branchless lowercase: OR 0x20 iff byte is in 'A'..='Z'.
     let lower = b | ((b.wrapping_sub(b'A') < 26) as u8 * 0x20);
-    if printable { lower as u16 } else { u16::MAX }
+    if printable { lower } else { 0 }
+}
+
+/// Bulk version: write `dst[i]` = `normalize_byte_scalar(src[i])` for `i`
+/// in `0..src.len()`. Inlined-scalar so LLVM auto-vectorises with the
+/// build's baseline SIMD; on x86_64 we runtime-dispatch to AVX2.
+/// Caller guarantees `dst.len() >= src.len()`.
+#[inline(always)]
+fn normalize_bytes(src: &[u8], dst: &mut [u8]) {
+    debug_assert!(dst.len() >= src.len());
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            unsafe { normalize_bytes_avx2(src, dst) };
+            return;
+        }
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        unsafe { normalize_bytes_neon(src, dst) };
+        return;
+    }
+
+    #[allow(unused)]
+    normalize_bytes_scalar(src, dst);
+}
+
+#[inline(always)]
+fn normalize_bytes_scalar(src: &[u8], dst: &mut [u8]) {
+    for (i, &b) in src.iter().enumerate() {
+        dst[i] = normalize_byte_scalar(b);
+    }
+}
+
+/// AVX2 normalize: 32 bytes/iter. AVX2 only has signed cmp, so unsigned
+/// range checks use `min(max(v, lo), hi) == v`.
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[target_feature(enable = "avx2")]
+unsafe fn normalize_bytes_avx2(src: &[u8], dst: &mut [u8]) {
+    use std::arch::x86_64::*;
+    let len = src.len();
+    let mut i = 0;
+    let p_lo = _mm256_set1_epi8(32);
+    let p_hi = _mm256_set1_epi8(126u8 as i8);
+    let u_lo = _mm256_set1_epi8(b'A' as i8);
+    let u_hi = _mm256_set1_epi8(b'Z' as i8);
+    let or20 = _mm256_set1_epi8(0x20);
+    while i + 32 <= len {
+        unsafe {
+            let v = _mm256_loadu_si256(src.as_ptr().add(i) as *const __m256i);
+            // printable_mask: v in [32, 126]
+            let clamp_p = _mm256_min_epu8(_mm256_max_epu8(v, p_lo), p_hi);
+            let printable = _mm256_cmpeq_epi8(v, clamp_p);
+            // is_upper_mask: v in [65, 90]
+            let clamp_u = _mm256_min_epu8(_mm256_max_epu8(v, u_lo), u_hi);
+            let is_upper = _mm256_cmpeq_epi8(v, clamp_u);
+            let or_bits = _mm256_and_si256(is_upper, or20);
+            let lower = _mm256_or_si256(v, or_bits);
+            let out = _mm256_and_si256(lower, printable);
+            _mm256_storeu_si256(dst.as_mut_ptr().add(i) as *mut __m256i, out);
+        }
+        i += 32;
+    }
+    while i < len {
+        dst[i] = normalize_byte_scalar(src[i]);
+        i += 1;
+    }
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[target_feature(enable = "neon")]
+unsafe fn normalize_bytes_neon(src: &[u8], dst: &mut [u8]) {
+    use std::arch::aarch64::*;
+    let len = src.len();
+    let mut i = 0;
+    let v32 = vdupq_n_u8(32);
+    let v127 = vdupq_n_u8(127);
+    let va = vdupq_n_u8(b'A');
+    let vz1 = vdupq_n_u8(b'Z' + 1);
+    let v20 = vdupq_n_u8(0x20);
+
+    while i + 16 <= len {
+        unsafe {
+            let v = vld1q_u8(src.as_ptr().add(i));
+            // printable: v >= 32 AND v < 127
+            let ge32 = vcgeq_u8(v, v32);
+            let lt127 = vcltq_u8(v, v127);
+            let print_mask = vandq_u8(ge32, lt127);
+            // is_upper: v >= 'A' AND v < 'Z'+1
+            let ge_a = vcgeq_u8(v, va);
+            let lt_z1 = vcltq_u8(v, vz1);
+            let upper_mask = vandq_u8(ge_a, lt_z1);
+            let or_bits = vandq_u8(upper_mask, v20);
+            let lower = vorrq_u8(v, or_bits);
+            let out = vandq_u8(lower, print_mask);
+
+            vst1q_u8(dst.as_mut_ptr().add(i), out);
+        }
+        i += 16;
+    }
+    while i < len {
+        dst[i] = normalize_byte_scalar(src[i]);
+        i += 1;
+    }
 }
 
 pub fn extract_bigrams(content: &[u8]) -> Vec<u16> {
@@ -640,7 +771,7 @@ pub(crate) fn build_bigram_index(
     // pass runs detached on the background pool without holding the picker
     // read lock, so a watcher event mutating a `FileItem` would race any
     // borrow we took from a cached `Mmap`.
-    crate::file_picker::BACKGROUND_THREAD_POOL.install(|| {
+    crate::parallelism::BACKGROUND_THREAD_POOL.install(|| {
         files
             .par_chunks(BIGRAM_CHUNK_FILES)
             .enumerate()
