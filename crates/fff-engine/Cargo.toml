@@ -1,6 +1,6 @@
 [package]
 name = "fff-engine"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 description = "fff singleton search engine daemon — owns FilePicker, BigramFilter, FrecencyTracker"
 license = "MIT"
@@ -10,8 +10,8 @@ name = "fff-engine"
 path = "src/main.rs"
 
 [dependencies]
-fff = { package = "fff-search", path = "../fff-core", default-features = false, version = "0.10.0" }
-fff-ipc = { path = "../fff-ipc", version = "0.10.0" }
+fff = { package = "fff-search", path = "../fff-core", default-features = false, version = "0.11.0" }
+fff-ipc = { path = "../fff-ipc", version = "0.11.0" }
 bincode = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 dirs = { workspace = true }

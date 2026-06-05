@@ -1,6 +1,6 @@
 [package]
 name = "fff-ipc"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 description = "Shared IPC types, framing codec, and path helpers for fff-engine <-> fff-mcp communication"
 license = "MIT"
