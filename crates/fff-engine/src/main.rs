@@ -52,11 +52,14 @@ pub(crate) struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    let default_log = dirs::cache_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("fff_engine.log");
     let log_file = args
         .log_file
         .as_deref()
         .and_then(|p| p.to_str())
-        .unwrap_or("");
+        .unwrap_or_else(|| default_log.to_str().unwrap_or(""));
     if let Err(e) = fff::log::init_tracing(log_file, Some(&args.log_level)) {
         eprintln!("Warning: failed to init tracing: {e}");
     }

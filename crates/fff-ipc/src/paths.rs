@@ -14,10 +14,14 @@ pub fn lockfile_path(base_path: &Path) -> PathBuf {
     cache_dir().join("fff").join("locks").join(format!("{hash}.lock"))
 }
 
+/// Unix domain sockets have a path limit of 104 bytes on macOS (SUN_LEN).
+/// A full blake3 hex (64 chars) + ~/.../Library/Caches/fff/sockets/ prefix
+/// exceeds that. Use the first 16 hex chars (8 bytes / 64 bits) — sufficient
+/// for collision-resistant local disambiguation.
 fn path_hash(base_path: &Path) -> String {
     let bytes = base_path.as_os_str().as_encoded_bytes();
     let hash = blake3::hash(bytes);
-    hash.to_hex().to_string()
+    hash.to_hex()[..16].to_string()
 }
 
 /// Resolves the XDG cache dir with the correct fallback for macOS (which does
