@@ -58,9 +58,12 @@ pub fn set_log_level(_level: &str) -> Result<(), String> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    let default_log = dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("fff_engine.log");
+    // Use the same ~/.cache/ convention as fff-mcp rather than dirs::cache_dir()
+    // which returns ~/Library/Caches on macOS — a different path.
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    let default_log = PathBuf::from(format!("{}/.cache/fff_engine.log", home));
     let log_path = args
         .log_file
         .as_deref()
