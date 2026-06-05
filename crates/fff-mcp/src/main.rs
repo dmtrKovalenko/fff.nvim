@@ -109,7 +109,7 @@ pub const MCP_INSTRUCTIONS: &str = concat!(
     "\n",
     "- **list_recent_files**: Show which files have been opened/modified most recently. Use at session start to understand what's in flight, or to find the file you were just editing.\n",
     "- **get_git_status**: Show all uncommitted changes grouped by status (modified, staged, untracked…). Use instead of shelling out to `git status`.\n",
-    "- **list_directories**: Show project directories ranked by activity. Use to orient yourself in an unfamiliar project.\n",
+    "- **list_directories**: Show non-ignored directories (with at least one indexed file) ranked by activity. Empty dirs and gitignored paths are absent by design — absence does not mean the directory doesn't exist.\n",
     "- **record_access**: Tell fff you opened a file. The file will rank higher in future find_files and list_recent_files results. Call this after reading a key file.",
 );
 

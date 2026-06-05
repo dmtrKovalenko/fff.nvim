@@ -1106,7 +1106,7 @@ impl FffServer {
     /// List project directories ranked by their most-active files.
     #[tool(
         name = "list_directories",
-        description = "List project directories ranked by the frecency of their most-active child files. Useful for understanding which parts of the project are currently active without running a search."
+        description = "List directories that contain indexed files, ranked by the frecency of their most-active child files. Only non-ignored directories with at least one tracked file appear — empty directories and gitignored paths (node_modules/, target/, etc.) are excluded by design. Use to understand which parts of the project are currently active."
     )]
     fn list_directories(
         &self,
