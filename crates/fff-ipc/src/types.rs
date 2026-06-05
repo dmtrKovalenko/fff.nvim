@@ -14,6 +14,9 @@ pub enum SearchRequest {
     },
     MultiGrep {
         patterns: Vec<String>,
+        /// Raw constraint query string (e.g. `"*.rs !test/"`). Parsed in
+        /// fff-engine using the same AiGrepConfig parser as fff-mcp.
+        constraints: Option<String>,
         options: GrepOptions,
     },
     /// Fire-and-forget frecency write. fff-mcp sends and does not await a
@@ -49,7 +52,10 @@ pub struct WireGrepResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WireGrepFileMatches {
     pub path: String,
+    pub size: u64,
     pub git_status: Option<u32>,
+    /// access_frecency_score + modification_frecency_score from FileItem.
+    pub frecency_score: i32,
     pub matches: Vec<WireGrepMatch>,
 }
 
@@ -73,6 +79,8 @@ pub struct WireSearchResult {
     pub path: String,
     pub score: i32,
     pub git_status: Option<u32>,
+    /// access_frecency_score + modification_frecency_score.
+    pub frecency_score: i32,
 }
 
 // ── Options ───────────────────────────────────────────────────────────────────
@@ -196,7 +204,9 @@ mod tests {
         let resp = SearchResponse::GrepResults(WireGrepResponse {
             matches: vec![WireGrepFileMatches {
                 path: "src/lib.rs".into(),
+                size: 1024,
                 git_status: Some(1),
+                frecency_score: 42,
                 matches: vec![WireGrepMatch {
                     line_number: 42,
                     col: 4,

@@ -1,7 +1,37 @@
+use std::io::{Read, Write};
+
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::IpcError;
+
+// ── Sync codec (used by fff-mcp's blocking EngineClient) ─────────────────────
+
+/// Synchronous write of a length-prefixed bincode message.
+pub fn write_message_sync<W: Write, T: Serialize>(
+    writer: &mut W,
+    value: &T,
+) -> Result<(), IpcError> {
+    let payload = bincode::serialize(value).map_err(IpcError::Encode)?;
+    let len = payload.len() as u32;
+    writer.write_all(&len.to_le_bytes()).map_err(IpcError::Io)?;
+    writer.write_all(&payload).map_err(IpcError::Io)?;
+    Ok(())
+}
+
+/// Synchronous read of a length-prefixed bincode message.
+pub fn read_message_sync<R: Read, T: for<'de> Deserialize<'de>>(
+    reader: &mut R,
+) -> Result<T, IpcError> {
+    let mut len_buf = [0u8; 4];
+    reader.read_exact(&mut len_buf).map_err(IpcError::Io)?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+
+    let mut payload = vec![0u8; len];
+    reader.read_exact(&mut payload).map_err(IpcError::Io)?;
+
+    bincode::deserialize(&payload).map_err(IpcError::Decode)
+}
 
 /// Write a length-prefixed bincode message.
 ///

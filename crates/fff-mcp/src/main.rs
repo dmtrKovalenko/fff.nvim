@@ -11,6 +11,8 @@ mod healthcheck;
 mod output;
 mod server;
 mod update_check;
+#[cfg(unix)]
+pub(crate) mod client;
 
 use clap::Parser;
 use fff::file_picker::FilePicker;
@@ -232,6 +234,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // ── Unix proxy path: connect to fff-engine daemon ─────────────────────────
+    #[cfg(unix)]
+    {
+        let base_path_ref = std::path::Path::new(&base_path);
+        match client::EngineClient::connect(base_path_ref) {
+            Ok(engine_client) => {
+                if !args.no_update_check {
+                    update_check::spawn_update_check();
+                }
+                let server = FffServer::new_proxy(engine_client);
+                let service = server
+                    .serve(stdio())
+                    .await
+                    .map_err(|e| format!("Failed to start MCP server: {}", e))?;
+                service.waiting().await?;
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!("Failed to connect to fff-engine ({e}), falling back to direct mode");
+            }
+        }
+    }
+
+    // ── Direct path (Windows, or Unix fallback when engine unavailable) ───────
     let shared_picker = SharedFilePicker::default();
     let shared_frecency = SharedFrecency::default();
     if let Some(frecency_db_path) = args.frecency_db_path {

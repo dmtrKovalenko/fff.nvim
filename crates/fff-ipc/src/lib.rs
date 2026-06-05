@@ -2,7 +2,7 @@ pub mod codec;
 pub mod paths;
 pub mod types;
 
-pub use codec::{read_message, write_message};
+pub use codec::{read_message, read_message_sync, write_message, write_message_sync};
 pub use paths::{lockfile_path, socket_path};
 pub use types::*;
 

@@ -85,6 +85,7 @@ pub async fn handle_find_files(
                 path: item.relative_path(picker),
                 score: score.total,
                 git_status: item.git_status.map(|s| s.bits()),
+                frecency_score: item.total_frecency_score(),
             })
             .collect();
 
@@ -185,7 +186,9 @@ fn project_grep_result(
         let entry = by_file.entry(m.file_index).or_insert_with(|| {
             WireGrepFileMatches {
                 path: file.relative_path(picker),
+                size: file.size,
                 git_status: file.git_status.map(|s| s.bits()),
+                frecency_score: file.total_frecency_score(),
                 matches: Vec::new(),
             }
         });

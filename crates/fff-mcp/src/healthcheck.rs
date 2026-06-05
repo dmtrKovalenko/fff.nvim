@@ -29,11 +29,7 @@ pub fn run_healthcheck(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     all_ok &= check(
         "Base path",
         path_exists,
-        if path_exists {
-            &base_path
-        } else {
-            "directory does not exist"
-        },
+        if path_exists { &base_path } else { "directory does not exist" },
     );
 
     // 2. Git repository
@@ -46,7 +42,6 @@ pub fn run_healthcheck(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Err(_) => {
-            // Not fatal — fff-mcp works without git, but worth flagging.
             warn(
                 "Git repository",
                 "not found (fff-mcp will still work, but git-status features are disabled)",
@@ -54,43 +49,33 @@ pub fn run_healthcheck(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 3. Frecency database
-    if let Some(ref db_path) = args.frecency_db_path {
-        let parent_ok = std::path::Path::new(db_path)
-            .parent()
-            .is_some_and(|p| p.is_dir());
-        all_ok &= check(
-            "Frecency DB",
-            parent_ok,
-            if parent_ok {
-                db_path
-            } else {
-                "parent directory does not exist"
-            },
-        );
-    } else {
-        check("Frecency DB", false, "path not resolved");
+    // 3. Daemon socket connectivity (Unix proxy path)
+    #[cfg(unix)]
+    {
+        use crate::client::{EngineClient, HealthStatus};
+        let base = std::path::Path::new(&base_path);
+        match EngineClient::check_health(base) {
+            HealthStatus::Ok => {
+                all_ok &= check("fff-engine daemon", true, "reachable via socket");
+            }
+            HealthStatus::NotStarted(sock) => {
+                // Not an error — daemon starts lazily on first tool call.
+                warn(
+                    "fff-engine daemon",
+                    &format!("not yet started (socket {} absent — will be spawned on first use)", sock.display()),
+                );
+            }
+            HealthStatus::ConnRefused(e) => {
+                all_ok &= check(
+                    "fff-engine daemon",
+                    false,
+                    &format!("socket exists but connection refused: {e}"),
+                );
+            }
+        }
     }
 
-    // 4. Query history database
-    if let Some(ref db_path) = args.history_db_path {
-        let parent_ok = std::path::Path::new(db_path)
-            .parent()
-            .is_some_and(|p| p.is_dir());
-        all_ok &= check(
-            "History DB",
-            parent_ok,
-            if parent_ok {
-                db_path
-            } else {
-                "parent directory does not exist"
-            },
-        );
-    } else {
-        check("History DB", false, "path not resolved");
-    }
-
-    // 5. Log file
+    // 4. Log file
     if let Some(ref log_path) = args.log_file {
         let parent_ok = std::path::Path::new(log_path)
             .parent()
@@ -98,11 +83,7 @@ pub fn run_healthcheck(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         all_ok &= check(
             "Log file",
             parent_ok,
-            if parent_ok {
-                log_path
-            } else {
-                "parent directory does not exist"
-            },
+            if parent_ok { log_path } else { "parent directory does not exist" },
         );
     } else {
         check("Log file", false, "path not resolved");

@@ -185,6 +185,11 @@ pub struct FffServer {
     frecency: SharedFrecency,
     cursor_store: Arc<Mutex<CursorStore>>,
     update_notice_sent: Arc<AtomicBool>,
+    /// Unix proxy path: connects to fff-engine over a socket.
+    /// When Some, all tool handlers route through the engine rather than
+    /// calling fff-core directly.
+    #[cfg(unix)]
+    engine_client: Option<Arc<std::sync::Mutex<crate::client::EngineClient>>>,
 }
 
 impl FffServer {
@@ -194,6 +199,21 @@ impl FffServer {
             frecency,
             cursor_store: Arc::new(Mutex::new(CursorStore::new())),
             update_notice_sent: Arc::new(AtomicBool::new(false)),
+            #[cfg(unix)]
+            engine_client: None,
+        }
+    }
+
+    /// Create a proxy server backed by fff-engine (Unix only).
+    #[cfg(unix)]
+    pub fn new_proxy(client: crate::client::EngineClient) -> Self {
+        use fff::{SharedFilePicker, SharedFrecency};
+        Self {
+            picker: SharedFilePicker::default(),
+            frecency: SharedFrecency::default(),
+            cursor_store: Arc::new(Mutex::new(CursorStore::new())),
+            update_notice_sent: Arc::new(AtomicBool::new(false)),
+            engine_client: Some(Arc::new(std::sync::Mutex::new(client))),
         }
     }
 
@@ -390,6 +410,203 @@ impl FffServer {
 
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
+
+    // ── Proxy dispatch (Unix only) ────────────────────────────────────────────
+
+    #[cfg(unix)]
+    fn proxy_grep(
+        &self,
+        query: &str,
+        max_results: usize,
+        cursor_id: Option<&str>,
+        output_mode: OutputMode,
+        context: Option<usize>,
+    ) -> Option<Result<CallToolResult, ErrorData>> {
+        use fff::grep::has_regex_metacharacters;
+        use fff::{AiGrepConfig, QueryParser};
+        use fff_ipc::types::{GrepOptions, SearchRequest, SearchResponse, WireGrepMode};
+        use crate::output::wire::WireGrepFormatter;
+
+        let client_arc = self.engine_client.as_ref()?;
+
+        let file_offset = cursor_id
+            .and_then(|id| self.cursor_store.lock().ok()?.get(id))
+            .unwrap_or(0);
+
+        let (options_core, auto_expand) = make_grep_options(output_mode, {
+            let parsed = QueryParser::new(AiGrepConfig).parse(query);
+            if has_regex_metacharacters(&parsed.grep_text()) {
+                GrepMode::Regex
+            } else {
+                GrepMode::PlainText
+            }
+        }, file_offset, context);
+
+        let ctx_lines = options_core.before_context;
+        let wire_mode = match options_core.mode {
+            GrepMode::PlainText => WireGrepMode::PlainText,
+            GrepMode::Regex => WireGrepMode::Regex,
+            GrepMode::Fuzzy => WireGrepMode::Fuzzy,
+        };
+
+        let req = SearchRequest::Grep {
+            query: query.to_owned(),
+            options: GrepOptions {
+                max_file_size: options_core.max_file_size,
+                max_matches_per_file: options_core.max_matches_per_file,
+                smart_case: options_core.smart_case,
+                file_offset: options_core.file_offset,
+                page_limit: options_core.page_limit,
+                mode: wire_mode,
+                time_budget_ms: options_core.time_budget_ms,
+                before_context: options_core.before_context,
+                after_context: options_core.after_context,
+                classify_definitions: options_core.classify_definitions,
+                trim_whitespace: options_core.trim_whitespace,
+            },
+        };
+
+        let response = client_arc
+            .lock()
+            .ok()?
+            .search(&req)
+            .ok()?;
+
+        match response {
+            SearchResponse::GrepResults(wire) => {
+                if wire.matches.is_empty() {
+                    return Some(Ok(CallToolResult::success(vec![Content::text("0 matches.")])));
+                }
+                let mut cs = self.lock_cursors().ok()?;
+                let text = WireGrepFormatter {
+                    response: &wire,
+                    output_mode,
+                    max_results,
+                    show_context: ctx_lines > 0,
+                    auto_expand_defs: auto_expand,
+                }
+                .format(&mut cs);
+                Some(Ok(CallToolResult::success(vec![Content::text(text)])))
+            }
+            SearchResponse::Error(msg) => {
+                Some(Err(ErrorData::internal_error(format!("fff-engine error: {msg}"), None)))
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn proxy_find_files(
+        &self,
+        query: &str,
+        max_results: usize,
+        cursor_id: Option<&str>,
+    ) -> Option<Result<CallToolResult, ErrorData>> {
+        use fff_ipc::types::{FindOptions, SearchRequest, SearchResponse};
+        use crate::output::wire::format_wire_find_files;
+
+        let client_arc = self.engine_client.as_ref()?;
+
+        let page_offset = cursor_id
+            .and_then(|id| self.cursor_store.lock().ok()?.get(id))
+            .unwrap_or(0);
+
+        let req = SearchRequest::FindFiles {
+            query: query.to_owned(),
+            options: FindOptions {
+                max_threads: 0,
+                current_file: None,
+                combo_boost_score_multiplier: 100,
+                min_combo_count: 3,
+                offset: page_offset,
+                limit: max_results,
+            },
+        };
+
+        let response = client_arc.lock().ok()?.search(&req).ok()?;
+
+        match response {
+            SearchResponse::SearchResults(items) => {
+                if items.is_empty() {
+                    return Some(Ok(CallToolResult::success(vec![Content::text("0 results")])));
+                }
+                let total_matched = items.len(); // wire doesn't carry total yet
+                let mut cs = self.lock_cursors().ok()?;
+                let text = format_wire_find_files(&items, total_matched, page_offset, &mut cs);
+                Some(Ok(CallToolResult::success(vec![Content::text(text)])))
+            }
+            SearchResponse::Error(msg) => {
+                Some(Err(ErrorData::internal_error(format!("fff-engine error: {msg}"), None)))
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn proxy_multi_grep(
+        &self,
+        params: &MultiGrepParams,
+        max_results: usize,
+    ) -> Option<Result<CallToolResult, ErrorData>> {
+        use fff_ipc::types::{GrepOptions, SearchRequest, SearchResponse, WireGrepMode};
+        use crate::output::wire::WireGrepFormatter;
+
+        let client_arc = self.engine_client.as_ref()?;
+
+        let file_offset = params
+            .cursor
+            .as_deref()
+            .and_then(|id| self.cursor_store.lock().ok()?.get(id))
+            .unwrap_or(0);
+
+        let context = params.context.map(|v| v.round() as usize);
+        let output_mode = OutputMode::new(params.output_mode.as_deref());
+        let (options_core, auto_expand) =
+            make_grep_options(output_mode, GrepMode::PlainText, file_offset, context);
+        let ctx_lines = options_core.before_context;
+
+        let req = SearchRequest::MultiGrep {
+            patterns: params.patterns.clone(),
+            constraints: params.constraints.clone(),
+            options: GrepOptions {
+                max_file_size: options_core.max_file_size,
+                max_matches_per_file: options_core.max_matches_per_file,
+                smart_case: options_core.smart_case,
+                file_offset: options_core.file_offset,
+                page_limit: options_core.page_limit,
+                mode: WireGrepMode::PlainText,
+                time_budget_ms: options_core.time_budget_ms,
+                before_context: options_core.before_context,
+                after_context: options_core.after_context,
+                classify_definitions: options_core.classify_definitions,
+                trim_whitespace: options_core.trim_whitespace,
+            },
+        };
+
+        let response = client_arc.lock().ok()?.search(&req).ok()?;
+
+        match response {
+            SearchResponse::GrepResults(wire) => {
+                if wire.matches.is_empty() {
+                    return Some(Ok(CallToolResult::success(vec![Content::text("0 matches.")])));
+                }
+                let mut cs = self.lock_cursors().ok()?;
+                let text = WireGrepFormatter {
+                    response: &wire,
+                    output_mode,
+                    max_results,
+                    show_context: ctx_lines > 0,
+                    auto_expand_defs: auto_expand,
+                }
+                .format(&mut cs);
+                Some(Ok(CallToolResult::success(vec![Content::text(text)])))
+            }
+            SearchResponse::Error(msg) => {
+                Some(Err(ErrorData::internal_error(format!("fff-engine error: {msg}"), None)))
+            }
+            _ => None,
+        }
+    }
 }
 
 #[tool_router]
@@ -409,6 +626,13 @@ impl FffServer {
     ) -> Result<CallToolResult, ErrorData> {
         let max_results = normalize_max_results(params.max_results, 20);
         let query = &params.query;
+
+        #[cfg(unix)]
+        if let Some(result) = self.proxy_find_files(query, max_results, params.cursor.as_deref()) {
+            let mut r = result?;
+            self.maybe_append_update_notice(&mut r);
+            return Ok(r);
+        }
 
         let page_offset = params
             .cursor
@@ -522,6 +746,19 @@ impl FffServer {
         let max_results = normalize_max_results(params.max_results, 20);
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
+        #[cfg(unix)]
+        if let Some(result) = self.proxy_grep(
+            &params.query,
+            max_results,
+            params.cursor.as_deref(),
+            output_mode,
+            None,
+        ) {
+            let mut r = result?;
+            self.maybe_append_update_notice(&mut r);
+            return Ok(r);
+        }
+
         let parsed = QueryParser::new(AiGrepConfig).parse(&params.query);
         let grep_text = parsed.grep_text();
 
@@ -553,6 +790,15 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<MultiGrepParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        let max_results = normalize_max_results(params.max_results, 20);
+
+        #[cfg(unix)]
+        if let Some(result) = self.proxy_multi_grep(&params, max_results) {
+            let mut r = result?;
+            self.maybe_append_update_notice(&mut r);
+            return Ok(r);
+        }
+
         let mut result = self.multi_grep_inner(params)?;
         self.maybe_append_update_notice(&mut result);
         Ok(result)
