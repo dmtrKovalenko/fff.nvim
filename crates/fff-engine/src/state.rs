@@ -16,11 +16,7 @@ pub struct EffectiveArgs {
 
 pub struct EngineState {
     pub shared_picker: SharedFilePicker,
-    /// Retained for KTD-5 RecordAccess follow-on track.
-    #[allow(dead_code)]
     pub shared_frecency: SharedFrecency,
-    /// Retained for use by lifecycle / health-check paths.
-    #[allow(dead_code)]
     pub base_path: PathBuf,
 }
 

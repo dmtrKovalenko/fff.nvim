@@ -1,6 +1,6 @@
 [package]
 name = "fff-ctl"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 description = "Operator CLI for managing fff-engine daemons — list, stop, status, clean"
 license = "MIT"
@@ -10,7 +10,7 @@ name = "fffctl"
 path = "src/main.rs"
 
 [dependencies]
-fff-ipc = { path = "../fff-ipc", version = "0.11.0" }
+fff-ipc = { path = "../fff-ipc", version = "0.12.0" }
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 

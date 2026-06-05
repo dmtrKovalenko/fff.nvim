@@ -139,6 +139,10 @@ impl DirItem {
         self.path.read_to_buf(arena, buf)
     }
 
+    pub fn relative_path_len(&self) -> usize {
+        self.path.byte_len as usize
+    }
+
     /// Relative dir path as owned String (cold path).
     pub fn relative_path(&self, arena: impl FFFStringStorage) -> String {
         let mut out = String::new();

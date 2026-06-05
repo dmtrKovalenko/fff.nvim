@@ -29,6 +29,21 @@ pub enum SearchRequest {
     SetLogLevel {
         level: String,
     },
+    /// Return the top-N files by frecency score.
+    ListRecentFiles {
+        limit: usize,
+        /// When true, only include files with a non-clean git status.
+        dirty_only: bool,
+    },
+    /// Return all files with a notable git status.
+    GetGitStatus {
+        /// When true, include clean files too.
+        include_clean: bool,
+    },
+    /// Return directories ranked by the peak frecency of their child files.
+    ListDirectories {
+        limit: usize,
+    },
 }
 
 // ── Response ──────────────────────────────────────────────────────────────────
@@ -39,6 +54,9 @@ pub enum SearchResponse {
     GrepResults(WireGrepResponse),
     Error(String),
     Ack,
+    RecentFiles(Vec<WireSearchResult>),
+    GitStatus(Vec<WireGitFile>),
+    Directories(Vec<WireDirEntry>),
 }
 
 // ── Grep result types ─────────────────────────────────────────────────────────
@@ -87,6 +105,22 @@ pub struct WireSearchResult {
     pub git_status: Option<u32>,
     /// access_frecency_score + modification_frecency_score.
     pub frecency_score: i32,
+}
+
+/// One file from `GetGitStatus`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WireGitFile {
+    pub path: String,
+    /// Human-readable status label ("modified", "untracked", etc.)
+    pub status: String,
+    pub frecency_score: i32,
+}
+
+/// One directory from `ListDirectories`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WireDirEntry {
+    pub path: String,
+    pub max_frecency: i32,
 }
 
 // ── Options ───────────────────────────────────────────────────────────────────
@@ -201,6 +235,87 @@ mod tests {
         let rt = round_trip(&resp);
         match rt {
             SearchResponse::Error(msg) => assert_eq!(msg, "something went wrong"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn recent_files_response_round_trips() {
+        let resp = SearchResponse::RecentFiles(vec![WireSearchResult {
+            path: "src/hot.rs".into(),
+            score: 200,
+            git_status: Some(0),
+            frecency_score: 200,
+        }]);
+        let rt = round_trip(&resp);
+        match rt {
+            SearchResponse::RecentFiles(v) => assert_eq!(v[0].path, "src/hot.rs"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn git_status_response_round_trips() {
+        let resp = SearchResponse::GitStatus(vec![WireGitFile {
+            path: "src/changed.rs".into(),
+            status: "modified".into(),
+            frecency_score: 10,
+        }]);
+        let rt = round_trip(&resp);
+        match rt {
+            SearchResponse::GitStatus(v) => {
+                assert_eq!(v[0].path, "src/changed.rs");
+                assert_eq!(v[0].status, "modified");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn directories_response_round_trips() {
+        let resp = SearchResponse::Directories(vec![WireDirEntry {
+            path: "src/".into(),
+            max_frecency: 50,
+        }]);
+        let rt = round_trip(&resp);
+        match rt {
+            SearchResponse::Directories(v) => {
+                assert_eq!(v[0].path, "src/");
+                assert_eq!(v[0].max_frecency, 50);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn list_recent_files_request_round_trips() {
+        let req = SearchRequest::ListRecentFiles { limit: 10, dirty_only: true };
+        let rt = round_trip(&req);
+        match rt {
+            SearchRequest::ListRecentFiles { limit, dirty_only } => {
+                assert_eq!(limit, 10);
+                assert!(dirty_only);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn get_git_status_request_round_trips() {
+        let req = SearchRequest::GetGitStatus { include_clean: false };
+        let rt = round_trip(&req);
+        match rt {
+            SearchRequest::GetGitStatus { include_clean } => assert!(!include_clean),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn list_directories_request_round_trips() {
+        let req = SearchRequest::ListDirectories { limit: 30 };
+        let rt = round_trip(&req);
+        match rt {
+            SearchRequest::ListDirectories { limit } => assert_eq!(limit, 30),
             _ => panic!("wrong variant"),
         }
     }

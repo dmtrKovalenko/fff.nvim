@@ -178,10 +178,37 @@ pub struct MultiGrepParams {
     pub context: Option<f64>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RecordAccessParams {
+    /// File path to record as accessed. Relative to project root or absolute.
+    pub path: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ListRecentFilesParams {
+    /// Maximum results (default 20).
+    #[serde(rename = "maxResults")]
+    pub max_results: Option<f64>,
+    /// When true, only include files with uncommitted changes (default false).
+    pub dirty_only: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetGitStatusParams {
+    /// When true, include clean files as well (default false — only dirty files).
+    pub include_clean: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ListDirectoriesParams {
+    /// Maximum results (default 30).
+    #[serde(rename = "maxResults")]
+    pub max_results: Option<f64>,
+}
+
 #[derive(Clone)]
 pub struct FffServer {
     picker: SharedFilePicker,
-    #[allow(dead_code)]
     frecency: SharedFrecency,
     cursor_store: Arc<Mutex<CursorStore>>,
     update_notice_sent: Arc<AtomicBool>,
@@ -548,6 +575,109 @@ impl FffServer {
     }
 
     #[cfg(unix)]
+    fn proxy_record_access(
+        &self,
+        path: &str,
+    ) -> Option<Result<CallToolResult, ErrorData>> {
+        let client_arc = self.engine_client.as_ref()?;
+        if let Ok(mut client) = client_arc.lock() {
+            client.record_access(path);
+        }
+        Some(Ok(CallToolResult::success(vec![Content::text("ok")])))
+    }
+
+    #[cfg(unix)]
+    fn proxy_list_recent_files(
+        &self,
+        limit: usize,
+        dirty_only: bool,
+    ) -> Option<Result<CallToolResult, ErrorData>> {
+        use fff_ipc::types::{SearchRequest, SearchResponse};
+
+        let client_arc = self.engine_client.as_ref()?;
+        let base_path = self.engine_base_path.as_deref()?;
+        let req = SearchRequest::ListRecentFiles { limit, dirty_only };
+        let response = client_arc.lock().ok()?.search_with_recovery(&req, base_path);
+
+        match response {
+            SearchResponse::RecentFiles(items) => {
+                if items.is_empty() {
+                    return Some(Ok(CallToolResult::success(vec![Content::text(
+                        "No recently accessed files.",
+                    )])));
+                }
+                let text = format_recent_files_wire(&items);
+                Some(Ok(CallToolResult::success(vec![Content::text(text)])))
+            }
+            SearchResponse::Error(msg) => Some(Err(ErrorData::internal_error(
+                format!("fff-engine error: {msg}"),
+                None,
+            ))),
+            _ => None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn proxy_get_git_status(
+        &self,
+        include_clean: bool,
+    ) -> Option<Result<CallToolResult, ErrorData>> {
+        use fff_ipc::types::{SearchRequest, SearchResponse};
+
+        let client_arc = self.engine_client.as_ref()?;
+        let base_path = self.engine_base_path.as_deref()?;
+        let req = SearchRequest::GetGitStatus { include_clean };
+        let response = client_arc.lock().ok()?.search_with_recovery(&req, base_path);
+
+        match response {
+            SearchResponse::GitStatus(items) => {
+                if items.is_empty() {
+                    return Some(Ok(CallToolResult::success(vec![Content::text(
+                        "No uncommitted changes.",
+                    )])));
+                }
+                let text = format_git_status_wire(&items);
+                Some(Ok(CallToolResult::success(vec![Content::text(text)])))
+            }
+            SearchResponse::Error(msg) => Some(Err(ErrorData::internal_error(
+                format!("fff-engine error: {msg}"),
+                None,
+            ))),
+            _ => None,
+        }
+    }
+
+    #[cfg(unix)]
+    fn proxy_list_directories(
+        &self,
+        limit: usize,
+    ) -> Option<Result<CallToolResult, ErrorData>> {
+        use fff_ipc::types::{SearchRequest, SearchResponse};
+
+        let client_arc = self.engine_client.as_ref()?;
+        let base_path = self.engine_base_path.as_deref()?;
+        let req = SearchRequest::ListDirectories { limit };
+        let response = client_arc.lock().ok()?.search_with_recovery(&req, base_path);
+
+        match response {
+            SearchResponse::Directories(items) => {
+                if items.is_empty() {
+                    return Some(Ok(CallToolResult::success(vec![Content::text(
+                        "No directories found.",
+                    )])));
+                }
+                let text = format_directories_wire(&items);
+                Some(Ok(CallToolResult::success(vec![Content::text(text)])))
+            }
+            SearchResponse::Error(msg) => Some(Err(ErrorData::internal_error(
+                format!("fff-engine error: {msg}"),
+                None,
+            ))),
+            _ => None,
+        }
+    }
+
+    #[cfg(unix)]
     fn proxy_multi_grep(
         &self,
         params: &MultiGrepParams,
@@ -809,6 +939,220 @@ impl FffServer {
         self.maybe_append_update_notice(&mut result);
         Ok(result)
     }
+
+    /// Record that you opened or read a file, boosting its frecency score for future searches.
+    /// Call this after reading a file to help fff rank it higher in upcoming searches.
+    #[tool(
+        name = "record_access",
+        description = "Record that you opened or read a file, boosting its frecency score. Call this after reading a file — fff will rank it higher in subsequent find_files and list_recent_files results. Relative or absolute paths are both accepted."
+    )]
+    fn record_access(
+        &self,
+        Parameters(params): Parameters<RecordAccessParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        #[cfg(unix)]
+        if let Some(result) = self.proxy_record_access(&params.path) {
+            return result;
+        }
+
+        let abs_path = {
+            let path = std::path::Path::new(&params.path);
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                let guard = self.picker.read().map_err(|e| {
+                    ErrorData::internal_error(
+                        format!("Failed to acquire picker lock: {e}"),
+                        None,
+                    )
+                })?;
+                let picker = guard.as_ref().ok_or_else(|| {
+                    ErrorData::internal_error("File picker not initialized", None)
+                })?;
+                picker.base_path().join(path)
+            }
+        };
+
+        if let Ok(guard) = self.frecency.read()
+            && let Some(tracker) = guard.as_ref()
+        {
+            if let Err(e) = tracker.track_access(&abs_path) {
+                tracing::warn!(?abs_path, "record_access track_access failed: {e}");
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    /// List the most recently and frequently accessed files, ranked by frecency.
+    #[tool(
+        name = "list_recent_files",
+        description = "List files ranked by recent access frequency (frecency) — no query needed. Use at session start to understand what's in flight, or to find files you were working on recently. Set dirty_only=true to focus on files with uncommitted changes."
+    )]
+    fn list_recent_files(
+        &self,
+        Parameters(params): Parameters<ListRecentFilesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let limit = normalize_max_results(params.max_results, 20);
+        let dirty_only = params.dirty_only.unwrap_or(false);
+
+        #[cfg(unix)]
+        if let Some(result) = self.proxy_list_recent_files(limit, dirty_only) {
+            let mut r = result?;
+            self.maybe_append_update_notice(&mut r);
+            return Ok(r);
+        }
+
+        let guard = self.picker.read().map_err(|e| {
+            ErrorData::internal_error(format!("Failed to acquire picker lock: {e}"), None)
+        })?;
+        let picker = guard
+            .as_ref()
+            .ok_or_else(|| ErrorData::internal_error("File picker not initialized", None))?;
+
+        let mut items: Vec<_> = picker
+            .get_files()
+            .iter()
+            .filter(|f| {
+                !f.is_deleted()
+                    && f.total_frecency_score() > 0
+                    && (!dirty_only || f.git_status.map_or(false, fff::git::is_modified_status))
+            })
+            .map(|f| (f, f.total_frecency_score()))
+            .collect();
+
+        items.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        items.truncate(limit);
+
+        if items.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No recently accessed files.",
+            )]));
+        }
+
+        let lines: Vec<String> = items
+            .into_iter()
+            .map(|(item, score)| {
+                format!(
+                    "{}{}",
+                    item.relative_path(picker),
+                    file_suffix(item.git_status, score)
+                )
+            })
+            .collect();
+
+        let mut result = CallToolResult::success(vec![Content::text(lines.join("\n"))]);
+        self.maybe_append_update_notice(&mut result);
+        Ok(result)
+    }
+
+    /// List all files with uncommitted git changes, grouped by status.
+    #[tool(
+        name = "get_git_status",
+        description = "List all files with uncommitted git changes, grouped by status (modified, staged, untracked, etc.). Use instead of shelling out to `git status`. Set include_clean=true to also see tracked clean files."
+    )]
+    fn get_git_status(
+        &self,
+        Parameters(params): Parameters<GetGitStatusParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let include_clean = params.include_clean.unwrap_or(false);
+
+        #[cfg(unix)]
+        if let Some(result) = self.proxy_get_git_status(include_clean) {
+            let mut r = result?;
+            self.maybe_append_update_notice(&mut r);
+            return Ok(r);
+        }
+
+        let guard = self.picker.read().map_err(|e| {
+            ErrorData::internal_error(format!("Failed to acquire picker lock: {e}"), None)
+        })?;
+        let picker = guard
+            .as_ref()
+            .ok_or_else(|| ErrorData::internal_error("File picker not initialized", None))?;
+
+        use fff::git::format_git_status_opt;
+        use fff_ipc::types::WireGitFile;
+
+        let items: Vec<WireGitFile> = picker
+            .get_files()
+            .iter()
+            .filter(|f| !f.is_deleted() && (f.git_status.is_some() || include_clean))
+            .filter_map(|f| {
+                let status_str = format_git_status_opt(f.git_status)?;
+                if !include_clean && status_str == "clean" {
+                    return None;
+                }
+                Some(WireGitFile {
+                    path: f.relative_path(picker),
+                    status: status_str.to_string(),
+                    frecency_score: f.total_frecency_score(),
+                })
+            })
+            .collect();
+
+        if items.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No uncommitted changes.",
+            )]));
+        }
+
+        let text = format_git_status_wire(&items);
+        let mut result = CallToolResult::success(vec![Content::text(text)]);
+        self.maybe_append_update_notice(&mut result);
+        Ok(result)
+    }
+
+    /// List project directories ranked by their most-active files.
+    #[tool(
+        name = "list_directories",
+        description = "List project directories ranked by the frecency of their most-active child files. Useful for understanding which parts of the project are currently active without running a search."
+    )]
+    fn list_directories(
+        &self,
+        Parameters(params): Parameters<ListDirectoriesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let limit = normalize_max_results(params.max_results, 30);
+
+        #[cfg(unix)]
+        if let Some(result) = self.proxy_list_directories(limit) {
+            let mut r = result?;
+            self.maybe_append_update_notice(&mut r);
+            return Ok(r);
+        }
+
+        let guard = self.picker.read().map_err(|e| {
+            ErrorData::internal_error(format!("Failed to acquire picker lock: {e}"), None)
+        })?;
+        let picker = guard
+            .as_ref()
+            .ok_or_else(|| ErrorData::internal_error("File picker not initialized", None))?;
+
+        let mut dirs: Vec<(String, i32)> = picker
+            .get_dirs()
+            .iter()
+            .map(|d| (d.relative_path(picker), d.max_access_frecency()))
+            .filter(|(path, _)| !path.is_empty())
+            .collect();
+
+        dirs.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        dirs.truncate(limit);
+
+        if dirs.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No directories found.",
+            )]));
+        }
+
+        let lines: Vec<String> = dirs
+            .into_iter()
+            .map(|(path, frecency)| format!("{}{}", path, file_suffix(None, frecency)))
+            .collect();
+
+        let mut result = CallToolResult::success(vec![Content::text(lines.join("\n"))]);
+        self.maybe_append_update_notice(&mut result);
+        Ok(result)
+    }
 }
 
 impl FffServer {
@@ -929,6 +1273,67 @@ impl ServerHandler for FffServer {
             .with_server_info(Implementation::new("fff", env!("CARGO_PKG_VERSION")))
             .with_instructions(instructions)
     }
+}
+
+fn format_recent_files_wire(items: &[fff_ipc::types::WireSearchResult]) -> String {
+    items
+        .iter()
+        .map(|item| {
+            let git_status = item.git_status.map(git2::Status::from_bits_truncate);
+            format!("{}{}", item.path, file_suffix(git_status, item.frecency_score))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_git_status_wire(items: &[fff_ipc::types::WireGitFile]) -> String {
+    use std::collections::HashMap;
+
+    const STATUS_ORDER: &[&str] = &[
+        "modified",
+        "staged_modified",
+        "staged_new",
+        "staged_deleted",
+        "deleted",
+        "renamed",
+        "untracked",
+        "clean",
+        "ignored",
+    ];
+
+    let mut groups: HashMap<&str, Vec<&str>> = HashMap::new();
+    for item in items {
+        groups.entry(item.status.as_str()).or_default().push(item.path.as_str());
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    for &status in STATUS_ORDER {
+        if let Some(paths) = groups.remove(status) {
+            lines.push(format!("{} ({}):", status, paths.len()));
+            for path in paths {
+                lines.push(format!("  {path}"));
+            }
+        }
+    }
+    // any remaining unknown statuses, sorted for determinism
+    let mut remaining: Vec<_> = groups.into_iter().collect();
+    remaining.sort_by_key(|(k, _)| *k);
+    for (status, paths) in remaining {
+        lines.push(format!("{status} ({}):", paths.len()));
+        for path in paths {
+            lines.push(format!("  {path}"));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn format_directories_wire(items: &[fff_ipc::types::WireDirEntry]) -> String {
+    items
+        .iter()
+        .map(|d| format!("{}{}", d.path, file_suffix(None, d.max_frecency)))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]

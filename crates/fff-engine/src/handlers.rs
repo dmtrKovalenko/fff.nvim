@@ -149,6 +149,139 @@ pub async fn handle_multi_grep(
     }
 }
 
+pub async fn handle_list_recent_files(
+    state: &EngineState,
+    limit: usize,
+    dirty_only: bool,
+) -> SearchResponse {
+    use fff_ipc::types::WireSearchResult;
+
+    let picker_arc = state.shared_picker.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let guard = picker_arc.read().map_err(|e| e.to_string())?;
+        let picker = guard
+            .as_ref()
+            .ok_or_else(|| "File picker not yet initialized".to_string())?;
+
+        let mut items: Vec<_> = picker
+            .get_files()
+            .iter()
+            .filter(|f| {
+                !f.is_deleted()
+                    && f.total_frecency_score() > 0
+                    && (!dirty_only || f.git_status.map_or(false, fff::git::is_modified_status))
+            })
+            .map(|f| (f, f.total_frecency_score()))
+            .collect();
+
+        items.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        items.truncate(limit);
+
+        let wire: Vec<WireSearchResult> = items
+            .into_iter()
+            .map(|(f, score)| WireSearchResult {
+                path: f.relative_path(picker),
+                score,
+                git_status: f.git_status.map(|s| s.bits()),
+                frecency_score: score,
+            })
+            .collect();
+
+        Ok::<_, String>(wire)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(wire)) => SearchResponse::RecentFiles(wire),
+        Ok(Err(msg)) => SearchResponse::Error(msg),
+        Err(e) => SearchResponse::Error(format!("spawn_blocking join error: {e}")),
+    }
+}
+
+pub async fn handle_get_git_status(
+    state: &EngineState,
+    include_clean: bool,
+) -> SearchResponse {
+    use fff::git::format_git_status_opt;
+    use fff_ipc::types::WireGitFile;
+
+    let picker_arc = state.shared_picker.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let guard = picker_arc.read().map_err(|e| e.to_string())?;
+        let picker = guard
+            .as_ref()
+            .ok_or_else(|| "File picker not yet initialized".to_string())?;
+
+        let wire: Vec<WireGitFile> = picker
+            .get_files()
+            .iter()
+            .filter(|f| !f.is_deleted() && (f.git_status.is_some() || include_clean))
+            .filter_map(|f| {
+                let status_str = format_git_status_opt(f.git_status)?;
+                if !include_clean && status_str == "clean" {
+                    return None;
+                }
+                Some(WireGitFile {
+                    path: f.relative_path(picker),
+                    status: status_str.to_string(),
+                    frecency_score: f.total_frecency_score(),
+                })
+            })
+            .collect();
+
+        Ok::<_, String>(wire)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(wire)) => SearchResponse::GitStatus(wire),
+        Ok(Err(msg)) => SearchResponse::Error(msg),
+        Err(e) => SearchResponse::Error(format!("spawn_blocking join error: {e}")),
+    }
+}
+
+pub async fn handle_list_directories(
+    state: &EngineState,
+    limit: usize,
+) -> SearchResponse {
+    use fff_ipc::types::WireDirEntry;
+
+    let picker_arc = state.shared_picker.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let guard = picker_arc.read().map_err(|e| e.to_string())?;
+        let picker = guard
+            .as_ref()
+            .ok_or_else(|| "File picker not yet initialized".to_string())?;
+
+        let mut dirs: Vec<(&fff::types::DirItem, i32)> = picker
+            .get_dirs()
+            .iter()
+            .filter(|d| d.relative_path_len() > 0)
+            .map(|d| (d, d.max_access_frecency()))
+            .collect();
+
+        dirs.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        dirs.truncate(limit);
+
+        let wire: Vec<WireDirEntry> = dirs
+            .into_iter()
+            .map(|(d, max_frecency)| WireDirEntry {
+                path: d.relative_path(picker),
+                max_frecency,
+            })
+            .collect();
+
+        Ok::<_, String>(wire)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(wire)) => SearchResponse::Directories(wire),
+        Ok(Err(msg)) => SearchResponse::Error(msg),
+        Err(e) => SearchResponse::Error(format!("spawn_blocking join error: {e}")),
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn to_core_grep_options(options: &GrepOptions) -> fff::grep::GrepSearchOptions {

@@ -67,8 +67,24 @@ async fn handle_connection(stream: tokio::net::UnixStream, state: Arc<EngineStat
         };
 
         match request {
-            SearchRequest::RecordAccess { .. } => {
-                // KTD-5: fire-and-forget, no response sent
+            SearchRequest::RecordAccess { path } => {
+                let base_path = state.base_path.clone();
+                let frecency = state.shared_frecency.clone();
+                tokio::task::spawn_blocking(move || {
+                    let abs_path = if std::path::Path::new(&path).is_absolute() {
+                        std::path::PathBuf::from(&path)
+                    } else {
+                        base_path.join(&path)
+                    };
+                    if let Ok(guard) = frecency.read()
+                        && let Some(tracker) = guard.as_ref()
+                    {
+                        if let Err(e) = tracker.track_access(&abs_path) {
+                            tracing::warn!(?abs_path, "RecordAccess failed: {e}");
+                        }
+                    }
+                });
+                // No response — fire-and-forget
             }
             SearchRequest::SetLogLevel { level } => {
                 let response = match crate::set_log_level(&level) {
@@ -93,7 +109,10 @@ async fn handle_connection(stream: tokio::net::UnixStream, state: Arc<EngineStat
 }
 
 async fn dispatch(state: &EngineState, req: SearchRequest) -> fff_ipc::types::SearchResponse {
-    use crate::handlers::{handle_find_files, handle_grep, handle_multi_grep};
+    use crate::handlers::{
+        handle_find_files, handle_get_git_status, handle_grep, handle_list_directories,
+        handle_list_recent_files, handle_multi_grep,
+    };
     use std::time::Instant;
 
     let start = Instant::now();
@@ -111,6 +130,18 @@ async fn dispatch(state: &EngineState, req: SearchRequest) -> fff_ipc::types::Se
             let label = format!("multi_grep({:?})", patterns);
             (label, handle_multi_grep(state, patterns, constraints, options).await)
         }
+        SearchRequest::ListRecentFiles { limit, dirty_only } => {
+            let label = format!("list_recent_files(limit={limit}, dirty_only={dirty_only})");
+            (label, handle_list_recent_files(state, limit, dirty_only).await)
+        }
+        SearchRequest::GetGitStatus { include_clean } => {
+            let label = format!("get_git_status(include_clean={include_clean})");
+            (label, handle_get_git_status(state, include_clean).await)
+        }
+        SearchRequest::ListDirectories { limit } => {
+            let label = format!("list_directories(limit={limit})");
+            (label, handle_list_directories(state, limit).await)
+        }
         SearchRequest::RecordAccess { .. } | SearchRequest::SetLogLevel { .. } => {
             unreachable!("handled before dispatch")
         }
@@ -119,7 +150,9 @@ async fn dispatch(state: &EngineState, req: SearchRequest) -> fff_ipc::types::Se
     let elapsed = start.elapsed();
     let result_count = match &response {
         fff_ipc::types::SearchResponse::GrepResults(r) => r.matches.iter().map(|f| f.matches.len()).sum::<usize>(),
-        fff_ipc::types::SearchResponse::SearchResults(r) => r.len(),
+        fff_ipc::types::SearchResponse::SearchResults(r) | fff_ipc::types::SearchResponse::RecentFiles(r) => r.len(),
+        fff_ipc::types::SearchResponse::GitStatus(r) => r.len(),
+        fff_ipc::types::SearchResponse::Directories(r) => r.len(),
         fff_ipc::types::SearchResponse::Error(_) | fff_ipc::types::SearchResponse::Ack => 0,
     };
     tracing::info!("request: {label}");
