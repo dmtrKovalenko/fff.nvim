@@ -14,7 +14,7 @@ SHELL := bash
 # string rather than the literal `-o` / `pipefail` tokens.
 .SHELLFLAGS := -o pipefail -ec
 
-.PHONY: build build-c-lib install uninstall test test-rust test-c-smoke test-c-api test-lua test-lua-snap test-version test-bun test-node prepare-bun prepare-node set-npm-version header test-stress test-stress-seeded test-stress-random test-stress-repos test-node-stress sync-js-api sync-js-api-check
+.PHONY: build build-c-lib build-daemon run-engine run-mcp healthcheck install uninstall test test-rust test-daemon test-c-smoke test-c-api test-lua test-lua-snap test-version test-bun test-node prepare-bun prepare-node set-npm-version header test-stress test-stress-seeded test-stress-random test-stress-repos test-node-stress sync-js-api sync-js-api-check
 
 all: format test lint
 
@@ -48,6 +48,36 @@ sync-js-api-check:
 
 build:
 	cargo build --release --features zlob
+
+# Build the daemon stack without the zlob feature (no Zig required).
+# Produces target/release/fff-engine and target/release/fff-mcp.
+BUILD_BASE_PATH ?= .
+
+build-daemon:
+	cargo build --release --no-default-features -p fff-engine -p fff-mcp
+
+# Start fff-engine for BUILD_BASE_PATH in the foreground.
+# Override the base path: make run-engine BUILD_BASE_PATH=/path/to/repo
+run-engine: build-daemon
+	PATH="$(CURDIR)/target/release:$$PATH" \
+	./target/release/fff-engine --base-path $(BUILD_BASE_PATH)
+
+# Start fff-mcp (proxy mode) in stdio transport for BUILD_BASE_PATH.
+# fff-mcp will spawn fff-engine automatically if it is not already running.
+# Pipe in MCP JSON-RPC messages or just verify it starts cleanly (Ctrl-C to stop).
+run-mcp: build-daemon
+	PATH="$(CURDIR)/target/release:$$PATH" \
+	./target/release/fff-mcp $(BUILD_BASE_PATH)
+
+# Run fff-mcp --healthcheck against BUILD_BASE_PATH.
+# Reports daemon socket status, git repo detection, and log file path.
+healthcheck: build-daemon
+	PATH="$(CURDIR)/target/release:$$PATH" \
+	./target/release/fff-mcp $(BUILD_BASE_PATH) --healthcheck
+
+# Run unit tests for the new daemon crates only (no Zig, no Lua, no JS).
+test-daemon:
+	cargo test --no-default-features -p fff-ipc -p fff-engine -p fff-mcp
 
 build-c-lib:
 	cargo build --release -p fff-c --features zlob
