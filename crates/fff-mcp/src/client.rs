@@ -39,11 +39,25 @@ impl EngineClient {
             std::fs::create_dir_all(parent)?;
         }
 
-        let won_lock = std::fs::OpenOptions::new()
+        let mut won_lock = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&lock)
             .is_ok();
+
+        // Lost the race — but the lockfile may be stale (engine crashed before
+        // binding its socket). If the PID it recorded is dead, clear the stale
+        // state and take ownership so we can spawn a fresh engine.
+        if !won_lock && is_lockfile_stale(&lock) {
+            tracing::info!("Removing stale fff-engine lockfile (dead PID)");
+            let _ = std::fs::remove_file(&lock);
+            let _ = std::fs::remove_file(&sock);
+            won_lock = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock)
+                .is_ok();
+        }
 
         if won_lock {
             // We won the race: spawn fff-engine and write the child PID.
@@ -169,6 +183,20 @@ pub enum HealthStatus {
     Ok,
     NotStarted(std::path::PathBuf),
     ConnRefused(String),
+}
+
+/// Returns true when the lockfile exists but the PID it contains is no longer alive.
+fn is_lockfile_stale(lockfile: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(lockfile) else {
+        // Unreadable lockfile — treat as stale so we can recover.
+        return true;
+    };
+    let Ok(pid) = content.trim().parse::<u32>() else {
+        return true;
+    };
+    // SAFETY: kill(pid, 0) probes liveness without delivering a signal.
+    let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+    !alive
 }
 
 fn wait_for_socket(socket_path: &Path, timeout: Duration) -> Result<(), Box<dyn std::error::Error>> {
