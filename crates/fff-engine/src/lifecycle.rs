@@ -15,30 +15,50 @@ impl Drop for LockfileGuard {
 
 /// Attempt to acquire the lockfile exclusively.
 ///
-/// Uses `O_CREAT | O_EXCL` semantics via `OpenOptions::create_new`. Exactly
-/// one caller wins; all others get `Err`.
+/// Uses `O_CREAT | O_EXCL` semantics via `OpenOptions::create_new`. If the
+/// lockfile already exists but the PID inside it is dead (crashed or killed
+/// without cleanup), the stale file is removed and the acquire is retried
+/// once. Returns `Err` only when a live daemon holds the lock.
 pub fn acquire_lockfile(lockfile_path: &Path) -> Result<LockfileGuard, Box<dyn std::error::Error>> {
     if let Some(parent) = lockfile_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    OpenOptions::new()
-        .write(true)
-        .create_new(true) // O_CREAT | O_EXCL
-        .open(lockfile_path)
-        .map_err(|e| {
-            Box::new(e) as Box<dyn std::error::Error>
-        })?;
+    match try_create_lockfile(lockfile_path) {
+        Ok(()) => {}
+        Err(_) => {
+            // Lockfile exists. Check whether the owning process is still alive.
+            if is_lockfile_stale(lockfile_path) {
+                eprintln!("fff-engine: removing stale lockfile (previous process exited uncleanly)");
+                let _ = std::fs::remove_file(lockfile_path);
+                // Retry once — if this fails a live daemon raced us.
+                try_create_lockfile(lockfile_path).map_err(|_| {
+                    "another fff-engine daemon is already running for this project root"
+                })?;
+            } else {
+                return Err("another fff-engine daemon is already running for this project root".into());
+            }
+        }
+    }
 
-    // Write a placeholder PID (fff-mcp crash recovery reads this).
-    // U8 (crash recovery) will write the spawned child PID from fff-mcp.
-    // fff-engine itself writes its own PID here for the server-side guard.
     let pid = std::process::id();
     std::fs::write(lockfile_path, pid.to_string())?;
 
     Ok(LockfileGuard {
         path: lockfile_path.to_path_buf(),
     })
+}
+
+fn try_create_lockfile(path: &Path) -> std::io::Result<()> {
+    OpenOptions::new().write(true).create_new(true).open(path).map(|_| ())
+}
+
+fn is_lockfile_stale(path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else { return true };
+    let Ok(pid) = content.trim().parse::<u32>() else { return true };
+    // kill(pid, 0) — signal 0 probes existence without delivering anything.
+    let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+    !alive
 }
 
 /// Poll until `socket_path` exists, returning `Ok` when it does.
