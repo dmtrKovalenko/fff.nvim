@@ -13,11 +13,9 @@ path = "src/main.rs"
 fff = { package = "fff-search", path = "../fff-core", default-features = false, version = "0.10.0" }
 fff-ipc = { path = "../fff-ipc", version = "0.10.0" }
 bincode = { workspace = true }
-blake3 = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 dirs = { workspace = true }
 git2 = { workspace = true }
-libc = "0.2"
 mimalloc = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { version = "1", features = ["full"] }

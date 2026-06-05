@@ -2,6 +2,7 @@
 members = [
   "crates/fff-c",
   "crates/fff-core",
+  "crates/fff-ctl",
   "crates/fff-engine",
   "crates/fff-ipc",
   "crates/fff-mcp",

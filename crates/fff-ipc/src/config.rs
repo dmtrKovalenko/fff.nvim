@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// max_cached_files = 30000
 ///
 /// [frecency]
-/// # db = "~/.local/share/fff/frecency/"  # defaults to XDG data dir
+/// # db = "~/.local/share/fff/frecency/"  # set to share one DB across projects
 /// ```
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct FffConfig {
@@ -66,7 +66,11 @@ pub struct IndexConfig {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct FrecencyConfig {
     /// Path to the LMDB frecency database directory.
-    /// Default: `$XDG_DATA_HOME/fff/frecency/` → `~/.local/share/fff/frecency/`.
+    /// Default: a per-base-path subdirectory under
+    /// `$XDG_DATA_HOME/fff/frecency/<slug>/` (the slug is a stable hash of
+    /// the canonical base-path). Set this to a fixed directory to share one
+    /// DB across all projects — useful when you want cross-project frecency
+    /// signal, at the cost of a global size-cap blast radius.
     pub db: Option<String>,
 }
 

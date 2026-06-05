@@ -9,10 +9,12 @@ license = "MIT"
 bincode = { workspace = true }
 blake3 = { workspace = true }
 dirs = { workspace = true }
+libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["io-util"] }
 
 [dev-dependencies]
+tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread"] }

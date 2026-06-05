@@ -3,25 +3,28 @@ use std::path::{Path, PathBuf};
 /// Socket path for a given project root:
 /// `<cache_dir>/fff/sockets/<blake3hex(canonical_base_path)>.sock`
 pub fn socket_path(base_path: &Path) -> PathBuf {
-    let hash = path_hash(base_path);
+    let hash = base_path_slug(base_path);
     cache_dir().join("fff").join("sockets").join(format!("{hash}.sock"))
 }
 
 /// Lockfile path for a given project root:
 /// `<cache_dir>/fff/locks/<blake3hex(canonical_base_path)>.lock`
 pub fn lockfile_path(base_path: &Path) -> PathBuf {
-    let hash = path_hash(base_path);
+    let hash = base_path_slug(base_path);
     cache_dir().join("fff").join("locks").join(format!("{hash}.lock"))
 }
 
+/// Stable 16-hex-char slug for a project root. Used to derive per-base-path
+/// paths (sockets, lockfiles, frecency DB) that don't collide across projects.
+///
 /// Canonicalize before hashing so that `.`, `./`, `/abs/path`, and
 /// `/abs/path/` all produce the same hash. This ensures fff-engine (started
 /// with `--base-path .`) and fff-mcp (which resolves the git workdir to an
-/// absolute path) derive the same socket and lockfile paths.
+/// absolute path) derive the same artefact paths.
 ///
 /// Unix socket path limit on macOS is 104 bytes (SUN_LEN). Using 16 hex
 /// chars (64-bit prefix) keeps the full path well under that limit.
-fn path_hash(base_path: &Path) -> String {
+pub fn base_path_slug(base_path: &Path) -> String {
     let canonical = std::fs::canonicalize(base_path)
         .unwrap_or_else(|_| base_path.to_path_buf());
     let bytes = canonical.as_os_str().as_encoded_bytes();

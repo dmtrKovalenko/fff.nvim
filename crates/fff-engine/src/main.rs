@@ -27,7 +27,9 @@ pub(crate) struct Args {
     pub base_path: PathBuf,
 
     /// Path to the LMDB frecency database directory.
-    /// Overrides config.frecency.db. Default: `~/.local/share/fff/frecency/`.
+    /// Overrides config.frecency.db. Default: a per-base-path subdirectory
+    /// under `~/.local/share/fff/frecency/<slug>/` so projects cannot wipe
+    /// each other's history via the global size-cap trip wire.
     #[arg(long = "frecency-db", value_name = "PATH")]
     pub frecency_db_path: Option<PathBuf>,
 
@@ -107,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket_path = fff_ipc::socket_path(&effective_args.base_path);
     let lockfile_path = fff_ipc::lockfile_path(&effective_args.base_path);
 
-    let _lockfile_guard = match lifecycle::acquire_lockfile(&lockfile_path) {
+    let _lockfile_guard = match lifecycle::acquire_lockfile(&lockfile_path, &effective_args.base_path) {
         Ok(guard) => guard,
         Err(e) => {
             tracing::info!("Daemon already running (lockfile held): {e}");

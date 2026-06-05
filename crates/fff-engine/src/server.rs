@@ -19,7 +19,17 @@ pub async fn run(state: Arc<EngineState>, socket_path: PathBuf) -> Result<(), Bo
     tracing::info!("fff-engine listening on {}", socket_path.display());
 
     let shutdown = async {
-        tokio::signal::ctrl_c().await.ok();
+        // Wait on whichever of SIGINT (Ctrl-C) or SIGTERM (fffctl stop, init,
+        // brew services) arrives first. Returning from this future drops the
+        // lockfile guard cleanly so no stale lockfile is left behind.
+        let mut sigterm = tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::terminate(),
+        )
+        .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => tracing::info!("SIGINT received"),
+            _ = sigterm.recv() => tracing::info!("SIGTERM received"),
+        }
     };
     tokio::pin!(shutdown);
 

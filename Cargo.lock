@@ -642,17 +642,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "fff-ctl"
+version = "0.10.0"
+dependencies = [
+ "clap",
+ "fff-ipc",
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "fff-engine"
 version = "0.10.0"
 dependencies = [
  "bincode",
- "blake3",
  "clap",
  "dirs",
  "fff-ipc",
  "fff-search",
  "git2",
- "libc",
  "mimalloc",
  "parking_lot",
  "tempfile",
@@ -675,7 +683,9 @@ dependencies = [
  "bincode",
  "blake3",
  "dirs",
+ "libc",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "toml",
@@ -691,7 +701,6 @@ dependencies = [
  "fff-query-parser",
  "fff-search",
  "git2",
- "libc",
  "mimalloc",
  "rmcp",
  "schemars",

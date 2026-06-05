@@ -2,6 +2,8 @@ use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use fff_ipc::lockfile;
+
 /// RAII guard that removes the lockfile on drop.
 pub struct LockfileGuard {
     path: PathBuf,
@@ -19,7 +21,13 @@ impl Drop for LockfileGuard {
 /// lockfile already exists but the PID inside it is dead (crashed or killed
 /// without cleanup), the stale file is removed and the acquire is retried
 /// once. Returns `Err` only when a live daemon holds the lock.
-pub fn acquire_lockfile(lockfile_path: &Path) -> Result<LockfileGuard, Box<dyn std::error::Error>> {
+///
+/// `base_path` is written into the lockfile so operator tools (fff-ctl)
+/// can map slug → project root without consulting any registry.
+pub fn acquire_lockfile(
+    lockfile_path: &Path,
+    base_path: &Path,
+) -> Result<LockfileGuard, Box<dyn std::error::Error>> {
     if let Some(parent) = lockfile_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -28,7 +36,7 @@ pub fn acquire_lockfile(lockfile_path: &Path) -> Result<LockfileGuard, Box<dyn s
         Ok(()) => {}
         Err(_) => {
             // Lockfile exists. Check whether the owning process is still alive.
-            if is_lockfile_stale(lockfile_path) {
+            if lockfile::is_stale(lockfile_path) {
                 eprintln!("fff-engine: removing stale lockfile (previous process exited uncleanly)");
                 let _ = std::fs::remove_file(lockfile_path);
                 // Retry once — if this fails a live daemon raced us.
@@ -42,7 +50,7 @@ pub fn acquire_lockfile(lockfile_path: &Path) -> Result<LockfileGuard, Box<dyn s
     }
 
     let pid = std::process::id();
-    std::fs::write(lockfile_path, pid.to_string())?;
+    std::fs::write(lockfile_path, lockfile::format_contents(pid, base_path))?;
 
     Ok(LockfileGuard {
         path: lockfile_path.to_path_buf(),
@@ -51,14 +59,6 @@ pub fn acquire_lockfile(lockfile_path: &Path) -> Result<LockfileGuard, Box<dyn s
 
 fn try_create_lockfile(path: &Path) -> std::io::Result<()> {
     OpenOptions::new().write(true).create_new(true).open(path).map(|_| ())
-}
-
-fn is_lockfile_stale(path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else { return true };
-    let Ok(pid) = content.trim().parse::<u32>() else { return true };
-    // kill(pid, 0) — signal 0 probes existence without delivering anything.
-    let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
-    !alive
 }
 
 /// Poll until `socket_path` exists, returning `Ok` when it does.
@@ -103,11 +103,15 @@ mod tests {
         tempfile::tempdir().unwrap()
     }
 
+    fn project() -> std::path::PathBuf {
+        std::path::PathBuf::from("/tmp/fff-test-project")
+    }
+
     #[test]
     fn acquire_creates_lockfile() {
         let dir = tmp();
         let lock = dir.path().join("test.lock");
-        let _guard = acquire_lockfile(&lock).unwrap();
+        let _guard = acquire_lockfile(&lock, &project()).unwrap();
         assert!(lock.exists());
     }
 
@@ -115,8 +119,8 @@ mod tests {
     fn second_acquire_fails() {
         let dir = tmp();
         let lock = dir.path().join("test.lock");
-        let _guard = acquire_lockfile(&lock).unwrap();
-        assert!(acquire_lockfile(&lock).is_err());
+        let _guard = acquire_lockfile(&lock, &project()).unwrap();
+        assert!(acquire_lockfile(&lock, &project()).is_err());
     }
 
     #[test]
@@ -124,10 +128,20 @@ mod tests {
         let dir = tmp();
         let lock = dir.path().join("test.lock");
         {
-            let _guard = acquire_lockfile(&lock).unwrap();
+            let _guard = acquire_lockfile(&lock, &project()).unwrap();
             assert!(lock.exists());
         }
         assert!(!lock.exists());
+    }
+
+    #[test]
+    fn lockfile_contains_base_path() {
+        let dir = tmp();
+        let lock = dir.path().join("test.lock");
+        let _guard = acquire_lockfile(&lock, &project()).unwrap();
+        let parsed = fff_ipc::lockfile::read(&lock).expect("readable");
+        assert_eq!(parsed.pid, std::process::id());
+        assert_eq!(parsed.base_path.as_deref(), Some(project().as_path()));
     }
 
     #[test]

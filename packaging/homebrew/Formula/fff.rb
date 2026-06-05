@@ -17,17 +17,18 @@ class Fff < Formula
     ENV["CMAKE_ARGS"] = "-DUSE_SQLITE_CREDENTIAL_CACHING=OFF"
 
     system "cargo", "build", "--release", "--no-default-features",
-           "-p", "fff-engine", "-p", "fff-mcp"
+           "-p", "fff-engine", "-p", "fff-mcp", "-p", "fff-ctl"
 
     # fff-mcp locates fff-engine via current_exe().parent() at runtime,
     # so both binaries must be installed to the same directory.
     bin.install "target/release/fff-mcp"
     bin.install "target/release/fff-engine"
+    bin.install "target/release/fffctl"
   end
 
   def caveats
     <<~EOS
-      fff-mcp and fff-engine are both installed to #{HOMEBREW_PREFIX}/bin/.
+      fff-mcp, fff-engine, and fffctl are all installed to #{HOMEBREW_PREFIX}/bin/.
 
       Register with Claude Code (user-scoped, survives updates):
         claude mcp add -s user fff -- #{bin}/fff-mcp
@@ -39,6 +40,11 @@ class Fff < Formula
           }
         }
 
+      Manage running daemons with fffctl:
+        fffctl list           # show all running daemons
+        fffctl stop --all     # stop every daemon
+        fffctl clean          # remove stale lockfiles / orphan sockets
+
       Configuration (optional): ~/.config/fff/config.toml
         [log]
         level = "fff_engine=info,fff_mcp=info,warn"
@@ -48,6 +54,8 @@ class Fff < Formula
   test do
     assert_predicate bin/"fff-mcp", :executable?
     assert_predicate bin/"fff-engine", :executable?
+    assert_predicate bin/"fffctl", :executable?
     assert_match "fff-engine", shell_output("#{bin}/fff-engine --help 2>&1", 2)
+    assert_match "Manage fff-engine daemons", shell_output("#{bin}/fffctl --help 2>&1")
   end
 end

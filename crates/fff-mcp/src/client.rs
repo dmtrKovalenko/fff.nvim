@@ -10,7 +10,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use fff_ipc::types::{SearchRequest, SearchResponse};
-use fff_ipc::{lockfile_path, socket_path, IpcError};
+use fff_ipc::{lockfile, lockfile_path, socket_path, IpcError};
 use fff_ipc::{read_message_sync, write_message_sync};
 
 /// How long to wait for fff-engine to bind its socket after spawning.
@@ -42,7 +42,7 @@ impl EngineClient {
         // fff-mcp only decides whether to spawn: if a live engine already holds
         // the lock, just wait for its socket; otherwise spawn and let the engine
         // acquire the lock itself.
-        let engine_running = lock.exists() && !is_lockfile_stale(&lock);
+        let engine_running = lock.exists() && !lockfile::is_stale(&lock);
 
         if !engine_running {
             // Clear any stale lockfile so fff-engine can acquire it cleanly.
@@ -55,8 +55,6 @@ impl EngineClient {
                 std::fs::create_dir_all(parent)?;
             }
 
-            let frecency_path = fff_ipc::xdg_data_dir().join("fff").join("frecency");
-
             // Prefer fff-engine co-located with fff-mcp (both live in the same
             // install dir) so $PATH doesn't need to include the binary directory.
             let engine_bin = std::env::current_exe()
@@ -65,14 +63,16 @@ impl EngineClient {
                 .filter(|p| p.exists())
                 .unwrap_or_else(|| std::path::PathBuf::from("fff-engine"));
 
+            // Frecency DB location is left to fff-engine, which derives a
+            // per-base-path subdirectory under $XDG_DATA_HOME/fff/frecency/.
+            // Users can override via --frecency-db or config.frecency.db.
+            //
             // Null out stdio: fff-engine writes to its own log file. Inheriting
             // fff-mcp's stdio would corrupt the MCP JSON-RPC stream on stdout
             // and leak engine startup logs into the Claude Code session via stderr.
             let child = Command::new(&engine_bin)
                 .arg("--base-path")
                 .arg(base_path)
-                .arg("--frecency-db")
-                .arg(&frecency_path)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -174,20 +174,6 @@ pub enum HealthStatus {
     Ok,
     NotStarted(std::path::PathBuf),
     ConnRefused(String),
-}
-
-/// Returns true when the lockfile exists but the PID it contains is no longer alive.
-fn is_lockfile_stale(lockfile: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(lockfile) else {
-        // Unreadable lockfile — treat as stale so we can recover.
-        return true;
-    };
-    let Ok(pid) = content.trim().parse::<u32>() else {
-        return true;
-    };
-    // SAFETY: kill(pid, 0) probes liveness without delivering a signal.
-    let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
-    !alive
 }
 
 fn wait_for_socket(socket_path: &Path, timeout: Duration) -> Result<(), Box<dyn std::error::Error>> {

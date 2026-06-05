@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fff::{FFFMode, FilePickerOptions, SharedFilePicker, SharedFrecency};
 use fff::file_picker::FilePicker;
@@ -31,10 +31,13 @@ pub fn init(args: &EffectiveArgs) -> Result<EngineState, Box<dyn std::error::Err
     let shared_frecency = SharedFrecency::default();
 
     // R5: frecency enabled by default — always open LMDB.
+    // Default is per-base-path so one project's DB cannot wipe another via
+    // the global SIZE_CAP_BYTES trip wire. Power users with cross-project
+    // signal needs can override via --frecency-db or config.frecency.db.
     let frecency_path = args
         .frecency_db_path
         .clone()
-        .unwrap_or_else(default_frecency_path);
+        .unwrap_or_else(|| default_frecency_path(&base_path));
     std::fs::create_dir_all(&frecency_path)?;
 
     match FrecencyTracker::open(&frecency_path) {
@@ -80,6 +83,12 @@ fn resolve_base_path(supplied: &std::path::Path) -> PathBuf {
     }
 }
 
-fn default_frecency_path() -> PathBuf {
-    fff_ipc::xdg_data_dir().join("fff").join("frecency")
+fn default_frecency_path(base_path: &Path) -> PathBuf {
+    // Reuse fff_ipc::base_path_slug so the frecency dir shares the slug the
+    // socket and lockfile already use for this base_path. Same hash → same
+    // suffix everywhere, which makes the on-disk layout self-describing.
+    fff_ipc::xdg_data_dir()
+        .join("fff")
+        .join("frecency")
+        .join(fff_ipc::base_path_slug(base_path))
 }

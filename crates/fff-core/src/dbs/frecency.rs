@@ -73,8 +73,8 @@ impl LmdbStore for FrecencyTracker {
     // leaves ~18× headroom while capping runaway growth (see GH issue #437).
     const MAP_SIZE: usize = 10 * 1024 * 1024;
     const MAX_DBS: u32 = 0;
-    // Nuke the db when it exceeds 8 MiB on disk — leaves a small margin under
-    // MAP_SIZE so we don't hit MDB_MAP_FULL before the open-time erase fires.
+    // Nuke the db when it exceeds 12 MiB on disk — slightly above MAP_SIZE so
+    // the open-time erase fires once an env has actually outgrown its mmap.
     const SIZE_CAP_BYTES: u64 = 12 * 1024 * 1024;
 
     fn env(&self) -> &Env {

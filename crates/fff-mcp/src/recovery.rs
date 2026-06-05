@@ -12,7 +12,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use fff_ipc::IpcError;
+use fff_ipc::{lockfile, IpcError};
 
 use crate::client::EngineClient;
 
@@ -28,8 +28,9 @@ pub fn respawn(base_path: &Path) -> Result<EngineClient, IpcError> {
     let socket = fff_ipc::socket_path(base_path);
 
     // Check whether the daemon is still alive using the PID in the lockfile.
-    match read_pid_from_lockfile(&lockfile) {
-        Some(pid) if is_process_alive(pid) => {
+    match lockfile::read(&lockfile) {
+        Some(lock) if lock.is_alive() => {
+            let pid = lock.pid;
             tracing::info!("fff-engine PID {pid} is still alive — waiting for it to bind");
             // Daemon is alive but socket not ready yet. Wait with backoff.
             for attempt in 0..MAX_ATTEMPTS {
@@ -69,15 +70,3 @@ pub fn respawn(base_path: &Path) -> Result<EngineClient, IpcError> {
     }
 }
 
-fn read_pid_from_lockfile(lockfile: &Path) -> Option<u32> {
-    let content = std::fs::read_to_string(lockfile).ok()?;
-    content.trim().parse::<u32>().ok()
-}
-
-fn is_process_alive(pid: u32) -> bool {
-    // SAFETY: kill(pid, 0) is a POSIX signal probe. Signal 0 is never delivered;
-    // the call only checks whether the process exists and we have permission to
-    // signal it. Returns 0 on success (process alive), -1 otherwise.
-    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    result == 0
-}

@@ -39,7 +39,7 @@ The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`]
 
 ### Homebrew
 
-Installs both `fff-mcp` and `fff-engine` to the same Homebrew `bin/` directory. Co-location is required: `fff-mcp` finds `fff-engine` via its own executable path at runtime.
+Installs `fff-mcp`, `fff-engine`, and `fffctl` to the same Homebrew `bin/` directory. Co-location is required: `fff-mcp` finds `fff-engine` via its own executable path at runtime.
 
 **From the published tap** (once `abhijit-s/homebrew-fff` exists on GitHub):
 
@@ -75,6 +75,21 @@ claude mcp add -s user fff -- $(brew --prefix)/bin/fff-mcp
 
 It prints the exact wiring instructions for your client. Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
 
+### Managing daemons with `fffctl`
+
+`fff-mcp` spawns one `fff-engine` daemon per project root the first time it's queried. They keep running in the background; manage them with `fffctl`:
+
+```bash
+fffctl list                       # all running daemons (pid, slug, base-path)
+fffctl status /path/to/project    # is the daemon for this project running?
+fffctl paths  /path/to/project    # show socket, lockfile, frecency dir, log
+fffctl stop   /path/to/project    # graceful SIGTERM (SIGKILL after --timeout)
+fffctl stop --all                 # stop every daemon
+fffctl clean [--dry-run]          # remove stale lockfiles and orphan sockets
+```
+
+`fffctl stop` triggers a clean shutdown: the engine removes its lockfile and socket on exit. `fffctl clean` exists for the case where a daemon crashed without cleanup.
+
 ### Recommended agent prompt
 
 Drop this into your project's `CLAUDE.md` or equivalent:
@@ -85,7 +100,7 @@ For any file search or grep in the current git-indexed directory, use fff tools.
 
 ### What changes
 
-- Frecency memory. Files you actually open rank higher next time. Warm-up from git touch history runs automatically. Frecency data is stored at `$XDG_DATA_HOME/fff/frecency/` (Linux: `~/.local/share/fff/frecency/`, macOS: `~/Library/Application Support/fff/frecency/`) and survives restarts.
+- Frecency memory. Files you actually open rank higher next time. Warm-up from git touch history runs automatically. Frecency data is stored per project under `$XDG_DATA_HOME/fff/frecency/<slug>/` (Linux: `~/.local/share/fff/frecency/<slug>/`, macOS: `~/Library/Application Support/fff/frecency/<slug>/`), where the slug is a stable hash of the project's canonical path. Set `frecency.db` in `~/.config/fff/config.toml` or pass `--frecency-db <PATH>` to share one DB across projects.
 - Definition-first hinting. Lines that look like code definitions are classified on the Rust side, no regex overhead in your prompt.
 - Smart-case with auto-fuzzy fallback. `IsOffTheRecord` finds snake_case variants; zero-match queries retry as fuzzy and surface the best approximate hits.
 - Git-aware annotations. Modified, untracked, and staged files are tagged so the agent reaches for what you are actively changing.

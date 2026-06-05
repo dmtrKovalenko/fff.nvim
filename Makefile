@@ -50,11 +50,11 @@ build:
 	cargo build --release --features zlob
 
 # Build the daemon stack without the zlob feature (no Zig required).
-# Produces target/release/fff-engine and target/release/fff-mcp.
+# Produces target/release/fff-engine, target/release/fff-mcp, target/release/fffctl.
 BUILD_BASE_PATH ?= .
 
 build-daemon:
-	cargo build --release --no-default-features -p fff-engine -p fff-mcp
+	cargo build --release --no-default-features -p fff-engine -p fff-mcp -p fff-ctl
 
 ENGINE_LOG ?= $(HOME)/.cache/fff_engine.log
 MCP_LOG    ?= $(HOME)/.cache/fff_mcp.log
@@ -96,7 +96,7 @@ healthcheck: build-daemon
 
 # Run unit tests for the new daemon crates only (no Zig, no Lua, no JS).
 test-daemon:
-	cargo test --no-default-features -p fff-ipc -p fff-engine -p fff-mcp
+	cargo test --no-default-features -p fff-ipc -p fff-engine -p fff-mcp -p fff-ctl
 
 build-c-lib:
 	cargo build --release -p fff-c --features zlob
