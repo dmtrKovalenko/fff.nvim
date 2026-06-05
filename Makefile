@@ -63,7 +63,7 @@ MCP_LOG    ?= $(HOME)/.cache/fff_mcp.log
 # terminal. Override: make run-engine BUILD_BASE_PATH=/path/to/repo
 run-engine: build-daemon
 	@touch $(ENGINE_LOG)
-	@tail -f $(ENGINE_LOG) &
+	@tail -F $(ENGINE_LOG) &
 	PATH="$(CURDIR)/target/release:$$PATH" \
 	./target/release/fff-engine --base-path $(BUILD_BASE_PATH); \
 	kill %1 2>/dev/null; true
@@ -72,7 +72,7 @@ run-engine: build-daemon
 # fff-mcp will spawn fff-engine automatically if it is not already running.
 run-mcp: build-daemon
 	@touch $(MCP_LOG)
-	@tail -f $(MCP_LOG) &
+	@tail -F $(MCP_LOG) &
 	PATH="$(CURDIR)/target/release:$$PATH" \
 	./target/release/fff-mcp $(BUILD_BASE_PATH); \
 	kill %1 2>/dev/null; true
