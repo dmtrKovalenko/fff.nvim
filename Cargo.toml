@@ -2,6 +2,8 @@
 members = [
   "crates/fff-c",
   "crates/fff-core",
+  "crates/fff-engine",
+  "crates/fff-ipc",
   "crates/fff-mcp",
   "crates/fff-nvim",
   "crates/fff-query-parser",
@@ -15,6 +17,7 @@ fff-query-parser = { version = "0.9.0", path = "crates/fff-query-parser", defaul
 
 # Shared dependencies
 ahash = "0.8"
+bincode = "1.3"
 blake3 = "1.8.2"
 chrono = { version = "0.4", features = ["serde"] }
 ctrlc = "3.4.2"

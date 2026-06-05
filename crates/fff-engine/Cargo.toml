@@ -1,0 +1,12 @@
+[package]
+name = "fff-engine"
+version = "0.9.0"
+edition = "2024"
+description = "fff singleton search engine daemon"
+license = "MIT"
+
+[[bin]]
+name = "fff-engine"
+path = "src/main.rs"
+
+[dependencies]
