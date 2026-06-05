@@ -56,13 +56,21 @@ impl EngineClient {
                 .join("fff")
                 .join("frecency");
 
-            let child = Command::new("fff-engine")
+            // Prefer fff-engine co-located with fff-mcp (both live in the same
+            // install dir) so $PATH doesn't need to include the binary directory.
+            let engine_bin = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("fff-engine")))
+                .filter(|p| p.exists())
+                .unwrap_or_else(|| std::path::PathBuf::from("fff-engine"));
+
+            let child = Command::new(&engine_bin)
                 .arg("--base-path")
                 .arg(base_path)
                 .arg("--frecency-db")
                 .arg(&frecency_path)
                 .spawn()
-                .map_err(|e| format!("Failed to spawn fff-engine: {e} (is fff-engine on PATH?)"))?;
+                .map_err(|e| format!("Failed to spawn {}: {e}", engine_bin.display()))?;
 
             // Write the child PID so crash recovery can distinguish slow-start from dead.
             let _ = std::fs::write(&lock, child.id().to_string());

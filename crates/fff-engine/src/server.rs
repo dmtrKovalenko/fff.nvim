@@ -112,6 +112,7 @@ async fn dispatch(state: &EngineState, req: SearchRequest) -> fff_ipc::types::Se
         fff_ipc::types::SearchResponse::SearchResults(r) => r.len(),
         fff_ipc::types::SearchResponse::Error(_) | fff_ipc::types::SearchResponse::Ack => 0,
     };
+    tracing::info!("request: {label}");
     tracing::debug!("{label} → {result_count} results in {elapsed:.1?}");
 
     response
