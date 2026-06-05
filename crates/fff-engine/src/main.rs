@@ -16,71 +16,94 @@ static GLOBAL: MiMalloc = MiMalloc;
 ///
 /// One instance per project root. fff-mcp instances connect as stateless
 /// proxies; this daemon owns FilePicker, BigramFilter, and FrecencyTracker.
+///
+/// Settings are loaded from `$XDG_CONFIG_HOME/fff/config.toml`
+/// (or `~/.config/fff/config.toml`). CLI flags override config values.
 #[derive(Parser, Debug)]
 #[command(name = "fff-engine", version)]
 pub(crate) struct Args {
-    /// Project root to index. Required — fff-mcp derives the socket path from
-    /// the canonical form of this path.
+    /// Project root to index. Required.
     #[arg(long = "base-path", value_name = "PATH")]
     pub base_path: PathBuf,
 
     /// Path to the LMDB frecency database directory.
-    /// Defaults to `$XDG_DATA_HOME/fff/frecency/` (R5: frecency enabled by default).
+    /// Overrides config.frecency.db. Default: `~/.local/share/fff/frecency/`.
     #[arg(long = "frecency-db", value_name = "PATH")]
     pub frecency_db_path: Option<PathBuf>,
 
-    /// Path to the log file.
+    /// Path to the log file. Overrides config.log.file.
     #[arg(long = "log-file", value_name = "PATH")]
     pub log_file: Option<PathBuf>,
 
-    /// Log level (trace, debug, info, warn, error). Default: info.
-    #[arg(long = "log-level", default_value = "info")]
-    pub log_level: String,
+    /// Log level. Overrides config.log.level.
+    #[arg(long = "log-level")]
+    pub log_level: Option<String>,
 
-    /// Disable the background filesystem watcher. Files are scanned once at
-    /// startup but not monitored for changes. Useful for tests.
+    /// Disable the background filesystem watcher. Overrides config.index.no_watch.
     #[arg(long = "no-watch")]
     pub no_watch: bool,
 
-    /// Skip background mmap warmup after initial scan. Useful for tests.
+    /// Skip mmap warmup after initial scan. Overrides config.index.no_warmup.
     #[arg(long = "no-warmup")]
     pub no_warmup: bool,
 }
 
-/// Hot-reload the log level. Stub — returns an error until the tracing
-/// reload::Layer is wired correctly. Filed as a follow-on task.
+/// Hot-reload the log level. Stub until reload::Layer is wired.
 pub fn set_log_level(_level: &str) -> Result<(), String> {
-    Err("dynamic log level change not yet supported; restart with --log-level <level>".into())
+    Err("dynamic log level change requires restart with --log-level <level>".into())
 }
 
 #[cfg(unix)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let cfg = fff_ipc::config::load();
 
-    // Use the same ~/.cache/ convention as fff-mcp rather than dirs::cache_dir()
-    // which returns ~/Library/Caches on macOS — a different path.
+    // CLI > config > hardcoded default. Booleans OR together: either source can disable.
+    let log_level = args
+        .log_level
+        .as_deref()
+        .unwrap_or(&cfg.log.level)
+        .to_string();
+
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| "/tmp".to_string());
-    let default_log = PathBuf::from(format!("{}/.cache/fff_engine.log", home));
+    let default_log = format!("{}/.cache/fff_engine.log", home);
     let log_path = args
         .log_file
         .as_deref()
         .and_then(|p| p.to_str())
-        .unwrap_or_else(|| default_log.to_str().unwrap_or(""));
+        .or(cfg.log.file.as_deref())
+        .unwrap_or(&default_log)
+        .to_string();
 
-    if let Err(e) = fff::log::init_tracing(log_path, Some(&args.log_level)) {
+    if let Err(e) = fff::log::init_tracing(&log_path, Some(&log_level)) {
         eprintln!("Warning: failed to init tracing: {e}");
     }
 
     tracing::info!(
-        "fff-engine starting for base_path={}",
-        args.base_path.display()
+        "fff-engine starting (config: {}, log: {log_path}, level: {log_level})",
+        fff_ipc::config::config_path().display()
     );
 
-    let socket_path = fff_ipc::socket_path(&args.base_path);
-    let lockfile_path = fff_ipc::lockfile_path(&args.base_path);
+    // Effective flags: CLI flag OR config flag (either can disable a feature)
+    let eff_no_watch = args.no_watch || cfg.index.no_watch;
+    let eff_no_warmup = args.no_warmup || cfg.index.no_warmup;
+
+    // Publish effective settings back into args for state::init to consume.
+    // Rebind as a new struct since Args doesn't impl Clone.
+    let effective_args = state::EffectiveArgs {
+        base_path: args.base_path,
+        frecency_db_path: args.frecency_db_path.or_else(|| {
+            cfg.frecency.db.as_deref().map(PathBuf::from)
+        }),
+        no_watch: eff_no_watch,
+        no_warmup: eff_no_warmup,
+    };
+
+    let socket_path = fff_ipc::socket_path(&effective_args.base_path);
+    let lockfile_path = fff_ipc::lockfile_path(&effective_args.base_path);
 
     let _lockfile_guard = match lifecycle::acquire_lockfile(&lockfile_path) {
         Ok(guard) => guard,
@@ -90,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let engine_state = Arc::new(state::init(&args).map_err(|e| {
+    let engine_state = Arc::new(state::init(&effective_args).map_err(|e| {
         tracing::error!("State init failed: {e}");
         e
     })?);

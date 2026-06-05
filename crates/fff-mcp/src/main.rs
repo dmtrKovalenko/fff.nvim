@@ -170,10 +170,39 @@ pub(crate) struct Args {
     pub(crate) set_log_level: Option<String>,
 }
 
-/// Resolve default paths for the log file.
-/// Database paths (frecency, history) must be explicitly provided via flags.
-fn resolve_defaults(args: &mut Args) {
-    // Ensure parent directories exist for database paths when provided
+/// Merge CLI args with config file, then apply hardcoded defaults for anything
+/// still unset. Priority: CLI > config > hardcoded default.
+fn resolve_defaults(args: &mut Args, cfg: &fff_ipc::config::FffConfig) {
+    let home = dirs_home();
+
+    // log_level: CLI > config > "info"
+    if args.log_level.is_none() {
+        args.log_level = Some(cfg.log.level.clone());
+    }
+
+    // log_file: CLI > config > ~/.cache/fff_mcp.log
+    if args.log_file.is_none() {
+        args.log_file = Some(
+            cfg.log.file.clone().unwrap_or_else(|| {
+                if cfg!(target_os = "windows") {
+                    format!("{}\\AppData\\Local\\fff_mcp.log", home)
+                } else {
+                    format!("{}/.cache/fff_mcp.log", home)
+                }
+            }),
+        );
+    }
+
+    // max_cached_files: CLI > config
+    if args.max_cached_files.is_none() {
+        args.max_cached_files = cfg.index.max_cached_files;
+    }
+
+    // Booleans: CLI flag OR config flag (either can disable)
+    args.no_watch = args.no_watch || cfg.index.no_watch;
+    args.no_warmup = args.no_warmup || cfg.index.no_warmup;
+
+    // Ensure parent dirs exist for any explicitly provided db paths
     for path in [&args.frecency_db_path, &args.history_db_path]
         .into_iter()
         .flatten()
@@ -181,16 +210,6 @@ fn resolve_defaults(args: &mut Args) {
         if let Some(parent) = std::path::Path::new(path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-    }
-
-    if args.log_file.is_none() {
-        let home = dirs_home();
-        let is_windows = cfg!(target_os = "windows");
-        args.log_file = Some(if is_windows {
-            format!("{}\\AppData\\Local\\fff_mcp.log", home)
-        } else {
-            format!("{}/.cache/fff_mcp.log", home)
-        });
     }
 }
 
@@ -203,7 +222,8 @@ fn dirs_home() -> String {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
-    resolve_defaults(&mut args);
+    let cfg = fff_ipc::config::load();
+    resolve_defaults(&mut args, &cfg);
 
     if args.healthcheck {
         return healthcheck::run_healthcheck(&args);

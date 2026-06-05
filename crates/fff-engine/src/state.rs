@@ -5,7 +5,14 @@ use fff::file_picker::FilePicker;
 use fff::frecency::FrecencyTracker;
 use git2::Repository;
 
-use crate::Args;
+/// Resolved arguments after merging CLI flags with config file values.
+/// Passed to init() so state.rs doesn't need to know about config loading.
+pub struct EffectiveArgs {
+    pub base_path: PathBuf,
+    pub frecency_db_path: Option<PathBuf>,
+    pub no_watch: bool,
+    pub no_warmup: bool,
+}
 
 pub struct EngineState {
     pub shared_picker: SharedFilePicker,
@@ -17,7 +24,7 @@ pub struct EngineState {
     pub base_path: PathBuf,
 }
 
-pub fn init(args: &Args) -> Result<EngineState, Box<dyn std::error::Error>> {
+pub fn init(args: &EffectiveArgs) -> Result<EngineState, Box<dyn std::error::Error>> {
     let base_path = resolve_base_path(&args.base_path);
 
     let shared_picker = SharedFilePicker::default();
