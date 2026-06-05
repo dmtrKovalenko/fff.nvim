@@ -56,18 +56,26 @@ BUILD_BASE_PATH ?= .
 build-daemon:
 	cargo build --release --no-default-features -p fff-engine -p fff-mcp
 
-# Start fff-engine for BUILD_BASE_PATH in the foreground.
-# Override the base path: make run-engine BUILD_BASE_PATH=/path/to/repo
-run-engine: build-daemon
-	PATH="$(CURDIR)/target/release:$$PATH" \
-	./target/release/fff-engine --base-path $(BUILD_BASE_PATH)
+ENGINE_LOG ?= $(HOME)/.cache/fff_engine.log
+MCP_LOG    ?= $(HOME)/.cache/fff_mcp.log
 
-# Start fff-mcp (proxy mode) in stdio transport for BUILD_BASE_PATH.
-# fff-mcp will spawn fff-engine automatically if it is not already running.
-# Pipe in MCP JSON-RPC messages or just verify it starts cleanly (Ctrl-C to stop).
-run-mcp: build-daemon
+# Start fff-engine for BUILD_BASE_PATH in the foreground, streaming logs to the
+# terminal. Override: make run-engine BUILD_BASE_PATH=/path/to/repo
+run-engine: build-daemon
+	@touch $(ENGINE_LOG)
+	@tail -f $(ENGINE_LOG) &
 	PATH="$(CURDIR)/target/release:$$PATH" \
-	./target/release/fff-mcp $(BUILD_BASE_PATH)
+	./target/release/fff-engine --base-path $(BUILD_BASE_PATH); \
+	kill %1 2>/dev/null; true
+
+# Start fff-mcp (proxy mode), streaming its logs to the terminal.
+# fff-mcp will spawn fff-engine automatically if it is not already running.
+run-mcp: build-daemon
+	@touch $(MCP_LOG)
+	@tail -f $(MCP_LOG) &
+	PATH="$(CURDIR)/target/release:$$PATH" \
+	./target/release/fff-mcp $(BUILD_BASE_PATH); \
+	kill %1 2>/dev/null; true
 
 # Run fff-mcp --healthcheck against BUILD_BASE_PATH.
 # Reports daemon socket status, git repo detection, and log file path.
