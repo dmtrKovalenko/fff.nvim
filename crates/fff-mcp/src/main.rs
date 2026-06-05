@@ -163,6 +163,11 @@ pub(crate) struct Args {
     /// Run a health check and print diagnostic information, then exit.
     #[arg(long = "healthcheck")]
     pub(crate) healthcheck: bool,
+
+    /// Hot-reload the running fff-engine's log level and exit.
+    /// Accepts any RUST_LOG-style string: "debug", "info", "fff_engine=debug,info".
+    #[arg(long = "set-log-level", value_name = "LEVEL")]
+    pub(crate) set_log_level: Option<String>,
 }
 
 /// Resolve default paths for the log file.
@@ -202,6 +207,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.healthcheck {
         return healthcheck::run_healthcheck(&args);
+    }
+
+    #[cfg(unix)]
+    if let Some(ref level) = args.set_log_level {
+        let base_path = args.base_path.as_deref().unwrap_or(".");
+        let mut engine = client::EngineClient::connect(std::path::Path::new(base_path))
+            .map_err(|e| format!("Could not connect to fff-engine: {e}"))?;
+        match engine.set_log_level(level) {
+            Ok(fff_ipc::types::SearchResponse::Ack) => {
+                println!("fff-engine log level set to {level:?}");
+            }
+            Ok(fff_ipc::types::SearchResponse::Error(e)) => {
+                eprintln!("fff-engine error: {e}");
+                std::process::exit(1);
+            }
+            Ok(_) => eprintln!("Unexpected response"),
+            Err(e) => {
+                eprintln!("IPC error: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
     }
 
     let log_file = args.log_file.as_deref().unwrap_or("");

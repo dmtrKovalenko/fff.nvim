@@ -24,6 +24,11 @@ pub enum SearchRequest {
     RecordAccess {
         path: String,
     },
+    /// Hot-reload the daemon's log filter. Accepts any RUST_LOG-style string
+    /// (e.g. "debug", "info", "fff_engine=debug,info"). Returns Ack.
+    SetLogLevel {
+        level: String,
+    },
 }
 
 // ── Response ──────────────────────────────────────────────────────────────────
@@ -33,6 +38,7 @@ pub enum SearchResponse {
     SearchResults(Vec<WireSearchResult>),
     GrepResults(WireGrepResponse),
     Error(String),
+    Ack,
 }
 
 // ── Grep result types ─────────────────────────────────────────────────────────

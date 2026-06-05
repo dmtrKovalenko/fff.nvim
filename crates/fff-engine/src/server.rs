@@ -60,6 +60,18 @@ async fn handle_connection(stream: tokio::net::UnixStream, state: Arc<EngineStat
             SearchRequest::RecordAccess { .. } => {
                 // KTD-5: fire-and-forget, no response sent
             }
+            SearchRequest::SetLogLevel { level } => {
+                let response = match crate::set_log_level(&level) {
+                    Ok(()) => {
+                        tracing::info!("Log level changed to {level:?}");
+                        fff_ipc::types::SearchResponse::Ack
+                    }
+                    Err(e) => fff_ipc::types::SearchResponse::Error(e),
+                };
+                if write_message(&mut write_half, &response).await.is_err() {
+                    break;
+                }
+            }
             req => {
                 let response = dispatch(&state, req).await;
                 if write_message(&mut write_half, &response).await.is_err() {
@@ -89,14 +101,16 @@ async fn dispatch(state: &EngineState, req: SearchRequest) -> fff_ipc::types::Se
             let label = format!("multi_grep({:?})", patterns);
             (label, handle_multi_grep(state, patterns, constraints, options).await)
         }
-        SearchRequest::RecordAccess { .. } => unreachable!("handled before dispatch"),
+        SearchRequest::RecordAccess { .. } | SearchRequest::SetLogLevel { .. } => {
+            unreachable!("handled before dispatch")
+        }
     };
 
     let elapsed = start.elapsed();
     let result_count = match &response {
         fff_ipc::types::SearchResponse::GrepResults(r) => r.matches.iter().map(|f| f.matches.len()).sum::<usize>(),
         fff_ipc::types::SearchResponse::SearchResults(r) => r.len(),
-        fff_ipc::types::SearchResponse::Error(_) => 0,
+        fff_ipc::types::SearchResponse::Error(_) | fff_ipc::types::SearchResponse::Ack => 0,
     };
     tracing::debug!("{label} → {result_count} results in {elapsed:.1?}");
 

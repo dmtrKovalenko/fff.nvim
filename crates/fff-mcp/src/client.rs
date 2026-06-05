@@ -124,6 +124,13 @@ impl EngineClient {
         read_message_sync(&mut self.reader)
     }
 
+    /// Hot-reload the daemon's log filter.
+    /// Accepts any RUST_LOG-style string: "debug", "info", "fff_engine=debug,info".
+    pub fn set_log_level(&mut self, level: &str) -> Result<SearchResponse, IpcError> {
+        let req = SearchRequest::SetLogLevel { level: level.to_owned() };
+        self.search(&req)
+    }
+
     /// Fire-and-forget frecency write. Sends RecordAccess and does NOT read a
     /// response. KTD-5: not called from tool handlers in this track.
     #[allow(dead_code)]

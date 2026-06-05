@@ -642,6 +642,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "fff-engine"
+version = "0.9.0"
+dependencies = [
+ "bincode",
+ "blake3",
+ "clap",
+ "dirs",
+ "fff-ipc",
+ "fff-search",
+ "git2",
+ "mimalloc",
+ "parking_lot",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fff-grep"
 version = "0.9.0"
 dependencies = [
@@ -650,13 +670,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "fff-ipc"
+version = "0.9.0"
+dependencies = [
+ "bincode",
+ "blake3",
+ "dirs",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "fff-mcp"
 version = "0.9.0"
 dependencies = [
  "clap",
+ "dirs",
+ "fff-ipc",
  "fff-query-parser",
  "fff-search",
  "git2",
+ "libc",
  "mimalloc",
  "rmcp",
  "schemars",

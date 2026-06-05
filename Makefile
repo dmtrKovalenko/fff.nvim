@@ -14,7 +14,7 @@ SHELL := bash
 # string rather than the literal `-o` / `pipefail` tokens.
 .SHELLFLAGS := -o pipefail -ec
 
-.PHONY: build build-c-lib build-daemon run-engine run-mcp healthcheck install uninstall test test-rust test-daemon test-c-smoke test-c-api test-lua test-lua-snap test-version test-bun test-node prepare-bun prepare-node set-npm-version header test-stress test-stress-seeded test-stress-random test-stress-repos test-node-stress sync-js-api sync-js-api-check
+.PHONY: build build-c-lib build-daemon run-engine run-mcp healthcheck log-debug log-info install uninstall test test-rust test-daemon test-c-smoke test-c-api test-lua test-lua-snap test-version test-bun test-node prepare-bun prepare-node set-npm-version header test-stress test-stress-seeded test-stress-random test-stress-repos test-node-stress sync-js-api sync-js-api-check
 
 all: format test lint
 
@@ -76,6 +76,17 @@ run-mcp: build-daemon
 	PATH="$(CURDIR)/target/release:$$PATH" \
 	./target/release/fff-mcp $(BUILD_BASE_PATH); \
 	kill %1 2>/dev/null; true
+
+# Hot-reload the running fff-engine's log level without restarting.
+# make log-debug  — show per-request timing and debug traces
+# make log-info   — back to normal (startup/shutdown only)
+log-debug: build-daemon
+	PATH="$(CURDIR)/target/release:$$PATH" \
+	./target/release/fff-mcp $(BUILD_BASE_PATH) --set-log-level debug
+
+log-info: build-daemon
+	PATH="$(CURDIR)/target/release:$$PATH" \
+	./target/release/fff-mcp $(BUILD_BASE_PATH) --set-log-level info
 
 # Run fff-mcp --healthcheck against BUILD_BASE_PATH.
 # Reports daemon socket status, git repo detection, and log file path.
