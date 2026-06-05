@@ -254,7 +254,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let log_file = args.log_file.as_deref().unwrap_or("");
     if std::env::var("RUST_LOG").is_err() {
         if let Some(level) = args.log_level.as_deref() {
-            std::env::set_var("RUST_LOG", level);
+            // SAFETY: single-threaded at this point — no other threads exist yet.
+            unsafe { std::env::set_var("RUST_LOG", level) };
         }
     }
     if let Err(e) = fff::log::init_tracing(log_file, Some("info")) {

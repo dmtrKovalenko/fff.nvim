@@ -82,7 +82,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Set RUST_LOG from our level string so target-based filters like
     // "fff_engine=debug,warn" are honoured. Respect any externally set RUST_LOG.
     if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", &log_level);
+        // SAFETY: single-threaded at this point — no other threads exist yet.
+        unsafe { std::env::set_var("RUST_LOG", &log_level) };
     }
     if let Err(e) = fff::log::init_tracing(&log_path, Some("info")) {
         eprintln!("Warning: failed to init tracing: {e}");
