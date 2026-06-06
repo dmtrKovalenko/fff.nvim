@@ -59,6 +59,11 @@ local M = {}
 --- @field trim_whitespace boolean
 --- @field location_format string
 
+--- @alias FffSelectAction 'edit' | 'split' | 'vsplit' | 'tab'
+
+--- @class FffSelectConfig
+--- @field pre_select_hook fun(current_buf: integer, action: FffSelectAction)
+
 --- @class FffConfig
 --- @field base_path string
 --- @field prompt string
@@ -76,6 +81,7 @@ local M = {}
 --- @field hl table<string, string>
 --- @field frecency FffFrecencyConfig
 --- @field history FffHistoryConfig
+--- @field select FffSelectConfig
 --- @field git table
 --- @field debug table
 --- @field logging table
@@ -348,6 +354,25 @@ local function init()
       db_path = vim.fn.stdpath('data') .. '/fff_queries',
       min_combo_count = 3, -- Minimum selections before combo boost applies (3 = boost starts on 3rd selection)
       combo_boost_score_multiplier = 100, -- Score multiplier for combo matches (files repeatedly opened with same query)
+    },
+    select = {
+      --- Runs right before the picker opens the chosen file. Reposition the
+      --- cursor to a different window, abort the open via error(), or no-op.
+      --- Default retargets when the current window can't host a file buffer
+      --- (special buftype, non-modifiable, or winfixbuf) — set to a no-op
+      --- function to always open in the invoking window.
+      --- @param current_buf integer
+      --- @param action FffSelectAction
+      pre_select_hook = function(current_buf, action)
+        if action ~= 'edit' then return end
+        local current_win = vim.api.nvim_get_current_win()
+        local buftype = vim.api.nvim_get_option_value('buftype', { buf = current_buf })
+        local modifiable = vim.api.nvim_get_option_value('modifiable', { buf = current_buf })
+        local winfixbuf = require('fff.utils').window_has_winfixbuf(current_win)
+        if buftype == '' and modifiable and not winfixbuf then return end
+        local suitable_win = require('fff.utils').find_suitable_window()
+        if suitable_win then vim.api.nvim_set_current_win(suitable_win) end
+      end,
     },
     -- Git integration
     git = {

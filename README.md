@@ -320,6 +320,18 @@ require('fff').setup({
   git = {
     status_text_color = false, -- true to color filenames by git status
   },
+  select = {
+    -- Runs right before the picker opens the chosen file (after the picker
+    -- has closed). Default retargets the open to a "suitable" window when
+    -- the invoking window has a special buftype, is non-modifiable, or has
+    -- 'winfixbuf' set — so picking from oil/Ex/snacks-explorer/outline
+    -- doesn't replace the sidebar with the file.
+    --   current_buf: the buffer that was active when <CR> was pressed
+    --   action:      'edit' | 'split' | 'vsplit' | 'tab'
+    -- Override to force-open in the invoking window — see "Open in invoking
+    -- window" below.
+    pre_select_hook = function(current_buf, action) --[[ default impl ]] end,
+  },
   grep = {
     max_file_size = 10 * 1024 * 1024,
     max_matches_per_file = 100,
@@ -381,6 +393,20 @@ Grep-only:
 - `src/main.rs`. Grep inside a single file.
 
 Mix freely: `git:modified src/**/*.rs !src/**/mod.rs user controller`.
+
+### Open in invoking window
+
+By default the picker retargets the open to a different window when invoked from a non-file buffer (oil, `:Ex`, sidebars). To force-open in whichever window invoked the picker — telescope-style `:edit <file>` semantics — set `select.pre_select_hook` to a no-op:
+
+```lua
+require('fff').setup({
+  select = {
+    pre_select_hook = function(_current_buf, _action) end,
+  },
+})
+```
+
+Caveat: the chosen file replaces the buffer in the invoking window even if it's a non-modifiable / special buftype. `winfixbuf` windows still fall back to `:split` to avoid `E1513`.
 
 ### Multi-select and quickfix
 

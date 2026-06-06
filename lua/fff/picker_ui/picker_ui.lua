@@ -244,18 +244,6 @@ end
 --- pcall-guarded so this stays safe on Neovim versions that predate the option.
 local window_has_winfixbuf = utils.window_has_winfixbuf
 
---- Find the first visible window with a normal file buffer, skipping the
---- picker's own floats.
---- @return number|nil Window ID of the first suitable window, or nil if none found
-local function find_suitable_window()
-  local exclude = {}
-  exclude[M.state.input_win or -1] = true
-  exclude[M.state.list_win or -1] = true
-  exclude[M.state.preview_win or -1] = true
-  exclude[M.state.file_info_win or -1] = true
-  return utils.find_suitable_window(exclude)
-end
-
 --- Toggle selection for the current item.
 --- In grep mode, selection is per-occurrence; in file mode, per-file.
 function M.toggle_select()
@@ -332,26 +320,19 @@ function M.select(action)
   -- Defer file open past picker float teardown. Without this, foldexpr is not
   -- recomputed on the new window (folds appear missing) on some platforms.
   vim.schedule(function()
-    if action == 'edit' then
-      local current_win = vim.api.nvim_get_current_win()
-      local current_buf = vim.api.nvim_get_current_buf()
-      local current_buftype = vim.api.nvim_get_option_value('buftype', { buf = current_buf })
-      local current_buf_modifiable = vim.api.nvim_get_option_value('modifiable', { buf = current_buf })
-      local current_winfixbuf = window_has_winfixbuf(current_win)
+    local config = M.state.config
+    if config.select and type(config.select.pre_select_hook) == 'function' then
+      local ok, err = pcall(config.select.pre_select_hook, vim.api.nvim_get_current_buf(), action)
+      if not ok then vim.notify('FFF: select.pre_select_hook error: ' .. tostring(err), vim.log.levels.WARN) end
+    end
 
-      -- If the current window can't host a new buffer (special buftype, non-modifiable,
-      -- or 'winfixbuf' locking it), retarget a suitable window or fall back to a split.
-      -- Without this, :edit raises E1513 ("Cannot switch buffer. 'winfixbuf' is enabled")
-      -- whenever the picker is invoked from a window pinned via :h winfixbuf.
+    if action == 'edit' then
+      -- Hard guard against E1513 ("Cannot switch buffer. 'winfixbuf' is enabled"):
+      -- if the (post-hook) current window is pinned, fall back to :split.
       local opened_via_split = false
-      if current_buftype ~= '' or not current_buf_modifiable or current_winfixbuf then
-        local suitable_win = find_suitable_window()
-        if suitable_win then
-          vim.api.nvim_set_current_win(suitable_win)
-        elseif current_winfixbuf then
-          vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
-          opened_via_split = true
-        end
+      if window_has_winfixbuf(vim.api.nvim_get_current_win()) then
+        vim.cmd('split ' .. vim.fn.fnameescape(relative_path))
+        opened_via_split = true
       end
 
       if not opened_via_split then vim.cmd('edit ' .. vim.fn.fnameescape(relative_path)) end
