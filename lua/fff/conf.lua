@@ -62,7 +62,7 @@ local M = {}
 --- @alias FffSelectAction 'edit' | 'split' | 'vsplit' | 'tab'
 
 --- @class FffSelectConfig
---- @field pre_select_hook fun(current_buf: integer, action: FffSelectAction)
+--- @field select_window fun(current_buf: integer, action: FffSelectAction): integer|nil
 
 --- @class FffConfig
 --- @field base_path string
@@ -356,22 +356,20 @@ local function init()
       combo_boost_score_multiplier = 100, -- Score multiplier for combo matches (files repeatedly opened with same query)
     },
     select = {
-      --- Runs right before the picker opens the chosen file. Reposition the
-      --- cursor to a different window, abort the open via error(), or no-op.
-      --- Default retargets when the current window can't host a file buffer
-      --- (special buftype, non-modifiable, or winfixbuf) — set to a no-op
-      --- function to always open in the invoking window.
+      --- Returns winid to open the file in. Return nil to open in the invoking
+      --- window. Default retargets when the invoking window can't host a file
+      --- buffer (special buftype, non-modifiable, or winfixbuf).
       --- @param current_buf integer
       --- @param action FffSelectAction
-      pre_select_hook = function(current_buf, action)
-        if action ~= 'edit' then return end
+      --- @return integer|nil
+      select_window = function(current_buf, action)
+        if action ~= 'edit' then return nil end
         local current_win = vim.api.nvim_get_current_win()
         local buftype = vim.api.nvim_get_option_value('buftype', { buf = current_buf })
         local modifiable = vim.api.nvim_get_option_value('modifiable', { buf = current_buf })
         local winfixbuf = require('fff.utils').window_has_winfixbuf(current_win)
-        if buftype == '' and modifiable and not winfixbuf then return end
-        local suitable_win = require('fff.utils').find_suitable_window()
-        if suitable_win then vim.api.nvim_set_current_win(suitable_win) end
+        if buftype == '' and modifiable and not winfixbuf then return nil end
+        return require('fff.utils').find_suitable_window()
       end,
     },
     -- Git integration

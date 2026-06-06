@@ -321,16 +321,10 @@ require('fff').setup({
     status_text_color = false, -- true to color filenames by git status
   },
   select = {
-    -- Runs right before the picker opens the chosen file (after the picker
-    -- has closed). Default retargets the open to a "suitable" window when
-    -- the invoking window has a special buftype, is non-modifiable, or has
-    -- 'winfixbuf' set — so picking from oil/Ex/snacks-explorer/outline
-    -- doesn't replace the sidebar with the file.
-    --   current_buf: the buffer that was active when <CR> was pressed
-    --   action:      'edit' | 'split' | 'vsplit' | 'tab'
-    -- Override to force-open in the invoking window — see "Open in invoking
-    -- window" below.
-    pre_select_hook = function(current_buf, action) --[[ default impl ]] end,
+    -- Return winid to open the chosen file in, or nil to open in the
+    -- invoking window. Default retargets when the invoking window can't
+    -- host a file buffer (oil/:Ex/sidebars, non-modifiable, winfixbuf).
+    select_window = function(current_buf, action) --[[ default impl ]] end,
   },
   grep = {
     max_file_size = 10 * 1024 * 1024,
@@ -396,12 +390,12 @@ Mix freely: `git:modified src/**/*.rs !src/**/mod.rs user controller`.
 
 ### Open in invoking window
 
-By default the picker retargets the open to a different window when invoked from a non-file buffer (oil, `:Ex`, sidebars). To force-open in whichever window invoked the picker — telescope-style `:edit <file>` semantics — set `select.pre_select_hook` to a no-op:
+By default the picker retargets the open to a different window when invoked from a non-file buffer (oil, `:Ex`, sidebars). To force-open in whichever window invoked the picker — telescope-style `:edit <file>` semantics — return `nil` from `select.select_window`:
 
 ```lua
 require('fff').setup({
   select = {
-    pre_select_hook = function(_current_buf, _action) end,
+    select_window = function(_current_buf, _action) return nil end,
   },
 })
 ```

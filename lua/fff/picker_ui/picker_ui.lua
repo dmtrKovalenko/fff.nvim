@@ -321,9 +321,13 @@ function M.select(action)
   -- recomputed on the new window (folds appear missing) on some platforms.
   vim.schedule(function()
     local config = M.state.config
-    if config.select and type(config.select.pre_select_hook) == 'function' then
-      local ok, err = pcall(config.select.pre_select_hook, vim.api.nvim_get_current_buf(), action)
-      if not ok then vim.notify('FFF: select.pre_select_hook error: ' .. tostring(err), vim.log.levels.WARN) end
+    if config.select and type(config.select.select_window) == 'function' then
+      local ok, win = pcall(config.select.select_window, vim.api.nvim_get_current_buf(), action)
+      if not ok then
+        vim.notify('FFF: select.select_window error: ' .. tostring(win), vim.log.levels.WARN)
+      elseif type(win) == 'number' and vim.api.nvim_win_is_valid(win) then
+        vim.api.nvim_set_current_win(win)
+      end
     end
 
     if action == 'edit' then
