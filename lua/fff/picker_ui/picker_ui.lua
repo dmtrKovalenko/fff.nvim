@@ -287,6 +287,7 @@ function M.select(action)
   local query = M.state.query -- Capture query before closing for tracking
   local mode = M.state.mode -- Capture mode before closing for tracking
   local suggestion_source = M.state.suggestion_source -- Capture suggestion context
+  local config = M.state.config -- Capture config before M.close() resets state
 
   -- In grep mode (or when selecting a grep suggestion), derive location from the match item
   local is_grep_item = mode == 'grep' or suggestion_source == 'grep'
@@ -320,8 +321,7 @@ function M.select(action)
   -- Defer file open past picker float teardown. Without this, foldexpr is not
   -- recomputed on the new window (folds appear missing) on some platforms.
   vim.schedule(function()
-    local config = M.state.config
-    if config.select and type(config.select.select_window) == 'function' then
+    if config and config.select and type(config.select.select_window) == 'function' then
       local ok, win = pcall(config.select.select_window, vim.api.nvim_get_current_buf(), action)
       if not ok then
         vim.notify('FFF: select.select_window error: ' .. tostring(win), vim.log.levels.WARN)
@@ -351,8 +351,8 @@ function M.select(action)
     if location then location_utils.jump_to_location(location) end
 
     if query and query ~= '' then
-      local config = conf.get()
-      if config.history and config.history.enabled then
+      local cfg = config or conf.get()
+      if cfg.history and cfg.history.enabled then
         local fff = require('fff.core').ensure_initialized()
         -- Track in background thread (non-blocking, handled by Rust)
         if mode == 'grep' then

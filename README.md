@@ -321,9 +321,7 @@ require('fff').setup({
     status_text_color = false, -- true to color filenames by git status
   },
   select = {
-    -- Return winid to open the chosen file in, or nil to open in the
-    -- invoking window. Default retargets when the invoking window can't
-    -- host a file buffer (oil/:Ex/sidebars, non-modifiable, winfixbuf).
+    -- Return winid to open the chosen file in, or nil to open in the original window
     select_window = function(current_buf, action) --[[ default impl ]] end,
   },
   grep = {
@@ -390,7 +388,7 @@ Mix freely: `git:modified src/**/*.rs !src/**/mod.rs user controller`.
 
 ### Open in invoking window
 
-By default the picker retargets the open to a different window when invoked from a non-file buffer (oil, `:Ex`, sidebars). To force-open in whichever window invoked the picker — telescope-style `:edit <file>` semantics — return `nil` from `select.select_window`:
+By default fff.nvim will try to open a file in the most suitable window, so any non-file buffers are not affected. You can customize or disable this by providing:
 
 ```lua
 require('fff').setup({
