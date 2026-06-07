@@ -14,6 +14,13 @@ pub fn lockfile_path(base_path: &Path) -> PathBuf {
     cache_dir().join("fff").join("locks").join(format!("{hash}.lock"))
 }
 
+/// Log file path for a given project root:
+/// `<cache_dir>/fff/logs/<blake3hex(canonical_base_path)>.log`
+pub fn log_path(base_path: &Path) -> PathBuf {
+    let hash = base_path_slug(base_path);
+    cache_dir().join("fff").join("logs").join(format!("{hash}.log"))
+}
+
 /// Stable 16-hex-char slug for a project root. Used to derive per-base-path
 /// paths (sockets, lockfiles, frecency DB) that don't collide across projects.
 ///

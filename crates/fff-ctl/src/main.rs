@@ -111,7 +111,7 @@ fn cmd_paths(base_path: &Path) -> i32 {
         .join("fff")
         .join("frecency")
         .join(&slug);
-    let log = fff_ipc::xdg_cache_dir().join("fff_engine.log");
+    let log = fff_ipc::log_path(base_path);
 
     println!("base_path : {}", base_path.display());
     println!("slug      : {slug}");
@@ -198,6 +198,7 @@ fn cmd_stop(base_path: Option<&Path>, all: bool, timeout: Duration) -> i32 {
 fn cmd_clean(dry_run: bool) -> i32 {
     let mut removed_locks = 0;
     let mut removed_sockets = 0;
+    let mut removed_logs = 0;
 
     // Stale lockfiles
     for d in discover_daemons() {
@@ -216,8 +217,11 @@ fn cmd_clean(dry_run: bool) -> i32 {
         removed_locks += 1;
     }
 
+    let cache = fff_ipc::xdg_cache_dir().join("fff");
+    let lock_dir = cache.join("locks");
+
     // Orphan sockets (no matching live lockfile)
-    let socket_dir = fff_ipc::xdg_cache_dir().join("fff").join("sockets");
+    let socket_dir = cache.join("sockets");
     if let Ok(entries) = std::fs::read_dir(&socket_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -227,12 +231,8 @@ fn cmd_clean(dry_run: bool) -> i32 {
             let Some(slug) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
-            let lock = fff_ipc::xdg_cache_dir()
-                .join("fff")
-                .join("locks")
-                .join(format!("{slug}.lock"));
-            let live = lockfile::read(&lock).is_some_and(|l| l.is_alive());
-            if live {
+            let lock = lock_dir.join(format!("{slug}.lock"));
+            if lockfile::read(&lock).is_some_and(|l| l.is_alive()) {
                 continue;
             }
             let action = if dry_run { "would remove" } else { "removing" };
@@ -244,11 +244,36 @@ fn cmd_clean(dry_run: bool) -> i32 {
         }
     }
 
+    // Orphan log files (no matching live lockfile)
+    let log_dir = cache.join("logs");
+    if let Ok(entries) = std::fs::read_dir(&log_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("log") {
+                continue;
+            }
+            let Some(slug) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let lock = lock_dir.join(format!("{slug}.lock"));
+            if lockfile::read(&lock).is_some_and(|l| l.is_alive()) {
+                continue;
+            }
+            let action = if dry_run { "would remove" } else { "removing" };
+            println!("{action} orphan log: {}", path.display());
+            if !dry_run {
+                let _ = std::fs::remove_file(&path);
+            }
+            removed_logs += 1;
+        }
+    }
+
     println!(
-        "{}: {} lockfile(s), {} socket(s)",
+        "{}: {} lockfile(s), {} socket(s), {} log(s)",
         if dry_run { "Would remove" } else { "Removed" },
         removed_locks,
-        removed_sockets
+        removed_sockets,
+        removed_logs,
     );
     0
 }

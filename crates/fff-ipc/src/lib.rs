@@ -5,7 +5,7 @@ pub mod paths;
 pub mod types;
 
 pub use codec::{read_message, read_message_sync, write_message, write_message_sync};
-pub use paths::{base_path_slug, lockfile_path, socket_path, xdg_cache_dir, xdg_data_dir};
+pub use paths::{base_path_slug, lockfile_path, log_path, socket_path, xdg_cache_dir, xdg_data_dir};
 pub use types::*;
 
 use thiserror::Error;

@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(&cfg.log.level)
         .to_string();
 
-    let default_log = fff_ipc::xdg_cache_dir().join("fff_engine.log");
+    let default_log = fff_ipc::log_path(&args.base_path);
     let default_log_str = default_log.to_string_lossy().into_owned();
     let log_path = args
         .log_file
