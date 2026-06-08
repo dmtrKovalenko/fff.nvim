@@ -33,7 +33,7 @@ pub struct FffConfig {
     pub worker: WorkerConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerConfig {
     /// Minimum number of worker processes to keep alive.
     pub n_min: u32,

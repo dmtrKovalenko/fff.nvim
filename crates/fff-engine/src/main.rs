@@ -1,5 +1,6 @@
 mod handlers;
 mod lifecycle;
+pub(crate) mod master;
 pub(crate) mod ring;
 mod server;
 mod state;
@@ -14,24 +15,23 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-/// fff singleton search engine daemon.
-///
-/// One instance per project root. fff-mcp instances connect as stateless
-/// proxies; this daemon owns FilePicker, BigramFilter, and FrecencyTracker.
-///
-/// Settings are loaded from `$XDG_CONFIG_HOME/fff/config.toml`
-/// (or `~/.config/fff/config.toml`). CLI flags override config values.
+/// fff search engine daemon — singleton, master, or worker mode.
 #[derive(Parser, Debug)]
 #[command(name = "fff-engine", version)]
 pub(crate) struct Args {
-    /// Project root to index. Required.
-    #[arg(long = "base-path", value_name = "PATH")]
-    pub base_path: PathBuf,
+    /// Run as the master router process (spawns and routes to workers).
+    #[arg(long = "master", conflicts_with_all = ["worker_index", "base_path"])]
+    pub master: bool,
 
-    /// Path to the LMDB frecency database directory.
-    /// Overrides config.frecency.db. Default: a per-base-path subdirectory
-    /// under `~/.local/share/fff/frecency/<slug>/` so projects cannot wipe
-    /// each other's history via the global size-cap trip wire.
+    /// Run as a worker process with the given index.
+    #[arg(long = "worker-index", value_name = "N", conflicts_with = "base_path")]
+    pub worker_index: Option<u32>,
+
+    /// Project root to index (singleton mode only). Required in singleton mode.
+    #[arg(long = "base-path", value_name = "PATH")]
+    pub base_path: Option<PathBuf>,
+
+    /// Path to the LMDB frecency database directory. Overrides config.
     #[arg(long = "frecency-db", value_name = "PATH")]
     pub frecency_db_path: Option<PathBuf>,
 
@@ -43,11 +43,11 @@ pub(crate) struct Args {
     #[arg(long = "log-level")]
     pub log_level: Option<String>,
 
-    /// Disable the background filesystem watcher. Overrides config.index.no_watch.
+    /// Disable the background filesystem watcher.
     #[arg(long = "no-watch")]
     pub no_watch: bool,
 
-    /// Skip mmap warmup after initial scan. Overrides config.index.no_warmup.
+    /// Skip mmap warmup after initial scan.
     #[arg(long = "no-warmup")]
     pub no_warmup: bool,
 }
@@ -63,14 +63,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let cfg = fff_ipc::config::load();
 
-    // CLI > config > hardcoded default. Booleans OR together: either source can disable.
     let log_level = args
         .log_level
         .as_deref()
         .unwrap_or(&cfg.log.level)
         .to_string();
 
-    let default_log = fff_ipc::log_path(&args.base_path);
+    if std::env::var("RUST_LOG").is_err() {
+        // SAFETY: single-threaded at this point — no other threads exist yet.
+        unsafe { std::env::set_var("RUST_LOG", &log_level) };
+    }
+
+    // ── Master mode ───────────────────────────────────────────────────────────
+    if args.master {
+        let log_path_str = cfg.log.file.clone().unwrap_or_else(|| {
+            fff_ipc::xdg_cache_dir().join("fff").join("master.log").to_string_lossy().into()
+        });
+        if let Err(e) = fff::log::init_tracing(&log_path_str, Some("info")) {
+            eprintln!("Warning: failed to init tracing: {e}");
+        }
+        tracing::info!("fff-engine master starting");
+        return master::run(cfg).await;
+    }
+
+    // ── Worker mode ───────────────────────────────────────────────────────────
+    if let Some(index) = args.worker_index {
+        let log_path_str = cfg.log.file.clone().unwrap_or_else(|| {
+            fff_ipc::xdg_cache_dir()
+                .join("fff")
+                .join(format!("worker-{index}.log"))
+                .to_string_lossy()
+                .into()
+        });
+        if let Err(e) = fff::log::init_tracing(&log_path_str, Some("info")) {
+            eprintln!("Warning: failed to init tracing: {e}");
+        }
+        tracing::info!("fff-engine worker-{index} starting");
+        return worker::run(index, cfg).await;
+    }
+
+    // ── Singleton mode (legacy / direct invocation) ───────────────────────────
+    let base_path = args.base_path.ok_or("--base-path is required in singleton mode")?;
+
+    let default_log = fff_ipc::log_path(&base_path);
     let default_log_str = default_log.to_string_lossy().into_owned();
     let log_path = args
         .log_file
@@ -80,27 +115,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(&default_log_str)
         .to_string();
 
-    // fff::log::init_tracing uses EnvFilter::from_env_lossy() which reads RUST_LOG.
-    // Set RUST_LOG from our level string so target-based filters like
-    // "fff_engine=debug,warn" are honoured. Respect any externally set RUST_LOG.
-    if std::env::var("RUST_LOG").is_err() {
-        // SAFETY: single-threaded at this point — no other threads exist yet.
-        unsafe { std::env::set_var("RUST_LOG", &log_level) };
-    }
     if let Err(e) = fff::log::init_tracing(&log_path, Some("info")) {
         eprintln!("Warning: failed to init tracing: {e}");
     }
 
-    tracing::info!("fff-engine starting (level: {log_level})");
+    tracing::info!("fff-engine singleton starting (level: {log_level})");
 
-    // Effective flags: CLI flag OR config flag (either can disable a feature)
     let eff_no_watch = args.no_watch || cfg.index.no_watch;
     let eff_no_warmup = args.no_warmup || cfg.index.no_warmup;
 
-    // Publish effective settings back into args for state::init to consume.
-    // Rebind as a new struct since Args doesn't impl Clone.
     let effective_args = state::EffectiveArgs {
-        base_path: args.base_path,
+        base_path: base_path.clone(),
         frecency_db_path: args.frecency_db_path.or_else(|| {
             cfg.frecency.db.as_deref().map(PathBuf::from)
         }),
@@ -108,10 +133,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_warmup: eff_no_warmup,
     };
 
-    let socket_path = fff_ipc::socket_path(&effective_args.base_path);
-    let lockfile_path = fff_ipc::lockfile_path(&effective_args.base_path);
+    let socket_path = fff_ipc::socket_path(&base_path);
+    let lockfile_path = fff_ipc::lockfile_path(&base_path);
 
-    let _lockfile_guard = match lifecycle::acquire_lockfile(&lockfile_path, &effective_args.base_path) {
+    let _lockfile_guard = match lifecycle::acquire_lockfile(&lockfile_path, &base_path) {
         Ok(guard) => guard,
         Err(e) => {
             tracing::info!("Daemon already running (lockfile held): {e}");
@@ -126,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     server::run(engine_state, socket_path).await?;
 
-    tracing::info!("fff-engine shutting down");
+    tracing::info!("fff-engine singleton shutting down");
     Ok(())
 }
 

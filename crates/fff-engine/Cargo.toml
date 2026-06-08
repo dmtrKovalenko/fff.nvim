@@ -17,6 +17,7 @@ blake3 = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 dirs = { workspace = true }
 git2 = { workspace = true }
+libc = "0.2"
 mimalloc = { workspace = true }
 parking_lot = { workspace = true }
 tokio = { version = "1", features = ["full"] }
