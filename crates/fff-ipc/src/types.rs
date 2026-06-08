@@ -36,8 +36,13 @@ pub struct WorkerInfo {
     pub index: u32,
     pub socket_path: String,
     pub root_slugs: Vec<String>,
-    pub root_count: usize,
     pub pid: u32,
+}
+
+impl WorkerInfo {
+    pub fn root_count(&self) -> usize {
+        self.root_slugs.len()
+    }
 }
 
 // ── Request ───────────────────────────────────────────────────────────────────
@@ -390,8 +395,8 @@ mod tests {
     fn master_response_worker_list_round_trips() {
         let resp = MasterResponse::WorkerList {
             workers: vec![
-                WorkerInfo { index: 0, socket_path: "worker-0.sock".into(), root_slugs: vec!["abc".into()], root_count: 1, pid: 1234 },
-                WorkerInfo { index: 1, socket_path: "worker-1.sock".into(), root_slugs: vec![], root_count: 0, pid: 5678 },
+                WorkerInfo { index: 0, socket_path: "worker-0.sock".into(), root_slugs: vec!["abc".into()], pid: 1234 },
+                WorkerInfo { index: 1, socket_path: "worker-1.sock".into(), root_slugs: vec![], pid: 5678 },
             ],
         };
         let rt = round_trip(&resp);
@@ -399,7 +404,7 @@ mod tests {
             MasterResponse::WorkerList { workers } => {
                 assert_eq!(workers.len(), 2);
                 assert_eq!(workers[0].pid, 1234);
-                assert_eq!(workers[1].root_count, 0);
+                assert_eq!(workers[1].root_count(), 0);
             }
             _ => panic!("wrong variant"),
         }

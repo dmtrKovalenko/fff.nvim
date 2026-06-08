@@ -98,7 +98,7 @@ fn cmd_list() -> i32 {
         println!("master PID: {master_pid}  workers: {}", workers.len());
         println!("{:<6}  {:<7}  {:<8}  {}", "INDEX", "PID", "ROOTS", "SOCKET");
         for w in &workers {
-            println!("{:<6}  {:<7}  {:<8}  {}", w.index, w.pid, w.root_count, w.socket_path);
+            println!("{:<6}  {:<7}  {:<8}  {}", w.index, w.pid, w.root_count(), w.socket_path);
         }
         return 0;
     }
@@ -128,7 +128,7 @@ fn cmd_list_workers() -> i32 {
         Some(MasterResponse::WorkerList { workers }) => {
             println!("{:<6}  {:<7}  {:<8}  SOCKET", "INDEX", "PID", "ROOTS");
             for w in &workers {
-                println!("{:<6}  {:<7}  {:<8}  {}", w.index, w.pid, w.root_count, w.socket_path);
+                println!("{:<6}  {:<7}  {:<8}  {}", w.index, w.pid, w.root_count(), w.socket_path);
                 for slug in &w.root_slugs {
                     println!("       slug: {slug}");
                 }
@@ -169,7 +169,7 @@ fn cmd_status(base_path: &Path) -> i32 {
         match resp {
             MasterResponse::WorkerInfo(info) => {
                 println!("Route for {}: worker-{} (pid={}, roots={})",
-                    base_path.display(), info.index, info.pid, info.root_count);
+                    base_path.display(), info.index, info.pid, info.root_count());
                 println!("  socket: {}", info.socket_path);
                 return 0;
             }
@@ -203,7 +203,7 @@ fn cmd_status(base_path: &Path) -> i32 {
 fn cmd_worker_status(index: u32) -> i32 {
     match master_request(MasterRequest::WorkerStatus { index }) {
         Some(MasterResponse::WorkerInfo(info)) => {
-            println!("worker-{}: pid={} roots={}", info.index, info.pid, info.root_count);
+            println!("worker-{}: pid={} roots={}", info.index, info.pid, info.root_count());
             println!("  socket: {}", info.socket_path);
             for slug in &info.root_slugs {
                 println!("  slug: {slug}");

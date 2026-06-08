@@ -110,6 +110,27 @@ fn cache_dir() -> PathBuf {
     xdg_cache_dir()
 }
 
+/// Poll until `path` accepts a Unix socket connection, up to `timeout`.
+///
+/// Polls via `UnixStream::connect` (not `path.exists()`) so a worker that has
+/// bound its socket file but not yet called `accept()` does not produce a false
+/// positive. Returns `Err` with a descriptive message on timeout.
+pub fn wait_for_socket(path: &std::path::Path, timeout: std::time::Duration) -> Result<(), String> {
+    use std::os::unix::net::UnixStream;
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if UnixStream::connect(path).is_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    Err(format!(
+        "timed out after {}s waiting for socket at {}",
+        timeout.as_secs(),
+        path.display()
+    ))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

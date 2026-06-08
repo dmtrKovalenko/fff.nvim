@@ -1,4 +1,12 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    fs::OpenOptions,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use fff_ipc::{
     base_path_slug, master_socket_path,
@@ -15,16 +23,17 @@ use crate::state::{EffectiveArgs, EngineState};
 
 struct RootEntry {
     state: Arc<EngineState>,
-    last_access: Instant,
+    // Milliseconds since Unix epoch; updated atomically on every access.
+    // Allows fast-path reads to hold roots.read() instead of roots.write().
+    last_access_ms: AtomicU64,
 }
 
-pub struct WorkerState {
+pub(crate) struct WorkerState {
     pub index: u32,
     config: FffConfig,
-    /// Loaded root states: slug → RootEntry.
     roots: Arc<RwLock<HashMap<String, RootEntry>>>,
-    /// Per-slug async mutex gates concurrent init requests for the same root.
-    /// Outer Mutex is sync (cheap; held only briefly to clone the inner Arc).
+    // Per-slug async mutex serialises concurrent inits for the same root.
+    // Outer Mutex is sync (held only briefly to clone the inner Arc).
     init_gates: Mutex<HashMap<String, Arc<TokioMutex<()>>>>,
 }
 
@@ -38,45 +47,43 @@ impl WorkerState {
         }
     }
 
-    /// Return a loaded `Arc<EngineState>` for `base_path`, initialising it on first access.
-    ///
-    /// Two concurrent callers for the same slug will serialize behind the slug's gate;
-    /// the second caller hits the registry after the first completes init.
+    // Return a loaded `Arc<EngineState>` for `base_path`, initialising it on first access.
+    // Two concurrent callers for the same slug serialise behind the slug's gate;
+    // the second caller hits the registry after the first completes init.
     pub async fn get_or_init(&self, base_path: PathBuf) -> Result<Arc<EngineState>, String> {
         let slug = base_path_slug(&base_path);
         let max_roots = self.config.worker.roots_per_worker_max as usize;
+        let now = now_ms();
 
-        // Fast path: slug already loaded — update access time and return.
+        // Fast path: slug loaded — update last_access atomically (read lock only).
         {
-            let mut map = self.roots.write();
-            if let Some(entry) = map.get_mut(&slug) {
-                entry.last_access = Instant::now();
+            let map = self.roots.read();
+            if let Some(entry) = map.get(&slug) {
+                entry.last_access_ms.store(now, Ordering::Relaxed);
                 return Ok(Arc::clone(&entry.state));
             }
         }
 
-        // Slow path: acquire the per-slug gate to serialize concurrent inits.
+        // Slow path: gate serialises concurrent inits for the same slug.
         let gate = {
             let mut gates = self.init_gates.lock();
             Arc::clone(gates.entry(slug.clone()).or_insert_with(|| Arc::new(TokioMutex::new(()))))
         };
         let _gate_guard = gate.lock().await;
 
-        // Double-check after acquiring gate — another task may have completed init.
+        // Double-check after acquiring gate.
         {
-            let mut map = self.roots.write();
-            if let Some(entry) = map.get_mut(&slug) {
-                entry.last_access = Instant::now();
+            let map = self.roots.read();
+            if let Some(entry) = map.get(&slug) {
+                entry.last_access_ms.store(now, Ordering::Relaxed);
                 return Ok(Arc::clone(&entry.state));
             }
         }
 
-        // LRU eviction if at capacity.
         if self.roots.read().len() >= max_roots {
             self.evict_lru().await;
         }
 
-        // Run the blocking init off the Tokio thread pool.
         let args = EffectiveArgs {
             base_path: base_path.clone(),
             frecency_db_path: self.config.frecency.db.as_deref().map(PathBuf::from),
@@ -84,7 +91,7 @@ impl WorkerState {
             no_warmup: self.config.index.no_warmup,
         };
 
-        // Convert the error to String inside the closure so the return type is Send.
+        // Convert error to String inside closure so the return type is Send.
         let new_state = tokio::task::spawn_blocking(move || {
             crate::state::init(&args).map_err(|e| e.to_string())
         })
@@ -92,25 +99,23 @@ impl WorkerState {
         .map_err(|e| format!("spawn_blocking join error: {e}"))??;
 
         let new_state = Arc::new(new_state);
-
-        // Insert into registry with write-lock; init is complete before we lock.
         self.roots.write().insert(slug, RootEntry {
             state: Arc::clone(&new_state),
-            last_access: Instant::now(),
+            last_access_ms: AtomicU64::new(now_ms()),
         });
 
         Ok(new_state)
     }
 
-    /// Evict the LRU root with no active connections (Arc::strong_count == 1).
-    /// Notifies master via fire-and-forget EvictedRoot.
+    // Evict the LRU root with no active connections (Arc::strong_count == 1).
+    // Roots with live connections are skipped; if none are evictable the new
+    // root loads anyway as a temporary overflow.
     async fn evict_lru(&self) {
-        // strong_count == 1 means only the registry holds the Arc (no connections).
         let victim = {
             let map = self.roots.read();
             map.iter()
                 .filter(|(_, e)| Arc::strong_count(&e.state) == 1)
-                .min_by_key(|(_, e)| e.last_access)
+                .min_by_key(|(_, e)| e.last_access_ms.load(Ordering::Relaxed))
                 .map(|(slug, _)| slug.clone())
         };
 
@@ -119,14 +124,14 @@ impl WorkerState {
             tracing::debug!("worker-{}: evicted root {slug}", self.index);
             self.notify_evicted(slug).await;
         }
-        // If no candidate (all roots have active connections), load anyway — temporary overflow.
     }
 
-    /// Fire-and-forget EvictedRoot to master socket.
+    // Fire-and-forget EvictedRoot to master socket.
+    // Uses spawn_blocking because std::os::unix::net::UnixStream::connect is blocking.
+    // Failure is benign — idle TTL will clean up the routing entry.
     async fn notify_evicted(&self, slug: String) {
         let master = master_socket_path();
         let msg = MasterRequest::EvictedRoot { slug };
-        // Synchronous connect + send — cheap (single message, no response).
         tokio::task::spawn_blocking(move || {
             use std::net::Shutdown;
             use std::os::unix::net::UnixStream;
@@ -136,16 +141,6 @@ impl WorkerState {
             }
         });
     }
-
-    /// Number of currently loaded roots.
-    pub fn root_count(&self) -> usize {
-        self.roots.read().len()
-    }
-
-    /// Slugs of all currently loaded roots.
-    pub fn root_slugs(&self) -> Vec<String> {
-        self.roots.read().keys().cloned().collect()
-    }
 }
 
 /// Entry point for worker mode. Binds the worker socket and serves connections.
@@ -153,11 +148,26 @@ pub async fn run(index: u32, config: FffConfig) -> Result<(), Box<dyn std::error
     let socket_path = worker_socket_path(index);
     let lockfile_path = worker_lockfile_path(index);
 
-    // Write PID lockfile so master and fffctl can probe liveness.
     if let Some(parent) = lockfile_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&lockfile_path, format!("{}\n", std::process::id()))?;
+
+    // Use O_CREAT|O_EXCL so two concurrent workers with the same index cannot
+    // both overwrite each other's PID (unlike plain std::fs::write).
+    match OpenOptions::new().write(true).create_new(true).open(&lockfile_path) {
+        Ok(_) => {
+            std::fs::write(&lockfile_path, format!("{}\n", std::process::id()))?;
+        }
+        Err(_) => {
+            if fff_ipc::lockfile::is_stale(&lockfile_path) {
+                let _ = std::fs::remove_file(&lockfile_path);
+                std::fs::write(&lockfile_path, format!("{}\n", std::process::id()))?;
+            } else {
+                tracing::info!("worker-{index}: another instance already running, exiting");
+                return Ok(());
+            }
+        }
+    }
 
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -205,7 +215,6 @@ pub async fn run(index: u32, config: FffConfig) -> Result<(), Box<dyn std::error
 async fn handle_worker_connection(stream: tokio::net::UnixStream, ws: Arc<WorkerState>) {
     let (mut read_half, mut write_half) = tokio::io::split(stream);
 
-    // First message must be Connect; any other variant closes the connection.
     let base_path = match read_message(&mut read_half).await {
         Ok(SearchRequest::Connect { base_path }) => PathBuf::from(base_path),
         Ok(other) => {
@@ -228,7 +237,6 @@ async fn handle_worker_connection(stream: tokio::net::UnixStream, ws: Arc<Worker
         return;
     }
 
-    // Normal request/response loop for all subsequent messages.
     loop {
         let req: SearchRequest = match read_message(&mut read_half).await {
             Ok(r) => r,
@@ -237,7 +245,6 @@ async fn handle_worker_connection(stream: tokio::net::UnixStream, ws: Arc<Worker
 
         match req {
             SearchRequest::Connect { .. } => {
-                // Connect is only valid as the first message.
                 let _ = write_message(
                     &mut write_half,
                     &SearchResponse::Error("unexpected Connect after handshake".into()),
@@ -261,7 +268,6 @@ async fn handle_worker_connection(stream: tokio::net::UnixStream, ws: Arc<Worker
                         }
                     }
                 });
-                // Fire-and-forget — no response.
             }
             SearchRequest::SetLogLevel { level } => {
                 let response = match crate::set_log_level(&level) {
@@ -280,4 +286,11 @@ async fn handle_worker_connection(stream: tokio::net::UnixStream, ws: Arc<Worker
             }
         }
     }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }

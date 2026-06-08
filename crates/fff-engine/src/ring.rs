@@ -9,7 +9,7 @@ const DEFAULT_VIRTUAL_NODES: usize = 150;
 /// Uses blake3 for all hashing. Ring space is [0, u64::MAX].
 /// Each worker occupies `virtual_nodes` evenly distributed points;
 /// `assign` walks clockwise from the path's hash to find the owner.
-pub struct HashRing {
+pub(crate) struct HashRing {
     /// Sorted (ring_point, worker_index) pairs — the canonical ring state.
     nodes: Vec<(u64, u32)>,
 }
@@ -67,7 +67,8 @@ impl HashRing {
         self.nodes.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[allow(dead_code)]
+    pub(crate) fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
 

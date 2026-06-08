@@ -16,13 +16,12 @@ use fff_ipc::{lockfile, master_lockfile_path, master_socket_path, IpcError};
 use fff_ipc::{read_message_sync, write_message_sync};
 
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub struct EngineClient {
     reader: BufReader<UnixStream>,
     writer: BufWriter<UnixStream>,
     /// Stored for reconnect — passed back on two-phase re-handshake.
-    pub base_path: PathBuf,
+    pub(crate) base_path: PathBuf,
 }
 
 impl EngineClient {
@@ -108,19 +107,49 @@ impl EngineClient {
         };
     }
 
-    /// Check daemon health.
+    /// Check daemon health without triggering root initialisation.
+    /// Uses MasterRequest::RouteInfo (read-only) instead of a full two-phase connect.
     pub fn check_health(base_path: &Path) -> HealthStatus {
+        use std::io::{BufReader, BufWriter};
         let master = master_socket_path();
-        if !master.exists() {
-            // Fall back to legacy per-root socket check.
-            let sock = fff_ipc::socket_path(base_path);
-            if !sock.exists() {
-                return HealthStatus::NotStarted(master);
+        match UnixStream::connect(&master) {
+            Ok(stream) if socket_owned_by_us(&master) => {
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut writer = match stream.try_clone().map(BufWriter::new) {
+                    Ok(w) => w,
+                    Err(_) => return HealthStatus::ConnRefused("clone failed".into()),
+                };
+                let mut reader = BufReader::new(stream);
+                let req = MasterRequest::RouteInfo {
+                    base_path: base_path.to_string_lossy().into(),
+                };
+                use std::io::Write;
+                if write_message_sync(&mut writer, &req).is_err()
+                    || writer.flush().is_err()
+                {
+                    return HealthStatus::ConnRefused("send failed".into());
+                }
+                let resp: Result<MasterResponse, _> = read_message_sync(&mut reader);
+                match resp {
+                    Ok(MasterResponse::WorkerInfo(_) | MasterResponse::Error(_)) => {
+                        HealthStatus::Ok
+                    }
+                    _ => HealthStatus::ConnRefused("unexpected response".into()),
+                }
             }
-        }
-        match Self::connect(base_path) {
-            Ok(_) => HealthStatus::Ok,
-            Err(e) => HealthStatus::ConnRefused(e.to_string()),
+            _ => {
+                // Master not running — fall back to legacy per-root socket.
+                let sock = fff_ipc::socket_path(base_path);
+                if !sock.exists() {
+                    HealthStatus::NotStarted(master)
+                } else {
+                    match UnixStream::connect(&sock) {
+                        Ok(_) => HealthStatus::Ok,
+                        Err(e) => HealthStatus::ConnRefused(e.to_string()),
+                    }
+                }
+            }
         }
     }
 }
@@ -181,7 +210,7 @@ fn ensure_master_running() -> Result<(), Box<dyn std::error::Error>> {
     // Check whether a live master holds the lockfile (slow start or another
     // spawner is in progress).
     if lockfile.exists() && !lockfile::is_stale(&lockfile) {
-        return wait_for_socket(&master, SPAWN_TIMEOUT);
+        return fff_ipc::wait_for_socket(&master, SPAWN_TIMEOUT).map_err(Into::into);
     }
 
     // Race to spawn master: O_CREAT|O_EXCL via create_new.
@@ -194,7 +223,7 @@ fn ensure_master_running() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(_) => {
             // Someone else is spawning; wait for the socket.
-            return wait_for_socket(&master, SPAWN_TIMEOUT);
+            return fff_ipc::wait_for_socket(&master, SPAWN_TIMEOUT).map_err(Into::into);
         }
     }
 
@@ -227,7 +256,7 @@ fn ensure_master_running() -> Result<(), Box<dyn std::error::Error>> {
     // Remove our temp lockfile so fff-engine --master can write its own PID.
     let _ = std::fs::remove_file(&lockfile);
 
-    let result = wait_for_socket(&master, SPAWN_TIMEOUT);
+    let result = fff_ipc::wait_for_socket(&master, SPAWN_TIMEOUT).map_err(Into::into);
     if result.is_err() {
         tracing::warn!(
             "timed out waiting for fff-engine --master socket — \
@@ -237,23 +266,15 @@ fn ensure_master_running() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
-/// Wait until `path` exists by polling, up to `timeout`.
-fn wait_for_socket(path: &Path, timeout: Duration) -> Result<(), Box<dyn std::error::Error>> {
-    let deadline = std::time::Instant::now() + timeout;
-    while std::time::Instant::now() < deadline {
-        if path.exists() {
-            return Ok(());
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-    Err(format!("timed out waiting for socket at {} ({}s)", path.display(), timeout.as_secs()).into())
-}
-
-/// Wait for `path` to exist then connect.
+/// Wait for `path` to accept connections, then connect. Delegates to the
+/// canonical fff_ipc::wait_for_socket (polls UnixStream::connect, not path.exists).
 fn wait_and_connect(path: &Path, timeout: Duration) -> Result<UnixStream, Box<dyn std::error::Error>> {
-    wait_for_socket(path, timeout)?;
-    UnixStream::connect(path)
-        .map_err(|e| format!("failed to connect to worker socket {}: {e}", path.display()).into())
+    fff_ipc::wait_for_socket(path, timeout)
+        .map_err(|e| format!("{e}").into())
+        .and_then(|()| {
+            UnixStream::connect(path)
+                .map_err(|e| format!("failed to connect to worker socket {}: {e}", path.display()).into())
+        })
 }
 
 /// Returns true when `path` is owned by the current user.

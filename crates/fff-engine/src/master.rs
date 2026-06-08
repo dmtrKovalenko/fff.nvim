@@ -83,7 +83,7 @@ impl MasterState {
         i
     }
 
-    /// Spawn a new worker process and register it in the ring and routing table.
+    // Spawn a new worker process and register it in the ring and routing table.
     async fn spawn_worker(&self, index: u32) -> Result<(), String> {
         let socket = worker_socket_path(index);
         let child = Command::new(&self.exe_path)
@@ -96,8 +96,11 @@ impl MasterState {
 
         let pid = child.id().unwrap_or(0);
 
-        // Wait for worker socket to appear (socket bind = readiness signal).
-        wait_for_socket(&socket, Duration::from_secs(10)).await
+        // Poll until worker socket accepts connections (not just file existence).
+        let sock = socket.clone();
+        tokio::task::spawn_blocking(move || fff_ipc::wait_for_socket(&sock, Duration::from_secs(10)))
+            .await
+            .map_err(|e| format!("join error: {e}"))?
             .map_err(|e| format!("worker-{index} socket timeout: {e}"))?;
 
         // Update ring (lock then release before locking routing).
@@ -132,7 +135,6 @@ impl MasterState {
             index: e.index,
             socket_path: e.socket_path.clone(),
             root_slugs: e.root_slugs.clone(),
-            root_count: e.root_slugs.len(),
             pid: e.pid,
         }).collect()
     }
@@ -143,22 +145,31 @@ impl MasterState {
             index: e.index,
             socket_path: e.socket_path.clone(),
             root_slugs: e.root_slugs.clone(),
-            root_count: e.root_slugs.len(),
             pid: e.pid,
         })
     }
 
-    /// Send SIGTERM to a worker and remove it from state.
+    // Send SIGTERM (then SIGKILL after 5s if needed) to a worker and remove it from state.
     async fn stop_worker(&self, index: u32) {
-        // Try the Child handle first (workers spawned this session).
         let child = self.children.lock().await.remove(&index);
-        if let Some(mut c) = child {
-            let _ = c.kill().await;
-        } else {
-            // Adopted worker: signal by PID.
-            if let Some(&pid) = self.adopted_pids.lock().await.get(&index) {
+        if let Some(c) = child {
+            // Get PID before consuming the child, then send SIGTERM for graceful shutdown.
+            if let Some(pid) = c.id() {
                 unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
+                // Give the worker up to 5s to exit cleanly before forcing SIGKILL.
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                while tokio::time::Instant::now() < deadline {
+                    if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+                        break; // process gone
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                if unsafe { libc::kill(pid as libc::pid_t, 0) == 0 } {
+                    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL); }
+                }
             }
+        } else if let Some(&pid) = self.adopted_pids.lock().await.get(&index) {
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
         }
         self.adopted_pids.lock().await.remove(&index);
 
@@ -189,10 +200,10 @@ impl MasterState {
         tracing::debug!("master: routing entry removed for evicted slug {slug}");
     }
 
-    /// Called after Handshake when a slug has no routing entry (new root).
-    /// Ring assignment is read first (deterministic, no mutation), then the
-    /// routing write-lock covers presence-check + push + scale-out threshold
-    /// atomically — eliminating the concurrent-Handshake double-push race.
+    // Called after Handshake when a slug has no routing entry (new root).
+    // Ring assignment is read first (deterministic, no mutation), then the
+    // routing write-lock covers presence-check + push + scale-out threshold
+    // atomically — eliminating the concurrent-Handshake double-push race.
     async fn assign_new_root(&self, base_path: &str) -> Option<u32> {
         let slug = base_path_slug(std::path::Path::new(base_path));
 
@@ -271,20 +282,22 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
     // Load routing.json and probe surviving workers.
     let rt_path = routing_table_path();
     let mut routing = RoutingTable::load(&rt_path).unwrap_or_default();
-    let mut ring = HashRing::new();
     let mut adopted_pids: HashMap<u32, u32> = HashMap::new();
     let mut max_seen_index: u32 = 0;
 
-    // Reconstruct ring from surviving workers only.
+    // Restore ring from persisted snapshot, then remove dead workers.
+    // Using from_serializable preserves the exact prior layout even if
+    // DEFAULT_VIRTUAL_NODES changes between restarts.
+    let mut ring = HashRing::from_serializable(routing.ring_state.clone());
     let mut dead_indices: Vec<u32> = vec![];
     for (&idx, entry) in &routing.workers {
         max_seen_index = max_seen_index.max(idx);
         let alive = unsafe { libc::kill(entry.pid as libc::pid_t, 0) == 0 };
         if alive {
-            ring.add_worker_default(idx);
             adopted_pids.insert(idx, entry.pid);
             tracing::info!("master: reconnected worker-{idx} pid={}", entry.pid);
         } else {
+            ring.remove_worker(idx);
             dead_indices.push(idx);
             tracing::info!("master: discarded dead worker-{idx} pid={}", entry.pid);
         }
@@ -486,12 +499,14 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
         }
     }
 
-    // Propagate shutdown to all workers.
+    // Propagate shutdown to all workers via SIGTERM.
     {
         let mut children = master_state.children.lock().await;
-        for (idx, mut child) in children.drain() {
-            let _ = child.kill().await;
-            tracing::info!("master: sent SIGTERM to worker-{idx}");
+        for (idx, child) in children.drain() {
+            if let Some(pid) = child.id() {
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
+                tracing::info!("master: sent SIGTERM to worker-{idx} pid={pid}");
+            }
         }
     }
     {
@@ -588,17 +603,3 @@ async fn handle_connection(stream: tokio::net::UnixStream, ms: Arc<MasterState>)
     }
 }
 
-/// Poll until `path` exists, up to `timeout`. Returns Err on timeout.
-async fn wait_for_socket(path: &std::path::Path, timeout: Duration) -> Result<(), String> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut tick = interval(Duration::from_millis(50));
-    loop {
-        tick.tick().await;
-        if path.exists() {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(format!("timeout waiting for {}", path.display()));
-        }
-    }
-}
