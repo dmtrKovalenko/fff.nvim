@@ -145,6 +145,16 @@ async fn dispatch(state: &EngineState, req: SearchRequest) -> fff_ipc::types::Se
         SearchRequest::RecordAccess { .. } | SearchRequest::SetLogLevel { .. } => {
             unreachable!("handled before dispatch")
         }
+        SearchRequest::Connect { .. } => {
+            // Connect is only valid as the first message on a worker socket.
+            // The singleton server does not support the worker protocol.
+            (
+                "connect(rejected)".to_string(),
+                fff_ipc::types::SearchResponse::Error(
+                    "Connect is not supported in singleton mode".into(),
+                ),
+            )
+        }
     };
 
     let elapsed = start.elapsed();

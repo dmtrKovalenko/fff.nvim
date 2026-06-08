@@ -1,5 +1,6 @@
 mod handlers;
 mod lifecycle;
+pub(crate) mod ring;
 mod server;
 mod state;
 
