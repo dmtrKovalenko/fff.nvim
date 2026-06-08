@@ -8,7 +8,7 @@ use fff_ipc::{
     routing::{RoutingTable, WorkerEntry},
     types::{MasterRequest, MasterResponse, WorkerInfo},
 };
-use tokio::{net::UnixListener, process::Command, sync::Mutex, time::interval};
+use tokio::{net::UnixListener, process::Command, sync::Mutex, time::{interval, sleep}};
 
 use crate::ring::HashRing;
 
@@ -297,10 +297,16 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
     let listener = UnixListener::bind(&socket)?;
     tracing::info!("fff-engine master listening on {}", socket.display());
 
-    // Background: poll children for crashes.
+    // Background: poll children for crashes and respawn them (R1 crash recovery).
+    // Backoff-limited: max 3 restarts per 60-second window to prevent storms.
     let ms_monitor = Arc::clone(&master_state);
     tokio::spawn(async move {
+        // restart_count[index] = (count, window_start)
+        let mut restart_count: HashMap<u32, (u32, Instant)> = HashMap::new();
+        const MAX_RESTARTS_PER_WINDOW: u32 = 3;
+        const RESTART_WINDOW: Duration = Duration::from_secs(60);
         let mut ticker = interval(Duration::from_secs(2));
+
         loop {
             ticker.tick().await;
             let mut children = ms_monitor.children.lock().await;
@@ -316,12 +322,41 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
                 }
             }
             drop(children);
+
             for idx in crashed {
                 ms_monitor.children.lock().await.remove(&idx);
-                // U6 will handle respawn; for now just remove from state.
-                ms_monitor.routing.lock().await.workers.remove(&idx);
-                ms_monitor.ring.lock().await.remove_worker(idx);
-                tracing::warn!("master: worker-{idx} removed from routing (respawn: U6)");
+
+                // Check restart backoff — read and update count outside borrow.
+                let now = Instant::now();
+                let (prev_count, window_start) = *restart_count.entry(idx).or_insert((0, now));
+                let (count, window_start) = if now.duration_since(window_start) > RESTART_WINDOW {
+                    (0, now)
+                } else {
+                    (prev_count, window_start)
+                };
+
+                if count >= MAX_RESTARTS_PER_WINDOW {
+                    tracing::error!(
+                        "master: worker-{idx} crashed {MAX_RESTARTS_PER_WINDOW} times in {RESTART_WINDOW:?}, removing permanently"
+                    );
+                    restart_count.remove(&idx);
+                    ms_monitor.routing.lock().await.workers.remove(&idx);
+                    ms_monitor.ring.lock().await.remove_worker(idx);
+                    continue;
+                }
+
+                // Exponential backoff before respawn (100ms * 2^count).
+                let backoff = Duration::from_millis(100 * (1u64 << count));
+                restart_count.insert(idx, (count + 1, window_start));
+
+                tracing::info!("master: respawning worker-{idx} (attempt {}) after {backoff:?}", count + 1);
+                sleep(backoff).await;
+
+                if let Err(e) = ms_monitor.spawn_worker(idx).await {
+                    tracing::error!("master: failed to respawn worker-{idx}: {e}");
+                    ms_monitor.routing.lock().await.workers.remove(&idx);
+                    ms_monitor.ring.lock().await.remove_worker(idx);
+                }
             }
         }
     });
