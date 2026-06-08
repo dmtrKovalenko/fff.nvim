@@ -3,6 +3,7 @@ mod lifecycle;
 pub(crate) mod ring;
 mod server;
 mod state;
+pub(crate) mod worker;
 
 use std::path::PathBuf;
 use std::sync::Arc;

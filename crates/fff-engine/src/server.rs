@@ -99,7 +99,7 @@ async fn handle_connection(stream: tokio::net::UnixStream, state: Arc<EngineStat
                 }
             }
             req => {
-                let response = dispatch(&state, req).await;
+                let response = dispatch_request(&state, req).await;
                 if write_message(&mut write_half, &response).await.is_err() {
                     break;
                 }
@@ -108,7 +108,7 @@ async fn handle_connection(stream: tokio::net::UnixStream, state: Arc<EngineStat
     }
 }
 
-async fn dispatch(state: &EngineState, req: SearchRequest) -> fff_ipc::types::SearchResponse {
+pub(crate) async fn dispatch_request(state: &EngineState, req: SearchRequest) -> fff_ipc::types::SearchResponse {
     use crate::handlers::{
         handle_find_files, handle_get_git_status, handle_grep, handle_list_directories,
         handle_list_recent_files, handle_multi_grep,
