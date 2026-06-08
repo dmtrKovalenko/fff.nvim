@@ -1,10 +1,11 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
 use fff_ipc::{
-    base_path_slug,
+    base_path_slug, master_socket_path,
     config::FffConfig,
-    types::{SearchRequest, SearchResponse},
+    types::{MasterRequest, SearchRequest, SearchResponse},
     worker_lockfile_path, worker_socket_path,
+    write_message_sync,
 };
 use parking_lot::{Mutex, RwLock};
 use tokio::{net::UnixListener, sync::Mutex as TokioMutex};
@@ -12,11 +13,16 @@ use fff_ipc::{read_message, write_message};
 
 use crate::state::{EffectiveArgs, EngineState};
 
+struct RootEntry {
+    state: Arc<EngineState>,
+    last_access: Instant,
+}
+
 pub struct WorkerState {
     pub index: u32,
     config: FffConfig,
-    /// Loaded root states: slug → Arc<EngineState>.
-    roots: Arc<RwLock<HashMap<String, Arc<EngineState>>>>,
+    /// Loaded root states: slug → RootEntry.
+    roots: Arc<RwLock<HashMap<String, RootEntry>>>,
     /// Per-slug async mutex gates concurrent init requests for the same root.
     /// Outer Mutex is sync (cheap; held only briefly to clone the inner Arc).
     init_gates: Mutex<HashMap<String, Arc<TokioMutex<()>>>>,
@@ -38,12 +44,14 @@ impl WorkerState {
     /// the second caller hits the registry after the first completes init.
     pub async fn get_or_init(&self, base_path: PathBuf) -> Result<Arc<EngineState>, String> {
         let slug = base_path_slug(&base_path);
+        let max_roots = self.config.worker.roots_per_worker_max as usize;
 
-        // Fast path: slug already loaded.
+        // Fast path: slug already loaded — update access time and return.
         {
-            let map = self.roots.read();
-            if let Some(state) = map.get(&slug) {
-                return Ok(Arc::clone(state));
+            let mut map = self.roots.write();
+            if let Some(entry) = map.get_mut(&slug) {
+                entry.last_access = Instant::now();
+                return Ok(Arc::clone(&entry.state));
             }
         }
 
@@ -56,10 +64,16 @@ impl WorkerState {
 
         // Double-check after acquiring gate — another task may have completed init.
         {
-            let map = self.roots.read();
-            if let Some(state) = map.get(&slug) {
-                return Ok(Arc::clone(state));
+            let mut map = self.roots.write();
+            if let Some(entry) = map.get_mut(&slug) {
+                entry.last_access = Instant::now();
+                return Ok(Arc::clone(&entry.state));
             }
+        }
+
+        // LRU eviction if at capacity.
+        if self.roots.read().len() >= max_roots {
+            self.evict_lru().await;
         }
 
         // Run the blocking init off the Tokio thread pool.
@@ -80,9 +94,47 @@ impl WorkerState {
         let new_state = Arc::new(new_state);
 
         // Insert into registry with write-lock; init is complete before we lock.
-        self.roots.write().insert(slug, Arc::clone(&new_state));
+        self.roots.write().insert(slug, RootEntry {
+            state: Arc::clone(&new_state),
+            last_access: Instant::now(),
+        });
 
         Ok(new_state)
+    }
+
+    /// Evict the LRU root with no active connections (Arc::strong_count == 1).
+    /// Notifies master via fire-and-forget EvictedRoot.
+    async fn evict_lru(&self) {
+        // strong_count == 1 means only the registry holds the Arc (no connections).
+        let victim = {
+            let map = self.roots.read();
+            map.iter()
+                .filter(|(_, e)| Arc::strong_count(&e.state) == 1)
+                .min_by_key(|(_, e)| e.last_access)
+                .map(|(slug, _)| slug.clone())
+        };
+
+        if let Some(slug) = victim {
+            self.roots.write().remove(&slug);
+            tracing::debug!("worker-{}: evicted root {slug}", self.index);
+            self.notify_evicted(slug).await;
+        }
+        // If no candidate (all roots have active connections), load anyway — temporary overflow.
+    }
+
+    /// Fire-and-forget EvictedRoot to master socket.
+    async fn notify_evicted(&self, slug: String) {
+        let master = master_socket_path();
+        let msg = MasterRequest::EvictedRoot { slug };
+        // Synchronous connect + send — cheap (single message, no response).
+        tokio::task::spawn_blocking(move || {
+            use std::net::Shutdown;
+            use std::os::unix::net::UnixStream;
+            if let Ok(mut stream) = UnixStream::connect(&master) {
+                let _ = write_message_sync(&mut stream, &msg);
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+        });
     }
 
     /// Number of currently loaded roots.

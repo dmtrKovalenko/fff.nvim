@@ -1,6 +1,7 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::{Duration, Instant}};
 
 use fff_ipc::{
+    base_path_slug,
     config::WorkerConfig,
     master_lockfile_path, master_socket_path, routing_table_path, worker_socket_path,
     read_message, write_message,
@@ -22,6 +23,8 @@ struct MasterState {
     adopted_pids: Mutex<HashMap<u32, u32>>,
     /// Monotonically increasing worker index counter.
     next_index: Mutex<u32>,
+    /// When each worker's routing table last became empty (for idle TTL).
+    idle_since: Mutex<HashMap<u32, Instant>>,
 }
 
 impl MasterState {
@@ -41,6 +44,7 @@ impl MasterState {
             children: Mutex::new(HashMap::new()),
             adopted_pids: Mutex::new(adopted_pids),
             next_index: Mutex::new(next_index),
+            idle_since: Mutex::new(HashMap::new()),
         }
     }
 
@@ -148,11 +152,66 @@ impl MasterState {
 
     async fn handle_evicted_root(&self, slug: &str) {
         let mut routing = self.routing.lock().await;
-        for entry in routing.workers.values_mut() {
+        let now = Instant::now();
+        for (&idx, entry) in routing.workers.iter_mut() {
             entry.root_slugs.retain(|s| s != slug);
+            if entry.root_slugs.is_empty() {
+                self.idle_since.lock().await.entry(idx).or_insert(now);
+            }
         }
         let _ = routing.save(&routing_table_path());
         tracing::debug!("master: routing entry removed for evicted slug {slug}");
+    }
+
+    /// Called after Handshake when a slug has no routing entry (new root).
+    /// Writes the routing entry and checks scale-out trigger.
+    /// Returns the assigned worker index.
+    async fn assign_new_root(&self, base_path: &str) -> Option<u32> {
+        let slug = base_path_slug(std::path::Path::new(base_path));
+
+        // Check if already in routing table (concurrent Handshake race).
+        {
+            let routing = self.routing.lock().await;
+            for (idx, entry) in &routing.workers {
+                if entry.root_slugs.contains(&slug) {
+                    return Some(*idx);
+                }
+            }
+        }
+
+        // Ring assignment — determines which worker this root goes to.
+        let index = {
+            let ring = self.ring.lock().await;
+            ring.assign(std::path::Path::new(base_path))?
+        };
+
+        // Write routing table entry and persist.
+        let mut should_scale_out = false;
+        {
+            let mut routing = self.routing.lock().await;
+            if let Some(entry) = routing.workers.get_mut(&index) {
+                if !entry.root_slugs.contains(&slug) {
+                    entry.root_slugs.push(slug.clone());
+                }
+                let load = entry.root_slugs.len() as u32;
+                let total_workers = routing.workers.len() as u32;
+                should_scale_out = load >= self.config.roots_per_worker_max
+                    && total_workers < self.config.n_max;
+            }
+            // Remove from idle_since now that it has work.
+            self.idle_since.lock().await.remove(&index);
+            let _ = routing.save(&routing_table_path());
+        }
+
+        if should_scale_out {
+            let new_idx = self.alloc_index().await;
+            tracing::info!("master: scale-out triggered, spawning worker-{new_idx}");
+            if let Err(e) = self.spawn_worker(new_idx).await {
+                tracing::error!("master: scale-out spawn failed: {e}");
+            }
+        }
+
+        Some(index)
     }
 }
 
@@ -267,6 +326,38 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
         }
     });
 
+    // Background: idle TTL — stop workers with no loaded roots after idle_ttl_secs.
+    let ms_idle = Arc::clone(&master_state);
+    let idle_ttl = Duration::from_secs(worker_cfg.idle_ttl_secs);
+    tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(60));
+        loop {
+            ticker.tick().await;
+            let now = Instant::now();
+            let mut to_stop: Vec<u32> = vec![];
+            {
+                let routing = ms_idle.routing.lock().await;
+                let mut idle = ms_idle.idle_since.lock().await;
+                for (&idx, _) in &routing.workers {
+                    let entry_count = routing.entries_for_worker(idx);
+                    if entry_count == 0 {
+                        let since = idle.entry(idx).or_insert(now);
+                        if now.duration_since(*since) >= idle_ttl {
+                            to_stop.push(idx);
+                        }
+                    } else {
+                        idle.remove(&idx);
+                    }
+                }
+            }
+            for idx in to_stop {
+                tracing::info!("master: worker-{idx} idle TTL elapsed, stopping");
+                ms_idle.stop_worker(idx).await;
+                ms_idle.idle_since.lock().await.remove(&idx);
+            }
+        }
+    });
+
     // Main accept loop.
     let shutdown = async {
         let mut sigterm = tokio::signal::unix::signal(
@@ -327,17 +418,27 @@ async fn handle_connection(stream: tokio::net::UnixStream, ms: Arc<MasterState>)
 
     match req {
         MasterRequest::Handshake { base_path } => {
-            let ring = ms.ring.lock().await;
-            let resp = match ring.assign(std::path::Path::new(&base_path)) {
-                Some(index) => {
-                    drop(ring);
-                    let socket = worker_socket_path(index).to_string_lossy().into_owned();
-                    // Add routing table entry if this is a new slug (done in U5; for now just route).
-                    MasterResponse::WorkerSocket { path: socket, worker_index: index }
-                }
-                None => {
-                    drop(ring);
-                    MasterResponse::Error("no workers available".into())
+            let slug = base_path_slug(std::path::Path::new(&base_path));
+
+            // Fast path: routing table hit — same worker, no mutation.
+            let routing_hit = {
+                let routing = ms.routing.lock().await;
+                routing.workers.iter().find_map(|(&idx, e)| {
+                    if e.root_slugs.contains(&slug) { Some(idx) } else { None }
+                })
+            };
+
+            let resp = if let Some(index) = routing_hit {
+                let socket = worker_socket_path(index).to_string_lossy().into_owned();
+                MasterResponse::WorkerSocket { path: socket, worker_index: index }
+            } else {
+                // Routing miss — assign new root (may trigger scale-out).
+                match ms.assign_new_root(&base_path).await {
+                    Some(index) => {
+                        let socket = worker_socket_path(index).to_string_lossy().into_owned();
+                        MasterResponse::WorkerSocket { path: socket, worker_index: index }
+                    }
+                    None => MasterResponse::Error("no workers available".into()),
                 }
             };
             let _ = write_message(&mut write_half, &resp).await;
