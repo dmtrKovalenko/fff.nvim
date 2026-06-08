@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, atomic::{AtomicU32, Ordering}},
+    time::{Duration, Instant},
+};
 
 use fff_ipc::{
     base_path_slug,
@@ -25,6 +30,8 @@ struct MasterState {
     next_index: Mutex<u32>,
     /// When each worker's routing table last became empty (for idle TTL).
     idle_since: Mutex<HashMap<u32, Instant>>,
+    /// Consecutive routing.json save failure count — resets on success.
+    save_fail_count: AtomicU32,
 }
 
 impl MasterState {
@@ -45,6 +52,27 @@ impl MasterState {
             adopted_pids: Mutex::new(adopted_pids),
             next_index: Mutex::new(next_index),
             idle_since: Mutex::new(HashMap::new()),
+            save_fail_count: AtomicU32::new(0),
+        }
+    }
+
+    /// Persist the routing table, logging escalating warnings on repeated failures.
+    fn persist_routing(&self, routing: &RoutingTable) {
+        match routing.save(&routing_table_path()) {
+            Ok(()) => {
+                self.save_fail_count.store(0, Ordering::Relaxed);
+            }
+            Err(e) => {
+                let n = self.save_fail_count.fetch_add(1, Ordering::Relaxed) + 1;
+                if n >= 3 {
+                    tracing::error!(
+                        "master: routing.json persist failed {n} consecutive times \
+                         (disk full or permissions error?): {e}"
+                    );
+                } else {
+                    tracing::warn!("master: routing.json persist failed ({n}/3): {e}");
+                }
+            }
         }
     }
 
@@ -89,9 +117,7 @@ impl MasterState {
                 root_slugs: vec![],
             });
             routing.ring_state = ring_snapshot;
-            if let Err(e) = routing.save(&routing_table_path()) {
-                tracing::warn!("master: routing table persist failed: {e}");
-            }
+            self.persist_routing(&routing);
         }
 
         self.children.lock().await.insert(index, child);
@@ -144,7 +170,7 @@ impl MasterState {
             let mut routing = self.routing.lock().await;
             routing.workers.remove(&index);
             routing.ring_state = ring_snapshot;
-            let _ = routing.save(&routing_table_path());
+            self.persist_routing(&routing);
         }
 
         tracing::info!("master: stopped worker-{index}");
@@ -159,49 +185,47 @@ impl MasterState {
                 self.idle_since.lock().await.entry(idx).or_insert(now);
             }
         }
-        let _ = routing.save(&routing_table_path());
+        self.persist_routing(&routing);
         tracing::debug!("master: routing entry removed for evicted slug {slug}");
     }
 
     /// Called after Handshake when a slug has no routing entry (new root).
-    /// Writes the routing entry and checks scale-out trigger.
-    /// Returns the assigned worker index.
+    /// Ring assignment is read first (deterministic, no mutation), then the
+    /// routing write-lock covers presence-check + push + scale-out threshold
+    /// atomically — eliminating the concurrent-Handshake double-push race.
     async fn assign_new_root(&self, base_path: &str) -> Option<u32> {
         let slug = base_path_slug(std::path::Path::new(base_path));
 
-        // Check if already in routing table (concurrent Handshake race).
-        {
-            let routing = self.routing.lock().await;
-            for (idx, entry) in &routing.workers {
-                if entry.root_slugs.contains(&slug) {
-                    return Some(*idx);
-                }
-            }
-        }
-
-        // Ring assignment — determines which worker this root goes to.
+        // Ring assignment is read-only and deterministic; compute outside any lock.
         let index = {
             let ring = self.ring.lock().await;
             ring.assign(std::path::Path::new(base_path))?
         };
 
-        // Write routing table entry and persist.
-        let mut should_scale_out = false;
-        {
+        // Single write-lock: re-check presence, push slug, compute scale-out trigger.
+        let should_scale_out = {
             let mut routing = self.routing.lock().await;
-            if let Some(entry) = routing.workers.get_mut(&index) {
-                if !entry.root_slugs.contains(&slug) {
-                    entry.root_slugs.push(slug.clone());
+
+            // Re-check after lock: a concurrent Handshake may have added this slug already.
+            for (idx, entry) in &routing.workers {
+                if entry.root_slugs.contains(&slug) {
+                    return Some(*idx);
                 }
+            }
+
+            let mut scale_out = false;
+            if let Some(entry) = routing.workers.get_mut(&index) {
+                entry.root_slugs.push(slug.clone());
                 let load = entry.root_slugs.len() as u32;
                 let total_workers = routing.workers.len() as u32;
-                should_scale_out = load >= self.config.roots_per_worker_max
+                scale_out = load >= self.config.roots_per_worker_max
                     && total_workers < self.config.n_max;
             }
-            // Remove from idle_since now that it has work.
+            // Remove from idle_since: this worker now has work.
             self.idle_since.lock().await.remove(&index);
-            let _ = routing.save(&routing_table_path());
-        }
+            self.persist_routing(&routing);
+            scale_out
+        };
 
         if should_scale_out {
             let new_idx = self.alloc_index().await;
@@ -297,11 +321,11 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
     let listener = UnixListener::bind(&socket)?;
     tracing::info!("fff-engine master listening on {}", socket.display());
 
-    // Background: poll children for crashes and respawn them (R1 crash recovery).
-    // Backoff-limited: max 3 restarts per 60-second window to prevent storms.
+    // Background: poll children for crashes and respawn them in parallel.
+    // restart_count tracks (attempts, window_start) per worker index.
+    // Max 3 restarts per 60s window to prevent restart storms.
     let ms_monitor = Arc::clone(&master_state);
     tokio::spawn(async move {
-        // restart_count[index] = (count, window_start)
         let mut restart_count: HashMap<u32, (u32, Instant)> = HashMap::new();
         const MAX_RESTARTS_PER_WINDOW: u32 = 3;
         const RESTART_WINDOW: Duration = Duration::from_secs(60);
@@ -326,7 +350,6 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
             for idx in crashed {
                 ms_monitor.children.lock().await.remove(&idx);
 
-                // Check restart backoff — read and update count outside borrow.
                 let now = Instant::now();
                 let (prev_count, window_start) = *restart_count.entry(idx).or_insert((0, now));
                 let (count, window_start) = if now.duration_since(window_start) > RESTART_WINDOW {
@@ -337,7 +360,8 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
 
                 if count >= MAX_RESTARTS_PER_WINDOW {
                     tracing::error!(
-                        "master: worker-{idx} crashed {MAX_RESTARTS_PER_WINDOW} times in {RESTART_WINDOW:?}, removing permanently"
+                        "master: worker-{idx} crashed {MAX_RESTARTS_PER_WINDOW} times \
+                         in {RESTART_WINDOW:?}, removing permanently"
                     );
                     restart_count.remove(&idx);
                     ms_monitor.routing.lock().await.workers.remove(&idx);
@@ -345,18 +369,23 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
                     continue;
                 }
 
-                // Exponential backoff before respawn (100ms * 2^count).
                 let backoff = Duration::from_millis(100 * (1u64 << count));
                 restart_count.insert(idx, (count + 1, window_start));
+                tracing::info!(
+                    "master: respawning worker-{idx} (attempt {}) after {backoff:?}",
+                    count + 1
+                );
 
-                tracing::info!("master: respawning worker-{idx} (attempt {}) after {backoff:?}", count + 1);
-                sleep(backoff).await;
-
-                if let Err(e) = ms_monitor.spawn_worker(idx).await {
-                    tracing::error!("master: failed to respawn worker-{idx}: {e}");
-                    ms_monitor.routing.lock().await.workers.remove(&idx);
-                    ms_monitor.ring.lock().await.remove_worker(idx);
-                }
+                // Spawn independent task so N simultaneous crashes respawn in parallel.
+                let ms = Arc::clone(&ms_monitor);
+                tokio::spawn(async move {
+                    sleep(backoff).await;
+                    if let Err(e) = ms.spawn_worker(idx).await {
+                        tracing::error!("master: failed to respawn worker-{idx}: {e}");
+                        ms.routing.lock().await.workers.remove(&idx);
+                        ms.ring.lock().await.remove_worker(idx);
+                    }
+                });
             }
         }
     });
@@ -389,6 +418,42 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
                 tracing::info!("master: worker-{idx} idle TTL elapsed, stopping");
                 ms_idle.stop_worker(idx).await;
                 ms_idle.idle_since.lock().await.remove(&idx);
+            }
+        }
+    });
+
+    // Background: re-probe adopted workers every 30s; respawn any that have died.
+    // Crash monitor only watches children (spawned this session); adopted workers
+    // have no Child handle and are invisible to try_wait().
+    let ms_adopted = Arc::clone(&master_state);
+    tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(30));
+        loop {
+            ticker.tick().await;
+            let mut dead: Vec<u32> = vec![];
+            {
+                let adopted = ms_adopted.adopted_pids.lock().await;
+                for (&idx, &pid) in &*adopted {
+                    let alive = unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+                    if !alive {
+                        tracing::warn!(
+                            "master: adopted worker-{idx} (pid={pid}) is no longer alive"
+                        );
+                        dead.push(idx);
+                    }
+                }
+            }
+            for idx in dead {
+                ms_adopted.adopted_pids.lock().await.remove(&idx);
+                {
+                    let mut routing = ms_adopted.routing.lock().await;
+                    routing.workers.remove(&idx);
+                    ms_adopted.persist_routing(&routing);
+                }
+                ms_adopted.ring.lock().await.remove_worker(idx);
+                if let Err(e) = ms_adopted.spawn_worker(idx).await {
+                    tracing::error!("master: failed to respawn adopted worker-{idx}: {e}");
+                }
             }
         }
     });

@@ -6,7 +6,7 @@
 //! All subsequent search traffic uses the direct worker connection.
 
 use std::io::{BufReader, BufWriter};
-use std::os::unix::net::UnixStream;
+use std::os::unix::{fs::MetadataExt, net::UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -149,7 +149,18 @@ fn master_handshake(base_path: &Path) -> Result<PathBuf, Box<dyn std::error::Err
 
     let resp: MasterResponse = read_message_sync(&mut reader)?;
     match resp {
-        MasterResponse::WorkerSocket { path, .. } => Ok(PathBuf::from(path)),
+        MasterResponse::WorkerSocket { path, worker_index } => {
+            // Validate the returned path is under the expected workers/ directory.
+            let expected = fff_ipc::worker_socket_path(worker_index);
+            let actual = PathBuf::from(&path);
+            if actual != expected {
+                return Err(format!(
+                    "master returned unexpected worker socket path: {path:?} \
+                     (expected {expected:?})"
+                ).into());
+            }
+            Ok(actual)
+        }
         MasterResponse::Error(e) => Err(format!("master handshake error: {e}").into()),
         other => Err(format!("unexpected master response: {other:?}").into()),
     }
@@ -160,16 +171,16 @@ fn master_handshake(base_path: &Path) -> Result<PathBuf, Box<dyn std::error::Err
 fn ensure_master_running() -> Result<(), Box<dyn std::error::Error>> {
     let master = master_socket_path();
 
-    // Fast path: master socket already exists and accepts connections.
-    if master.exists() && UnixStream::connect(&master).is_ok() {
+    // Fast path: socket exists, is owned by us, and accepts connections.
+    if master.exists() && socket_owned_by_us(&master) && UnixStream::connect(&master).is_ok() {
         return Ok(());
     }
 
     let lockfile = master_lockfile_path();
 
-    // Check whether a live master holds the lockfile (slow start).
+    // Check whether a live master holds the lockfile (slow start or another
+    // spawner is in progress).
     if lockfile.exists() && !lockfile::is_stale(&lockfile) {
-        // Master is alive but socket not ready yet — wait.
         return wait_for_socket(&master, SPAWN_TIMEOUT);
     }
 
@@ -177,8 +188,9 @@ fn ensure_master_running() -> Result<(), Box<dyn std::error::Error>> {
     use std::fs::OpenOptions;
     match OpenOptions::new().write(true).create_new(true).open(&lockfile) {
         Ok(_) => {
-            // We won — clear the temp lockfile; fff-engine --master will own it.
-            let _ = std::fs::remove_file(&lockfile);
+            // We won. Write our PID so concurrent losers see a live holder and
+            // call wait_for_socket instead of also trying to spawn.
+            let _ = std::fs::write(&lockfile, format!("{}\n", std::process::id()));
         }
         Err(_) => {
             // Someone else is spawning; wait for the socket.
@@ -191,18 +203,38 @@ fn ensure_master_running() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let child = Command::new(&engine_bin)
+    let spawn_result = Command::new(&engine_bin)
         .arg("--master")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("failed to spawn {}: {e}", engine_bin.display()))?;
+        .spawn();
+
+    let child = match spawn_result {
+        Ok(c) => c,
+        Err(e) => {
+            // Remove our lockfile immediately so other callers can retry.
+            let _ = std::fs::remove_file(&lockfile);
+            return Err(format!(
+                "failed to start fff-engine --master ({}): {e}",
+                engine_bin.display()
+            ).into());
+        }
+    };
 
     tracing::info!("spawned fff-engine --master pid={}", child.id());
 
-    wait_for_socket(&master, SPAWN_TIMEOUT)?;
-    Ok(())
+    // Remove our temp lockfile so fff-engine --master can write its own PID.
+    let _ = std::fs::remove_file(&lockfile);
+
+    let result = wait_for_socket(&master, SPAWN_TIMEOUT);
+    if result.is_err() {
+        tracing::warn!(
+            "timed out waiting for fff-engine --master socket — \
+             binary may have crashed on startup"
+        );
+    }
+    result
 }
 
 /// Wait until `path` exists by polling, up to `timeout`.
@@ -222,6 +254,15 @@ fn wait_and_connect(path: &Path, timeout: Duration) -> Result<UnixStream, Box<dy
     wait_for_socket(path, timeout)?;
     UnixStream::connect(path)
         .map_err(|e| format!("failed to connect to worker socket {}: {e}", path.display()).into())
+}
+
+/// Returns true when `path` is owned by the current user.
+/// Prevents a rogue process at the master socket path from being trusted.
+fn socket_owned_by_us(path: &Path) -> bool {
+    let current_uid = unsafe { libc::getuid() };
+    std::fs::metadata(path)
+        .map(|m| m.uid() == current_uid)
+        .unwrap_or(false)
 }
 
 fn find_engine_bin() -> PathBuf {
