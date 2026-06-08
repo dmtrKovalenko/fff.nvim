@@ -41,6 +41,7 @@ local function setup(geometry, opts)
         vim.opt.runtimepath:prepend(plugin)
         package.path = plugin .. '/lua/?.lua;' .. plugin .. '/lua/?/init.lua;' .. package.path
         vim.cmd('cd ' .. vim.fn.fnameescape(%q))
+        vim.cmd('syntax off')
         local winborder = %q
         if winborder ~= '' then vim.o.winborder = winborder end
         vim.g.fff = {

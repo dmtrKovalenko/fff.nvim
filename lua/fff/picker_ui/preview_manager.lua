@@ -14,22 +14,29 @@ function M.init(parent_module) P = parent_module end
 
 local S = picker_ui_state.state
 
-function M.update_preview_debounced()
-  if S.preview_timer then
-    S.preview_timer:stop()
-    S.preview_timer:close()
-    S.preview_timer = nil
-  end
+function M.close_preview_timer(timer)
+  timer = timer or S.preview_timer
+  if not timer then return end
 
-  S.preview_timer = vim.uv.new_timer()
-  S.preview_timer:start(
+  if S.preview_timer == timer then S.preview_timer = nil end
+  if timer:is_closing() then return end
+
+  timer:stop()
+  timer:close()
+end
+
+function M.update_preview_debounced()
+  M.close_preview_timer()
+
+  local timer = vim.uv.new_timer()
+  S.preview_timer = timer
+  timer:start(
     S.preview_debounce_ms,
     0,
     vim.schedule_wrap(function()
-      if P.state.active then
-        M.update_preview()
-        S.preview_timer = nil
-      end
+      local is_current = S.preview_timer == timer
+      M.close_preview_timer(timer)
+      if is_current and P.state.active then M.update_preview() end
     end)
   )
 end

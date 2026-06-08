@@ -255,11 +255,15 @@ function M.render_list()
   local ctx = build_render_context()
   if S.mode == 'grep' and #ctx.items == 0 then
     S.line_to_item = {}
+    S.item_to_lines = {}
+    S.last_render_ctx = nil
     render_grep_empty_state(ctx)
     return
   end
 
   local item_to_lines, separator_line = list_renderer.render(ctx, S.list_buf, S.list_win, S.ns_id)
+  S.item_to_lines = item_to_lines
+  S.last_render_ctx = ctx
 
   local line_to_item = {}
   for item_idx, mapping in pairs(item_to_lines) do
@@ -272,6 +276,52 @@ function M.render_list()
   if ctx.prompt_position == 'bottom' then M.scroll_to_bottom() end
 
   finalize_render(separator_line, ctx)
+end
+
+local function rerender_cursor_rows(old_cursor, new_cursor)
+  if S.suggestion_source then return false end
+  if not (S.list_buf and vim.api.nvim_buf_is_valid(S.list_buf)) then return false end
+  if not (S.list_win and vim.api.nvim_win_is_valid(S.list_win)) then return false end
+  if not (S.item_to_lines and S.last_render_ctx and S.ns_id) then return false end
+
+  local ctx = S.last_render_ctx
+  if ctx.items ~= S.filtered_items then return false end
+  if ctx.renderer and not ctx.renderer.supports_cursor_rerender then return false end
+
+  local old_lines = S.item_to_lines[old_cursor]
+  local new_lines = S.item_to_lines[new_cursor]
+  if not old_lines or not new_lines then return false end
+
+  local renderer = ctx.renderer or require('fff.picker_ui.file_renderer')
+  local entries = {
+    { item_idx = old_cursor, lines = old_lines },
+    { item_idx = new_cursor, lines = new_lines },
+  }
+
+  for _, entry in ipairs(entries) do
+    entry.item = ctx.items[entry.item_idx]
+    if not entry.item then return false end
+
+    local line_idx = entry.lines.last
+    entry.line = vim.api.nvim_buf_get_lines(S.list_buf, line_idx - 1, line_idx, false)[1]
+    if not entry.line then return false end
+  end
+
+  ctx.cursor = new_cursor
+  for _, entry in ipairs(entries) do
+    vim.api.nvim_buf_clear_namespace(S.list_buf, S.ns_id, entry.lines.first - 1, entry.lines.last)
+    renderer.apply_highlights(entry.item, ctx, entry.item_idx, S.list_buf, S.ns_id, entry.lines.last, entry.line)
+  end
+
+  vim.api.nvim_win_set_cursor(S.list_win, { new_lines.last, 0 })
+  return true
+end
+
+function M.render_after_cursor_move(old_cursor)
+  if old_cursor == S.cursor then return false end
+  if old_cursor and rerender_cursor_rows(old_cursor, S.cursor) then return true end
+  M.render_list()
+  return true
 end
 
 return M

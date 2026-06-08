@@ -74,6 +74,7 @@ function M.move_up()
 
   local prompt_position = get_prompt_position()
   local items_count = #S.filtered_items
+  local old_cursor = S.cursor
   local wrap_around = S.config and S.config.wrap_around or false
 
   if prompt_position == 'bottom' then
@@ -114,13 +115,10 @@ function M.move_up()
     end
   end
 
-  P.render_list()
-  if S.mode == 'grep' or S.suggestion_source == 'grep' then
-    P.update_preview_smart()
-  else
-    P.update_preview()
-  end
+  if not P.render_after_cursor_move(old_cursor) then return end
   P.update_status()
+  pcall(vim.cmd, 'redraw')
+  P.update_preview_debounced()
 
   maybe_hide_combo_separator()
 end
@@ -131,6 +129,7 @@ function M.move_down()
 
   local prompt_position = get_prompt_position()
   local items_count = #S.filtered_items
+  local old_cursor = S.cursor
   local wrap_around = S.config and S.config.wrap_around or false
 
   if prompt_position == 'bottom' then
@@ -171,13 +170,10 @@ function M.move_down()
     end
   end
 
-  P.render_list()
-  if S.mode == 'grep' or S.suggestion_source == 'grep' then
-    P.update_preview_smart()
-  else
-    P.update_preview()
-  end
+  if not P.render_after_cursor_move(old_cursor) then return end
   P.update_status()
+  pcall(vim.cmd, 'redraw')
+  P.update_preview_debounced()
 
   maybe_hide_combo_separator()
 end

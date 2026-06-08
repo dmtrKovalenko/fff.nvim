@@ -7,6 +7,8 @@ local fuzzy = require('fff.fuzzy')
 local file_renderer = require('fff.picker_ui.file_renderer')
 local tresitter_highlight = require('fff.treesitter_hl')
 
+M.supports_cursor_rerender = true
+
 -- ===== Search Bridge =====
 
 ---@class fff.grep.SearchResult

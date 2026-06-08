@@ -26,6 +26,8 @@ M.state = {
   top = 1,
   query = '',
   line_to_item = {},
+  item_to_lines = {},
+  last_render_ctx = nil,
   location = nil,
 
   -- History cycling state
@@ -69,7 +71,7 @@ M.state = {
   last_preview_file = nil,
   last_preview_location = nil,
   preview_timer = nil,
-  preview_debounce_ms = 100,
+  preview_debounce_ms = 10,
 
   -- Misc
   ns_id = nil,
@@ -112,6 +114,8 @@ function M.reset_state()
   M.state.top = 1
   M.state.query = ''
   M.state.line_to_item = {}
+  M.state.item_to_lines = {}
+  M.state.last_render_ctx = nil
   M.state.location = nil
 
   M.reset_history_state()

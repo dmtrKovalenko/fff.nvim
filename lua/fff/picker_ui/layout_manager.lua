@@ -109,11 +109,7 @@ function M.close()
     end
   end
 
-  if S.preview_timer then
-    S.preview_timer:stop()
-    S.preview_timer:close()
-    S.preview_timer = nil
-  end
+  P.close_preview_timer()
 
   S.input_win = nil
   S.list_win = nil
@@ -126,6 +122,9 @@ function M.close()
   S.preview_visible = false
   S.items = {}
   S.filtered_items = {}
+  S.line_to_item = {}
+  S.item_to_lines = {}
+  S.last_render_ctx = nil
   S.cursor = 1
   S.query = ''
   S.ns_id = nil

@@ -57,9 +57,11 @@ M.get_suggestion_renderer = search_manager.get_suggestion_renderer
 -- Wire renderer module (list rendering, scroll, empty state)
 renderer.init(M)
 M.render_list = renderer.render_list
+M.render_after_cursor_move = renderer.render_after_cursor_move
 
 -- Wire preview_manager module (preview rendering, debounce, clear)
 preview_manager.init(M)
+M.close_preview_timer = preview_manager.close_preview_timer
 M.update_preview_debounced = preview_manager.update_preview_debounced
 M.update_preview_smart = preview_manager.update_preview_smart
 M.update_preview_title = preview_manager.update_preview_title
