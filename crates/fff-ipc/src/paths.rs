@@ -39,6 +39,41 @@ pub fn base_path_slug(base_path: &Path) -> String {
     hash.to_hex()[..16].to_string()
 }
 
+/// Master Unix socket: `<cache_dir>/fff/master.sock`
+pub fn master_socket_path() -> PathBuf {
+    cache_dir().join("fff").join("master.sock")
+}
+
+/// Master lockfile: `<cache_dir>/fff/master.lock`
+pub fn master_lockfile_path() -> PathBuf {
+    cache_dir().join("fff").join("master.lock")
+}
+
+/// Worker Unix socket: `<cache_dir>/fff/workers/worker-{index}.sock`
+pub fn worker_socket_path(index: u32) -> PathBuf {
+    cache_dir().join("fff").join("workers").join(format!("worker-{index}.sock"))
+}
+
+/// Worker lockfile: `<cache_dir>/fff/workers/worker-{index}.lock`
+pub fn worker_lockfile_path(index: u32) -> PathBuf {
+    cache_dir().join("fff").join("workers").join(format!("worker-{index}.lock"))
+}
+
+/// Routing table JSON: `<runtime_dir>/fff/routing.json`
+pub fn routing_table_path() -> PathBuf {
+    xdg_runtime_dir().join("fff").join("routing.json")
+}
+
+/// XDG runtime directory: `$XDG_RUNTIME_DIR` → falls back to `xdg_cache_dir()` on macOS.
+pub fn xdg_runtime_dir() -> PathBuf {
+    if let Ok(v) = std::env::var("XDG_RUNTIME_DIR") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    xdg_cache_dir()
+}
+
 /// XDG cache directory: `$XDG_CACHE_HOME` → `$HOME/.cache` → `dirs::cache_dir()` → `/tmp`.
 ///
 /// Matches the XDG Base Directory Specification rather than macOS-canonical
@@ -109,6 +144,51 @@ mod tests {
         let a = socket_path(Path::new("/project/a"));
         let b = socket_path(Path::new("/project/a"));
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn master_socket_under_fff_dir() {
+        let p = master_socket_path();
+        let s = p.to_string_lossy();
+        assert!(s.contains("/fff/"), "expected .../fff/... in {p:?}");
+        assert!(s.ends_with("master.sock"));
+    }
+
+    #[test]
+    fn worker_socket_under_workers_subdir() {
+        let p0 = worker_socket_path(0);
+        let p9 = worker_socket_path(9);
+        let s0 = p0.to_string_lossy();
+        let s9 = p9.to_string_lossy();
+        assert!(s0.contains("/fff/workers/"), "expected .../fff/workers/... in {p0:?}");
+        assert!(s0.ends_with("worker-0.sock"));
+        assert!(s9.ends_with("worker-9.sock"));
+    }
+
+    #[test]
+    fn routing_table_path_under_runtime_dir() {
+        let p = routing_table_path();
+        let s = p.to_string_lossy();
+        assert!(s.contains("/fff/"), "expected .../fff/... in {p:?}");
+        assert!(s.ends_with("routing.json"));
+    }
+
+    #[test]
+    fn xdg_runtime_dir_uses_env_var() {
+        // SAFETY: single-threaded test; no concurrent env access in this test.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000") };
+        let p = xdg_runtime_dir();
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+        assert_eq!(p, PathBuf::from("/run/user/1000"));
+    }
+
+    #[test]
+    fn xdg_runtime_dir_falls_back_to_cache() {
+        // SAFETY: single-threaded test; no concurrent env access in this test.
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+        let runtime = xdg_runtime_dir();
+        let cache = xdg_cache_dir();
+        assert_eq!(runtime, cache);
     }
 
     #[test]
