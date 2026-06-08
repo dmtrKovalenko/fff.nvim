@@ -412,6 +412,36 @@ mod tests {
     }
 
     #[test]
+    fn master_request_management_variants_round_trip() {
+        assert!(matches!(round_trip(&MasterRequest::ListWorkers), MasterRequest::ListWorkers));
+        let rt = round_trip(&MasterRequest::WorkerStatus { index: 3 });
+        assert!(matches!(rt, MasterRequest::WorkerStatus { index: 3 }));
+        let rt = round_trip(&MasterRequest::StopWorker { index: 7 });
+        assert!(matches!(rt, MasterRequest::StopWorker { index: 7 }));
+        let rt = round_trip(&MasterRequest::EvictedRoot { slug: "abc123".into() });
+        match rt { MasterRequest::EvictedRoot { slug } => assert_eq!(slug, "abc123"), _ => panic!() }
+        let rt = round_trip(&MasterRequest::RouteInfo { base_path: "/project/x".into() });
+        match rt { MasterRequest::RouteInfo { base_path } => assert_eq!(base_path, "/project/x"), _ => panic!() }
+    }
+
+    #[test]
+    fn master_response_management_variants_round_trip() {
+        assert!(matches!(round_trip(&MasterResponse::Ack), MasterResponse::Ack));
+        let rt = round_trip(&MasterResponse::Error("oops".into()));
+        assert!(matches!(rt, MasterResponse::Error(e) if e == "oops"));
+        let info = WorkerInfo { index: 2, socket_path: "w.sock".into(), root_slugs: vec!["s".into()], pid: 42 };
+        let rt = round_trip(&MasterResponse::WorkerInfo(info.clone()));
+        match rt {
+            MasterResponse::WorkerInfo(w) => {
+                assert_eq!(w.index, 2);
+                assert_eq!(w.root_count(), 1);
+                assert_eq!(w.pid, 42);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
     fn search_request_connect_round_trips() {
         let req = SearchRequest::Connect { base_path: "/home/user/repo".into() };
         let rt = round_trip(&req);

@@ -9,6 +9,10 @@ license = "MIT"
 name = "fff-mcp"
 path = "src/main.rs"
 
+[lib]
+name = "fff_mcp"
+path = "src/lib.rs"
+
 [features]
 default = ["zlob"]
 zlob = ["fff/zlob"]
@@ -28,3 +32,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = { workspace = true }
 git2 = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
+
+[dev-dependencies]
+tempfile = "3"
+libc = "0.2"

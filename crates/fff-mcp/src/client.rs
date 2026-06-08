@@ -58,6 +58,11 @@ impl EngineClient {
         Ok(Self { reader, writer, base_path: base_path.to_path_buf() })
     }
 
+    /// The base path this client is connected to.
+    pub fn base_path(&self) -> &std::path::Path {
+        &self.base_path
+    }
+
     /// Re-run the two-phase handshake and return a fresh client. Used by recovery.
     pub fn reconnect(&self) -> Result<Self, Box<dyn std::error::Error>> {
         Self::connect(&self.base_path)

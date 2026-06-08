@@ -51,8 +51,8 @@ impl HashRing {
         Some(node.1)
     }
 
-    /// Unique worker indices currently in the ring.
-    pub fn workers(&self) -> Vec<u32> {
+    // Unique worker indices currently in the ring.
+    pub(crate) fn workers(&self) -> Vec<u32> {
         let mut seen = Vec::new();
         for &(_, w) in &self.nodes {
             if !seen.contains(&w) {
@@ -62,8 +62,8 @@ impl HashRing {
         seen
     }
 
-    /// Total virtual node count (not unique workers).
-    pub fn len(&self) -> usize {
+    // Total virtual node count (not unique workers).
+    pub(crate) fn len(&self) -> usize {
         self.nodes.len()
     }
 
@@ -155,25 +155,30 @@ mod tests {
     }
 
     #[test]
-    fn assign_is_stable_after_unrelated_worker_added() {
+    fn consistent_hash_invariant_paths_only_move_to_new_worker() {
         let mut ring = HashRing::new();
         ring.add_worker(0, 150);
         ring.add_worker(1, 150);
 
-        // Find a path that resolves to worker 0.
-        let target = (0..200u32)
-            .map(|i| format!("/project/stable-{i}"))
-            .find(|p| ring.assign(Path::new(p)) == Some(0))
-            .expect("no path mapped to worker 0 in 200 attempts");
+        // Record assignments for 60 paths across both workers.
+        let paths: Vec<String> = (0..60u32).map(|i| format!("/project/root-{i}")).collect();
+        let before: Vec<u32> = paths.iter()
+            .map(|p| ring.assign(Path::new(p)).unwrap())
+            .collect();
 
-        // Add worker 2 — existing assignments should be mostly stable.
-        // (We just check our specific target stays on 0 if adding a worker
-        // on the far side of the ring doesn't displace it.)
+        // Add worker 2. Consistent hashing guarantees: each path either stays
+        // on its original worker OR moves to worker 2. Moving from worker 0 to
+        // worker 1 (or vice versa) would violate the consistent hash guarantee.
         ring.add_worker(2, 150);
-        // The test is probabilistic: ~2/3 of paths stay on their original
-        // worker. We verify the ring still returns a valid index.
-        let result = ring.assign(Path::new(&target));
-        assert!(result.is_some(), "assign returned None after adding worker");
+
+        for (path, &original) in paths.iter().zip(&before) {
+            let after = ring.assign(Path::new(path)).expect("assign returned None");
+            assert!(
+                after == original || after == 2,
+                "path {path}: moved from worker-{original} to worker-{after} \
+                 — consistent hash violation (should only move to worker-2)"
+            );
+        }
     }
 
     #[test]
