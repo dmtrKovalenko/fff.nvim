@@ -1,134 +1,90 @@
-//! Synchronous IPC client for fff-engine.
+//! Synchronous IPC client for fff-engine — two-phase connect via master.
 //!
-//! Used by the tool handlers (which are sync functions within the rmcp server).
-//! Spawn-if-absent logic runs the first time `connect` is called.
+//! Phase 1: connect to master socket, send Handshake{base_path}, receive
+//! WorkerSocket{path, worker_index}.
+//! Phase 2: connect to the worker socket, send Connect{base_path}, wait for Ack.
+//! All subsequent search traffic uses the direct worker connection.
 
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use fff_ipc::types::{SearchRequest, SearchResponse};
-use fff_ipc::{lockfile, lockfile_path, socket_path, IpcError};
+use fff_ipc::types::{MasterRequest, MasterResponse, SearchRequest, SearchResponse};
+use fff_ipc::{lockfile, master_lockfile_path, master_socket_path, IpcError};
 use fff_ipc::{read_message_sync, write_message_sync};
 
-/// How long to wait for fff-engine to bind its socket after spawning.
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
-/// Poll interval while waiting for socket to appear.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub struct EngineClient {
     reader: BufReader<UnixStream>,
     writer: BufWriter<UnixStream>,
+    /// Stored for reconnect — passed back on two-phase re-handshake.
+    pub base_path: PathBuf,
 }
 
 impl EngineClient {
-    /// Connect to the fff-engine for `base_path`, spawning it if absent.
+    /// Connect to the fff-engine for `base_path` via master two-phase handshake.
+    ///
+    /// If master is not running, spawns `fff-engine --master` first.
+    /// Falls back to the legacy singleton path when master spawn fails and a
+    /// per-root socket exists (backwards compatibility).
     pub fn connect(base_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let sock = socket_path(base_path);
-        let lock = lockfile_path(base_path);
+        // Ensure master is running; spawn if absent.
+        ensure_master_running()?;
 
-        // Fast path: socket already exists and is live.
-        if sock.exists() {
-            if let Ok(stream) = UnixStream::connect(&sock) {
-                return Self::from_stream(stream);
-            }
-            // Socket file exists but connection refused — remove stale socket.
-            let _ = std::fs::remove_file(&sock);
+        // Phase 1: handshake with master to get the worker socket path.
+        let worker_socket = master_handshake(base_path)?;
+
+        // Phase 2: connect to the worker and send Connect{base_path}.
+        let stream = wait_and_connect(&worker_socket, SPAWN_TIMEOUT)?;
+        let base_path_str = base_path.to_string_lossy().into_owned();
+
+        let mut writer = BufWriter::new(stream.try_clone()?);
+        let mut reader = BufReader::new(stream);
+
+        write_message_sync(&mut writer, &SearchRequest::Connect { base_path: base_path_str.clone() })?;
+        use std::io::Write;
+        writer.flush().map_err(IpcError::Io)?;
+
+        let connect_resp: SearchResponse = read_message_sync(&mut reader)?;
+        match connect_resp {
+            SearchResponse::Ack => {}
+            SearchResponse::Error(e) => return Err(format!("worker Connect rejected: {e}").into()),
+            other => return Err(format!("unexpected worker response: {other:?}").into()),
         }
 
-        // fff-engine is the daemon and owns its lockfile exclusively.
-        // fff-mcp only decides whether to spawn: if a live engine already holds
-        // the lock, just wait for its socket; otherwise spawn and let the engine
-        // acquire the lock itself.
-        let engine_running = lock.exists() && !lockfile::is_stale(&lock);
-
-        if !engine_running {
-            // Clear any stale lockfile so fff-engine can acquire it cleanly.
-            if lock.exists() {
-                tracing::info!("Removing stale fff-engine lockfile (dead PID)");
-                let _ = std::fs::remove_file(&lock);
-            }
-
-            if let Some(parent) = sock.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            // Prefer fff-engine co-located with fff-mcp (both live in the same
-            // install dir) so $PATH doesn't need to include the binary directory.
-            let engine_bin = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("fff-engine")))
-                .filter(|p| p.exists())
-                .unwrap_or_else(|| std::path::PathBuf::from("fff-engine"));
-
-            // Frecency DB location is left to fff-engine, which derives a
-            // per-base-path subdirectory under $XDG_DATA_HOME/fff/frecency/.
-            // Users can override via --frecency-db or config.frecency.db.
-            //
-            // Null out stdio: fff-engine writes to its own log file. Inheriting
-            // fff-mcp's stdio would corrupt the MCP JSON-RPC stream on stdout
-            // and leak engine startup logs into the Claude Code session via stderr.
-            let child = Command::new(&engine_bin)
-                .arg("--base-path")
-                .arg(base_path)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .map_err(|e| format!("Failed to spawn {}: {e}", engine_bin.display()))?;
-
-            tracing::info!("Spawned fff-engine PID={} for {}", child.id(), base_path.display());
-        } else {
-            tracing::info!("fff-engine already running, waiting for socket");
-        }
-
-        // Wait for fff-engine to bind its socket.
-        wait_for_socket(&sock, SPAWN_TIMEOUT)?;
-
-        let stream = UnixStream::connect(&sock)
-            .map_err(|e| format!("Failed to connect to fff-engine socket: {e}"))?;
-
-        Self::from_stream(stream)
+        Ok(Self { reader, writer, base_path: base_path.to_path_buf() })
     }
 
-    fn from_stream(stream: UnixStream) -> Result<Self, Box<dyn std::error::Error>> {
-        let reader = BufReader::new(stream.try_clone()?);
-        let writer = BufWriter::new(stream);
-        Ok(Self { reader, writer })
+    /// Re-run the two-phase handshake and return a fresh client. Used by recovery.
+    pub fn reconnect(&self) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::connect(&self.base_path)
     }
 
     /// Send a search request, with transparent crash recovery.
-    ///
-    /// On `Err` (broken pipe, ECONNREFUSED), calls `recovery::respawn` to
-    /// reconnect and retries up to 3 times with 100→200→400 ms backoff.
-    /// Returns `SearchResponse::Error` only after all retries are exhausted.
-    pub fn search_with_recovery(
-        &mut self,
-        req: &SearchRequest,
-        base_path: &std::path::Path,
-    ) -> SearchResponse {
+    pub fn search_with_recovery(&mut self, req: &SearchRequest, base_path: &Path) -> SearchResponse {
         match self.search(req) {
             Ok(resp) => return resp,
-            Err(e) => {
-                tracing::warn!("fff-engine socket error: {e}; attempting recovery");
-            }
+            Err(e) => tracing::warn!("worker socket error: {e}; attempting recovery"),
         }
 
+        // Re-run two-phase handshake to get a fresh worker connection.
         match crate::recovery::respawn(base_path) {
             Ok(new_client) => {
                 *self = new_client;
                 match self.search(req) {
                     Ok(resp) => resp,
-                    Err(e) => SearchResponse::Error(format!("fff-engine unavailable after respawn: {e}")),
+                    Err(e) => SearchResponse::Error(format!("fff-engine unavailable after recovery: {e}")),
                 }
             }
             Err(e) => SearchResponse::Error(format!("fff-engine recovery failed: {e}")),
         }
     }
 
-    /// Low-level send with no retry — used internally and by recovery.
+    /// Low-level send with no retry.
     pub fn search(&mut self, req: &SearchRequest) -> Result<SearchResponse, IpcError> {
         write_message_sync(&mut self.writer, req)?;
         use std::io::Write;
@@ -137,14 +93,11 @@ impl EngineClient {
     }
 
     /// Hot-reload the daemon's log filter.
-    /// Accepts any RUST_LOG-style string: "debug", "info", "fff_engine=debug,info".
     pub fn set_log_level(&mut self, level: &str) -> Result<SearchResponse, IpcError> {
-        let req = SearchRequest::SetLogLevel { level: level.to_owned() };
-        self.search(&req)
+        self.search(&SearchRequest::SetLogLevel { level: level.to_owned() })
     }
 
-    /// Fire-and-forget frecency write. Sends RecordAccess and does NOT read a
-    /// response. KTD-5: not called from tool handlers in this track.
+    /// Fire-and-forget frecency write.
     #[allow(dead_code)]
     pub fn record_access(&mut self, path: &str) {
         let req = SearchRequest::RecordAccess { path: path.to_owned() };
@@ -153,17 +106,19 @@ impl EngineClient {
             use std::io::Write;
             self.writer.flush()
         };
-        // No response expected — see fire-and-forget semantics in KTD-5.
     }
 
-    /// Check daemon health: attempt a fresh connection, return a human-readable
-    /// status string for `--healthcheck`.
+    /// Check daemon health.
     pub fn check_health(base_path: &Path) -> HealthStatus {
-        let sock = socket_path(base_path);
-        if !sock.exists() {
-            return HealthStatus::NotStarted(sock);
+        let master = master_socket_path();
+        if !master.exists() {
+            // Fall back to legacy per-root socket check.
+            let sock = fff_ipc::socket_path(base_path);
+            if !sock.exists() {
+                return HealthStatus::NotStarted(master);
+            }
         }
-        match UnixStream::connect(&sock) {
+        match Self::connect(base_path) {
             Ok(_) => HealthStatus::Ok,
             Err(e) => HealthStatus::ConnRefused(e.to_string()),
         }
@@ -176,18 +131,103 @@ pub enum HealthStatus {
     ConnRefused(String),
 }
 
-fn wait_for_socket(socket_path: &Path, timeout: Duration) -> Result<(), Box<dyn std::error::Error>> {
+/// Send a Handshake to the master and return the worker socket path.
+fn master_handshake(base_path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let master = master_socket_path();
+    let stream = UnixStream::connect(&master)
+        .map_err(|e| format!("cannot connect to master socket {}: {e}", master.display()))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+
+    let mut writer = BufWriter::new(stream.try_clone()?);
+    let mut reader = BufReader::new(stream);
+
+    let base_str = base_path.to_string_lossy().into_owned();
+    write_message_sync(&mut writer, &MasterRequest::Handshake { base_path: base_str })?;
+    use std::io::Write;
+    writer.flush().map_err(IpcError::Io)?;
+
+    let resp: MasterResponse = read_message_sync(&mut reader)?;
+    match resp {
+        MasterResponse::WorkerSocket { path, .. } => Ok(PathBuf::from(path)),
+        MasterResponse::Error(e) => Err(format!("master handshake error: {e}").into()),
+        other => Err(format!("unexpected master response: {other:?}").into()),
+    }
+}
+
+/// Ensure `fff-engine --master` is running, spawning it if absent.
+/// Uses an O_CREAT|O_EXCL race so only one spawner wins.
+fn ensure_master_running() -> Result<(), Box<dyn std::error::Error>> {
+    let master = master_socket_path();
+
+    // Fast path: master socket already exists and accepts connections.
+    if master.exists() && UnixStream::connect(&master).is_ok() {
+        return Ok(());
+    }
+
+    let lockfile = master_lockfile_path();
+
+    // Check whether a live master holds the lockfile (slow start).
+    if lockfile.exists() && !lockfile::is_stale(&lockfile) {
+        // Master is alive but socket not ready yet — wait.
+        return wait_for_socket(&master, SPAWN_TIMEOUT);
+    }
+
+    // Race to spawn master: O_CREAT|O_EXCL via create_new.
+    use std::fs::OpenOptions;
+    match OpenOptions::new().write(true).create_new(true).open(&lockfile) {
+        Ok(_) => {
+            // We won — clear the temp lockfile; fff-engine --master will own it.
+            let _ = std::fs::remove_file(&lockfile);
+        }
+        Err(_) => {
+            // Someone else is spawning; wait for the socket.
+            return wait_for_socket(&master, SPAWN_TIMEOUT);
+        }
+    }
+
+    let engine_bin = find_engine_bin();
+    if let Some(parent) = master.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let child = Command::new(&engine_bin)
+        .arg("--master")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to spawn {}: {e}", engine_bin.display()))?;
+
+    tracing::info!("spawned fff-engine --master pid={}", child.id());
+
+    wait_for_socket(&master, SPAWN_TIMEOUT)?;
+    Ok(())
+}
+
+/// Wait until `path` exists by polling, up to `timeout`.
+fn wait_for_socket(path: &Path, timeout: Duration) -> Result<(), Box<dyn std::error::Error>> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if socket_path.exists() {
+        if path.exists() {
             return Ok(());
         }
         std::thread::sleep(POLL_INTERVAL);
     }
-    Err(format!(
-        "Timed out waiting for fff-engine socket at {} ({}s)",
-        socket_path.display(),
-        timeout.as_secs()
-    )
-    .into())
+    Err(format!("timed out waiting for socket at {} ({}s)", path.display(), timeout.as_secs()).into())
+}
+
+/// Wait for `path` to exist then connect.
+fn wait_and_connect(path: &Path, timeout: Duration) -> Result<UnixStream, Box<dyn std::error::Error>> {
+    wait_for_socket(path, timeout)?;
+    UnixStream::connect(path)
+        .map_err(|e| format!("failed to connect to worker socket {}: {e}", path.display()).into())
+}
+
+fn find_engine_bin() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("fff-engine")))
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| PathBuf::from("fff-engine"))
 }

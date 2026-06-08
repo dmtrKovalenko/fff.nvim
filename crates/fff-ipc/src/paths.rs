@@ -173,9 +173,12 @@ mod tests {
         assert!(s.ends_with("routing.json"));
     }
 
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn xdg_runtime_dir_uses_env_var() {
-        // SAFETY: single-threaded test; no concurrent env access in this test.
+        let _lock = ENV_MUTEX.lock().unwrap();
+        // SAFETY: held under ENV_MUTEX — no concurrent env mutation from other tests.
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000") };
         let p = xdg_runtime_dir();
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
@@ -184,7 +187,8 @@ mod tests {
 
     #[test]
     fn xdg_runtime_dir_falls_back_to_cache() {
-        // SAFETY: single-threaded test; no concurrent env access in this test.
+        let _lock = ENV_MUTEX.lock().unwrap();
+        // SAFETY: held under ENV_MUTEX — no concurrent env mutation from other tests.
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
         let runtime = xdg_runtime_dir();
         let cache = xdg_cache_dir();
