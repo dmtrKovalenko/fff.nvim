@@ -49,9 +49,6 @@ impl WorkerInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SearchRequest {
-    /// First message sent on a worker socket connection.
-    /// Worker loads state for this root on demand and responds with Ack.
-    Connect { base_path: String },
     Grep {
         query: String,
         options: GrepOptions,
@@ -92,6 +89,10 @@ pub enum SearchRequest {
     ListDirectories {
         limit: usize,
     },
+    /// First message sent on a worker socket connection — appended last to
+    /// preserve bincode variant indices for all existing variants.
+    /// Worker loads state for this root on demand and responds with Ack.
+    Connect { base_path: String },
 }
 
 // ── Response ──────────────────────────────────────────────────────────────────

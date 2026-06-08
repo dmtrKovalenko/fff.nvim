@@ -292,8 +292,14 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
     let mut dead_indices: Vec<u32> = vec![];
     for (&idx, entry) in &routing.workers {
         max_seen_index = max_seen_index.max(idx);
-        let alive = unsafe { libc::kill(entry.pid as libc::pid_t, 0) == 0 };
-        if alive {
+        let pid_alive = unsafe { libc::kill(entry.pid as libc::pid_t, 0) == 0 };
+        // Also verify the worker socket is connectable — a recycled PID would pass
+        // kill(pid,0) but the dead worker's socket file would be absent or unusable.
+        let socket_alive = pid_alive && {
+            let sock = worker_socket_path(idx);
+            std::os::unix::net::UnixStream::connect(&sock).is_ok()
+        };
+        if socket_alive {
             adopted_pids.insert(idx, entry.pid);
             tracing::info!("master: reconnected worker-{idx} pid={}", entry.pid);
         } else {
@@ -332,6 +338,11 @@ pub async fn run(config: fff_ipc::config::FffConfig) -> Result<(), Box<dyn std::
     }
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
+    // Restrict to owner-only so no other local user can send management commands.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
+    }
     tracing::info!("fff-engine master listening on {}", socket.display());
 
     // Background: poll children for crashes and respawn them in parallel.
