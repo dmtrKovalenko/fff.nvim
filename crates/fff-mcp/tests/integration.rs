@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 use fff_ipc::types::{FindOptions, SearchRequest, SearchResponse};
+use fff_ipc::socket_path;
 use fff_mcp::client::EngineClient;
 
 // ── Env-var serialisation lock ────────────────────────────────────────────────
@@ -372,6 +373,71 @@ fn u7_5_same_base_path_returns_same_worker() {
         worker_sock.exists(),
         "worker-0 socket must exist after two connects for the same base_path"
     );
+}
+
+// ── R2 — legacy per-root singleton fallback ──────────────────────────────────
+
+/// Spawn a legacy singleton engine (`--base-path`), then verify that
+/// `EngineClient::connect_legacy` connects to it directly — no master involved.
+///
+/// This exercises the R2 resilience path: when the master is unreachable,
+/// `recovery::respawn` falls back to `connect_legacy` against a running
+/// per-root singleton.
+#[test]
+fn r2_connect_legacy_reaches_singleton() {
+    let env = TestEnv::new();
+
+    let base_path = env.root.join("r2_project");
+    std::fs::create_dir_all(&base_path).expect("create base_path dir");
+    std::fs::create_dir_all(env.cache_dir().join("fff").join("sockets")).expect("create sockets dir");
+    std::fs::create_dir_all(env.cache_dir().join("fff").join("locks")).expect("create locks dir");
+
+    // Spawn legacy singleton (no --master flag).
+    let mut singleton = Command::new(engine_bin())
+        .arg("--base-path").arg(&base_path)
+        .arg("--no-watch").arg("--no-warmup")
+        .env("XDG_CACHE_HOME", env.cache_dir())
+        .env("XDG_RUNTIME_DIR", env.runtime_dir())
+        .env("XDG_CONFIG_HOME", env.config_dir())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn legacy singleton");
+
+    // Compute the socket path the singleton will bind.
+    let legacy_sock = {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", env.cache_dir()); }
+        let p = socket_path(&base_path);
+        unsafe { std::env::remove_var("XDG_CACHE_HOME"); }
+        p
+    };
+
+    let started = wait_socket(&legacy_sock, 10_000);
+
+    if !started {
+        let _ = singleton.kill();
+        let _ = singleton.wait();
+        panic!("legacy singleton socket did not appear at {legacy_sock:?}");
+    }
+
+    // No master running — connect_legacy must reach the singleton directly.
+    assert!(!env.master_socket().exists(), "precondition: master must not be running");
+
+    let result = {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", env.cache_dir()); }
+        let r = EngineClient::connect_legacy(&base_path);
+        unsafe { std::env::remove_var("XDG_CACHE_HOME"); }
+        r
+    };
+
+    let _ = singleton.kill();
+    let _ = singleton.wait();
+
+    let client = result.expect("connect_legacy should succeed against running singleton");
+    assert_eq!(client.base_path(), base_path);
 }
 
 // ── U7-6 — different base_paths may share a worker ───────────────────────────
