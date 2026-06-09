@@ -1,13 +1,13 @@
 --- Grep search bridge and renderer.
 --- Wraps the Rust `live_grep` FFI function with file-based pagination state tracking.
 --- Also provides renderer for live grep results with file grouping.
-local M = {}
+local M = {
+  supports_cursor_rerender = true,
+}
 
 local fuzzy = require('fff.fuzzy')
 local file_renderer = require('fff.picker_ui.file_renderer')
 local tresitter_highlight = require('fff.treesitter_hl')
-
-M.supports_cursor_rerender = true
 
 -- ===== Search Bridge =====
 

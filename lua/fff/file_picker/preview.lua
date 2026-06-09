@@ -28,13 +28,15 @@ local function append_buffer_lines(bufnr, lines)
   vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
 end
 
+local function show_preview_unavailable(bufnr) set_buffer_lines(bufnr, { 'No preview available' }) end
+
 local function set_preview_filetype(bufnr, filetype)
-  -- Preserve user-facing errors from preview-local filetype churn.
+  -- FileType hooks can throw or mutate global v:errmsg during preview setup.
+  -- pcall lets us restore it; callers treat failures as preview-local.
   local errmsg = vim.v.errmsg
-  vim.v.errmsg = ''
   local ok, err = pcall(vim.api.nvim_set_option_value, 'filetype', filetype, { buf = bufnr })
   vim.v.errmsg = errmsg
-  if not ok then error(err) end
+  return ok, err
 end
 
 local function find_existing_buffer(file_path)
@@ -289,7 +291,10 @@ local function link_buffer_content(source_bufnr, target_bufnr)
   set_buffer_lines(target_bufnr, lines)
 
   local source_ft = vim.api.nvim_get_option_value('filetype', { buf = source_bufnr })
-  if source_ft ~= '' then set_preview_filetype(target_bufnr, source_ft) end
+  if source_ft ~= '' then
+    local ok = set_preview_filetype(target_bufnr, source_ft)
+    if not ok then return false end
+  end
 
   M.state.has_more_content = false
   M.state.total_file_lines = #lines
@@ -445,7 +450,11 @@ function M.preview_file(file_path, bufnr)
       set_buffer_lines(bufnr, content)
 
       local file_config = M.get_file_config(file_path)
-      set_preview_filetype(bufnr, info.filetype)
+      local ok = set_preview_filetype(bufnr, info.filetype)
+      if not ok then
+        show_preview_unavailable(bufnr)
+        return
+      end
       vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
       vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
       vim.api.nvim_set_option_value('buftype', 'nofile', { buf = bufnr })
@@ -564,7 +573,11 @@ function M.preview_binary_file(file_path, bufnr)
   end
 
   set_buffer_lines(bufnr, lines)
-  set_preview_filetype(bufnr, 'text')
+  local ok = set_preview_filetype(bufnr, 'text')
+  if not ok then
+    show_preview_unavailable(bufnr)
+    return false
+  end
   vim.api.nvim_set_option_value('modifiable', false, { buf = bufnr })
   vim.api.nvim_set_option_value('readonly', true, { buf = bufnr })
 

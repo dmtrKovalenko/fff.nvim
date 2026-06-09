@@ -280,12 +280,9 @@ end
 
 local function rerender_cursor_rows(old_cursor, new_cursor)
   if S.suggestion_source then return false end
-  if not (S.list_buf and vim.api.nvim_buf_is_valid(S.list_buf)) then return false end
-  if not (S.list_win and vim.api.nvim_win_is_valid(S.list_win)) then return false end
-  if not (S.item_to_lines and S.last_render_ctx and S.ns_id) then return false end
 
   local ctx = S.last_render_ctx
-  if ctx.items ~= S.filtered_items then return false end
+  if not ctx or ctx.items ~= S.filtered_items then return false end
   if ctx.renderer and not ctx.renderer.supports_cursor_rerender then return false end
 
   local old_lines = S.item_to_lines[old_cursor]
