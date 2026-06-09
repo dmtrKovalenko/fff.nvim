@@ -1,5 +1,50 @@
 use serde::{Deserialize, Serialize};
 
+// ── Master protocol ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MasterRequest {
+    /// Connect a new fff-mcp client; returns the worker socket to use.
+    Handshake { base_path: String },
+    /// List all active workers and their loaded roots.
+    ListWorkers,
+    /// Query status of a specific worker by index.
+    WorkerStatus { index: u32 },
+    /// Gracefully stop a worker by index.
+    StopWorker { index: u32 },
+    /// Fire-and-forget: worker notifies master that a root was LRU-evicted.
+    /// Master removes the routing table entry. No response is sent.
+    EvictedRoot { slug: String },
+    /// Read-only route query for fffctl — does not mutate state or trigger scale-out.
+    RouteInfo { base_path: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MasterResponse {
+    /// Returned for Handshake — direct the client to this worker socket.
+    WorkerSocket { path: String, worker_index: u32 },
+    /// Returned for ListWorkers.
+    WorkerList { workers: Vec<WorkerInfo> },
+    /// Returned for WorkerStatus / RouteInfo.
+    WorkerInfo(WorkerInfo),
+    Ack,
+    Error(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerInfo {
+    pub index: u32,
+    pub socket_path: String,
+    pub root_slugs: Vec<String>,
+    pub pid: u32,
+}
+
+impl WorkerInfo {
+    pub fn root_count(&self) -> usize {
+        self.root_slugs.len()
+    }
+}
+
 // ── Request ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +89,10 @@ pub enum SearchRequest {
     ListDirectories {
         limit: usize,
     },
+    /// First message sent on a worker socket connection — appended last to
+    /// preserve bincode variant indices for all existing variants.
+    /// Worker loads state for this root on demand and responds with Ack.
+    Connect { base_path: String },
 }
 
 // ── Response ──────────────────────────────────────────────────────────────────
@@ -316,6 +365,88 @@ mod tests {
         let rt = round_trip(&req);
         match rt {
             SearchRequest::ListDirectories { limit } => assert_eq!(limit, 30),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn master_handshake_round_trips() {
+        let req = MasterRequest::Handshake { base_path: "/home/user/project".into() };
+        let rt = round_trip(&req);
+        match rt {
+            MasterRequest::Handshake { base_path } => assert_eq!(base_path, "/home/user/project"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn master_response_worker_socket_round_trips() {
+        let resp = MasterResponse::WorkerSocket { path: "/tmp/fff/workers/worker-0.sock".into(), worker_index: 0 };
+        let rt = round_trip(&resp);
+        match rt {
+            MasterResponse::WorkerSocket { path, worker_index } => {
+                assert_eq!(path, "/tmp/fff/workers/worker-0.sock");
+                assert_eq!(worker_index, 0);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn master_response_worker_list_round_trips() {
+        let resp = MasterResponse::WorkerList {
+            workers: vec![
+                WorkerInfo { index: 0, socket_path: "worker-0.sock".into(), root_slugs: vec!["abc".into()], pid: 1234 },
+                WorkerInfo { index: 1, socket_path: "worker-1.sock".into(), root_slugs: vec![], pid: 5678 },
+            ],
+        };
+        let rt = round_trip(&resp);
+        match rt {
+            MasterResponse::WorkerList { workers } => {
+                assert_eq!(workers.len(), 2);
+                assert_eq!(workers[0].pid, 1234);
+                assert_eq!(workers[1].root_count(), 0);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn master_request_management_variants_round_trip() {
+        assert!(matches!(round_trip(&MasterRequest::ListWorkers), MasterRequest::ListWorkers));
+        let rt = round_trip(&MasterRequest::WorkerStatus { index: 3 });
+        assert!(matches!(rt, MasterRequest::WorkerStatus { index: 3 }));
+        let rt = round_trip(&MasterRequest::StopWorker { index: 7 });
+        assert!(matches!(rt, MasterRequest::StopWorker { index: 7 }));
+        let rt = round_trip(&MasterRequest::EvictedRoot { slug: "abc123".into() });
+        match rt { MasterRequest::EvictedRoot { slug } => assert_eq!(slug, "abc123"), _ => panic!() }
+        let rt = round_trip(&MasterRequest::RouteInfo { base_path: "/project/x".into() });
+        match rt { MasterRequest::RouteInfo { base_path } => assert_eq!(base_path, "/project/x"), _ => panic!() }
+    }
+
+    #[test]
+    fn master_response_management_variants_round_trip() {
+        assert!(matches!(round_trip(&MasterResponse::Ack), MasterResponse::Ack));
+        let rt = round_trip(&MasterResponse::Error("oops".into()));
+        assert!(matches!(rt, MasterResponse::Error(e) if e == "oops"));
+        let info = WorkerInfo { index: 2, socket_path: "w.sock".into(), root_slugs: vec!["s".into()], pid: 42 };
+        let rt = round_trip(&MasterResponse::WorkerInfo(info.clone()));
+        match rt {
+            MasterResponse::WorkerInfo(w) => {
+                assert_eq!(w.index, 2);
+                assert_eq!(w.root_count(), 1);
+                assert_eq!(w.pid, 42);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn search_request_connect_round_trips() {
+        let req = SearchRequest::Connect { base_path: "/home/user/repo".into() };
+        let rt = round_trip(&req);
+        match rt {
+            SearchRequest::Connect { base_path } => assert_eq!(base_path, "/home/user/repo"),
             _ => panic!("wrong variant"),
         }
     }

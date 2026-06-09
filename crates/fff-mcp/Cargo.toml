@@ -9,6 +9,10 @@ license = "MIT"
 name = "fff-mcp"
 path = "src/main.rs"
 
+[lib]
+name = "fff_mcp"
+path = "src/lib.rs"
+
 [features]
 default = ["zlob"]
 zlob = ["fff/zlob"]
@@ -18,6 +22,7 @@ fff = { package = "fff-search", path = "../fff-core", default-features = false ,
 fff-ipc = { path = "../fff-ipc", version = "0.12.0" }
 fff-query-parser = { path = "../fff-query-parser", default-features = false , version = "0.12.0" }
 dirs = { workspace = true }
+libc = "0.2"
 mimalloc = { workspace = true }
 rmcp = { version = "1.7.0", features = ["server", "transport-io"] }
 schemars = "1.0"
@@ -27,3 +32,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = { workspace = true }
 git2 = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
+
+[dev-dependencies]
+tempfile = "3"
+libc = "0.2"

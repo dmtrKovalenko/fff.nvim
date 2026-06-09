@@ -99,7 +99,7 @@ async fn handle_connection(stream: tokio::net::UnixStream, state: Arc<EngineStat
                 }
             }
             req => {
-                let response = dispatch(&state, req).await;
+                let response = dispatch_request(&state, req).await;
                 if write_message(&mut write_half, &response).await.is_err() {
                     break;
                 }
@@ -108,7 +108,7 @@ async fn handle_connection(stream: tokio::net::UnixStream, state: Arc<EngineStat
     }
 }
 
-async fn dispatch(state: &EngineState, req: SearchRequest) -> fff_ipc::types::SearchResponse {
+pub(crate) async fn dispatch_request(state: &EngineState, req: SearchRequest) -> fff_ipc::types::SearchResponse {
     use crate::handlers::{
         handle_find_files, handle_get_git_status, handle_grep, handle_list_directories,
         handle_list_recent_files, handle_multi_grep,
@@ -144,6 +144,16 @@ async fn dispatch(state: &EngineState, req: SearchRequest) -> fff_ipc::types::Se
         }
         SearchRequest::RecordAccess { .. } | SearchRequest::SetLogLevel { .. } => {
             unreachable!("handled before dispatch")
+        }
+        SearchRequest::Connect { .. } => {
+            // Connect is only valid as the first message on a worker socket.
+            // The singleton server does not support the worker protocol.
+            (
+                "connect(rejected)".to_string(),
+                fff_ipc::types::SearchResponse::Error(
+                    "Connect is not supported in singleton mode".into(),
+                ),
+            )
         }
     };
 

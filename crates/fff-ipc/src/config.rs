@@ -29,6 +29,31 @@ pub struct FffConfig {
     pub index: IndexConfig,
     #[serde(default)]
     pub frecency: FrecencyConfig,
+    #[serde(default)]
+    pub worker: WorkerConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerConfig {
+    /// Minimum number of worker processes to keep alive.
+    pub n_min: u32,
+    /// Maximum number of worker processes to spawn.
+    pub n_max: u32,
+    /// Maximum roots loaded per worker before a new worker is spawned.
+    pub roots_per_worker_max: u32,
+    /// Seconds a worker with no loaded roots waits before being shut down.
+    pub idle_ttl_secs: u64,
+}
+
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            n_min: 1,
+            n_max: 4,
+            roots_per_worker_max: 8,
+            idle_ttl_secs: 300,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -116,5 +141,37 @@ pub fn load() -> FffConfig {
             );
             FffConfig::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_config_defaults() {
+        let c = WorkerConfig::default();
+        assert_eq!(c.n_min, 1);
+        assert_eq!(c.n_max, 4);
+        assert_eq!(c.roots_per_worker_max, 8);
+        assert_eq!(c.idle_ttl_secs, 300);
+    }
+
+    #[test]
+    fn fff_config_without_worker_section_uses_defaults() {
+        let toml = "[log]\nlevel = \"debug\"\n";
+        let cfg: FffConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.worker.n_min, 1);
+        assert_eq!(cfg.worker.n_max, 4);
+    }
+
+    #[test]
+    fn fff_config_with_worker_section_parses_fields() {
+        let toml = "[worker]\nn_min = 2\nn_max = 8\nroots_per_worker_max = 16\nidle_ttl_secs = 600\n";
+        let cfg: FffConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.worker.n_min, 2);
+        assert_eq!(cfg.worker.n_max, 8);
+        assert_eq!(cfg.worker.roots_per_worker_max, 16);
+        assert_eq!(cfg.worker.idle_ttl_secs, 600);
     }
 }
