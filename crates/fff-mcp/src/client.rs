@@ -63,6 +63,25 @@ impl EngineClient {
         &self.base_path
     }
 
+    /// Connect directly to a legacy per-root singleton engine.
+    ///
+    /// Uses `fff_ipc::socket_path(base_path)` — the singleton's well-known socket.
+    /// No `Connect` handshake is sent; the legacy engine speaks search requests
+    /// directly after the TCP-like accept. Use as a fallback when the master is
+    /// unavailable (R2 resilience).
+    pub fn connect_legacy(base_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let sock = fff_ipc::socket_path(base_path);
+        let stream = UnixStream::connect(&sock)
+            .map_err(|e| format!("legacy per-root socket {}: {e}", sock.display()))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        Ok(Self {
+            writer: BufWriter::new(stream.try_clone()?),
+            reader: BufReader::new(stream),
+            base_path: base_path.to_path_buf(),
+        })
+    }
+
     /// Re-run the two-phase handshake and return a fresh client. Used by recovery.
     pub fn reconnect(&self) -> Result<Self, Box<dyn std::error::Error>> {
         Self::connect(&self.base_path)
