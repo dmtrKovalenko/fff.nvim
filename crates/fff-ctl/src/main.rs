@@ -283,10 +283,20 @@ fn cmd_stop(base_path: Option<&Path>, all: bool, timeout: Duration) -> i32 {
 }
 
 fn cmd_clean(dry_run: bool) -> i32 {
+    let mut removed_master = 0usize;
     let mut removed_locks = 0;
     let mut removed_sockets = 0;
     let mut removed_logs = 0;
 
+    // ── Master + worker artifacts ─────────────────────────────────────
+    let master_lock = master_lockfile_path();
+    if lockfile::read(&master_lock).is_some_and(|l| l.is_alive()) {
+        println!("Note: master is running; skipping master artifacts (use `fffctl stop --all` first).");
+    } else {
+        removed_master = clean_master_artifacts(dry_run);
+    }
+
+    // ── Legacy per-root artifacts ─────────────────────────────────────
     // Stale lockfiles
     for d in discover_daemons() {
         if d.lock.is_alive() {
@@ -356,13 +366,55 @@ fn cmd_clean(dry_run: bool) -> i32 {
     }
 
     println!(
-        "{}: {} lockfile(s), {} socket(s), {} log(s)",
+        "{}: {} master artifact(s), {} lockfile(s), {} socket(s), {} log(s)",
         if dry_run { "Would remove" } else { "Removed" },
+        removed_master,
         removed_locks,
         removed_sockets,
         removed_logs,
     );
     0
+}
+
+fn clean_master_artifacts(dry_run: bool) -> usize {
+    let mut removed = 0;
+    let action = if dry_run { "would remove" } else { "removing" };
+
+    let routing = routing_table_path();
+    if routing.exists() {
+        println!("{action} routing table: {}", routing.display());
+        if !dry_run { let _ = std::fs::remove_file(&routing); }
+        removed += 1;
+    }
+
+    let master_sock = master_socket_path();
+    if master_sock.exists() {
+        println!("{action} master socket: {}", master_sock.display());
+        if !dry_run { let _ = std::fs::remove_file(&master_sock); }
+        removed += 1;
+    }
+
+    let master_lock = master_lockfile_path();
+    if master_lock.exists() {
+        println!("{action} master lockfile: {}", master_lock.display());
+        if !dry_run { let _ = std::fs::remove_file(&master_lock); }
+        removed += 1;
+    }
+
+    let workers_dir = fff_ipc::xdg_cache_dir().join("fff").join("workers");
+    if let Ok(entries) = std::fs::read_dir(&workers_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(ext) = path.extension().and_then(|s| s.to_str()) else { continue };
+            if ext == "sock" || ext == "lock" {
+                println!("{action} worker artifact: {}", path.display());
+                if !dry_run { let _ = std::fs::remove_file(&path); }
+                removed += 1;
+            }
+        }
+    }
+
+    removed
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
