@@ -14,7 +14,7 @@ SHELL := bash
 # string rather than the literal `-o` / `pipefail` tokens.
 .SHELLFLAGS := -o pipefail -ec
 
-.PHONY: build build-c-lib install uninstall test test-rust test-c-smoke test-c-api test-lua test-lua-snap test-version test-bun test-node prepare-bun prepare-node set-npm-version header test-stress test-stress-seeded test-stress-random test-stress-repos test-node-stress sync-js-api sync-js-api-check
+.PHONY: build build-c-lib install uninstall test test-rust test-c-smoke test-c-api test-lua test-lua-snap test-version test-bun test-node prepare-bun prepare-node set-npm-version header test-stress test-stress-seeded test-stress-random test-stress-repos test-node-stress sync-js-api sync-js-api-check bump-homebrew-formula bump-install-mcp-sh
 
 all: format test lint
 
@@ -245,6 +245,60 @@ lint-ts:
 lint: lint-rust lint-lua lint-ts
 
 check: format lint
+
+FFF_RELEASE_REPO ?= dmtrKovalenko/fff.nvim
+FFF_FORMULA_PATH ?= Formula/fff-mcp.rb
+FFF_INSTALL_SCRIPT_PATH ?= install-mcp.sh
+
+# Read the sha256 for $1 (filename, no .sha256 suffix). Reads from
+# BINARIES_DIR/$1.sha256 when set; otherwise curls the GitHub release.
+define fff_fetch_sha
+	if [ -n "$$BINARIES_DIR" ]; then \
+		awk '{print $$1}' "$$BINARIES_DIR/$$1.sha256" \
+			|| { echo "Missing checksum file: $$BINARIES_DIR/$$1.sha256" >&2; exit 1; }; \
+	else \
+		curl -fsSL "https://github.com/$(FFF_RELEASE_REPO)/releases/download/v$(VERSION)/$$1.sha256" \
+			| awk '{print $$1}'; \
+	fi
+endef
+
+bump-homebrew-formula:
+	@test -n "$(VERSION)" || (echo "VERSION is required. Usage: make bump-homebrew-formula VERSION=0.9.1 [BINARIES_DIR=./binaries]" && exit 1)
+	@export BINARIES_DIR="$(BINARIES_DIR)"; \
+	fetch_sha() { $(fff_fetch_sha); }; \
+	sha_darwin_arm="$$(fetch_sha fff-mcp-aarch64-apple-darwin)"; \
+	sha_darwin_intel="$$(fetch_sha fff-mcp-x86_64-apple-darwin)"; \
+	sha_linux_arm="$$(fetch_sha fff-mcp-aarch64-unknown-linux-gnu)"; \
+	sha_linux_intel="$$(fetch_sha fff-mcp-x86_64-unknown-linux-gnu)"; \
+	sed -i.bak \
+		-e 's/^  version "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$$/  version "$(VERSION)"/' \
+		-e '/fff-mcp-aarch64-apple-darwin"$$/{n;s/sha256 "[a-f0-9]*"/sha256 "'"$$sha_darwin_arm"'"/;}' \
+		-e '/fff-mcp-x86_64-apple-darwin"$$/{n;s/sha256 "[a-f0-9]*"/sha256 "'"$$sha_darwin_intel"'"/;}' \
+		-e '/fff-mcp-aarch64-unknown-linux-gnu"$$/{n;s/sha256 "[a-f0-9]*"/sha256 "'"$$sha_linux_arm"'"/;}' \
+		-e '/fff-mcp-x86_64-unknown-linux-gnu"$$/{n;s/sha256 "[a-f0-9]*"/sha256 "'"$$sha_linux_intel"'"/;}' \
+		"$(FFF_FORMULA_PATH)" && rm -f "$(FFF_FORMULA_PATH).bak"; \
+	echo "Bumped $(FFF_FORMULA_PATH) to v$(VERSION)"
+
+bump-install-mcp-sh:
+	@test -n "$(VERSION)" || (echo "VERSION is required. Usage: make bump-install-mcp-sh VERSION=0.9.1 [BINARIES_DIR=./binaries]" && exit 1)
+	@export BINARIES_DIR="$(BINARIES_DIR)"; \
+	fetch_sha() { $(fff_fetch_sha); }; \
+	sha_linux_intel="$$(fetch_sha fff-mcp-x86_64-unknown-linux-musl)"; \
+	sha_linux_arm="$$(fetch_sha fff-mcp-aarch64-unknown-linux-musl)"; \
+	sha_darwin_intel="$$(fetch_sha fff-mcp-x86_64-apple-darwin)"; \
+	sha_darwin_arm="$$(fetch_sha fff-mcp-aarch64-apple-darwin)"; \
+	sha_win_intel="$$(fetch_sha fff-mcp-x86_64-pc-windows-msvc.exe)"; \
+	sha_win_arm="$$(fetch_sha fff-mcp-aarch64-pc-windows-msvc.exe)"; \
+	sed -i.bak \
+		-e 's|^PINNED_RELEASE_TAG=".*"|PINNED_RELEASE_TAG="v$(VERSION)"|' \
+		-e 's|^SHA256_X86_64_UNKNOWN_LINUX_MUSL=".*"|SHA256_X86_64_UNKNOWN_LINUX_MUSL="'"$$sha_linux_intel"'"|' \
+		-e 's|^SHA256_AARCH64_UNKNOWN_LINUX_MUSL=".*"|SHA256_AARCH64_UNKNOWN_LINUX_MUSL="'"$$sha_linux_arm"'"|' \
+		-e 's|^SHA256_X86_64_APPLE_DARWIN=".*"|SHA256_X86_64_APPLE_DARWIN="'"$$sha_darwin_intel"'"|' \
+		-e 's|^SHA256_AARCH64_APPLE_DARWIN=".*"|SHA256_AARCH64_APPLE_DARWIN="'"$$sha_darwin_arm"'"|' \
+		-e 's|^SHA256_X86_64_PC_WINDOWS_MSVC=".*"|SHA256_X86_64_PC_WINDOWS_MSVC="'"$$sha_win_intel"'"|' \
+		-e 's|^SHA256_AARCH64_PC_WINDOWS_MSVC=".*"|SHA256_AARCH64_PC_WINDOWS_MSVC="'"$$sha_win_arm"'"|' \
+		"$(FFF_INSTALL_SCRIPT_PATH)" && rm -f "$(FFF_INSTALL_SCRIPT_PATH).bak"; \
+	echo "Bumped $(FFF_INSTALL_SCRIPT_PATH) tag + checksums to v$(VERSION)"
 
 CRATES_TO_PUBLISH= fff-grep fff-query-parser fff-search
 

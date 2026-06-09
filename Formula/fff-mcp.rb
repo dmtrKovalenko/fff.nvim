@@ -55,6 +55,6 @@ class FffMcp < Formula
   end
 
   test do
-    system bin/"fff-mcp", "--version"
+    system bin/"fff-mcp", "--healthcheck"
   end
 end

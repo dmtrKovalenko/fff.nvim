@@ -31,7 +31,7 @@ echo "→ Updating Cargo.toml versions to $VERSION"
 cargo set-version "$VERSION"
 
 git add -A
-git commit -m "chore: release $VERSION"
+git commit -m "chore: release $VERSION [skip ci]"
 
 echo "→ Creating tag $TAG"
 git tag -a "$TAG" -m "Release $VERSION"

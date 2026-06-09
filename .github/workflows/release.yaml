@@ -466,46 +466,26 @@ jobs:
             curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
             ```
 
-  bump-homebrew-formula:
-    name: Bump Homebrew formula (fff-mcp)
-    needs: release
-    runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'push'
-      && github.repository_owner == 'dmtrKovalenko'
-      && (github.ref == 'refs/heads/main'
-        || github.ref == 'refs/heads/fix/use-trusted-publishing'
-        || startsWith(github.ref, 'refs/tags/v'))
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v5
+      - name: Bump Homebrew formula (uses local checksums)
+        if: steps.version.outputs.is_release == 'true' && github.repository_owner == 'dmtrKovalenko'
+        run: make bump-homebrew-formula VERSION="${{ steps.version.outputs.version }}" BINARIES_DIR=./binaries
 
-      - name: Install Lua
-        uses: leafo/gh-actions-lua@v12
+      - name: Pin SHAs in install-mcp.sh (uses local checksums)
+        if: steps.version.outputs.is_release == 'true' && github.repository_owner == 'dmtrKovalenko'
+        run: make bump-install-mcp-sh VERSION="${{ steps.version.outputs.version }}" BINARIES_DIR=./binaries
 
-      - name: Determine version
-        id: version
-        run: lua scripts/determine-version.lua
-
-      - name: Regenerate Formula/fff-mcp.rb
-        if: steps.version.outputs.is_release == 'true'
-        run: |
-          chmod +x scripts/bump-fff-mcp.sh
-          ./scripts/bump-fff-mcp.sh "${{ steps.version.outputs.version }}"
-
-      - name: Commit formula bump
-        if: steps.version.outputs.is_release == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/fff-mcp.rb
-          if git diff --staged --quiet; then
-            echo "Formula already up to date"
-            exit 0
-          fi
-          git commit -m "chore(homebrew): bump fff-mcp to v${{ steps.version.outputs.version }}"
-          git push
+      - name: Commit formula + installer bump to main
+        # Uses the default GITHUB_TOKEN configured by actions/checkout above.
+        # Requires github-actions[bot] in the main branch-protection bypass list.
+        if: steps.version.outputs.is_release == 'true' && github.repository_owner == 'dmtrKovalenko'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          # Workflow runs on detached HEAD at the v* tag — explicit target needed.
+          branch: main
+          commit_message: "chore: bump fff-mcp release artifacts to v${{ steps.version.outputs.version }} [skip ci]"
+          file_pattern: "Formula/fff-mcp.rb install-mcp.sh"
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
 
   crates-publish:
     name: Publish Rust crates
