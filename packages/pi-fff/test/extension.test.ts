@@ -140,6 +140,24 @@ beforeEach(() => {
   finders = [];
   mixedSearchImpl = undefined;
   delete process.env.PI_FFF_MODE;
+  delete process.env.FFF_ENABLE_HOME_SCAN;
+  delete process.env.FFF_ENABLE_ROOT_SCAN;
+});
+
+describe("pi-fff scanning opt-in flags", () => {
+  test("FFF_ENABLE_HOME_SCAN=1 propagates to FileFinder.create", async () => {
+    process.env.FFF_ENABLE_HOME_SCAN = "1";
+    await start();
+    expect((createCalls[0] as any).enableHomeDirScanning).toBe(true);
+    expect((createCalls[0] as any).enableFsRootScanning).toBe(false);
+  });
+
+  test("FFF_ENABLE_ROOT_SCAN=true propagates to FileFinder.create", async () => {
+    process.env.FFF_ENABLE_ROOT_SCAN = "true";
+    await start();
+    expect((createCalls[0] as any).enableFsRootScanning).toBe(true);
+    expect((createCalls[0] as any).enableHomeDirScanning).toBe(false);
+  });
 });
 
 describe("pi-fff autocomplete registration", () => {
@@ -154,6 +172,8 @@ describe("pi-fff autocomplete registration", () => {
         frecencyDbPath: undefined,
         historyDbPath: undefined,
         aiMode: true,
+        enableHomeDirScanning: false,
+        enableFsRootScanning: false,
       },
     ]);
   });
