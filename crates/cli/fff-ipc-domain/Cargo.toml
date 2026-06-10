@@ -1,0 +1,13 @@
+[package]
+name = "fff-ipc-domain"
+version = "0.0.1"
+edition = "2024"
+description = "FFF domain types for IPC."
+license = "MIT"
+
+[dependencies]
+libc = { workspace = true }
+rkyv = { workspace = true }
+
+[lints]
+workspace = true

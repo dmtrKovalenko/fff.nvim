@@ -36,7 +36,7 @@ fn plain_opts() -> GrepSearchOptions {
     GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
-        smart_case: true,
+        case_mode: fff::CaseMode::Smart,
         file_offset: 0,
         page_limit: 200,
         mode: GrepMode::PlainText,

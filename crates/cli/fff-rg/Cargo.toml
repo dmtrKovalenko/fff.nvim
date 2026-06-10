@@ -1,0 +1,28 @@
+[package]
+name = "fff-rg"
+version = "0.0.1"
+edition = "2024"
+description = "FFF CLI — fast file finder from the command line."
+license = "MIT"
+
+[[bin]]
+name = "fff-rg"
+path = "src/main.rs"
+
+[dependencies]
+fff-ipc-domain = { path = "../fff-ipc-domain" }
+rkyv = { workspace = true }
+sendfd = "0.4"
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+bytesize = "2"
+mimalloc = { workspace = true }
+git2 = { workspace = true }
+which = "8.0.3"
+
+[dev-dependencies]
+test-case = "3"
+
+[lints]
+workspace = true

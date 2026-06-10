@@ -6,6 +6,9 @@ members = [
   "crates/fff-nvim",
   "crates/fff-query-parser",
   "crates/fff-grep",
+  "crates/cli/fff-daemon",
+  "crates/cli/fff-ipc-domain",
+  "crates/cli/fff-rg",
 ]
 resolver = "2"
 
@@ -44,7 +47,11 @@ regex = "1.11"
 regex-syntax = "0.8"
 smallvec = { version = "1.13", features = ["const_generics", "union"] }
 thiserror = "2.0.10"
-tracing = "0.1"
+tracing = { version = "0.1", features = ["release_max_level_debug"] }
+rkyv = { version = "0.8" }
+clap = { version = "4", features = ["derive", "env"] }
+libc = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 opt-level = 3
@@ -68,3 +75,6 @@ inherits = "release"
 debug = "full"
 strip = false
 lto = "thin"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }

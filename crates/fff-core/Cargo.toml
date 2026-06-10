@@ -42,7 +42,7 @@ tracing = { workspace = true }
 fff-query-parser = { workspace = true , version = "0.8.2" }
 blake3 = { workspace = true }
 dirs = { workspace = true }
-libc = "0.2"
+libc = { workspace = true }
 git2 = { workspace = true }
 glidesort = { workspace = true }
 globset = { workspace = true }
