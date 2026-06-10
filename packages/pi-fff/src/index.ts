@@ -304,9 +304,9 @@ export default function fffExtension(pi: ExtensionAPI) {
     process.env.FFF_HISTORY_DB ??
     undefined;
 
-  // Boolean flag/env resolution: flag (boolean) > env ("1"/"true") > false.
-  // FFF refuses to init in $HOME or / unless these are set — pi users launching
-  // pi from those directories need a way to opt in.
+  // Root scanning opt-in: flag (boolean) > env ("1"/"true") > false.
+  // FFF refuses to init at / unless this is set. Home dir scanning is on by
+  // default for pi — launching pi from $HOME is a normal flow.
   function resolveBoolOpt(flagName: string, envName: string): boolean {
     const flag = pi.getFlag(flagName);
     if (typeof flag === "boolean") return flag;
@@ -314,10 +314,6 @@ export default function fffExtension(pi: ExtensionAPI) {
     const env = process.env[envName];
     return env === "1" || env === "true";
   }
-  const enableHomeDirScanning = resolveBoolOpt(
-    "fff-enable-home-scan",
-    "FFF_ENABLE_HOME_SCAN",
-  );
   const enableFsRootScanning = resolveBoolOpt(
     "fff-enable-root-scan",
     "FFF_ENABLE_ROOT_SCAN",
@@ -352,7 +348,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         frecencyDbPath,
         historyDbPath,
         aiMode: true,
-        enableHomeDirScanning,
+        enableHomeDirScanning: true,
         enableFsRootScanning,
       });
 
@@ -460,12 +456,6 @@ export default function fffExtension(pi: ExtensionAPI) {
   pi.registerFlag("fff-history-db", {
     description: "Path to the query history database (overrides FFF_HISTORY_DB env)",
     type: "string",
-  });
-
-  pi.registerFlag("fff-enable-home-scan", {
-    description:
-      "Allow indexing when launched from the home directory (also: FFF_ENABLE_HOME_SCAN env)",
-    type: "boolean",
   });
 
   pi.registerFlag("fff-enable-root-scan", {
