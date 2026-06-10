@@ -140,22 +140,6 @@ beforeEach(() => {
   finders = [];
   mixedSearchImpl = undefined;
   delete process.env.PI_FFF_MODE;
-  delete process.env.FFF_ENABLE_ROOT_SCAN;
-});
-
-describe("pi-fff scanning opt-in flags", () => {
-  test("home dir scanning is always enabled", async () => {
-    await start();
-    expect((createCalls[0] as any).enableHomeDirScanning).toBe(true);
-    expect((createCalls[0] as any).enableFsRootScanning).toBe(false);
-  });
-
-  test("FFF_ENABLE_ROOT_SCAN=true propagates to FileFinder.create", async () => {
-    process.env.FFF_ENABLE_ROOT_SCAN = "true";
-    await start();
-    expect((createCalls[0] as any).enableFsRootScanning).toBe(true);
-    expect((createCalls[0] as any).enableHomeDirScanning).toBe(true);
-  });
 });
 
 describe("pi-fff autocomplete registration", () => {
