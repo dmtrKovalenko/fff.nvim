@@ -487,7 +487,6 @@ export default function fffExtension(pi: ExtensionAPI) {
           const restored = (modeEntry as any).data.mode as FffMode;
           if (restored !== currentMode) {
             currentMode = restored;
-            process.env.PI_FFF_MODE = restored;
           }
         }
       }
@@ -945,9 +944,8 @@ export default function fffExtension(pi: ExtensionAPI) {
       if (!arg) {
         const mode = getMode();
         const flag = pi.getFlag("fff-mode") ?? "unset";
-        const env = process.env.PI_FFF_MODE ?? "unset";
         ctx.ui.notify(
-          `Current mode: '${mode}'\nFlag: ${flag}, Env: ${env}`,
+          `Current mode: '${mode}' (flag: ${flag})`,
           "info",
         );
         return;
@@ -963,9 +961,6 @@ export default function fffExtension(pi: ExtensionAPI) {
       const oldMode = getMode();
       setMode(newMode);
 
-      // Persist so the mode survives /reload (process survives) and
-      // session resume (entry survives in the session file).
-      process.env.PI_FFF_MODE = newMode;
       pi.appendEntry("fff-mode", { mode: newMode });
 
       const note =
