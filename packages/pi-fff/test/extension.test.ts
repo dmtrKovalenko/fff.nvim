@@ -93,6 +93,7 @@ function createPi(mode?: string) {
     }),
     registerFlag: mock(() => undefined),
     registerTool: mock(() => undefined),
+    appendEntry: mock(() => undefined),
   };
 
   return { pi, events, commands };
