@@ -1,5 +1,5 @@
 *fff.nvim.txt*
-                             For Neovim >= 0.10.0    Last change: 2026 June 06
+                             For Neovim >= 0.10.0    Last change: 2026 June 13
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -246,6 +246,10 @@ Defaults are sensible. Override only what you care about.
       git = {
         status_text_color = false, -- true to color filenames by git status
       },
+      select = {
+        -- Return winid to open the chosen file in, or nil to open in the original window
+        select_window = function(current_buf, action) --[[ default impl ]] end,
+      },
       grep = {
         max_file_size = 10 * 1024 * 1024,
         max_matches_per_file = 100,
@@ -253,6 +257,7 @@ Defaults are sensible. Override only what you care about.
         time_budget_ms = 150,
         modes = { 'plain', 'regex', 'fuzzy' },
         trim_whitespace = false,
+        enable_filename_constraint = false, -- treat filename-like tokens (e.g. `score.rs`) in a grep query as a file-path filter scoping the search; off = searched as literal text
         location_format = ':%d:%d', -- printf format for line:col prefix in grep results, e.g. ':%d' for line-only
       },
       debug = {
@@ -311,6 +316,25 @@ Grep-only:
 - `src/main.rs`. Grep inside a single file.
 
 Mix freely: `git:modified src/**/*.rs !src/**/mod.rs user controller`.
+
+
+OPEN IN INVOKING WINDOW ~
+
+By default fff.nvim will try to open a file in the most suitable window, so any
+non-file buffers are not affected. You can customize or disable this by
+providing:
+
+>lua
+    require('fff').setup({
+      select = {
+        select_window = function(_current_buf, _action) return nil end,
+      },
+    })
+<
+
+Caveat: the chosen file replaces the buffer in the invoking window even if
+it’s a non-modifiable / special buftype. `winfixbuf` windows still fall back
+to `:split` to avoid `E1513`.
 
 
 MULTI-SELECT AND QUICKFIX ~
