@@ -17,9 +17,7 @@ function M.find_files(opts)
   end
 
   if opts and opts.resume then
-    local cleaned = vim.deepcopy(opts)
-    cleaned.resume = nil
-    picker_ui.resume_find_files(cleaned)
+    picker_ui.resume_find_files(opts)
     return
   end
 
@@ -37,9 +35,7 @@ function M.live_grep(opts)
   end
 
   if opts and opts.resume then
-    local cleaned = vim.deepcopy(opts)
-    cleaned.resume = nil
-    picker_ui.resume_live_grep(cleaned)
+    picker_ui.resume_live_grep(opts)
     return
   end
 

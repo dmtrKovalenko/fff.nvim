@@ -75,7 +75,7 @@ function M.relayout()
   P.update_status()
 end
 
-function M.close_windows()
+function M.close()
   if not P.state.active then return end
 
   vim.cmd('stopinsert')
@@ -145,7 +145,5 @@ function M.close_windows()
   P.reset_history_state()
   pcall(vim.api.nvim_del_augroup_by_name, 'fff_picker_focus')
 end
-
-function M.close() M.close_windows() end
 
 return M

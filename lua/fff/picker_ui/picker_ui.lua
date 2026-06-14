@@ -204,7 +204,7 @@ function M.close()
   save_state_and_close()
 end
 
----@return boolean true if a picker was resumed, false otherwise
+---@return boolean|nil true if a picker was resumed, false otherwise
 function M.resume()
   if M.state.active then
     vim.notify('FFF: close the current picker before resuming', vim.log.levels.INFO)
@@ -229,7 +229,7 @@ end
 --- Resume the last file picker (find_files mode).
 --- Falls back to opening a new find_files picker if nothing to resume.
 ---@param opts? table Optional config overrides for fallback open
----@return boolean
+---@return boolean|nil
 function M.resume_find_files(opts)
   if M.state.active then
     vim.notify('FFF: close the current picker before resuming', vim.log.levels.INFO)
