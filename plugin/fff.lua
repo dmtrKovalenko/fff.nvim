@@ -22,6 +22,10 @@ else
   })
 end
 
+vim.api.nvim_create_user_command('FFFResume', function() require('fff').resume() end, {
+  desc = 'Resume the last FFF picker (restores query, results, cursor, and mode)',
+})
+
 vim.api.nvim_create_user_command('FFFFind', function(opts)
   local fff = require('fff')
   if opts.args and opts.args ~= '' then

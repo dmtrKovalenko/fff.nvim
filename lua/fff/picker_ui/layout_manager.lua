@@ -19,6 +19,78 @@ local function restore_paste(should_restore)
   if should_restore then vim.o.paste = true end
 end
 
+function M.close_windows()
+  if not P.state.active then return end
+
+  vim.cmd('stopinsert')
+  P.state.active = false
+
+  restore_paste(S.restore_paste)
+
+  list_separator.cleanup()
+  scrollbar.cleanup()
+
+  local ts_ok, ts_hl = pcall(require, 'fff.treesitter_hl')
+  if ts_ok then ts_hl.cleanup() end
+
+  local windows = { S.input_win, S.list_win, S.preview_win }
+  if S.file_info_win then table.insert(windows, S.file_info_win) end
+
+  for _, win in ipairs(windows) do
+    if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+  end
+
+  local buffers = { S.input_buf, S.list_buf, S.file_info_buf }
+  if S.preview_buf then buffers[#buffers + 1] = S.preview_buf end
+
+  for _, buf in ipairs(buffers) do
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_clear_namespace(buf, -1, 0, -1)
+      if buf == S.preview_buf then preview.clear_buffer(buf) end
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end
+  end
+
+  if S.preview_timer then
+    S.preview_timer:stop()
+    S.preview_timer:close()
+    S.preview_timer = nil
+  end
+
+  S.input_win = nil
+  S.list_win = nil
+  S.file_info_win = nil
+  S.preview_win = nil
+  S.input_buf = nil
+  S.list_buf = nil
+  S.file_info_buf = nil
+  S.preview_buf = nil
+  S.preview_visible = false
+  S.items = {}
+  S.filtered_items = {}
+  S.cursor = 1
+  S.query = ''
+  S.ns_id = nil
+  S.last_preview_file = nil
+  S.last_preview_location = nil
+  S.current_file_cache = nil
+  S.location = nil
+  S.selected_files = {}
+  S.selected_items = {}
+  S.mode = nil
+  S.grep_config = nil
+  S.grep_mode = 'plain'
+  S.grep_regex_fallback_error = nil
+  S.suggestion_items = nil
+  S.suggestion_source = nil
+  S.renderer = nil
+  S.restore_paste = false
+  S.combo_visible = true
+  S.combo_initial_cursor = nil
+  P.reset_history_state()
+  pcall(vim.api.nvim_del_augroup_by_name, 'fff_picker_focus')
+end
+
 function M.relayout()
   if not P.state.active then return end
 
@@ -75,7 +147,7 @@ function M.relayout()
   P.update_status()
 end
 
-function M.close()
+function M.close_windows()
   if not P.state.active then return end
 
   vim.cmd('stopinsert')
@@ -102,9 +174,7 @@ function M.close()
   for _, buf in ipairs(buffers) do
     if buf and vim.api.nvim_buf_is_valid(buf) then
       vim.api.nvim_buf_clear_namespace(buf, -1, 0, -1)
-
       if buf == S.preview_buf then preview.clear_buffer(buf) end
-
       vim.api.nvim_buf_delete(buf, { force = true })
     end
   end
@@ -147,5 +217,7 @@ function M.close()
   P.reset_history_state()
   pcall(vim.api.nvim_del_augroup_by_name, 'fff_picker_focus')
 end
+
+function M.close() M.close_windows() end
 
 return M

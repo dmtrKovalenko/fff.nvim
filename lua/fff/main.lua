@@ -6,23 +6,40 @@ M.state = { initialized = false }
 --- @param config table Configuration options
 function M.setup(config) vim.g.fff = config end
 
---- Find files in current directory
---- @param opts? table Optional configuration {renderer = custom_renderer}
+--- Find files in current directory.
+--- When opts.resume is true, resumes the last find_files picker (or opens a new one if none saved).
+--- @param opts? table Optional configuration {renderer = custom_renderer, resume = boolean}
 function M.find_files(opts)
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui.picker_ui')
-  if picker_ok then
-    picker_ui.open(opts)
-  else
+  if not picker_ok then
     vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
+    return
   end
+
+  if opts and opts.resume then
+    local cleaned = vim.deepcopy(opts)
+    cleaned.resume = nil
+    picker_ui.resume_find_files(cleaned)
+    return
+  end
+
+  picker_ui.open(opts)
 end
 
---- Live grep: search file contents in the current directory
---- @param opts? {cwd?: string, title?: string, prompt?: string, layout?: table, grep?: {max_file_size?: number, smart_case?: boolean, max_matches_per_file?: number, modes?: string[]}, query?: string} Optional configuration overrides
+--- Live grep: search file contents in the current directory.
+--- When opts.resume is true, resumes the last live_grep picker (or opens a new one if none saved).
+--- @param opts? {cwd?: string, title?: string, prompt?: string, layout?: table, grep?: {max_file_size?: number, smart_case?: boolean, max_matches_per_file?: number, modes?: string[]}, query?: string, resume?: boolean} Optional configuration overrides
 function M.live_grep(opts)
   local picker_ok, picker_ui = pcall(require, 'fff.picker_ui.picker_ui')
   if not picker_ok then
     vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
+    return
+  end
+
+  if opts and opts.resume then
+    local cleaned = vim.deepcopy(opts)
+    cleaned.resume = nil
+    picker_ui.resume_live_grep(cleaned)
     return
   end
 
@@ -426,6 +443,18 @@ end
 --- @param new_path string New directory path to use as base
 --- @return boolean `true` if successful, `false` otherwise
 function M.change_indexing_directory(new_path) return require('fff.core').change_indexing_directory(new_path) end
+
+--- Resume the most recently closed picker (find_files or live_grep).
+--- Similar to Telescope's `require('telescope.builtin').resume()`.
+---@return boolean true if a picker was resumed, false if there is nothing to resume
+function M.resume()
+  local picker_ok, picker_ui = pcall(require, 'fff.picker_ui.picker_ui')
+  if not picker_ok then
+    vim.notify('Failed to load picker UI: ' .. picker_ui, vim.log.levels.ERROR)
+    return false
+  end
+  return picker_ui.resume()
+end
 
 -- Strip wrapper punctuation that frequently surrounds paths in prose: leading
 -- markdown-link `[`, parens `(`, brackets `<`, quotes; trailing sentence
