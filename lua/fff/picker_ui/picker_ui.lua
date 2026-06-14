@@ -83,7 +83,6 @@ M.scroll_to_bottom = renderer.scroll_to_bottom
 -- Wire layout_manager module (relayout, close)
 layout_manager.init(M)
 M.relayout = layout_manager.relayout
-M.close_windows = layout_manager.close_windows
 
 -- Resume state: saved snapshots of closed pickers for the resume feature.
 --- @type table|nil Saved state from last file picker (find_files) session
@@ -96,17 +95,13 @@ local last_closed_mode = nil
 --- Save the current picker state for later resume, then close.
 local function save_state_and_close()
   if M.state.query == '' then
-    -- Don't save empty state to avoid confusion on resume
-    M.close_windows()
+    layout_manager.close()
     return
   end
   if not M.state.active then return end
 
-  -- Deep copy the full state to capture all data fields (future-proof).
-  -- Window/buffer handles are also copied but are ignored during restore since UI is recreated.
   local snapshot = vim.deepcopy(M.state)
 
-  -- Capture the base_path from the Rust file indexer (not part of M.state)
   local fuzzy = require('fff.core').ensure_initialized()
   local ok, base_path = pcall(fuzzy.get_base_path)
   if ok and base_path then
@@ -115,7 +110,6 @@ local function save_state_and_close()
     snapshot.base_path = M.state.config and M.state.config.base_path or nil
   end
 
-  -- Save to the mode-specific slot
   if M.state.mode == 'grep' then
     last_grep_picker_state = snapshot
     last_closed_mode = 'grep'
@@ -124,7 +118,7 @@ local function save_state_and_close()
     last_closed_mode = 'files'
   end
 
-  M.close_windows()
+  layout_manager.close()
 end
 
 --- Internal: restore picker from a saved state snapshot.
@@ -206,14 +200,7 @@ local function restore_from_state(state, source_label)
   return true
 end
 
---- Close the picker, saving state for later resume.
---- When query is empty, the state is not saved.
----@param skip_save boolean|nil When true, closes without saving (for internal use)
-function M.close(skip_save)
-  if skip_save then
-    M.close_windows()
-    return
-  end
+function M.close()
   save_state_and_close()
 end
 
