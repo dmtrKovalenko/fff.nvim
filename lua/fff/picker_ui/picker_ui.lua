@@ -93,7 +93,7 @@ local last_grep_picker_state = nil
 local last_closed_mode = nil
 
 --- Save the current picker state for later resume, then close.
-local function save_state_and_close()
+function M.close()
   if M.state.query == '' then
     layout_manager.close()
     return
@@ -198,10 +198,6 @@ local function restore_from_state(state, source_label)
   end)
 
   return true
-end
-
-function M.close()
-  save_state_and_close()
 end
 
 ---@return boolean|nil true if a picker was resumed, false otherwise
