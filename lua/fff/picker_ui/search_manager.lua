@@ -315,7 +315,10 @@ function M.cycle_forward_query()
   if not P.state.active then return end
 
   if S.history_offset == nil then
-    -- Already at present state, nothing to cycle forward to
+    -- At top of stack (fresh open or resume with pre-filled input).
+    -- Clear input to return to a clean slate.
+    S.history_offset = nil
+    vim.api.nvim_buf_set_lines(S.input_buf, 0, -1, false, { S.config.prompt })
     return
   elseif S.history_offset == 0 then
     -- At the most recent history entry, go back to present
