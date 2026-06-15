@@ -84,13 +84,11 @@ M.scroll_to_bottom = renderer.scroll_to_bottom
 layout_manager.init(M)
 M.relayout = layout_manager.relayout
 
--- Resume state: saved snapshots of closed pickers for the resume feature.
---- @type table|nil Saved state from last file picker (find_files) session
-local last_file_picker_state = nil
---- @type table|nil Saved state from last grep session
-local last_grep_picker_state = nil
---- @type string|nil 'files' or 'grep' — which mode was most recently closed
-local last_closed_mode = nil
+--- @class fff.ResumeState
+--- @field files table|nil Snapshot from last find_files session
+--- @field grep table|nil Snapshot from last live_grep session
+--- @field last_mode 'files'|'grep'|nil Mode of the most recently closed picker
+local resume_state = { files = nil, grep = nil, last_mode = nil }
 
 --- Save the current picker state for later resume, then close.
 function M.close()
@@ -101,21 +99,14 @@ function M.close()
   if not M.state.active then return end
 
   local snapshot = vim.deepcopy(M.state)
-
-  local fuzzy = require('fff.core').ensure_initialized()
-  local ok, base_path = pcall(fuzzy.get_base_path)
-  if ok and base_path then
-    snapshot.base_path = base_path
-  else
-    snapshot.base_path = M.state.config and M.state.config.base_path or nil
-  end
+  snapshot.base_path = M.state.config and M.state.config.base_path or nil
 
   if M.state.mode == 'grep' then
-    last_grep_picker_state = snapshot
-    last_closed_mode = 'grep'
+    resume_state.grep = snapshot
+    resume_state.last_mode = 'grep'
   else
-    last_file_picker_state = snapshot
-    last_closed_mode = 'files'
+    resume_state.files = snapshot
+    resume_state.last_mode = 'files'
   end
 
   layout_manager.close()
@@ -200,25 +191,25 @@ local function restore_from_state(state, source_label)
   return true
 end
 
+--- Close any active picker before resuming so the user can re-trigger
+--- resume to recreate the previous results without manually closing first.
+local function close_active_for_resume()
+  if M.state.active then layout_manager.close() end
+end
+
 ---@return boolean|nil true if a picker was resumed, false otherwise
 function M.resume()
-  if M.state.active then
-    vim.notify('FFF: close the current picker before resuming', vim.log.levels.INFO)
-    return false
-  end
+  close_active_for_resume()
 
-  -- Pick the most recently closed mode
-  if last_closed_mode == 'grep' then
+  if resume_state.last_mode == 'grep' then
     return M.resume_live_grep()
-  elseif last_closed_mode == 'files' then
+  elseif resume_state.last_mode == 'files' then
     return M.resume_find_files()
   end
 
-  -- Fallback: try grep state, then file state, then open an empty find_files picker
-  if last_grep_picker_state then return restore_from_state(last_grep_picker_state, 'grep resume') end
-  if last_file_picker_state then return restore_from_state(last_file_picker_state, 'files resume') end
+  if resume_state.grep then return restore_from_state(resume_state.grep, 'grep resume') end
+  if resume_state.files then return restore_from_state(resume_state.files, 'files resume') end
 
-  -- Nothing saved: open an empty find_files picker
   return M.open()
 end
 
@@ -227,17 +218,11 @@ end
 ---@param opts? table Optional config overrides for fallback open
 ---@return boolean|nil
 function M.resume_find_files(opts)
-  if M.state.active then
-    vim.notify('FFF: close the current picker before resuming', vim.log.levels.INFO)
-    return false
-  end
+  close_active_for_resume()
 
-  if not last_file_picker_state then
-    -- Nothing saved: open a new find_files picker
-    return M.open(opts)
-  end
+  if not resume_state.files then return M.open(opts) end
 
-  return restore_from_state(last_file_picker_state, 'find_files resume')
+  return restore_from_state(resume_state.files, 'find_files resume')
 end
 
 --- Resume the last live_grep picker.
@@ -245,13 +230,9 @@ end
 ---@param opts? table Optional config overrides for fallback open
 ---@return boolean
 function M.resume_live_grep(opts)
-  if M.state.active then
-    vim.notify('FFF: close the current picker before resuming', vim.log.levels.INFO)
-    return false
-  end
+  close_active_for_resume()
 
-  if not last_grep_picker_state then
-    -- Nothing saved: open a new live_grep picker
+  if not resume_state.grep then
     local config = conf.get()
     local grep_renderer = require('fff.picker_ui.grep_renderer')
     local grep_config = vim.tbl_deep_extend('force', config.grep or {}, (opts and opts.grep) or {})
@@ -264,7 +245,7 @@ function M.resume_live_grep(opts)
     return true
   end
 
-  return restore_from_state(last_grep_picker_state, 'live_grep resume')
+  return restore_from_state(resume_state.grep, 'live_grep resume')
 end
 
 function M.toggle_debug()
