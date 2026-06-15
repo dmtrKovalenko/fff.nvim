@@ -14,7 +14,7 @@ SHELL := bash
 # string rather than the literal `-o` / `pipefail` tokens.
 .SHELLFLAGS := -o pipefail -ec
 
-.PHONY: build build-c-lib install uninstall test test-rust test-c-smoke test-c-api test-lua test-lua-snap test-version test-bun test-node prepare-bun prepare-bun-packaged prepare-node set-npm-version header test-stress test-stress-seeded test-stress-random test-stress-repos test-node-stress sync-js-api sync-js-api-check bump-homebrew-formula bump-install-mcp-sh test-bun-compile 
+.PHONY: build build-c-lib build-c-lib-prof install uninstall test test-rust test-c-smoke test-c-api test-lua test-lua-snap test-version test-bun test-node prepare-bun prepare-bun-packaged prepare-node prepare-node-prof set-npm-version header test-stress test-stress-seeded test-stress-random test-stress-repos test-node-stress test-node-watcher-stress test-node-watcher-stress-prof sync-js-api sync-js-api-check bump-homebrew-formula bump-install-mcp-sh test-bun-compile
 
 all: format test lint
 
@@ -51,6 +51,9 @@ build:
 
 build-c-lib:
 	cargo build --release -p fff-c --features zlob
+
+build-c-lib-prof:
+	cargo build --profile prof -p fff-c --features zlob
 
 header:
 	cbindgen --config crates/fff-c/cbindgen.toml --crate fff-c --output crates/fff-c/include/fff.h
@@ -163,6 +166,12 @@ prepare-node: build sync-js-api
 	cp target/release/libfff_c.so packages/fff-node/bin/ 2>/dev/null || true; \
 	cp target/release/fff_c.dll packages/fff-node/bin/ 2>/dev/null || true
 
+prepare-node-prof: build-c-lib-prof sync-js-api
+	mkdir -p packages/fff-node/bin
+	cp target/prof/libfff_c.dylib packages/fff-node/bin/ 2>/dev/null || true; \
+	cp target/prof/libfff_c.so packages/fff-node/bin/ 2>/dev/null || true; \
+	cp target/prof/fff_c.dll packages/fff-node/bin/ 2>/dev/null || true
+
 test-bun: prepare-bun
 	cd packages/fff-bun && bun test test/
 	cd packages/pi-fff && bun test test/
@@ -218,6 +227,21 @@ FFF_STRESS_ITERS ?= 50
 test-node-stress: prepare-node
 	cd packages/fff-node && npm run build && \
 		FFF_STRESS_ITERS=$(FFF_STRESS_ITERS) node test/stress-515.mjs
+
+FFF_WATCHER_STRESS_ITERS ?= 12
+FFF_WATCHER_STRESS_OPS ?= 2500
+test-node-watcher-stress: prepare-node
+	cd packages/fff-node && npm run build && \
+		FFF_WATCHER_STRESS_ITERS=$(FFF_WATCHER_STRESS_ITERS) \
+		FFF_WATCHER_STRESS_OPS=$(FFF_WATCHER_STRESS_OPS) \
+		node test/watcher-churn-stress.mjs
+
+test-node-watcher-stress-prof: prepare-node-prof
+	cd packages/fff-node && npm run build && \
+		FFF_WATCHER_STRESS_ITERS=$(FFF_WATCHER_STRESS_ITERS) \
+		FFF_WATCHER_STRESS_OPS=$(FFF_WATCHER_STRESS_OPS) \
+		FFF_WATCHER_STRESS_LOG_LEVEL=trace \
+		node test/watcher-churn-stress.mjs
 
 test: test-rust test-lua test-lua-snap test-version test-bun test-node test-node-stress
 
