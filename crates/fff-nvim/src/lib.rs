@@ -463,7 +463,11 @@ pub fn live_grep(
     let options = fff::GrepSearchOptions {
         max_file_size: max_file_size.unwrap_or(10 * 1024 * 1024),
         max_matches_per_file: max_matches_per_file.unwrap_or(200),
-        smart_case: smart_case.unwrap_or(true),
+        case_mode: if smart_case.unwrap_or(true) {
+            fff::CaseMode::Smart
+        } else {
+            fff::CaseMode::Sensitive
+        },
         file_offset: file_offset.unwrap_or(0),
         page_limit: page_size.unwrap_or(50),
         mode,

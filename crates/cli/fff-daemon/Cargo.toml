@@ -1,0 +1,28 @@
+[package]
+name = "fff-daemon"
+version = "0.0.1"
+edition = "2024"
+description = "FFF file finder daemon — indexes files and serves search requests over UDS."
+license = "MIT"
+
+[[bin]]
+name = "fff-daemon"
+path = "src/main.rs"
+
+[dependencies]
+fff = { package = "fff-search", path = "../../fff-core", version = "0.8.4" }
+fff-ipc-domain = { path = "../fff-ipc-domain" }
+rkyv = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+mimalloc = { workspace = true }
+parking_lot = { workspace = true }
+rayon = { workspace = true }
+smallvec = { workspace = true }
+dunce = { workspace = true }
+sendfd = "0.4"
+signal-hook = "0.3"
+
+[lints]
+workspace = true

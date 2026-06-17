@@ -891,7 +891,7 @@ fn grep_plain_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
     let opts = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
-        smart_case: true,
+        case_mode: fff::CaseMode::Smart,
         file_offset: 0,
         page_limit: 500,
         mode: GrepMode::PlainText,
@@ -928,7 +928,7 @@ fn grep_fuzzy_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
     let opts = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
-        smart_case: true,
+        case_mode: fff::CaseMode::Smart,
         file_offset: 0,
         page_limit: 500,
         mode: GrepMode::Fuzzy,
@@ -960,7 +960,7 @@ fn grep_regex_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
     let opts = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
-        smart_case: true,
+        case_mode: fff::CaseMode::Smart,
         file_offset: 0,
         page_limit: 500,
         mode: GrepMode::Regex,

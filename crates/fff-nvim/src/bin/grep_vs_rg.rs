@@ -162,7 +162,7 @@ fn run_fff_full(picker: &FilePicker, query: &str) -> (usize, Duration) {
     let options = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: usize::MAX,
-        smart_case: true,
+        case_mode: fff::CaseMode::Smart,
         file_offset: 0,
         page_limit: usize::MAX,
         mode: Default::default(),
@@ -185,7 +185,7 @@ fn run_fff_page(picker: &FilePicker, query: &str) -> (usize, Duration) {
     let options = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
-        smart_case: true,
+        case_mode: fff::CaseMode::Smart,
         file_offset: 0,
         page_limit: 50,
         mode: Default::default(),
