@@ -23,6 +23,3 @@ which = "8.0.3"
 
 [dev-dependencies]
 test-case = "3"
-
-[lints]
-workspace = true

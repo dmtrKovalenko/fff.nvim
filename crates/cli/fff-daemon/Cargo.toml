@@ -23,6 +23,3 @@ smallvec = { workspace = true }
 dunce = { workspace = true }
 sendfd = "0.4"
 signal-hook = "0.3"
-
-[lints]
-workspace = true
