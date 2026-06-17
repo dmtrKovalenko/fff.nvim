@@ -17,8 +17,6 @@ const EVICTION_INTERVAL: Duration = Duration::from_secs(60);
 
 struct Session {
     picker: SharedFilePicker,
-    #[allow(dead_code)]
-    frecency: SharedFrecency,
     last_accessed: Instant,
 }
 
@@ -121,7 +119,7 @@ impl Inner {
 
         FilePicker::new_with_shared_state(
             picker.clone(),
-            frecency.clone(),
+            frecency,
             FilePickerOptions {
                 base_path: canonical.to_string_lossy().into_owned(),
                 enable_mmap_cache: false,
@@ -135,7 +133,7 @@ impl Inner {
 
         sessions.insert(
             canonical,
-            Session { picker: picker.clone(), frecency, last_accessed: Instant::now() },
+            Session { picker: picker.clone(), last_accessed: Instant::now() },
         );
 
         Ok(picker)
