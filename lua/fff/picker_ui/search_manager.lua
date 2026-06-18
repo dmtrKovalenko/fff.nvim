@@ -219,6 +219,13 @@ end
 function M.on_input_change()
   if not P.state.active then return end
 
+  -- Restore writes the query into the input buffer, which triggers this via
+  -- on_lines. Skip the resulting search so the restored cursor/items survive.
+  if S.suppress_input_change then
+    S.suppress_input_change = false
+    return
+  end
+
   local lines = vim.api.nvim_buf_get_lines(S.input_buf, 0, -1, false)
   local prompt_len = #S.config.prompt
   local query = ''

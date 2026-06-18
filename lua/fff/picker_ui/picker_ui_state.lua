@@ -30,6 +30,9 @@ M.state = {
   last_render_ctx = nil,
   location = nil,
 
+  -- Skip the next on_input_change (set during resume's buffer write)
+  suppress_input_change = false,
+
   -- History cycling state
   history_offset = nil,
   next_search_force_combo_boost = false,
