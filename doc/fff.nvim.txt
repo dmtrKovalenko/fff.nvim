@@ -1,5 +1,5 @@
 *fff.nvim.txt*
-                             For Neovim >= 0.10.0    Last change: 2026 June 13
+                             For Neovim >= 0.10.0    Last change: 2026 June 18
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -227,6 +227,9 @@ Defaults are sensible. Override only what you care about.
         preview_scroll_down = '<C-d>',
         toggle_debug = '<F2>',
         cycle_grep_modes = '<S-Tab>',
+        -- grep mode only: jump cursor to first match of next/prev file group
+        grep_jump_to_next_file = { '<C-A-n>', '<A-Down>' },
+        grep_jump_to_prev_file = { '<C-A-p>', '<A-Up>' },
         cycle_previous_query = '<C-Up>',
         toggle_select = '<Tab>',
         send_to_quickfix = '<C-q>',
@@ -388,16 +391,15 @@ disabled individually via `debug.show_file_info`.
 
 Customise the panel via `hl`:
 
-  -----------------------------------------------------------------------
+  --------------------------------------------------------------------------
   key                     default           used for
-  ----------------------- ----------------- -----------------------------
+  ----------------------- ----------------- --------------------------------
   file_info_section       Title             section header label
 
   file_info_separator     FloatBorder       dashes that act as section
                                             borders
 
-  file_info_label         Comment           row labels (Size, Type, Git,
-                                            …)
+  file_info_label         Comment           row labels (Size, Type, Git, …)
 
   file_info_value         Normal fg         plain values
 
@@ -417,7 +419,7 @@ Customise the panel via `hl`:
   file_info_score_pos     DiagnosticOk      positive score components
 
   file_info_score_neg     DiagnosticError   negative score components
-  -----------------------------------------------------------------------
+  --------------------------------------------------------------------------
 
 FILE FILTERING ~
 
