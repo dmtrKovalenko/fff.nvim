@@ -1,0 +1,33 @@
+[project]
+name = "fff-search"
+version = "0.9.5"
+description = "Python bindings for FFF (Fast File Finder)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "maturin>=1.0",
+]
+
+[project.urls]
+Repository = "https://github.com/dmtrKovalenko/fff.nvim"
+Issues = "https://github.com/dmtrKovalenko/fff.nvim/issues"
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+manifest-path = "../../crates/fff-python/Cargo.toml"
+module-name = "fff._fff_python"
+python-source = "src"
+exclude = ["src/**/__pycache__/*", "src/**/*.pyc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

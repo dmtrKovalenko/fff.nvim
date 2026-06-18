@@ -22,6 +22,10 @@ else
   })
 end
 
+vim.api.nvim_create_user_command('FFFResume', function() require('fff').resume() end, {
+  desc = 'Resume the last FFF picker (restores query, results, cursor, and mode)',
+})
+
 vim.api.nvim_create_user_command('FFFFind', function(opts)
   local fff = require('fff')
   if opts.args and opts.args ~= '' then
@@ -121,13 +125,11 @@ end, {
 })
 
 vim.api.nvim_create_user_command('FFFOpenLog', function()
-  local fff = require('fff')
-  local config = require('fff.conf').get()
-  if fff.log_file_path then
-    vim.cmd('tabnew ' .. vim.fn.fnameescape(fff.log_file_path))
-  elseif config and config.logging and config.logging.log_file then
-    -- Fallback to the configured log file path even if tracing wasn't initialized
-    vim.cmd('tabnew ' .. vim.fn.fnameescape(config.logging.log_file))
+  local core = require('fff.core')
+  core.ensure_initialized()
+
+  if core.log_file_path then
+    vim.cmd('tabnew ' .. vim.fn.fnameescape(core.log_file_path))
   else
     vim.notify('Log file path not available', vim.log.levels.ERROR)
   end

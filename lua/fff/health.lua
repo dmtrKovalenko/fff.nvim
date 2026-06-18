@@ -13,6 +13,60 @@ local function fetch_rust_checkhealth(rust_module, test_path)
   return result, nil
 end
 
+-- Report health for a rust-side LMDB section (frecency / query_tracker).
+-- opts.populate(section, db_info) copies DB-specific counters into health_section.
+-- opts.format_healthy_msg(db_info) returns the message for the healthy path;
+-- the unhealthy path is handled uniformly here as a critical error.
+local function report_db_health(rust_section, health_section, messages, label, opts)
+  if not rust_section then return end
+
+  health_section.initialized = rust_section.initialized
+  health_section.error = rust_section.error
+
+  if not rust_section.initialized then
+    table.insert(messages, {
+      level = 'info',
+      msg = label .. ' not initialized (will initialize on first use)',
+    })
+    return
+  end
+
+  local db_info = rust_section.db_healthcheck
+  if not db_info then
+    if rust_section.db_healthcheck_error then
+      table.insert(messages, {
+        level = 'warn',
+        msg = label .. ' initialized but health check failed: ' .. rust_section.db_healthcheck_error,
+      })
+    else
+      table.insert(messages, { level = 'ok', msg = label .. ' initialized' })
+    end
+    return
+  end
+
+  health_section.db_path = db_info.path
+  health_section.disk_size = db_info.disk_size
+  health_section.healthy = db_info.healthy
+  if opts.populate then opts.populate(health_section, db_info) end
+
+  if db_info.healthy == false then
+    table.insert(messages, {
+      level = 'error',
+      msg = string.format(
+        '%s UNRESPONSIVE — CRITICAL ERROR (see logs; try removing %s/lock.mdb to unblock)',
+        label,
+        db_info.path or 'unknown'
+      ),
+    })
+    return
+  end
+
+  table.insert(messages, {
+    level = 'ok',
+    msg = opts.format_healthy_msg(db_info),
+  })
+end
+
 --- Check snacks.nvim image preview availability
 --- @return table image_preview_info
 local function check_image_preview()
@@ -77,6 +131,7 @@ function M.run(opts)
         db_path = nil,
         disk_size = nil,
         entries = nil,
+        healthy = nil,
         error = nil,
       },
       query_tracker = {
@@ -85,6 +140,7 @@ function M.run(opts)
         disk_size = nil,
         query_file_entries = nil,
         query_history_entries = nil,
+        healthy = nil,
         error = nil,
       },
     },
@@ -175,6 +231,7 @@ function M.run(opts)
 
       if rust_health.file_picker.initialized then
         local status = rust_health.file_picker.is_scanning and 'scanning' or 'ready'
+
         table.insert(health.messages, {
           level = 'ok',
           msg = string.format(
@@ -192,88 +249,33 @@ function M.run(opts)
       end
     end
 
-    -- Frecency database status
-    if rust_health.frecency then
-      health.rust.frecency.initialized = rust_health.frecency.initialized
-      health.rust.frecency.error = rust_health.frecency.error
+    report_db_health(rust_health.frecency, health.rust.frecency, health.messages, 'Frecency database', {
+      populate = function(section, db_info) section.entries = db_info.absolute_frecency_entries end,
+      format_healthy_msg = function(db_info)
+        return string.format(
+          'Frecency database operational (%d entries, %s, path: %s)',
+          db_info.absolute_frecency_entries or 0,
+          utils.format_file_size(db_info.disk_size or 0),
+          db_info.path or 'unknown'
+        )
+      end,
+    })
 
-      if rust_health.frecency.initialized then
-        local db_info = rust_health.frecency.db_healthcheck
-        if db_info then
-          health.rust.frecency.db_path = db_info.path
-          health.rust.frecency.disk_size = db_info.disk_size
-          health.rust.frecency.entries = db_info.absolute_frecency_entries
-
-          table.insert(health.messages, {
-            level = 'ok',
-            msg = string.format(
-              'Frecency database initialized (%d entries, %s, path: %s)',
-              db_info.absolute_frecency_entries or 0,
-              utils.format_file_size(db_info.disk_size or 0),
-              db_info.path or 'unknown'
-            ),
-          })
-        elseif rust_health.frecency.db_healthcheck_error then
-          table.insert(health.messages, {
-            level = 'warn',
-            msg = 'Frecency database initialized but health check failed: '
-              .. rust_health.frecency.db_healthcheck_error,
-          })
-        else
-          table.insert(health.messages, {
-            level = 'ok',
-            msg = 'Frecency database initialized',
-          })
-        end
-      else
-        table.insert(health.messages, {
-          level = 'info',
-          msg = 'Frecency database not initialized (will initialize on first use)',
-        })
-      end
-    end
-
-    if rust_health.query_tracker then
-      health.rust.query_tracker.initialized = rust_health.query_tracker.initialized
-      health.rust.query_tracker.error = rust_health.query_tracker.error
-
-      if rust_health.query_tracker.initialized then
-        local db_info = rust_health.query_tracker.db_healthcheck
-        if db_info then
-          health.rust.query_tracker.db_path = db_info.path
-          health.rust.query_tracker.disk_size = db_info.disk_size
-          health.rust.query_tracker.query_file_entries = db_info.query_file_entries
-          health.rust.query_tracker.query_history_entries = db_info.query_history_entries
-
-          table.insert(health.messages, {
-            level = 'ok',
-            msg = string.format(
-              'Query tracker initialized (%d query-file mappings, %d history entries, %s, path: %s)',
-              db_info.query_file_entries or 0,
-              db_info.query_history_entries or 0,
-              utils.format_file_size(db_info.disk_size or 0),
-              db_info.path or 'unknown'
-            ),
-          })
-        elseif rust_health.query_tracker.db_healthcheck_error then
-          table.insert(health.messages, {
-            level = 'warn',
-            msg = 'Query tracker initialized but health check failed: '
-              .. rust_health.query_tracker.db_healthcheck_error,
-          })
-        else
-          table.insert(health.messages, {
-            level = 'ok',
-            msg = 'Query tracker initialized',
-          })
-        end
-      else
-        table.insert(health.messages, {
-          level = 'info',
-          msg = 'Query tracker not initialized (will initialize on first use)',
-        })
-      end
-    end
+    report_db_health(rust_health.query_tracker, health.rust.query_tracker, health.messages, 'Query cache database', {
+      populate = function(section, db_info)
+        section.query_file_entries = db_info.query_file_entries
+        section.query_history_entries = db_info.query_history_entries
+      end,
+      format_healthy_msg = function(db_info)
+        return string.format(
+          'Query cache database operational (%d query-file mappings, %d history entries, %s, path: %s)',
+          db_info.query_file_entries or 0,
+          db_info.query_history_entries or 0,
+          utils.format_file_size(db_info.disk_size or 0),
+          db_info.path or 'unknown'
+        )
+      end,
+    })
   else
     health.ok = false
     table.insert(health.messages, {

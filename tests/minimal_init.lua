@@ -4,9 +4,14 @@
 -- Set up runtimepath to include the plugin and plenary
 local plugin_dir = vim.fn.fnamemodify(vim.fn.resolve(vim.fn.expand('<sfile>:p')), ':h:h')
 local plenary_dir = os.getenv('PLENARY_DIR') or (plugin_dir .. '/../plenary.nvim')
+local mini_dir = os.getenv('MINI_DIR') or (plugin_dir .. '/../mini.nvim')
 
 vim.opt.runtimepath:prepend(plugin_dir)
 vim.opt.runtimepath:prepend(plenary_dir)
+vim.opt.runtimepath:prepend(mini_dir)
+
+-- Make `tests/` itself a Lua require root so test helper modules (e.g. tests.snapshot.fixture) resolve.
+package.path = string.format('%s/?.lua;%s/?/init.lua;%s', plugin_dir, plugin_dir, package.path)
 
 -- Disable swap files and other noise for testing
 vim.o.swapfile = false

@@ -79,13 +79,7 @@ local function setup_global_autocmds(config)
       if new_canonical == base_canonical then return end
 
       vim.schedule(function()
-        -- Delay require to avoid circular dependency: core -> main -> picker_ui -> file_picker -> core
-        local ok, picker = pcall(require, 'fff.main')
-        if not ok then
-          vim.notify('FFF: Failed to load main module: ' .. tostring(picker), vim.log.levels.ERROR)
-          return
-        end
-        local change_ok, err = pcall(picker.change_indexing_directory, new_canonical)
+        local change_ok, err = pcall(M.change_indexing_directory, new_canonical)
         if not change_ok then
           vim.notify('FFF: Failed to change indexing directory: ' .. tostring(err), vim.log.levels.ERROR)
         end
@@ -98,13 +92,48 @@ end
 --- @return boolean
 M.is_file_picker_initialized = function() return state.file_picker_initialized end
 
+--- Change the base directory for the file picker. Triggers a reindex on the
+--- Rust side and updates `config.base_path` so subsequent `:cd` events compare
+--- against the new root.
+--- @param new_path string New directory path to use as base
+--- @return boolean ok `true` if the reindex was scheduled, `false` otherwise
+M.change_indexing_directory = function(new_path)
+  if not new_path or new_path == '' then
+    vim.notify('Directory path is required', vim.log.levels.ERROR)
+    return false
+  end
+
+  local expanded_path = vim.fn.expand(new_path)
+  if vim.fn.isdirectory(expanded_path) ~= 1 then
+    vim.notify('Directory does not exist: ' .. expanded_path, vim.log.levels.ERROR)
+    return false
+  end
+
+  local fff_rust = M.ensure_initialized()
+  local config = require('fff.conf').get()
+  local ok, err = pcall(fff_rust.restart_index_in_path, expanded_path, {
+    follow_symlinks = config.follow_symlinks,
+    enable_fs_root_scanning = config.enable_fs_root_scanning,
+    enable_home_dir_scanning = config.enable_home_dir_scanning,
+    enable_filename_constraint = config.grep and config.grep.enable_filename_constraint,
+  })
+  if not ok then
+    vim.notify('Failed to change directory: ' .. err, vim.log.levels.ERROR)
+    return false
+  end
+
+  require('fff.conf').get().base_path = expanded_path
+  return true
+end
+
 M.ensure_initialized = function()
   if state.initialized then return fuzzy end
   state.initialized = true
 
   local config = require('fff.conf').get()
   if config.logging.enabled then
-    local log_success, log_error = pcall(fuzzy.init_tracing, config.logging.log_file, config.logging.log_level)
+    local log_success, log_error =
+      pcall(fuzzy.init_tracing, config.logging.log_file, config.logging.log_level, config.logging.retain_runs)
     if log_success then
       M.log_file_path = log_error
     else
@@ -118,7 +147,12 @@ M.ensure_initialized = function()
   local ok, result = pcall(fuzzy.init_db, frecency_db_path, history_db_path, true)
   if not ok then vim.notify('Failed to databases: ' .. tostring(result), vim.log.levels.WARN) end
 
-  ok, result = pcall(fuzzy.init_file_picker, config.base_path)
+  ok, result = pcall(fuzzy.init_file_picker, config.base_path, {
+    follow_symlinks = config.follow_symlinks,
+    enable_fs_root_scanning = config.enable_fs_root_scanning,
+    enable_home_dir_scanning = config.enable_home_dir_scanning,
+    enable_filename_constraint = config.grep and config.grep.enable_filename_constraint,
+  })
   if not ok then
     vim.notify('Failed to initialize file picker: ' .. tostring(result), vim.log.levels.ERROR)
     return fuzzy
@@ -127,8 +161,14 @@ M.ensure_initialized = function()
   state.file_picker_initialized = true
   setup_global_autocmds(config)
 
-  local git_utils = require('fff.git_utils')
-  git_utils.setup_highlights()
+  local highlights = require('fff.highlights')
+  highlights.setup()
+
+  vim.api.nvim_create_autocmd('ColorScheme', {
+    group = vim.api.nvim_create_augroup('fff_highlights', { clear = true }),
+    callback = function() highlights.setup() end,
+    desc = 'Re-apply FFF highlights on colorscheme change',
+  })
 
   return fuzzy
 end

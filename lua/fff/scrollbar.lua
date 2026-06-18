@@ -49,6 +49,10 @@ function M.render(layout, config, list_win, pagination, prompt_position)
       border = 'none',
       style = 'minimal',
       focusable = false,
+      -- Float above the list/preview borders so the thumb is visible. Must
+      -- be higher than the list (52) and preview (51) zindex; 200 leaves
+      -- room for transient overlays (combo separator at 250 still wins).
+      zindex = 200,
     })
 
     local scrollbar_hl = string.format('Normal:%s', config.hl.border)

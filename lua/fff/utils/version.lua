@@ -34,12 +34,18 @@ function M.current_release_tag(repo_root)
   local raw = git(repo_root, 'tag', '--points-at', 'HEAD')
   if not raw then return nil end
 
-  local stable, nightly, dev, other
+  -- A nightly commit carries both the per-sha tag (e.g. 0.9.2-nightly.abc1234,
+  -- which owns a permanent release with that commit's binaries) and the rolling
+  -- `nightly` alias. Prefer the per-sha tag so a pinned install downloads the
+  -- binary built for its own commit, not whatever `nightly` currently points at.
+  local stable, nightly_versioned, nightly_alias, dev, other
   for tag in raw:gmatch('[^\n]+') do
     if tag:match('^v%d') then
       stable = tag
     elseif tag:match('%-nightly%.') then
-      nightly = tag
+      nightly_versioned = tag
+    elseif tag == 'nightly' then
+      nightly_alias = tag
     elseif tag:match('%-dev%.') then
       dev = tag
     else
@@ -47,7 +53,7 @@ function M.current_release_tag(repo_root)
     end
   end
 
-  return stable or nightly or dev or other
+  return stable or nightly_versioned or dev or other or nightly_alias
 end
 
 function M.read_base_version(repo_root)
@@ -69,7 +75,7 @@ end
 
 ---@class FFFVersionInfo
 ---@field version string semver version (e.g. "0.4.0" or "0.4.1-nightly.abc1234")
----@field release_tag string GitHub release tag for download URLs
+---@field release_tag string permanent GitHub release tag clients download from (per-sha for nightlies)
 ---@field is_release boolean true for tagged stable releases
 ---@field npm_tag string "latest"|"nightly"|"dev"
 
@@ -135,6 +141,10 @@ function M.resolve(repo_root)
   end
 
   local version = string.format('%s-%s.%s', next_version, prerelease_label, short_sha)
+  -- Each nightly gets its own permanent per-sha release/tag so a pinned or stale
+  -- install always downloads the binary built for its exact commit. CI also moves
+  -- the rolling `nightly` tag to HEAD for "give me latest" tooling, but clients
+  -- never resolve to it when their commit has a per-sha tag.
   return {
     version = version,
     release_tag = version,

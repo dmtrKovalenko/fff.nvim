@@ -1,11 +1,3 @@
-//! FFF MCP Server — high-performance file finder for AI code assistants.
-//!
-//! Drop-in replacement for AI code assistant file search tools (Glob/Grep).
-//! Provides frecency-ranked, fuzzy-matched, git-aware file finding and
-//! code search via the Model Context Protocol (MCP).
-//!
-//! Uses `fff-core` directly (zero FFI overhead) for all search operations.
-
 mod cursor;
 mod healthcheck;
 mod output;
@@ -100,7 +92,7 @@ pub const MCP_INSTRUCTIONS: &str = concat!(
     "  !generated/ - exclude generated code",
 );
 
-/// FFF MCP Server — high-performance file finder for AI code assistants.
+/// FFF MCP Server -- a high performance & accuracy file finder for AI code assistants.
 #[derive(Parser)]
 #[command(name = "fff-mcp", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("FFF_GIT_HASH"), ")"))]
 pub(crate) struct Args {
@@ -117,7 +109,8 @@ pub(crate) struct Args {
     #[allow(dead_code)]
     history_db_path: Option<String>,
 
-    /// Path to the log file.
+    /// Path-shape hint for per-session log files.
+    /// Each fff-mcp startup writes a fresh sibling file `<stem>+<UTC-timestamp>+<pid>.<ext>`
     #[arg(long = "log-file")]
     log_file: Option<String>,
 
@@ -201,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let log_file = args.log_file.as_deref().unwrap_or("");
-    if let Err(e) = fff::log::init_tracing(log_file, args.log_level.as_deref()) {
+    if let Err(e) = fff::log::init_tracing(log_file, args.log_level.as_deref(), None) {
         eprintln!("Warning: Failed to init tracing: {}", e);
     }
 
@@ -238,7 +231,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match FrecencyTracker::open(&frecency_db_path) {
             Ok(tracker) => {
                 let _ = shared_frecency.init(tracker);
-                let _ = shared_frecency.spawn_gc(frecency_db_path);
             }
             Err(e) => {
                 eprintln!("Warning: Failed to init frecency db: {}", e);
@@ -270,6 +262,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cache_budget: args
                 .max_cached_files
                 .map(fff::ContentCacheBudget::new_for_repo),
+            follow_symlinks: false,
+            ..Default::default()
         },
     )
     .map_err(|e| format!("Failed to init file picker: {}", e))?;

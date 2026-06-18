@@ -3,8 +3,14 @@ name: Rust CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
 
 env:
   CARGO_TERM_COLOR: always

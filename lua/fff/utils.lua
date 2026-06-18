@@ -88,4 +88,53 @@ function M.is_one_of(value, values)
   return false
 end
 
+--- Resolve an indexer-relative path to an absolute one against the picker's current `base_path`.
+--- @param relative_path string|nil
+--- @return string|nil
+function M.canonicalize_fff_path(relative_path)
+  if not relative_path or relative_path == '' then return nil end
+  local path = relative_path
+  -- Strip Windows long-path prefix (\\?\) — Neovim cannot open these.
+  if vim.startswith(path, '\\\\?\\') then path = path:sub(5) end
+  if vim.fn.fnamemodify(path, ':p') == path then return path end
+  local base = require('fff.conf').get().base_path
+  if not base or base == '' then return path end
+  return vim.fs.normalize(base .. '/' .. path)
+end
+
+--- Whether a window has `winfixbuf` set (cannot host a different buffer).
+--- @param win number Window ID
+--- @return boolean
+function M.window_has_winfixbuf(win)
+  local ok, val = pcall(vim.api.nvim_get_option_value, 'winfixbuf', { win = win })
+  return ok and val == true
+end
+
+--- Find the first window in the current tabpage that can host a regular file
+--- buffer (writable, not locked, not the picker's own floats).
+--- @param exclude_wins? table<number, boolean> Optional set of window IDs to skip.
+--- @return number|nil
+function M.find_suitable_window(exclude_wins)
+  exclude_wins = exclude_wins or {}
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_get_current_tabpage())) do
+    if vim.api.nvim_win_is_valid(win) and not exclude_wins[win] then
+      local buf = vim.api.nvim_win_get_buf(win)
+      if vim.api.nvim_buf_is_valid(buf) then
+        local buftype = vim.api.nvim_get_option_value('buftype', { buf = buf })
+        local modifiable = vim.api.nvim_get_option_value('modifiable', { buf = buf })
+        local filetype = vim.api.nvim_get_option_value('filetype', { buf = buf })
+        if
+          (buftype == '' or buftype == 'acwrite')
+          and modifiable
+          and filetype ~= 'undotree'
+          and not M.window_has_winfixbuf(win)
+        then
+          return win
+        end
+      end
+    end
+  end
+  return nil
+end
+
 return M

@@ -90,13 +90,13 @@ pub fn run_healthcheck(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         check("History DB", false, "path not resolved");
     }
 
-    // 5. Log file
+    // 5. Log path hint (per-session files written next to this path)
     if let Some(ref log_path) = args.log_file {
         let parent_ok = std::path::Path::new(log_path)
             .parent()
-            .is_some_and(|p| p.is_dir());
+            .is_some_and(|p| p.is_dir() || p.parent().is_some());
         all_ok &= check(
-            "Log file",
+            "Log path",
             parent_ok,
             if parent_ok {
                 log_path
@@ -105,7 +105,7 @@ pub fn run_healthcheck(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             },
         );
     } else {
-        check("Log file", false, "path not resolved");
+        check("Log path", false, "path not resolved");
     }
 
     if all_ok {

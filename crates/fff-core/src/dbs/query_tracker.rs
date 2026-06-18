@@ -1,5 +1,5 @@
 use super::db_healthcheck::DbHealthChecker;
-use super::lmdb::{LmdbStore, is_map_full};
+use super::lmdb::{DbHealth, LmdbStore, is_map_full};
 use crate::error::Error;
 use heed::types::{Bytes, SerdeBincode};
 use heed::{Database, Env};
@@ -34,6 +34,7 @@ pub struct QueryTracker {
     query_history_db: Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
     // Database for project_path -> VecDeque<HistoryEntry> mappings (grep)
     grep_query_history_db: Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
+    health: DbHealth,
 }
 
 impl DbHealthChecker for QueryTracker {
@@ -41,15 +42,40 @@ impl DbHealthChecker for QueryTracker {
         &self.env
     }
 
-    fn count_entries(&self) -> Result<Vec<(&'static str, u64)>, Error> {
-        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
+    fn is_healthy(&self) -> bool {
+        self.health.is_healthy()
+    }
 
-        let count_queries = self.query_file_db.len(&rtxn).map_err(Error::DbRead)?;
-        let count_histories = self.query_history_db.len(&rtxn).map_err(Error::DbRead)?;
-        let count_grep_histories = self
-            .grep_query_history_db
+    fn count_entries(&self) -> Result<Vec<(&'static str, u64)>, Error> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|source| Error::DbStartReadTxn {
+                db: Self::LABEL,
+                source,
+            })?;
+
+        let count_queries = self
+            .query_file_db
             .len(&rtxn)
-            .map_err(Error::DbRead)?;
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?;
+        let count_histories = self
+            .query_history_db
+            .len(&rtxn)
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?;
+        let count_grep_histories =
+            self.grep_query_history_db
+                .len(&rtxn)
+                .map_err(|source| Error::DbRead {
+                    db: Self::LABEL,
+                    source,
+                })?;
 
         Ok(vec![
             ("query_file_entries", count_queries),
@@ -60,12 +86,19 @@ impl DbHealthChecker for QueryTracker {
 }
 
 impl LmdbStore for QueryTracker {
+    const LABEL: &'static str = "query";
     // 10 MiB hard ceiling. Same reasoning as FrecencyTracker (GH issue #437).
     const MAP_SIZE: usize = 10 * 1024 * 1024;
     const MAX_DBS: u32 = 16;
-    // Nuke at 4 MiB — query history is bounded per-project but query→file
-    // associations grow unbounded over typing time.
-    const SIZE_CAP_BYTES: u64 = 4 * 1024 * 1024;
+    const SIZE_CAP_BYTES: u64 = 8 * 1024 * 1024;
+
+    fn env(&self) -> &Env {
+        &self.env
+    }
+
+    fn health(&self) -> &DbHealth {
+        &self.health
+    }
 }
 
 impl QueryTracker {
@@ -76,7 +109,7 @@ impl QueryTracker {
 
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self, Error> {
         let db_path = db_path.as_ref();
-        let env = Self::open_env(db_path)?;
+        let (env, health) = Self::open_env(db_path)?;
 
         let query_file_db = Self::open_database_safe(&env, Some("query_file_associations"))?;
         let query_history_db = Self::open_database_safe(&env, Some("query_history"))?;
@@ -87,6 +120,7 @@ impl QueryTracker {
             query_file_db,
             query_history_db,
             grep_query_history_db,
+            health,
         })
     }
 
@@ -137,7 +171,10 @@ impl QueryTracker {
     ) -> Result<(), Error> {
         let mut history = db
             .get(wtxn, project_key)
-            .map_err(Error::DbRead)?
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?
             .unwrap_or_default();
 
         history.push_back(HistoryEntry {
@@ -149,7 +186,10 @@ impl QueryTracker {
         }
 
         db.put(wtxn, project_key, &history)
-            .map_err(Error::DbWrite)?;
+            .map_err(|source| Error::DbWrite {
+                db: Self::LABEL,
+                source,
+            })?;
         Ok(())
     }
 
@@ -161,11 +201,17 @@ impl QueryTracker {
         project_key: &[u8; 32],
         offset: usize,
     ) -> Result<Option<String>, Error> {
-        let rtxn = env.read_txn().map_err(Error::DbStartReadTxn)?;
+        let rtxn = env.read_txn().map_err(|source| Error::DbStartReadTxn {
+            db: Self::LABEL,
+            source,
+        })?;
 
         let mut history = db
             .get(&rtxn, project_key)
-            .map_err(Error::DbRead)?
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?
             .unwrap_or_default();
 
         // history is FIFO, last element is most recent
@@ -188,12 +234,21 @@ impl QueryTracker {
         let file_path_buf = file_path.to_path_buf();
 
         let query_key = Self::create_query_key(project_path, query)?;
-        let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|source| Error::DbStartWriteTxn {
+                db: Self::LABEL,
+                source,
+            })?;
 
         let mut entry = self
             .query_file_db
             .get(&wtxn, &query_key)
-            .map_err(Error::DbRead)?
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?
             .unwrap_or_else(|| QueryMatchEntry {
                 file_path: file_path_buf.clone(),
                 open_count: 0,
@@ -225,6 +280,7 @@ impl QueryTracker {
 
         if let Err(e) = self.query_file_db.put(&mut wtxn, &query_key, &entry) {
             if is_map_full(&e) {
+                self.health.mark_unhealthy("MDB_MAP_FULL on put");
                 tracing::error!(
                     ?query,
                     "Query tracker DB hit MDB_MAP_FULL; dropping write — db will \
@@ -232,7 +288,10 @@ impl QueryTracker {
                 );
                 return Ok(());
             }
-            return Err(Error::DbWrite(e));
+            return Err(Error::DbWrite {
+                db: Self::LABEL,
+                source: e,
+            });
         }
 
         // Update query history database
@@ -240,9 +299,12 @@ impl QueryTracker {
         if let Err(e) =
             Self::append_to_history(&self.query_history_db, &mut wtxn, &project_key, query, now)
         {
-            if let Error::DbWrite(ref inner) = e
+            if let Error::DbWrite {
+                source: ref inner, ..
+            } = e
                 && is_map_full(inner)
             {
+                self.health.mark_unhealthy("MDB_MAP_FULL on history append");
                 tracing::error!(?query, "Query tracker DB map full while appending history");
                 return Ok(());
             }
@@ -251,10 +313,14 @@ impl QueryTracker {
 
         if let Err(e) = wtxn.commit() {
             if is_map_full(&e) {
+                self.health.mark_unhealthy("MDB_MAP_FULL on commit");
                 tracing::error!(?query, "Query tracker DB map full on commit");
                 return Ok(());
             }
-            return Err(Error::DbCommit(e));
+            return Err(Error::DbCommit {
+                db: Self::LABEL,
+                source: e,
+            });
         }
 
         tracing::debug!(?query, ?file_path, "Tracked query completion");
@@ -268,12 +334,21 @@ impl QueryTracker {
         min_combo_count: u32,
     ) -> Result<Option<QueryMatchEntry>, Error> {
         let query_key = Self::create_query_key(project_path, query)?;
-        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|source| Error::DbStartReadTxn {
+                db: Self::LABEL,
+                source,
+            })?;
 
         let last_match = self
             .query_file_db
             .get(&rtxn, &query_key)
-            .map_err(Error::DbRead)?;
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?;
 
         Ok(last_match.filter(|entry| entry.open_count >= min_combo_count))
     }
@@ -287,13 +362,21 @@ impl QueryTracker {
     ) -> Result<i32, Error> {
         let query_key = Self::create_query_key(project_path, query)?;
         tracing::debug!(?query_key, "HASH");
-        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|source| Error::DbStartReadTxn {
+                db: Self::LABEL,
+                source,
+            })?;
 
         match self
             .query_file_db
             .get(&rtxn, &query_key)
-            .map_err(Error::DbRead)?
-        {
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })? {
             Some(entry) => {
                 // Check if the file path matches and return boost
                 if entry.file_path == file_path && entry.open_count >= 2 {
@@ -322,7 +405,13 @@ impl QueryTracker {
     pub fn track_grep_query(&mut self, query: &str, project_path: &Path) -> Result<(), Error> {
         let now = self.get_now();
         let project_key = Self::create_project_key(project_path)?;
-        let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|source| Error::DbStartWriteTxn {
+                db: Self::LABEL,
+                source,
+            })?;
 
         if let Err(e) = Self::append_to_history(
             &self.grep_query_history_db,
@@ -331,9 +420,13 @@ impl QueryTracker {
             query,
             now,
         ) {
-            if let Error::DbWrite(ref inner) = e
+            if let Error::DbWrite {
+                source: ref inner, ..
+            } = e
                 && is_map_full(inner)
             {
+                self.health
+                    .mark_unhealthy("MDB_MAP_FULL on grep history append");
                 tracing::error!(?query, "Grep query history DB map full; dropping write");
                 return Ok(());
             }
@@ -342,10 +435,14 @@ impl QueryTracker {
 
         if let Err(e) = wtxn.commit() {
             if is_map_full(&e) {
+                self.health.mark_unhealthy("MDB_MAP_FULL on commit");
                 tracing::error!(?query, "Grep query history DB map full on commit");
                 return Ok(());
             }
-            return Err(Error::DbCommit(e));
+            return Err(Error::DbCommit {
+                db: Self::LABEL,
+                source: e,
+            });
         }
 
         tracing::debug!(?query, "Tracked grep query");

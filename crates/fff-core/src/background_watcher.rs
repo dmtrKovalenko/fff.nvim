@@ -1,5 +1,6 @@
+use crate::constants::MAX_OVERFLOW_FILES;
 use crate::error::Error;
-use crate::file_picker::{FFFMode, MAX_OVERFLOW_FILES};
+use crate::file_picker::FFFMode;
 use crate::git::GitStatusCache;
 use crate::shared::{SharedFilePicker, SharedFrecency};
 use crate::sort_buffer::sort_with_buffer;
@@ -25,7 +26,6 @@ pub struct BackgroundWatcher {
 }
 
 const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(50);
-const MAX_PATHS_THRESHOLD: usize = 1024;
 /// On macOS, each `watch()` call creates a separate FSEventStream. When the
 /// number of directories exceeds this threshold we fall back to a single
 /// recursive watch to avoid exhausting the per-process stream limit.
@@ -35,12 +35,16 @@ const MAX_MACOS_NONRECURSIVE_WATCHES: usize = 4096;
 const AI_MODE_COOLDOWN_SECS: u64 = 5 * 60;
 
 impl BackgroundWatcher {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         base_path: PathBuf,
         git_workdir: Option<PathBuf>,
         shared_picker: SharedFilePicker,
         shared_frecency: SharedFrecency,
         mode: FFFMode,
+        enable_fs_root_scanning: bool,
+        enable_home_dir_scanning: bool,
+        trace_span: tracing::Span,
     ) -> Result<Self, Error> {
         info!(
             "Initializing background watcher for path: {}, mode: {:?}",
@@ -48,34 +52,31 @@ impl BackgroundWatcher {
             mode,
         );
 
-        // Refuse to watch the filesystem root or the user's home directory.
-        // These are prone to high-volume event churn (editor temp files,
-        // browser caches, log rotations) which inflates the overflow arena
-        // and, on macOS, can exhaust the per-process FSEvents stream limit.
-        if base_path.parent().is_none()
-            || Some(base_path.as_os_str()) == dirs::home_dir().as_ref().map(|p| p.as_os_str())
-        {
+        // by default we do not want to allow users to search their FS root, this is very error prone
+        // though some consumers would specifically allow that e.g. unikernels, windows disc
+        // partition or sub file systems. By default - fail, unless user permits
+        let is_fs_root = base_path.parent().is_none();
+        // use rust's path api for maximum reliability of the comparison
+        let is_home_dir = Some(&base_path) == dirs::home_dir().as_ref();
+
+        if (is_fs_root && !enable_fs_root_scanning) || (is_home_dir && !enable_home_dir_scanning) {
             return Err(Error::FilesystemRoot(base_path));
         }
 
         // macOS: always use a single recursive FSEvent stream.
-        //
         // Per-dir NonRecursive watches create one FSEvent stream per dir.
         // The per-process FSEvent cap is lower than expected in practice
         // (4096 per process, but FFF usually is running within code editors),
         // and each failed `watch()` after the cap blocks ~40 ms on kernel retry.
         // Yes we pay for filtering events on handler phase but it is usable
         //
-        // macOS and Windows use a single recursive watch. FSEvents and
-        // ReadDirectoryChangesW both support true kernel-level recursion
-        // on one handle — per-dir NonRecursive watches burn streams/handles
-        // for no benefit and, on Windows, have been observed to silently
-        // drop Modify events for nested paths.
+        // Windows doesn't seem to have a hard cap, but in practice non recursive watching
+        // does a way worse job and often looses events which is not an option for us.
         //
         // Linux keeps the per-dir NonRecursive strategy: inotify has no
-        // kernel-level recursion, so Recursive here would still register
-        // one watch per subdir but without the ignored-dir filtering we
-        // get by iterating `picker.for_each_dir` ourselves.
+        // kernel-level watcher recursion, so we have to manually watch every single interested
+        // directory for watch events which is in practice stable and fast if system has enough
+        // spare watcher (configurable by the user, usually 100k - 1m)
         let use_recursive = cfg!(any(target_os = "macos", target_os = "windows"));
 
         let (watch_tx, watch_rx) = mpsc::channel::<PathBuf>();
@@ -104,9 +105,11 @@ impl BackgroundWatcher {
         #[cfg(target_os = "linux")]
         let owner_debouncer = Arc::clone(&debouncer);
 
+        let owner_span = trace_span.clone();
         let owner_thread = std::thread::Builder::new()
             .name("fff-watcher-own".into())
             .spawn(move || {
+                let _g = owner_span.enter();
                 while let Ok(dir) = watch_rx.recv() {
                     // if the picker is dropped we do need to exit the loop
                     let Some(strong_picker) = owner_weak_picker.upgrade() else {
@@ -497,10 +500,11 @@ fn handle_debounced_events(
         }
 
         affected_paths_count += debounced_event.event.paths.len();
-        if affected_paths_count > MAX_PATHS_THRESHOLD {
+        if affected_paths_count > MAX_OVERFLOW_FILES {
             warn!(
-                "Too many affected paths ({}) in a single batch, triggering full rescan",
-                affected_paths_count
+                ?affected_paths_count,
+                max = MAX_OVERFLOW_FILES,
+                "Too many affected paths in a single batch, triggering full rescan",
             );
 
             need_full_rescan = true;
@@ -587,12 +591,12 @@ fn handle_debounced_events(
         }
 
         overflow_count = picker.get_overflow_files().len();
-        info!(
-            files_updated = files_to_update_git_status.len(),
-            overflow_count, "File index changes applied",
-        );
     }
 
+    info!(
+        files_updated = files_to_update_git_status.len(),
+        overflow_count, "File index changes applied",
+    );
     if need_full_rescan || overflow_count > MAX_OVERFLOW_FILES {
         info!("Watcher faced limit of index overflow. Triggering rescan");
         if let Err(e) = shared_picker.trigger_full_rescan_async(shared_frecency) {
@@ -644,46 +648,54 @@ fn handle_debounced_events(
         }
     }
 
-    // Git status updates require a repository.
-    let Some(repo) = repo.as_ref() else {
-        debug!("No git repo available, skipping git status updates");
-        return new_dirs_to_watch;
-    };
+    // do not try to update the paths if we anyway going to rescan everything from scratch
+    if !need_full_rescan && (need_full_git_rescan || !files_to_update_git_status.is_empty()) {
+        let git_workdir = repo
+            .as_ref()
+            .map(|r| r.workdir().unwrap_or_else(|| r.path()).to_path_buf());
 
-    if need_full_git_rescan && !need_full_rescan {
-        info!("Triggering full git rescan");
+        let shared_picker = shared_picker.clone();
+        let shared_frecency = shared_frecency.clone();
 
-        if let Err(e) = shared_picker.refresh_git_status(shared_frecency) {
-            error!("Failed to refresh git status: {:?}", e);
-        }
-    }
+        // git status query even with a pathspec could be really slow, if we do this syncrhronously
+        // within the event handler, we actually risk of forming a snow ball of conflicting events
+        crate::parallelism::BACKGROUND_THREAD_POOL.spawn(move || {
+            let Some(git_path) = git_workdir else { return };
+            let Ok(repo) = Repository::open(&git_path) else {
+                error!("Failed to open git repo for async status update");
+                return;
+            };
 
-    // do not update the git status if the
-    if !files_to_update_git_status.is_empty() && !need_full_git_rescan {
-        info!(
-            "Fetching git status for {} files",
-            files_to_update_git_status.len()
-        );
-
-        let status = match GitStatusCache::git_status_for_paths(repo, &files_to_update_git_status) {
-            Ok(status) => status,
-            Err(e) => {
-                tracing::error!(?e, "Failed to query git status");
-                return new_dirs_to_watch;
+            if need_full_git_rescan && !need_full_rescan {
+                info!("Async: triggering full git rescan");
+                if let Err(e) = shared_picker.refresh_git_status(&shared_frecency) {
+                    error!("Failed to refresh git status: {:?}", e);
+                }
             }
-        };
 
-        if let Ok(mut guard) = shared_picker.write()
-            && let Some(ref mut picker) = *guard
-        {
-            if let Err(e) = picker.update_git_statuses(status, shared_frecency) {
-                error!("Failed to update git statuses: {:?}", e);
-            } else {
-                info!("Successfully updated git statuses in picker");
+            if !files_to_update_git_status.is_empty() {
+                let status = match GitStatusCache::git_status_for_paths(
+                    &repo,
+                    &files_to_update_git_status,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("Failed to query git status: {:?}", e);
+                        return;
+                    }
+                };
+
+                if let Ok(mut guard) = shared_picker.write()
+                    && let Some(ref mut picker) = *guard
+                {
+                    if let Err(e) = picker.update_git_statuses(status, &shared_frecency) {
+                        error!("Failed to update git statuses: {:?}", e);
+                    } else {
+                        info!("Async: git statuses updated");
+                    }
+                }
             }
-        } else {
-            error!("Failed to acquire picker lock for git status update");
-        }
+        });
     }
 
     new_dirs_to_watch

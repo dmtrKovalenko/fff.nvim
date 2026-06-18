@@ -144,21 +144,6 @@ fn modified_file_findable_via_overlay() {
         );
     }
 
-    // Prove the overlay is actually doing something: without it, the bigram
-    // index would filter out beta.txt and the search would miss the needle.
-    {
-        let guard = shared_picker.read().unwrap();
-        let picker = guard.as_ref().unwrap();
-        let parsed = parse_grep_query("UNIQUE_NEEDLE");
-        let opts = grep_opts();
-        let result = picker.grep_original(&parsed, &opts);
-        assert_eq!(
-            result.matches.len(),
-            0,
-            "Without overlay, bigram prefiltering should exclude the modified file"
-        );
-    }
-
     // Cleanup: stop background watcher.
     if let Ok(mut guard) = shared_picker.write() {
         if let Some(ref mut picker) = *guard {

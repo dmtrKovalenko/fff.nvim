@@ -21,11 +21,8 @@ param(
     [string]$Version = $env:FFF_MCP_VERSION,
     [string]$InstallDir = $env:FFF_MCP_INSTALL_DIR,
     [ValidateSet('User', 'Profile', 'None')]
-    [string]$PathScope
+    [string]$PathScope = $(if ($env:FFF_MCP_PATH_SCOPE) { $env:FFF_MCP_PATH_SCOPE } else { 'User' })
 )
-if (-not $PathScope) {
-    $PathScope = if ($env:FFF_MCP_PATH_SCOPE) { $env:FFF_MCP_PATH_SCOPE } else { 'User' }
-}
 
 $ErrorActionPreference = 'Stop'
 

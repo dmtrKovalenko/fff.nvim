@@ -303,6 +303,445 @@ fn plain_text_binary_files_are_skipped() {
 }
 
 #[test]
+fn binary_payload_after_long_ascii_header_is_detected() {
+    // Mimics formats like Radiance .hdr / Apple bplist / Adobe .ai where the
+    // first ~1KB is plain ASCII and the binary payload (NULs) starts later.
+    // The legacy 512-byte sniff missed these; the bigram-build memchr scan
+    // over the whole indexed buffer must catch them.
+    use fff_search::file_picker::FFFMode;
+    use fff_search::{SharedFilePicker, SharedFrecency};
+    use std::time::Duration;
+
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path();
+
+    let mut content = Vec::new();
+    // 1 KiB of plain ASCII header — escapes any small fixed-window NUL sniff.
+    content.extend(std::iter::repeat_n(b'A', 1024));
+    content.extend_from_slice(b"\nmatch this text\n");
+    // Binary payload: NUL bytes that prove the file is not text.
+    content.extend(std::iter::repeat_n(0u8, 256));
+    content.extend_from_slice(b"\nmatch this text\n");
+
+    // Use a *text* extension so the scan-time heuristic does NOT pre-flag it.
+    // Only the bigram-time content scan can mark it binary.
+    fs::write(base.join("header.txt"), &content).unwrap();
+    fs::write(base.join("plain.txt"), b"match this text\n").unwrap();
+
+    let shared_picker = SharedFilePicker::default();
+    let shared_frecency = SharedFrecency::default();
+
+    FilePicker::new_with_shared_state(
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        FilePickerOptions {
+            base_path: base.to_string_lossy().to_string(),
+            enable_mmap_cache: false,
+            enable_content_indexing: true,
+            mode: FFFMode::Neovim,
+            watch: false,
+            ..Default::default()
+        },
+    )
+    .expect("Failed to create FilePicker");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        std::thread::sleep(Duration::from_millis(25));
+        let ready = shared_picker
+            .read()
+            .ok()
+            .and_then(|g| {
+                g.as_ref()
+                    .map(|p| !p.is_scan_active() && p.bigram_index().is_some())
+            })
+            .unwrap_or(false);
+        if ready {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Timed out waiting for bigram build"
+        );
+    }
+
+    let guard = shared_picker.read().unwrap();
+    let picker = guard.as_ref().unwrap();
+
+    let was_flagged = picker
+        .get_files()
+        .iter()
+        .any(|f| f.relative_path(picker).contains("header.txt") && f.is_binary());
+    assert!(
+        was_flagged,
+        "header.txt with NULs past 512 bytes must be flagged binary by the whole-buffer memchr scan"
+    );
+
+    let parsed = parse_grep_query("match this text");
+    let result = picker.grep(&parsed, &plain_opts());
+    assert_eq!(
+        result.files.len(),
+        1,
+        "only plain.txt should be searched; header.txt must be skipped as binary"
+    );
+    assert!(
+        result.files[0].relative_path(picker).contains("plain.txt"),
+        "the only match should come from plain.txt"
+    );
+}
+
+#[test]
+fn unknown_extension_binary_added_after_scan_is_reclassified() {
+    // The initial-scan path runs detect_binary_content as part of bigram build,
+    // but the watcher path used to fall back to extension-only triage and
+    // missed binary files with unknown extensions like `.codex`.
+    use fff_search::file_picker::FFFMode;
+    use fff_search::{SharedFilePicker, SharedFrecency};
+    use std::time::Duration;
+
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path();
+
+    // Seed one tracked text file so the initial scan has something to work with.
+    fs::write(base.join("seed.txt"), b"seed\n").unwrap();
+
+    let shared_picker = SharedFilePicker::default();
+    let shared_frecency = SharedFrecency::default();
+
+    FilePicker::new_with_shared_state(
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        FilePickerOptions {
+            base_path: base.to_string_lossy().to_string(),
+            enable_mmap_cache: false,
+            enable_content_indexing: true,
+            mode: FFFMode::Neovim,
+            watch: false,
+            ..Default::default()
+        },
+    )
+    .expect("Failed to create FilePicker");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        std::thread::sleep(Duration::from_millis(25));
+        let ready = shared_picker
+            .read()
+            .ok()
+            .and_then(|g| {
+                g.as_ref()
+                    .map(|p| !p.is_scan_active() && p.bigram_index().is_some())
+            })
+            .unwrap_or(false);
+        if ready {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Timed out waiting for bigram build"
+        );
+    }
+
+    // Drop the file on disk after indexing finished, then announce it through
+    // the watcher entry point. `.codex` is intentionally not in the extension
+    // allow-list — only a content sniff can flag it.
+    let mut payload = vec![0x03u8, 0x00, 0x04, 0x05];
+    payload.extend(std::iter::repeat_n(0u8, 256));
+    let new_path = base.join("snapshot.codex");
+    fs::write(&new_path, &payload).unwrap();
+
+    {
+        let mut guard = shared_picker.write().unwrap();
+        let picker = guard.as_mut().unwrap();
+        assert!(
+            picker.handle_create_or_modify(&new_path).is_some(),
+            "handle_create_or_modify must accept the new file"
+        );
+    }
+
+    let guard = shared_picker.read().unwrap();
+    let picker = guard.as_ref().unwrap();
+    let was_flagged = picker
+        .get_files()
+        .iter()
+        .any(|f| f.relative_path(picker).contains("snapshot.codex") && f.is_binary());
+    assert!(
+        was_flagged,
+        "snapshot.codex must be flagged binary when added via the watcher path"
+    );
+}
+
+#[test]
+fn text_file_modified_to_binary_is_reclassified() {
+    // A file that started life as text and later got rewritten with NUL bytes
+    // (e.g. a generator overwrote a .log) must lose its text classification.
+    use fff_search::file_picker::FFFMode;
+    use fff_search::{SharedFilePicker, SharedFrecency};
+    use std::time::Duration;
+
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path();
+
+    // Start as plain text with a known extension.
+    fs::write(base.join("notes.txt"), b"hello world\n").unwrap();
+
+    let shared_picker = SharedFilePicker::default();
+    let shared_frecency = SharedFrecency::default();
+
+    FilePicker::new_with_shared_state(
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        FilePickerOptions {
+            base_path: base.to_string_lossy().to_string(),
+            enable_mmap_cache: false,
+            enable_content_indexing: true,
+            mode: FFFMode::Neovim,
+            watch: false,
+            ..Default::default()
+        },
+    )
+    .expect("Failed to create FilePicker");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        std::thread::sleep(Duration::from_millis(25));
+        let ready = shared_picker
+            .read()
+            .ok()
+            .and_then(|g| {
+                g.as_ref()
+                    .map(|p| !p.is_scan_active() && p.bigram_index().is_some())
+            })
+            .unwrap_or(false);
+        if ready {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Timed out waiting for bigram build"
+        );
+    }
+
+    // Sanity: it's text right now.
+    {
+        let guard = shared_picker.read().unwrap();
+        let picker = guard.as_ref().unwrap();
+        let is_text = picker
+            .get_files()
+            .iter()
+            .any(|f| f.relative_path(picker).contains("notes.txt") && !f.is_binary());
+        assert!(is_text, "notes.txt should start as text");
+    }
+
+    // Overwrite with binary content and replay through the watcher entry point.
+    // Bump mtime so update_metadata records it as a real change.
+    std::thread::sleep(Duration::from_secs(1));
+    let mut payload = b"header text\n".to_vec();
+    payload.extend(std::iter::repeat_n(0u8, 256));
+    fs::write(base.join("notes.txt"), &payload).unwrap();
+
+    {
+        let mut guard = shared_picker.write().unwrap();
+        let picker = guard.as_mut().unwrap();
+        assert!(
+            picker
+                .handle_create_or_modify(base.join("notes.txt"))
+                .is_some(),
+            "handle_create_or_modify must succeed for the modify case"
+        );
+    }
+
+    let guard = shared_picker.read().unwrap();
+    let picker = guard.as_ref().unwrap();
+    let now_binary = picker
+        .get_files()
+        .iter()
+        .any(|f| f.relative_path(picker).contains("notes.txt") && f.is_binary());
+    assert!(
+        now_binary,
+        "notes.txt must flip to binary after being overwritten with NULs"
+    );
+}
+
+#[test]
+fn large_unknown_extension_binary_is_classified_at_scan_time() {
+    // Files larger than MAX_INDEXABLE_FILE_SIZE never enter build_bigram_index,
+    // so without a separate header sniff they default to is_binary=false and
+    // pollute grep results with NUL-laden lines (e.g. a committed ELF blob
+    // named `codex_view` with no extension).
+    use fff_search::file_picker::FFFMode;
+    use fff_search::grep::{GrepSearchOptions, parse_grep_query};
+    use fff_search::{SharedFilePicker, SharedFrecency};
+    use std::time::Duration;
+
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path();
+
+    // 3 MiB: above the 2 MiB bigram cap and below the 10 MiB grep cap.
+    // ELF-like header with NULs at the very start, then ASCII filler so a
+    // grep for "match this text" would otherwise return polluted lines.
+    let mut blob = Vec::new();
+    blob.extend_from_slice(b"\x7fELF\x02\x01\x01\x00");
+    blob.extend(std::iter::repeat_n(0u8, 256));
+    blob.extend_from_slice(b"\nmatch this text\n");
+    blob.extend(std::iter::repeat_n(b'A', 3 * 1024 * 1024));
+    blob.extend_from_slice(b"\nmatch this text\n");
+    fs::write(base.join("codex_view"), &blob).unwrap();
+    fs::write(base.join("plain.txt"), b"match this text\n").unwrap();
+
+    let shared_picker = SharedFilePicker::default();
+    let shared_frecency = SharedFrecency::default();
+
+    FilePicker::new_with_shared_state(
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        FilePickerOptions {
+            base_path: base.to_string_lossy().to_string(),
+            enable_mmap_cache: false,
+            enable_content_indexing: true,
+            mode: FFFMode::Neovim,
+            watch: false,
+            ..Default::default()
+        },
+    )
+    .expect("Failed to create FilePicker");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        std::thread::sleep(Duration::from_millis(25));
+        let ready = shared_picker
+            .read()
+            .ok()
+            .and_then(|g| {
+                g.as_ref()
+                    .map(|p| !p.is_scan_active() && p.bigram_index().is_some())
+            })
+            .unwrap_or(false);
+        if ready {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Timed out waiting for bigram build"
+        );
+    }
+
+    let guard = shared_picker.read().unwrap();
+    let picker = guard.as_ref().unwrap();
+    let was_flagged = picker
+        .get_files()
+        .iter()
+        .any(|f| f.relative_path(picker).contains("codex_view") && f.is_binary());
+    assert!(
+        was_flagged,
+        "large no-extension binary must be flagged via the header sniff"
+    );
+
+    let parsed = parse_grep_query("match this text");
+    let opts = GrepSearchOptions {
+        max_file_size: 10 * 1024 * 1024,
+        ..plain_opts()
+    };
+    let result = picker.grep(&parsed, &opts);
+    assert_eq!(
+        result.files.len(),
+        1,
+        "only plain.txt should be searched; codex_view must be skipped as binary"
+    );
+    assert!(
+        result.files[0].relative_path(picker).contains("plain.txt"),
+        "the only match should come from plain.txt"
+    );
+}
+
+#[test]
+fn large_binary_with_nuls_past_header_is_classified() {
+    // Guards the streaming sniff: a >2 MB file that is pure ASCII well past any
+    // fixed header window (the old code only checked the first 8 KB) but has
+    // NULs deeper in. Grep reads the whole file up to max_file_size, so the
+    // detector must scan the same range or the binary tail leaks as "text".
+    use fff_search::file_picker::FFFMode;
+    use fff_search::grep::{GrepSearchOptions, parse_grep_query};
+    use fff_search::{SharedFilePicker, SharedFrecency};
+    use std::time::Duration;
+
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path();
+
+    // 1 MiB of clean ASCII (with a grep marker) — dwarfs any header sniff —
+    // then NUL bytes, keeping the total above the 2 MiB non-indexable cap.
+    let mut blob = Vec::new();
+    blob.extend_from_slice(b"match this text\n");
+    blob.extend(std::iter::repeat_n(b'A', 1024 * 1024));
+    blob.extend_from_slice(b"match this text\n");
+    blob.extend(std::iter::repeat_n(0u8, 1024 * 1024 + 4096)); // NULs start ~1 MiB in
+    blob.extend_from_slice(b"match this text\n");
+    assert!(blob.len() > 2 * 1024 * 1024);
+    fs::write(base.join("late_nul.dat"), &blob).unwrap();
+    fs::write(base.join("plain.txt"), b"match this text\n").unwrap();
+
+    let shared_picker = SharedFilePicker::default();
+    let shared_frecency = SharedFrecency::default();
+    FilePicker::new_with_shared_state(
+        shared_picker.clone(),
+        shared_frecency.clone(),
+        FilePickerOptions {
+            base_path: base.to_string_lossy().to_string(),
+            enable_mmap_cache: false,
+            enable_content_indexing: true,
+            mode: FFFMode::Neovim,
+            watch: false,
+            ..Default::default()
+        },
+    )
+    .expect("Failed to create FilePicker");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        std::thread::sleep(Duration::from_millis(25));
+        let ready = shared_picker
+            .read()
+            .ok()
+            .and_then(|g| {
+                g.as_ref()
+                    .map(|p| !p.is_scan_active() && p.bigram_index().is_some())
+            })
+            .unwrap_or(false);
+        if ready {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Timed out waiting for bigram build"
+        );
+    }
+
+    let guard = shared_picker.read().unwrap();
+    let picker = guard.as_ref().unwrap();
+    let flagged = picker
+        .get_files()
+        .iter()
+        .any(|f| f.relative_path(picker).contains("late_nul.dat") && f.is_binary());
+    assert!(
+        flagged,
+        "NULs past the 8 KB header window must still be detected by the streaming scan"
+    );
+
+    let parsed = parse_grep_query("match this text");
+    let opts = GrepSearchOptions {
+        max_file_size: 10 * 1024 * 1024,
+        ..plain_opts()
+    };
+    let result = picker.grep(&parsed, &opts);
+    assert_eq!(
+        result.files.len(),
+        1,
+        "only plain.txt should match; late_nul.dat must be skipped as binary"
+    );
+    assert!(result.files[0].relative_path(picker).contains("plain.txt"));
+}
+
+#[test]
 fn plain_text_max_matches_per_file() {
     let tmp = TempDir::new().unwrap();
     let mut content = String::new();

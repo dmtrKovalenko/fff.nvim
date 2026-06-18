@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussion / question
+    url: https://github.com/dmtrKovalenko/fff/discussions
+    about: For usage questions, design discussion, or anything that's not a bug or feature request.

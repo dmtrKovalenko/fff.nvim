@@ -2,10 +2,17 @@ name: Prebuild
 
 on:
   push:
-    branches: [main, fix/download-version]
+    branches: [main, fix/use-trusted-publishing]
     tags:
       - "v*"
   pull_request:
+  workflow_dispatch:
+    inputs:
+      publish_pypi:
+        description: "Manually build and publish Python wheels to PyPI"
+        required: false
+        default: false
+        type: boolean
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -16,6 +23,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+      id-token: write
     strategy:
       matrix:
         include:
@@ -358,12 +366,103 @@ jobs:
           name: mcp-${{ matrix.target }}
           path: fff-mcp-${{ matrix.target }}*
 
+  build-python:
+    name: Build Python wheels ${{ matrix.target }} (${{ matrix.os }})
+    # Wheels are release artifacts; PR validation uses the develop build in
+    # python.yml, so skip the cross-compile matrix on pull requests.
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+            container: "off"
+          - os: ubuntu-latest
+            target: aarch64
+            container: "off"
+          - os: macos-latest
+            target: x86_64
+          - os: macos-latest
+            target: aarch64
+          - os: windows-latest
+            target: x86_64
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Install cargo-zigbuild
+        if: contains(matrix.os, 'ubuntu')
+        run: cargo install cargo-zigbuild
+
+      - name: Install aarch64 cross compiler
+        if: matrix.target == 'aarch64' && contains(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --features zlob
+          sccache: "true"
+          working-directory: packages/fff-python
+          container: ${{ matrix.container || '' }}
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: packages/fff-python/dist/
+
+  build-python-sdist:
+    name: Build Python sdist
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+          working-directory: packages/fff-python
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-sdist
+          path: packages/fff-python/dist/
+
   release:
     name: Release
-    needs: [build-nvim, build-c, build-mcp]
+    needs: [build-nvim, build-c, build-mcp, build-python, build-python-sdist]
     runs-on: ubuntu-latest
-    # do not create releases on the forks (no permissions)
-    if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dmtrKovalenko'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/use-trusted-publishing' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: write
     steps:
@@ -420,6 +519,20 @@ jobs:
             rmdir "$dir" 2>/dev/null || true
           done
 
+      - name: Move Python wheels to release directory
+        working-directory: ./binaries
+        run: |
+          mkdir -p python
+          for dir in python-wheels-*/ python-sdist/; do
+            [ -d "$dir" ] || continue
+            for file in "$dir"*; do
+              if [ -f "$file" ]; then
+                mv "$file" "python/$(basename "$file")"
+              fi
+            done
+            rmdir "$dir" 2>/dev/null || true
+          done
+
       - name: Remove npm package artifacts from release binaries
         working-directory: ./binaries
         run: |
@@ -429,7 +542,7 @@ jobs:
         working-directory: ./binaries
         run: |
           ls -la
-          for file in *; do
+          for file in * python/*; do
             if [ -f "$file" ] && [[ ! "$file" == *.sha256 ]]; then
               sha256sum "$file" > "${file}.sha256"
             fi
@@ -439,18 +552,31 @@ jobs:
         id: version
         run: lua scripts/determine-version.lua
 
+      # Nightlies publish to a permanent per-sha tag (release_tag == version) so
+      # pinned/stale installs always fetch the binary built for their own commit.
+      # The rolling `nightly` tag is also moved to HEAD for "give me latest" tooling.
+      - name: Move rolling nightly tag to current commit
+        if: steps.version.outputs.is_release != 'true'
+        run: |
+          git tag -f nightly "${{ github.sha }}"
+          git push -f origin refs/tags/nightly
+
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
           name: "${{ steps.version.outputs.version }}"
-          tag_name: "${{ steps.version.outputs.is_release == 'true' && format('v{0}', steps.version.outputs.version) || steps.version.outputs.version }}"
+          tag_name: "${{ steps.version.outputs.release_tag }}"
           token: ${{ github.token }}
-          files: ./binaries/*
+          files: |
+            ./binaries/*
+            ./binaries/python/*
           draft: false
           prerelease: ${{ steps.version.outputs.is_release != 'true' }}
           generate_release_notes: ${{ steps.version.outputs.is_release == 'true' }}
           body: |
             ${{ steps.version.outputs.is_release == 'true' && format('Release {0}', steps.version.outputs.version) || format('Nightly release from commit: {0}', github.sha) }}
+
+            npm packages, rust crates and python wheels are available under this version ${{ steps.version.outputs.version }}
 
             ## Neovim Plugin
             - `{target}.so` / `.dylib` / `.dll` - Lua module for Neovim
@@ -461,21 +587,75 @@ jobs:
             ## MCP Server
             - `fff-mcp-{target}` - MCP server binary
 
-            Install with:
+            ## Python Package
+            - `python/*.whl` / `python/*.tar.gz` - Python wheels and sdist
+            - Install from PyPI: `pip install fff-search` (when published)
+
+            Update mcp via:
             ```sh
             curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
             ```
+
+      - name: Bump Homebrew formula (uses local checksums)
+        if: steps.version.outputs.is_release == 'true' && github.repository_owner == 'dmtrKovalenko'
+        run: make bump-homebrew-formula VERSION="${{ steps.version.outputs.version }}" BINARIES_DIR=./binaries
+
+      - name: Pin SHAs in install-mcp.sh (uses local checksums)
+        if: steps.version.outputs.is_release == 'true' && github.repository_owner == 'dmtrKovalenko'
+        run: make bump-install-mcp-sh VERSION="${{ steps.version.outputs.version }}" BINARIES_DIR=./binaries
+
+      - name: Commit formula + installer bump to main
+        # Uses the default GITHUB_TOKEN configured by actions/checkout above.
+        # Requires github-actions[bot] in the main branch-protection bypass list.
+        if: steps.version.outputs.is_release == 'true' && github.repository_owner == 'dmtrKovalenko'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          # Workflow runs on detached HEAD at the v* tag — explicit target needed.
+          branch: main
+          commit_message: "chore: bump fff-mcp release artifacts to v${{ steps.version.outputs.version }} [skip ci]"
+          file_pattern: "Formula/fff-mcp.rb install-mcp.sh"
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+
+  pypi-publish:
+    name: Publish Python wheels to PyPI
+    needs: [build-python, build-python-sdist]
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_TO_PYPI == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_pypi == true)
+    environment:
+      name: pypi
+      url: https://pypi.org/p/fff-search
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download Python wheels and sdist
+        uses: actions/download-artifact@v4
+        with:
+          pattern: python-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
 
   crates-publish:
     name: Publish Rust crates
     needs: [build-nvim, build-c, build-mcp]
     runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/download-version' || startsWith(github.ref, 'refs/tags/v')))
-      || (github.event_name == 'pull_request' && github.head_ref == 'main')
-
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/use-trusted-publishing' || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
 
       - name: Install Lua
         uses: leafo/gh-actions-lua@v12
@@ -484,7 +664,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-edit
-        run: cargo install cargo-edit
+        run: cargo install cargo-edit --force --locked
 
       - name: Determine version
         id: version
@@ -492,18 +672,17 @@ jobs:
 
       - name: Publish crates
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: make publish-crates V="${{ steps.version.outputs.version }}"
 
   npm-publish:
     name: Publish npm packages
     needs: [build-c]
     runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/download-version' || startsWith(github.ref, 'refs/tags/v')))
-      || (github.event_name == 'pull_request' && github.head_ref == 'main')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/use-trusted-publishing' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
 
@@ -527,8 +706,6 @@ jobs:
           path: ./npm-packages
 
       - name: Publish platform packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.npm_tag }}"
@@ -541,14 +718,12 @@ jobs:
               make set-npm-version PKG="$pkg_dir" VERSION="$VERSION"
 
               cd "$pkg_dir"
-              npm publish --tag "$TAG" --access public || echo "Failed to publish ${pkg_name} (may already exist)"
+              npm publish --tag "$TAG" --access public --provenance
               cd -
             fi
           done
 
       - name: Publish bun package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.npm_tag }}"
@@ -557,11 +732,9 @@ jobs:
           make set-npm-version PKG=packages/fff-bun VERSION="$VERSION"
 
           cd packages/fff-bun
-          npm publish --tag "$TAG" --access public || echo "Failed to publish @ff-labs/fff-bun (may already exist)"
+          npm publish --tag "$TAG" --access public --provenance
 
       - name: Publish Node.js package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.npm_tag }}"
@@ -572,11 +745,9 @@ jobs:
           cd packages/fff-node
           npm install
           npm run build
-          npm publish --tag "$TAG" --access public || echo "Failed to publish @ff-labs/fff-node (may already exist)"
+          npm publish --tag "$TAG" --access public --provenance
 
       - name: Publish pi-fff package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.npm_tag }}"
@@ -585,4 +756,4 @@ jobs:
           make set-npm-version PKG=packages/pi-fff VERSION="$VERSION"
 
           cd packages/pi-fff
-          npm publish --tag "$TAG" --access public || echo "Failed to publish @ff-labs/pi-fff (may already exist)"
+          npm publish --tag "$TAG" --access public --provenance

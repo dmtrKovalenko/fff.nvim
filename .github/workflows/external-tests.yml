@@ -3,8 +3,14 @@ name: e2e Tests
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
 
 env:
   CARGO_TERM_COLOR: always
@@ -90,14 +96,31 @@ jobs:
         shell: bash
         run: make test-lua
 
+      - name: Dump fff trace log on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "=== fff-test.log ==="
+          if [ -f fff-test.log ]; then
+            cat fff-test.log
+          else
+            echo "(no log file produced)"
+          fi
+
       - name: Run version resolution tests
         shell: bash
         run: make test-version
 
-      - name: Run bun tests
+      - name: Run non windows tests
         shell: bash
         if: ${{ matrix.os != 'windows-latest' }}
-        run: make test-bun
+        run: |
+          make test-bun
+          make test-c-api
+
+      - name: Verify bun --compile 
+        shell: bash
+        run: make test-bun-compile
 
       - name: Install Node.js
         if: ${{ matrix.os != 'ubuntu-latest' }}
@@ -112,3 +135,78 @@ jobs:
       - name: Run node tests
         shell: bash
         run: make test-node
+
+  # Regression for https://github.com/dmtrKovalenko/fff/issues/480: build &
+  # run @ff-labs/fff-node end-to-end on real Alpine Linux (musl). Forces
+  # findBinary() through the npm-package resolver so detectLinuxLibc()
+  # actually runs.
+  alpine-musl:
+    name: e2e (alpine-musl)
+    runs-on: ubuntu-latest
+    container: node:22-alpine
+    continue-on-error: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    defaults:
+      run:
+        shell: sh
+    steps:
+      - name: Install build deps
+        run: apk add --no-cache git rust cargo musl-dev
+
+      - uses: actions/checkout@v5
+
+      # libgit2 refuses repos owned by a different user; checkout in a
+      # container can land at a uid mismatch, so opt every dir in.
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory '*'
+
+      - name: Sanity check libc is musl
+        run: |
+          if ! ldd --version 2>&1 | grep -qi musl; then
+            echo "FAIL: container is not running musl libc"
+            exit 1
+          fi
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: alpine-musl-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            alpine-musl-cargo-
+
+      - name: Build libfff_c (musl)
+        run: cargo build --release -p fff-c
+
+      - name: Install workspace npm deps
+        run: npm install --no-package-lock
+
+      # Upstream @yuuang/ffi-rs-linux-x64-musl ships with libc:"glibc" in
+      # its package.json (a publishing bug in ffi-rs), so npm filters it
+      # out. Force-install it so the FFI runtime is present on Alpine.
+      - name: Install ffi-rs musl runtime
+        run: |
+          FFI_RS_VERSION=$(node -p "require('ffi-rs/package.json').version")
+          npm install --no-package-lock --no-save --force \
+            "@yuuang/ffi-rs-linux-x64-musl@${FFI_RS_VERSION}"
+
+      # Stage the freshly built libfff_c.so as the platform npm package
+      # so findBinary() resolves through the @ff-labs/fff-bin-* path —
+      # this is what exercises detectLinuxLibc().
+      - name: Stage musl bin package
+        run: |
+          PKG_DIR=node_modules/@ff-labs/fff-bin-linux-x64-musl
+          mkdir -p "$PKG_DIR"
+          cp target/release/libfff_c.so "$PKG_DIR/libfff_c.so"
+          cat >"$PKG_DIR/package.json" <<'JSON'
+          { "name": "@ff-labs/fff-bin-linux-x64-musl", "version": "0.0.0" }
+          JSON
+
+      - name: Build fff-node
+        working-directory: packages/fff-node
+        run: npm run build
+
+      - name: Run fff-node e2e suite
+        working-directory: packages/fff-node
+        run: node test/e2e.mjs

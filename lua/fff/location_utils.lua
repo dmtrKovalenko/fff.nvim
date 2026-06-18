@@ -54,6 +54,8 @@ function M.highlight_location(bufnr, location, namespace)
       local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, target_line - 1, target_col, {
         end_col = end_col,
         hl_group = 'IncSearch', -- inc search are better visible for a single chars
+        line_hl_group = 'CursorLine',
+        number_hl_group = 'CursorLineNr',
         priority = 1000,
       })
 
@@ -61,6 +63,7 @@ function M.highlight_location(bufnr, location, namespace)
     else
       local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, target_line - 1, 0, {
         line_hl_group = 'Visual',
+        number_hl_group = 'CursorLineNr',
         priority = 1000,
       })
 
@@ -82,6 +85,8 @@ function M.highlight_location(bufnr, location, namespace)
         local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, start_line - 1, start_col, {
           end_col = end_col,
           hl_group = 'IncSearch',
+          line_hl_group = 'CursorLine',
+          number_hl_group = 'CursorLineNr',
           priority = 1000,
         })
 
@@ -150,11 +155,19 @@ function M.highlight_grep_matches(bufnr, location, namespace)
   local line_count = vim.api.nvim_buf_line_count(bufnr)
   local extmarks = {}
 
-  -- Target line highlighting is handled by the native `cursorline` window
-  -- option, which is enabled on the preview window in grep mode (picker_ui.lua).
-  -- The cursor is positioned on the target line by preview.scroll_to_line(),
-  -- giving standard CursorLine background + CursorLineNr line number styling
-  -- without conflicting with IncSearch match highlights.
+  -- Pin CursorLine + CursorLineNr to the target match line via extmark, so
+  -- the highlight stays anchored when the user pages the preview viewport
+  -- with <C-d>/<C-u>. The cursor itself moves with paging, but the match
+  -- line stays styled until it scrolls out of view.
+  if location.line then
+    local target_line = math.max(1, math.min(location.line, line_count))
+    local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, bufnr, namespace, target_line - 1, 0, {
+      line_hl_group = 'CursorLine',
+      number_hl_group = 'CursorLineNr',
+      priority = 999,
+    })
+    if ok then table.insert(extmarks, { id = mark_id, line = target_line - 1 }) end
+  end
 
   -- Fuzzy mode: use pre-computed byte offsets from Rust's match_indices.
   -- These are the exact matched character positions within the line, already
@@ -173,6 +186,7 @@ function M.highlight_grep_matches(bufnr, location, namespace)
       })
       if ok then table.insert(extmarks, { id = mark_id, line = target_line - 1 }) end
     end
+    -- Fuzzy mode: only target line has matches; skip the plain-text scan below.
     return #extmarks > 0 and extmarks or nil
   end
 

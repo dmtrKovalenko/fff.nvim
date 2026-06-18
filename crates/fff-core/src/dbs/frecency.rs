@@ -1,13 +1,10 @@
 use super::db_healthcheck::DbHealthChecker;
-use super::lmdb::{LmdbStore, is_map_full};
+use super::lmdb::{DbHealth, LmdbStore, is_map_full};
 use crate::error::{Error, Result};
 use crate::file_picker::FFFMode;
 use crate::git::is_modified_status;
-use crate::shared::SharedFrecency;
 use heed::types::{Bytes, SerdeBincode};
 use heed::{Database, Env};
-use std::fs;
-use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::VecDeque, path::Path};
 
@@ -24,6 +21,7 @@ const AI_MAX_HISTORY_DAYS: f64 = 7.0; // Only consider accesses within 7 days
 pub struct FrecencyTracker {
     env: Env,
     db: Database<Bytes, SerdeBincode<VecDeque<u64>>>,
+    health: DbHealth,
 }
 
 const MODIFICATION_THRESHOLDS: [(i64, u64); 5] = [
@@ -48,22 +46,53 @@ impl DbHealthChecker for FrecencyTracker {
         &self.env
     }
 
+    fn is_healthy(&self) -> bool {
+        self.health.is_healthy()
+    }
+
     fn count_entries(&self) -> Result<Vec<(&'static str, u64)>> {
-        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
-        let count = self.db.len(&rtxn).map_err(Error::DbRead)?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|source| Error::DbStartReadTxn {
+                db: Self::LABEL,
+                source,
+            })?;
+        let count = self.db.len(&rtxn).map_err(|source| Error::DbRead {
+            db: Self::LABEL,
+            source,
+        })?;
 
         Ok(vec![("absolute_frecency_entries", count)])
     }
 }
 
 impl LmdbStore for FrecencyTracker {
-    const MAX_DBS: u32 = 0;
+    const LABEL: &'static str = "frecency";
     // 10 MiB hard ceiling. Owner's db after years of use is ~560 KiB, so this
     // leaves ~18× headroom while capping runaway growth (see GH issue #437).
     const MAP_SIZE: usize = 10 * 1024 * 1024;
+    const MAX_DBS: u32 = 0;
     // Nuke the db when it exceeds 8 MiB on disk — leaves a small margin under
     // MAP_SIZE so we don't hit MDB_MAP_FULL before the open-time erase fires.
-    const SIZE_CAP_BYTES: u64 = 8 * 1024 * 1024;
+    const SIZE_CAP_BYTES: u64 = 12 * 1024 * 1024;
+
+    fn env(&self) -> &Env {
+        &self.env
+    }
+
+    fn health(&self) -> &DbHealth {
+        &self.health
+    }
+
+    fn purge_stale_data(env: &Env) -> Result<()> {
+        let (deleted, pruned) = Self::purge_stale_entries(env)?;
+        if deleted > 0 || pruned > 0 {
+            tracing::info!(deleted, pruned, "Frecency GC purged entries");
+        }
+
+        Ok(())
+    }
 }
 
 impl FrecencyTracker {
@@ -74,11 +103,10 @@ impl FrecencyTracker {
 
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self> {
         let db_path = db_path.as_ref();
-        let env = Self::open_env(db_path)?;
+        let (env, health) = Self::open_env(db_path)?;
 
         let db = Self::open_database_safe(&env, None)?;
-
-        Ok(FrecencyTracker { db, env })
+        Ok(FrecencyTracker { db, env, health })
     }
 
     #[deprecated(
@@ -90,102 +118,41 @@ impl FrecencyTracker {
         Self::open(db_path)
     }
 
-    /// Spawns a background thread to purge stale frecency entries and compact the database.
-    /// Run it once in a while to purge old pages and keep DB file size reasonable.
-    ///
-    /// It's okay to not join this thread since it acquires locks for the db access
-    ///
-    /// ```
-    /// use fff_search::frecency::FrecencyTracker;
-    /// use fff_search::SharedFrecency;
-    /// let shared_frecency: SharedFrecency = Default::default();
-    /// let _ = FrecencyTracker::spawn_gc(shared_frecency, "/path/to/frecency_db".into()).ok();
-    /// ```
-    pub fn spawn_gc(
-        shared: SharedFrecency,
-        db_path: String,
-    ) -> Result<std::thread::JoinHandle<()>> {
-        Ok(std::thread::Builder::new()
-            .name("fff-frecency-gc".into())
-            .spawn(move || Self::run_frecency_gc(shared, db_path))?)
-    }
-
-    #[tracing::instrument(skip(shared), fields(db_path = %db_path))]
-    fn run_frecency_gc(shared: SharedFrecency, db_path: String) {
-        let start = std::time::Instant::now();
-
-        let (deleted, pruned) = {
-            let guard = match shared.read() {
-                Ok(g) => g,
-                Err(e) => {
-                    tracing::debug!("Failed to acquire read lock: {e}");
-                    return;
-                }
-            };
-            let Some(ref tracker) = *guard else {
-                return;
-            };
-
-            // Clear stale readers here (on a background thread) rather than in
-            // open_env — clear_stale_readers needs the writer mutex which can
-            // block indefinitely on a stuck lock if called on the main thread.
-            if let Err(e) = tracker.env.clear_stale_readers() {
-                tracing::debug!("clear_stale_readers failed: {e}");
-            }
-
-            match tracker.purge_stale_entries() {
-                Ok(result) => result,
-                Err(e) => {
-                    tracing::debug!("Purge failed: {e}");
-                    return;
-                }
-            }
-        };
-
-        if deleted > 0 || pruned > 0 {
-            tracing::info!(deleted, pruned, elapsed = ?start.elapsed(), "Frecency GC purged entries");
-        }
-
-        let data_path = PathBuf::from(&db_path).join("data.mdb");
-        let file_size = fs::metadata(&data_path).map(|m| m.len()).unwrap_or(0);
-        if file_size > <Self as LmdbStore>::SIZE_CAP_BYTES {
-            tracing::warn!(
-                size = file_size,
-                cap = <Self as LmdbStore>::SIZE_CAP_BYTES,
-                "Frecency DB exceeds size cap — will be erased on next open"
-            );
-        }
-    }
-
     /// Removes entries where all timestamps are older than MAX_HISTORY_DAYS,
     /// and prunes stale timestamps from entries that still have recent ones.
     /// Returns (deleted_count, pruned_count).
-    fn purge_stale_entries(&self) -> Result<(usize, usize)> {
-        let now = self.get_now();
+    fn purge_stale_entries(env: &Env) -> Result<(usize, usize)> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let cutoff_time = now.saturating_sub((MAX_HISTORY_DAYS * SECONDS_PER_DAY) as u64);
 
-        // Collect entries to delete or update
-        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
+        let db: Database<Bytes, SerdeBincode<VecDeque<u64>>> = Self::open_database_safe(env, None)?;
+
+        let rtxn = env.read_txn().map_err(|source| Error::DbStartReadTxn {
+            db: Self::LABEL,
+            source,
+        })?;
         let mut to_delete: Vec<Vec<u8>> = Vec::new();
         let mut to_update: Vec<(Vec<u8>, VecDeque<u64>)> = Vec::new();
 
-        let iter = self.db.iter(&rtxn).map_err(Error::DbRead)?;
+        let iter = db.iter(&rtxn).map_err(|source| Error::DbRead {
+            db: Self::LABEL,
+            source,
+        })?;
         for result in iter {
-            let (key, accesses) = result.map_err(Error::DbRead)?;
+            let (key, accesses) = result.map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?;
 
-            // Timestamps are chronologically ordered (oldest at front).
-            // Find the first timestamp that is still within the retention window.
+            // Timestamps chronologically ordered (oldest at front).
             let fresh_start = accesses.iter().position(|&ts| ts >= cutoff_time);
             match fresh_start {
-                None => {
-                    // All timestamps are stale — delete the entire entry
-                    to_delete.push(key.to_vec());
-                }
-                Some(0) => {
-                    // All timestamps are fresh — nothing to do
-                }
+                None => to_delete.push(key.to_vec()),
+                Some(0) => {}
                 Some(start) => {
-                    // Some timestamps are stale — keep only the fresh ones
                     let pruned: VecDeque<u64> = accesses.iter().skip(start).copied().collect();
                     to_update.push((key.to_vec(), pruned));
                 }
@@ -197,17 +164,29 @@ impl FrecencyTracker {
             return Ok((0, 0));
         }
 
-        // Apply all changes in a single write transaction
-        let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
+        let mut wtxn = env.write_txn().map_err(|source| Error::DbStartWriteTxn {
+            db: Self::LABEL,
+            source,
+        })?;
+
         for key in &to_delete {
-            self.db.delete(&mut wtxn, key).map_err(Error::DbWrite)?;
+            db.delete(&mut wtxn, key).map_err(|source| Error::DbWrite {
+                db: Self::LABEL,
+                source,
+            })?;
         }
+
         for (key, accesses) in &to_update {
-            self.db
-                .put(&mut wtxn, key, accesses)
-                .map_err(Error::DbWrite)?;
+            db.put(&mut wtxn, key, accesses)
+                .map_err(|source| Error::DbWrite {
+                    db: Self::LABEL,
+                    source,
+                })?;
         }
-        wtxn.commit().map_err(Error::DbCommit)?;
+        wtxn.commit().map_err(|source| Error::DbCommit {
+            db: Self::LABEL,
+            source,
+        })?;
 
         Ok((to_delete.len(), to_update.len()))
     }
@@ -215,9 +194,24 @@ impl FrecencyTracker {
     fn get_accesses(&self, path: &Path) -> Result<Option<VecDeque<u64>>> {
         let key_hash = Self::path_to_hash_bytes(path)?;
 
-        let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
-        let result = self.db.get(&rtxn, &key_hash).map_err(Error::DbRead)?;
-        rtxn.commit().map_err(Error::DbCommit)?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|source| Error::DbStartReadTxn {
+                db: Self::LABEL,
+                source,
+            })?;
+        let result = self
+            .db
+            .get(&rtxn, &key_hash)
+            .map_err(|source| Error::DbRead {
+                db: Self::LABEL,
+                source,
+            })?;
+        rtxn.commit().map_err(|source| Error::DbCommit {
+            db: Self::LABEL,
+            source,
+        })?;
 
         Ok(result)
     }
@@ -245,6 +239,11 @@ impl FrecencyTracker {
         Ok(last.map(|ts| self.get_now().saturating_sub(ts)))
     }
 
+    /// Number of tracked access for file path
+    pub fn access_count(&self, path: &Path) -> Result<usize> {
+        Ok(self.get_accesses(path)?.map_or(0, |a| a.len()))
+    }
+
     pub fn track_access(&self, path: &Path) -> Result<()> {
         let key_hash = Self::path_to_hash_bytes(path)?;
         let mut accesses = self.get_accesses(path)?.unwrap_or_default();
@@ -265,9 +264,16 @@ impl FrecencyTracker {
         accesses.push_back(now);
         tracing::debug!(?path, accesses = accesses.len(), "Tracking access");
 
-        let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|source| Error::DbStartWriteTxn {
+                db: Self::LABEL,
+                source,
+            })?;
         if let Err(e) = self.db.put(&mut wtxn, &key_hash, &accesses) {
             if is_map_full(&e) {
+                self.health.mark_unhealthy("MDB_MAP_FULL on put");
                 tracing::error!(
                     ?path,
                     "Frecency DB hit MDB_MAP_FULL; dropping write — db will be \
@@ -275,19 +281,26 @@ impl FrecencyTracker {
                 );
                 return Ok(());
             }
-            return Err(Error::DbWrite(e));
+            return Err(Error::DbWrite {
+                db: Self::LABEL,
+                source: e,
+            });
         }
 
         wtxn.commit()
             .inspect_err(|e| {
                 if is_map_full(e) {
+                    self.health.mark_unhealthy("MDB_MAP_FULL on commit");
                     tracing::error!(
                         ?path,
                         "Frecency DB hit MDB_MAP_FULL on commit; dropping write"
                     );
                 }
             })
-            .map_err(Error::DbCommit)
+            .map_err(|source| Error::DbCommit {
+                db: Self::LABEL,
+                source,
+            })
     }
 
     pub fn get_access_score(&self, file_path: &Path, mode: FFFMode) -> i64 {

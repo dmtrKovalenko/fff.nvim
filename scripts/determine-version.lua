@@ -14,6 +14,7 @@ if not info then
 end
 
 print('version=' .. info.version)
+print('release_tag=' .. info.release_tag)
 print('npm_tag=' .. info.npm_tag)
 print('is_release=' .. tostring(info.is_release))
 
@@ -23,6 +24,7 @@ if github_output and github_output ~= '' then
   local f = io.open(github_output, 'a')
   if f then
     f:write('version=' .. info.version .. '\n')
+    f:write('release_tag=' .. info.release_tag .. '\n')
     f:write('npm_tag=' .. info.npm_tag .. '\n')
     f:write('is_release=' .. tostring(info.is_release) .. '\n')
     f:close()

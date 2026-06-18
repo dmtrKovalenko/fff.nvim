@@ -45,6 +45,8 @@ pub mod glob_detect;
 pub mod location;
 mod parser;
 
+#[allow(deprecated)]
+pub use config::is_filename_constraint_token;
 pub use config::{
     AiGrepConfig, DirSearchConfig, FileSearchConfig, GrepConfig, MixedSearchConfig, ParserConfig,
 };

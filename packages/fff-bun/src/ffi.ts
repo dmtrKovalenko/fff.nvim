@@ -10,6 +10,7 @@
 
 import { CString, dlopen, FFIType, type Pointer, ptr, read } from "bun:ffi";
 import { findBinary } from "./download";
+import { embeddedLibPath } from "./embedded";
 import type {
   DirItem,
   DirSearchResult,
@@ -23,8 +24,8 @@ import type {
   ScanProgress,
   Score,
   SearchResult,
-} from "./types";
-import { createGrepCursor, err } from "./types";
+} from "./fff-api";
+import { createGrepCursor, err } from "./fff-api";
 
 /** Grep mode constants matching the C API (u8). */
 const GREP_MODE_PLAIN = 0;
@@ -62,6 +63,10 @@ const ffiDefinition = {
     ],
     returns: FFIType.ptr,
   },
+  fff_create_instance_with: {
+    args: [FFIType.ptr], // *const FffCreateOptions
+    returns: FFIType.ptr,
+  },
   fff_destroy: {
     args: [FFIType.ptr],
     returns: FFIType.void,
@@ -78,6 +83,19 @@ const ffiDefinition = {
       FFIType.u32, // page_size
       FFIType.i32, // combo_boost_multiplier
       FFIType.u32, // min_combo_count
+    ],
+    returns: FFIType.ptr,
+  },
+
+  // Glob-only search (bypasses query parser)
+  fff_glob: {
+    args: [
+      FFIType.ptr, // handle
+      FFIType.cstring, // pattern
+      FFIType.cstring, // current_file
+      FFIType.u32, // max_threads
+      FFIType.u32, // page_index
+      FFIType.u32, // page_size
     ],
     returns: FFIType.ptr,
   },
@@ -166,10 +184,6 @@ const ffiDefinition = {
     returns: FFIType.ptr,
   },
   fff_wait_for_scan: {
-    args: [FFIType.ptr, FFIType.u64],
-    returns: FFIType.ptr,
-  },
-  fff_wait_for_watcher: {
     args: [FFIType.ptr, FFIType.u64],
     returns: FFIType.ptr,
   },
@@ -269,7 +283,6 @@ const ffiDefinition = {
 
 type FFFLibrary = ReturnType<typeof dlopen<typeof ffiDefinition>>;
 
-// Library instance (lazy loaded)
 let lib: FFFLibrary | null = null;
 
 /**
@@ -278,15 +291,32 @@ let lib: FFFLibrary | null = null;
 function loadLibrary(): FFFLibrary {
   if (lib) return lib;
 
-  const binaryPath = findBinary();
+  const isEmbedded = embeddedLibPath?.includes("$bunfs") ?? false;
+  const binaryPath = isEmbedded ? embeddedLibPath : (findBinary() ?? embeddedLibPath);
   if (!binaryPath) {
-    throw new Error(
-      "fff native library not found. Build from source with `cargo build --release -p fff-c` or install the platform package.",
-    );
+    throw new Error(libNotFoundMessage());
   }
 
   lib = dlopen(binaryPath, ffiDefinition);
   return lib;
+}
+
+function libNotFoundMessage(): string {
+  if (import.meta.url.includes("$bunfs")) {
+    if (process.platform === "linux") {
+      return [
+        "You are running bun --compile with fff native library which CAN NOT resolve a binary",
+        "On Linux the libc must be supplied at compile time so the native lib is bundled.",
+        "Rebuild with:",
+        "  bun build --compile --define FFF_LIBC='\"gnu\"'  ...   # glibc",
+        "  bun build --compile --define FFF_LIBC='\"musl\"' ...   # musl / Alpine",
+      ].join("\n");
+    }
+
+    return "fff native library was not embedded into this executable. Rebuild with `bun build --compile` and ensure the @ff-labs/fff-bin-* package for this platform is installed.";
+  }
+
+  return "fff native library not found. Build from source with `cargo build --release -p fff-c` or install the platform package.";
 }
 
 /**
@@ -332,10 +362,25 @@ const RES_ERROR = 8; // *mut c_char (8)
 const RES_HANDLE = 16; // *mut c_void (8)
 const RES_INT_VALUE = 24; // i64         (8)
 
-/**
- * Read the FffResult envelope: check success, extract payload, free envelope.
- * On error returns a Result<never>. On success returns the raw handle pointer and int_value.
- */
+// MUST match `crates/fff-c/src/ffi_types.rs::FffCreateOptions`
+const FFF_CREATE_OPTIONS_VERSION = 1;
+const FFF_CREATE_OPTIONS_SIZE = 88;
+const FCO_VERSION = 0;
+const FCO_BASE_PATH = 8;
+const FCO_FRECENCY_DB_PATH = 16;
+const FCO_HISTORY_DB_PATH = 24;
+const FCO_ENABLE_MMAP_CACHE = 32;
+const FCO_ENABLE_CONTENT_INDEXING = 33;
+const FCO_WATCH = 34;
+const FCO_AI_MODE = 35;
+const FCO_LOG_FILE_PATH = 40;
+const FCO_LOG_LEVEL = 48;
+const FCO_CACHE_BUDGET_MAX_FILES = 56;
+const FCO_CACHE_BUDGET_MAX_BYTES = 64;
+const FCO_CACHE_BUDGET_MAX_FILE_SIZE = 72;
+const FCO_ENABLE_FS_ROOT_SCANNING = 80;
+const FCO_ENABLE_HOME_DIR_SCANNING = 81;
+
 function readResultEnvelope(
   resultPtr: Pointer | null,
 ): { success: true; handlePtr: number; intValue: number } | Result<never> {
@@ -420,12 +465,23 @@ export type NativeHandle = Pointer;
 
 /**
  * Create a new file finder instance.
+ *
+ * Hand-encodes a [`FffCreateOptions`] struct (88 bytes, locked offsets — see
+ * `crates/fff-c/src/ffi_types.rs::options_layout_tests`) into a Buffer and
+ * passes its pointer to `fff_create_instance_with`. Inner cstring addresses
+ * come from Bun's native `ptr(buffer)` primitive — no round-trip helpers,
+ * no struct support gaps.
+ *
+ * Adding new options later means: (1) appending the field to
+ * `FffCreateOptions` in Rust, (2) bumping `FFF_CREATE_OPTIONS_VERSION`,
+ * (3) extending `FFF_CREATE_OPTIONS_SIZE` + offsets here. The C entry point
+ * never changes.
  */
 export function ffiCreate(
   basePath: string,
   frecencyDbPath: string,
   historyDbPath: string,
-  useUnsafeNoLock: boolean,
+  _useUnsafeNoLock: boolean,
   enableMmapCache: boolean,
   enableContentIndexing: boolean,
   watch: boolean,
@@ -435,46 +491,75 @@ export function ffiCreate(
   cacheBudgetMaxFiles: bigint,
   cacheBudgetMaxBytes: bigint,
   cacheBudgetMaxFileSize: bigint,
+  enableFsRootScanning: boolean,
+  enableHomeDirScanning: boolean,
 ): Result<NativeHandle> {
   const library = loadLibrary();
-  const resultPtr = library.symbols.fff_create_instance2(
-    ptr(encodeString(basePath)),
-    ptr(encodeString(frecencyDbPath)),
-    ptr(encodeString(historyDbPath)),
-    useUnsafeNoLock,
-    enableMmapCache,
-    enableContentIndexing,
-    watch,
-    aiMode,
-    ptr(encodeString(logFilePath)),
-    ptr(encodeString(logLevel)),
-    cacheBudgetMaxFiles,
-    cacheBudgetMaxBytes,
-    cacheBudgetMaxFileSize,
-  );
+
+  // Keep cstring buffers alive across the FFI call. Bun's `ptr()` returns
+  // the underlying memory address of each Buffer — no round-trips.
+  const basePathCStr = encodeCStringBuf(basePath);
+  const frecencyCStr = encodeCStringBuf(frecencyDbPath);
+  const historyCStr = encodeCStringBuf(historyDbPath);
+  const logFileCStr = encodeCStringBuf(logFilePath);
+  const logLevelCStr = encodeCStringBuf(logLevel);
+
+  const opts = Buffer.alloc(FFF_CREATE_OPTIONS_SIZE);
+  opts.writeUInt32LE(FFF_CREATE_OPTIONS_VERSION, FCO_VERSION);
+  writePtrLE(opts, FCO_BASE_PATH, basePathCStr);
+  writePtrLE(opts, FCO_FRECENCY_DB_PATH, frecencyCStr);
+  writePtrLE(opts, FCO_HISTORY_DB_PATH, historyCStr);
+  opts.writeUInt8(enableMmapCache ? 1 : 0, FCO_ENABLE_MMAP_CACHE);
+  opts.writeUInt8(enableContentIndexing ? 1 : 0, FCO_ENABLE_CONTENT_INDEXING);
+  opts.writeUInt8(watch ? 1 : 0, FCO_WATCH);
+  opts.writeUInt8(aiMode ? 1 : 0, FCO_AI_MODE);
+  writePtrLE(opts, FCO_LOG_FILE_PATH, logFileCStr);
+  writePtrLE(opts, FCO_LOG_LEVEL, logLevelCStr);
+  opts.writeBigUInt64LE(cacheBudgetMaxFiles, FCO_CACHE_BUDGET_MAX_FILES);
+  opts.writeBigUInt64LE(cacheBudgetMaxBytes, FCO_CACHE_BUDGET_MAX_BYTES);
+  opts.writeBigUInt64LE(cacheBudgetMaxFileSize, FCO_CACHE_BUDGET_MAX_FILE_SIZE);
+  opts.writeUInt8(enableFsRootScanning ? 1 : 0, FCO_ENABLE_FS_ROOT_SCANNING);
+  opts.writeUInt8(enableHomeDirScanning ? 1 : 0, FCO_ENABLE_HOME_DIR_SCANNING);
+
+  const resultPtr = library.symbols.fff_create_instance_with(ptr(opts));
 
   if (resultPtr === null) {
     return err("FFI returned null pointer");
   }
 
   const success = read.u8(resultPtr, RES_SUCCESS) !== 0;
-  const errorPtr = read.ptr(resultPtr, RES_ERROR);
-  const handlePtr = read.ptr(resultPtr, RES_HANDLE);
 
   if (success) {
+    const handlePtr = read.ptr(resultPtr, RES_HANDLE);
     const handle = handlePtr as unknown as Pointer;
     library.symbols.fff_free_result(resultPtr);
 
     if (!handle || handle === (0 as unknown as Pointer)) {
-      return err("fff_create_instance returned null handle");
+      return err("fff_create_instance_with returned null handle");
     }
 
     return { ok: true, value: handle };
   } else {
+    const errorPtr = read.ptr(resultPtr, RES_ERROR);
     const errorMsg = readCString(errorPtr) || "Unknown error";
     library.symbols.fff_free_result(resultPtr);
     return err(errorMsg);
   }
+}
+
+/** NUL-terminated UTF-8 buffer for `s`, or `null` for empty input. */
+function encodeCStringBuf(s: string | null | undefined): Buffer | null {
+  if (!s) return null;
+  return Buffer.from(s + "\0", "utf-8");
+}
+
+/** Write Bun's native pointer-to-buffer address into the options buffer. */
+function writePtrLE(buf: Buffer, offset: number, target: Buffer | null): void {
+  if (target == null) {
+    buf.writeBigUInt64LE(0n, offset);
+    return;
+  }
+  buf.writeBigUInt64LE(BigInt(ptr(target) as unknown as number), offset);
 }
 
 /**
@@ -793,7 +878,10 @@ function parseMixedSearchResult(resultPtr: Pointer | null): Result<MixedSearchRe
   } else if (locTag === 3) {
     location = {
       type: "range",
-      start: { line: read.i32(hp, MSR_LOC_LINE), col: read.i32(hp, MSR_LOC_COL) },
+      start: {
+        line: read.i32(hp, MSR_LOC_LINE),
+        col: read.i32(hp, MSR_LOC_COL),
+      },
       end: {
         line: read.i32(hp, MSR_LOC_END_LINE),
         col: read.i32(hp, MSR_LOC_END_COL),
@@ -866,6 +954,7 @@ const GM_FUZZY_SCORE = 128;
 // 1-byte
 const GM_HAS_FUZZY = 130;
 const GM_IS_BINARY = 131;
+const GM_IS_DEFINITION = 132;
 
 // struct size: pad to 8-byte alignment → 136
 const GM_SIZE_OF = 136;
@@ -943,6 +1032,9 @@ function readGrepMatchStruct(p: number): GrepMatch {
   if (ctxAfterCount > 0) {
     match.contextAfter = readCStringArray(read.ptr(pp, GM_CTX_AFTER), ctxAfterCount);
   }
+  if (read.u8(pp, GM_IS_DEFINITION) !== 0) {
+    match.isDefinition = true;
+  }
 
   return match;
 }
@@ -1013,6 +1105,30 @@ export function ffiSearch(
     pageSize,
     comboBoostMultiplier,
     minComboCount,
+  );
+  return parseSearchResult(resultPtr);
+}
+
+/**
+ * Glob-only search. Bypasses the regular query parser, applies the pattern
+ * as a single `Constraint::Glob`, ranks by frecency, paginates.
+ */
+export function ffiGlob(
+  handle: NativeHandle,
+  pattern: string,
+  currentFile: string,
+  maxThreads: number,
+  pageIndex: number,
+  pageSize: number,
+): Result<SearchResult> {
+  const library = loadLibrary();
+  const resultPtr = library.symbols.fff_glob(
+    handle,
+    ptr(encodeString(pattern)),
+    ptr(encodeString(currentFile)),
+    maxThreads,
+    pageIndex,
+    pageSize,
   );
   return parseSearchResult(resultPtr);
 }
@@ -1199,18 +1315,6 @@ export function ffiGetScanProgress(handle: NativeHandle): Result<ScanProgress> {
 export function ffiWaitForScan(handle: NativeHandle, timeoutMs: number): Result<boolean> {
   const library = loadLibrary();
   const resultPtr = library.symbols.fff_wait_for_scan(handle, BigInt(timeoutMs));
-  return parseBoolResult(resultPtr);
-}
-
-/**
- * Wait for the background file watcher to be ready.
- */
-export function ffiWaitForWatcher(
-  handle: NativeHandle,
-  timeoutMs: number,
-): Result<boolean> {
-  const library = loadLibrary();
-  const resultPtr = library.symbols.fff_wait_for_watcher(handle, BigInt(timeoutMs));
   return parseBoolResult(resultPtr);
 }
 

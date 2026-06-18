@@ -1,45 +1,10 @@
 use crate::constraints::Constraint;
 use crate::glob_detect::has_wildcards;
 
-/// Check if a token looks like a filename or file path for use as a `FilePath` constraint.
-///
-/// A token is a filename/path if ALL of:
-/// - Does NOT end with `/` (that's a directory/PathSegment)
-/// - Does NOT contain wildcards (`*`, `?`, `{`, `[`) — those are globs
-/// - Last component (after final `/`) contains `.` with a valid-looking extension
-///   (1–10 alphanumeric chars starting with a letter, e.g. `rs`, `json`, `tsx`)
-///
-/// This covers both bare filenames (`score.rs`) and path-prefixed ones (`src/main.rs`).
-#[inline]
-fn is_filename_constraint_token(token: &str) -> bool {
-    let bytes = token.as_bytes();
-
-    // Must NOT end with / (that's a PathSegment)
-    if bytes.last() == Some(&b'/') {
-        return false;
-    }
-
-    // Must NOT contain wildcards (those are globs)
-    if has_wildcards(token) {
-        return false;
-    }
-
-    // Get the filename component (after last /)
-    let filename = token.rsplit('/').next().unwrap_or(token);
-
-    // Extension must exist and look like a real file extension:
-    // starts with an ASCII letter (rejects version numbers like "v2.0"),
-    // followed by alphanumeric chars, max 10 chars total.
-    match filename.rfind('.') {
-        Some(dot_pos) => {
-            let ext = &filename[dot_pos + 1..];
-            !ext.is_empty()
-                && ext.len() <= 10
-                && ext.as_bytes()[0].is_ascii_alphabetic()
-                && ext.bytes().all(|b| b.is_ascii_alphanumeric())
-        }
-        None => false,
-    }
+/// Check if a token looks like a filename/path for use as a `FilePath` constraint.
+#[deprecated(note = "use `Constraint::is_filename_constraint_token`")]
+pub fn is_filename_constraint_token(token: &str) -> bool {
+    Constraint::is_filename_constraint_token(token)
 }
 
 /// Parser configuration trait - allows different picker types to customize parsing
@@ -97,28 +62,32 @@ pub trait ParserConfig {
         true
     }
 
-    /// Custom constraint parsers for picker-specific needs
+    /// If `true`, tokens that look like filenames (`score.rs`, `src/main.rs`)
+    /// become `FilePath` constraints that scope the search to matching paths.
+    /// Off by default: a partial filename like `vite.conf` would otherwise
+    /// filter out `vite.config.ts` and yield zero results.
+    fn enable_filename_constraint(&self) -> bool {
+        false
+    }
+
+    /// Custom constraint parsers for picker-specific needs.
+    ///
+    /// Returns `None` by default. Filename-token detection is handled
+    /// separately by the parser via `enable_filename_constraint`.
     fn parse_custom<'a>(&self, _input: &'a str) -> Option<Constraint<'a>> {
         None
     }
 }
 
-/// Default configuration for file picker - all features enabled
+/// Default configuration for the file picker.
+///
+/// Filename-constraint detection is off (trait default), so partial filenames
+/// like `vite.conf` don't silently filter out fuzzy matches. The Neovim layer
+/// overrides `enable_filename_constraint` to opt in based on user config.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FileSearchConfig;
 
-impl ParserConfig for FileSearchConfig {
-    /// Detect bare filenames (`score.rs`) and path-prefixed filenames (`src/main.rs`)
-    /// as `FilePath` constraints so that multi-token queries like `score.rs file_picker`
-    /// filter by filename first, then fuzzy-match the remaining text against the path.
-    fn parse_custom<'a>(&self, token: &'a str) -> Option<Constraint<'a>> {
-        if is_filename_constraint_token(token) {
-            Some(Constraint::FilePath(token))
-        } else {
-            None
-        }
-    }
-}
+impl ParserConfig for FileSearchConfig {}
 
 /// Configuration for full-text search (grep) - file constraints enabled for
 /// filtering which files to search, git status disabled since it's not useful
@@ -169,8 +138,10 @@ impl ParserConfig for GrepConfig {
         // Require a comma between `{` and `}` AND at least one letter to
         // distinguish real glob expansions like `{src,lib}` or `*.{ts,tsx}`
         // from code patterns like `format!("{}")` and regex quantifiers `{2,3}`.
+        // Guard `open < close` so reversed braces like `}{` don't panic on slicing.
         if let Some(open) = bytes.iter().position(|&b| b == b'{')
             && let Some(close) = bytes.iter().rposition(|&b| b == b'}')
+            && open < close
         {
             let inner = &bytes[open + 1..close];
             if inner.contains(&b',') && inner.iter().any(|b| b.is_ascii_alphabetic()) {
@@ -215,6 +186,10 @@ impl ParserConfig for AiGrepConfig {
         false
     }
 
+    fn enable_filename_constraint(&self) -> bool {
+        true
+    }
+
     fn is_glob_pattern(&self, token: &str) -> bool {
         // First check GrepConfig's strict rules (path globs, brace expansion)
         if GrepConfig.is_glob_pattern(token) {
@@ -237,14 +212,6 @@ impl ParserConfig for AiGrepConfig {
         }
 
         false
-    }
-
-    fn parse_custom<'a>(&self, token: &'a str) -> Option<Constraint<'a>> {
-        if is_filename_constraint_token(token) {
-            Some(Constraint::FilePath(token))
-        } else {
-            None
-        }
     }
 }
 

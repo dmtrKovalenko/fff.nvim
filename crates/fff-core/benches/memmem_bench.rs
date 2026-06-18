@@ -83,14 +83,6 @@ fn bench_memmem(c: &mut Criterion) {
                     b.iter(|| black_box(case_insensitive_memmem::search(h, n)));
                 },
             );
-
-            group.bench_with_input(
-                BenchmarkId::new("scalar_baseline", &id),
-                &(haystack, &needle_lower),
-                |b, &(h, n)| {
-                    b.iter(|| black_box(case_insensitive_memmem::search_scalar(h, n)));
-                },
-            );
         }
     }
 

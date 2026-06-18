@@ -23,6 +23,21 @@ pub struct FFFQuery<'a> {
     pub location: Option<Location>,
 }
 
+impl<'a> FFFQuery<'a> {
+    /// Parse query and execute, perfectly paired with configuration presets
+    ///
+    /// ```
+    /// use fff_query_parser::{FFFQuery, FileSearchConfig};
+    ///
+    /// let query = FFFQuery::parse("file *.rs", FileSearchConfig);
+    /// ```
+    pub fn parse(query: &'a str, config: impl ParserConfig) -> Self {
+        let query_parser = QueryParser::new(config);
+
+        query_parser.parse(query.as_ref())
+    }
+}
+
 /// Main query parser - zero-cost wrapper around configuration
 #[derive(Debug)]
 pub struct QueryParser<C: ParserConfig> {
@@ -277,9 +292,16 @@ fn parse_token<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Constr
         }
         b'!' if config.enable_exclude() => parse_negation(token, config),
         b'/' if config.enable_path_segments() => parse_path_segment(token),
+        // Handle trailing slash syntax: www/ -> PathSegment("www")
         _ if config.enable_path_segments() && token.ends_with('/') => {
-            // Handle trailing slash syntax: www/ -> PathSegment("www")
             parse_path_segment_trailing(token)
+        }
+        // tokens like `file.rs` *if enabled*
+        _ if config.enable_filename_constraint()
+            && !token.ends_with('/')
+            && Constraint::is_filename_constraint_token(token) =>
+        {
+            Some(Constraint::FilePath(token))
         }
         _ => {
             // Check for glob patterns using config-specific detection
@@ -401,6 +423,12 @@ fn parse_token_without_negation<'a, C: ParserConfig>(
                 }
             }
 
+            if config.enable_filename_constraint()
+                && Constraint::is_filename_constraint_token(token)
+            {
+                return Some(Constraint::FilePath(token));
+            }
+
             config.parse_custom(token)
         }
     }
@@ -467,6 +495,16 @@ fn parse_git_status(value: &str) -> Option<Constraint<'_>> {
 mod tests {
     use super::*;
     use crate::{FileSearchConfig, GrepConfig};
+
+    /// File-picker-like config with filename-constraint detection enabled,
+    /// mirroring the Neovim layer's opt-in behavior.
+    struct FilenameConstraintConfig;
+
+    impl ParserConfig for FilenameConstraintConfig {
+        fn enable_filename_constraint(&self) -> bool {
+            true
+        }
+    }
 
     #[test]
     fn test_parse_extension() {
@@ -1169,6 +1207,42 @@ mod tests {
     }
 
     #[test]
+    fn test_grep_reversed_braces_does_not_panic() {
+        // BUG PINING https://github.com/dmtrKovalenko/fff/issues/479
+        // we should support any combination of different brackets without crashes
+        for query in [
+            "}{",
+            "}{ foo",
+            "foo }{",
+            "a}{b",
+            "}}{{",
+            "} something {{{ {}}}d{ {}}}}{{{    }}}}}d{d    something {{}}}}}}",
+        ] {
+            let result = QueryParser::new(GrepConfig).parse(query);
+            // A reversed-brace token must not be promoted to a Glob — there
+            // is no comma+letters between `{` and `}`, so it's just text.
+            assert!(
+                !result
+                    .constraints
+                    .iter()
+                    .any(|c| matches!(c, Constraint::Glob(_))),
+                "GrepConfig: {query:?} produced a Glob constraint, got {:?}",
+                result.constraints
+            );
+
+            let result = QueryParser::new(crate::AiGrepConfig).parse(query);
+            assert!(
+                !result
+                    .constraints
+                    .iter()
+                    .any(|c| matches!(c, Constraint::Glob(_))),
+                "AiGrepConfig: {query:?} produced a Glob constraint, got {:?}",
+                result.constraints
+            );
+        }
+    }
+
+    #[test]
     fn test_grep_braces_without_comma_is_text() {
         let parser = QueryParser::new(GrepConfig);
         // Code patterns like format!("{}") should NOT be treated as brace expansion
@@ -1179,6 +1253,49 @@ mod tests {
             result.constraints
         );
         assert_eq!(result.grep_text(), r#"format!("{}\\AppData", home)"#);
+    }
+
+    #[test]
+    fn test_grep_valid_brace_expansion_amid_junk_braces() {
+        // A query mixing junk-brace tokens (`}{`, `{{}}`, `}}{{`, `{}`) with
+        // a real brace-expansion glob (`{src,lib}`) must NOT panic and MUST
+        // still surface the valid glob as a Glob constraint. Regression for
+        // the `}{` slice-out-of-bounds panic at config.rs:175.
+        let parser = QueryParser::new(GrepConfig);
+        let result = parser.parse("}{ {{}} }}{{ {} {src,lib} pattern");
+
+        let glob_constraints: Vec<&str> = result
+            .constraints
+            .iter()
+            .filter_map(|c| match c {
+                Constraint::Glob(p) => Some(*p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            glob_constraints,
+            vec!["{src,lib}"],
+            "Expected exactly one Glob({{src,lib}}), got {:?}",
+            result.constraints
+        );
+
+        // Same scenario for AiGrepConfig (delegates to GrepConfig::is_glob_pattern).
+        let parser = QueryParser::new(crate::AiGrepConfig);
+        let result = parser.parse("}{ {{}} }}{{ {} {src,lib} pattern");
+        let glob_constraints: Vec<&str> = result
+            .constraints
+            .iter()
+            .filter_map(|c| match c {
+                Constraint::Glob(p) => Some(*p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            glob_constraints,
+            vec!["{src,lib}"],
+            "AiGrepConfig: expected Glob({{src,lib}}), got {:?}",
+            result.constraints
+        );
     }
 
     #[test]
@@ -1211,7 +1328,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_bare_filename_constraint() {
-        let parser = QueryParser::new(FileSearchConfig);
+        let parser = QueryParser::new(FilenameConstraintConfig);
         let result = parser.parse("score.rs file_picker");
         assert_eq!(result.constraints.len(), 1);
         assert!(
@@ -1224,7 +1341,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_path_prefixed_filename_constraint() {
-        let parser = QueryParser::new(FileSearchConfig);
+        let parser = QueryParser::new(FilenameConstraintConfig);
         let result = parser.parse("libswscale/slice.c lum_convert");
         assert_eq!(result.constraints.len(), 1);
         assert!(
@@ -1268,7 +1385,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_filename_with_multiple_fuzzy_parts() {
-        let parser = QueryParser::new(FileSearchConfig);
+        let parser = QueryParser::new(FilenameConstraintConfig);
         let result = parser.parse("main.rs src components");
         assert_eq!(result.constraints.len(), 1);
         assert!(matches!(
@@ -1295,7 +1412,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_only_one_filepath_constraint() {
-        let parser = QueryParser::new(FileSearchConfig);
+        let parser = QueryParser::new(FilenameConstraintConfig);
         let result = parser.parse("main.rs score.rs");
         // Only first filename becomes a constraint; second is text
         assert_eq!(result.constraints.len(), 1);
@@ -1324,7 +1441,7 @@ mod tests {
 
     #[test]
     fn test_file_picker_dotfile_is_filename() {
-        let parser = QueryParser::new(FileSearchConfig);
+        let parser = QueryParser::new(FilenameConstraintConfig);
         let result = parser.parse(".gitignore src");
         assert_eq!(result.constraints.len(), 1);
         assert!(

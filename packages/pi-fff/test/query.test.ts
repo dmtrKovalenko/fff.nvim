@@ -48,7 +48,9 @@ describe("path constraint normalization", () => {
   });
 
   test("converts absolute in-workspace file path to repo-relative", () => {
-    expect(normalizePathConstraint("/tmp/workspace/src/main.rs", cwd)).toBe("src/main.rs");
+    expect(normalizePathConstraint("/tmp/workspace/src/main.rs", cwd)).toBe(
+      "src/main.rs",
+    );
     expect(buildQuery("/tmp/workspace/src/main.rs", "needle", undefined, cwd)).toBe(
       "src/main.rs needle",
     );
@@ -56,10 +58,14 @@ describe("path constraint normalization", () => {
 
   test("converts absolute in-workspace directory (without trailing slash) to repo-relative", () => {
     expect(normalizePathConstraint("/tmp/workspace/src", cwd)).toBe("src/");
-    expect(buildQuery("/tmp/workspace/src", "needle", undefined, cwd)).toBe("src/ needle");
+    expect(buildQuery("/tmp/workspace/src", "needle", undefined, cwd)).toBe(
+      "src/ needle",
+    );
   });
 
   test("converts absolute in-workspace glob path to repo-relative glob", () => {
-    expect(normalizePathConstraint("/tmp/workspace/src/**/*.ts", cwd)).toBe("src/**/*.ts");
+    expect(normalizePathConstraint("/tmp/workspace/src/**/*.ts", cwd)).toBe(
+      "src/**/*.ts",
+    );
   });
 });

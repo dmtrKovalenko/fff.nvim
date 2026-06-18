@@ -1,257 +1,122 @@
 # fff - Fast File Finder
 
-High-performance fuzzy file finder for Bun, powered by Rust. Perfect for LLM agent tools that need to search through codebases.
+High-performance fuzzy file finder for Bun, powered by Rust. Extremely fast live file, content, and directory search with a typo-resistant algorithm. As well as regex, plain-text, multi-occurrence and typo-resistant content search.
 
-## Features
+Comes with built-in git status support, frecency access tracking, and a real-time file watcher, content indexing and many more! Designed for LLM agent tools that search through codebases or agentic RAG document search.
 
-- **Blazing fast** - Rust-powered fuzzy search with parallel processing
-- **Smart ranking** - Frecency-based scoring (frequency + recency)
-- **Git-aware** - Shows file git status in results
-- **Query history** - Learns from your search patterns
-- **Type-safe** - Full TypeScript support with Result types
+Faster than ripgrep & fzf on any workflow that runs more than once per process.
 
 ## Installation
 
 ```bash
-bun add @ff-labs/bun
+bun add @ff-labs/fff-bun
 ```
 
-The correct native binary for your platform is installed automatically via platform-specific packages (e.g. `@ff-labs/fff-bin-darwin-arm64`, `@ff-labs/fff-bin-linux-x64-gnu`). No GitHub downloads are needed.
+The correct native binary for your platform is installed automatically via platform-specific packages (e.g. `@ff-labs/fff-bin-darwin-arm64`, `@ff-labs/fff-bin-linux-x64-gnu`)
 
 ### Supported Platforms
 
-| Platform | Architecture | Package |
-|----------|-------------|---------|
-| macOS | ARM64 (Apple Silicon) | `@ff-labs/fff-bin-darwin-arm64` |
-| macOS | x64 (Intel) | `@ff-labs/fff-bin-darwin-x64` |
-| Linux | x64 (glibc) | `@ff-labs/fff-bin-linux-x64-gnu` |
-| Linux | ARM64 (glibc) | `@ff-labs/fff-bin-linux-arm64-gnu` |
-| Linux | x64 (musl) | `@ff-labs/fff-bin-linux-x64-musl` |
-| Linux | ARM64 (musl) | `@ff-labs/fff-bin-linux-arm64-musl` |
-| Windows | x64 | `@ff-labs/fff-bin-win32-x64` |
-| Windows | ARM64 | `@ff-labs/fff-bin-win32-arm64` |
+| Platform | Architecture          | Package                             |
+| -------- | --------------------- | ----------------------------------- |
+| macOS    | ARM64 (Apple Silicon) | `@ff-labs/fff-bin-darwin-arm64`     |
+| macOS    | x64 (Intel)           | `@ff-labs/fff-bin-darwin-x64`       |
+| Linux    | x64 (glibc)           | `@ff-labs/fff-bin-linux-x64-gnu`    |
+| Linux    | ARM64 (glibc)         | `@ff-labs/fff-bin-linux-arm64-gnu`  |
+| Linux    | x64 (musl)            | `@ff-labs/fff-bin-linux-x64-musl`   |
+| Linux    | ARM64 (musl)          | `@ff-labs/fff-bin-linux-arm64-musl` |
+| Windows  | x64                   | `@ff-labs/fff-bin-win32-x64`        |
+| Windows  | ARM64                 | `@ff-labs/fff-bin-win32-arm64`      |
 
 If the platform package isn't available, the postinstall script will attempt to download from GitHub releases as a fallback.
 
+### Standalone executables (`bun build --compile`)
+
+`@ff-labs/fff-bun` embeds the native library into single-file executables built
+with `bun build --compile`. macOS and Windows work with no extra flags:
+
+```bash
+bun build --compile ./app.ts --outfile myapp
+```
+
+On **Linux** the C library's libc (glibc vs musl) can't be detected at build
+time, so you must pass it as a build constant for the lib to embed:
+
+```bash
+bun build --compile --define FFF_LIBC='"gnu"'  ./app.ts --outfile myapp   # glibc
+bun build --compile --define FFF_LIBC='"musl"' ./app.ts --outfile myapp   # musl / Alpine
+```
+
+Without the define on Linux the library is resolved at runtime instead of being
+embedded, which works under `bun run` but not in a standalone binary.
+
 ## Quick Start
 
+Each `FileFinder` instance owns an independent native index. Create one, wait
+for the initial scan, then run as many searches as you like.
+
 ```typescript
-import { FileFinder } from "fff";
+import { FileFinder } from "@ff-labs/fff-bun";
 
-// Initialize with a directory
-const result = FileFinder.init({ basePath: "/path/to/project" });
-if (!result.ok) {
-  console.error(result.error);
-  process.exit(1);
-}
+// Create an instance bound to a directory
+const created = FileFinder.create({ basePath: "/path/to/project" });
+if (!created.ok) throw new Error(created.error);
 
-// Wait for initial scan
-FileFinder.waitForScan(5000);
+const finder = created.value;
 
-// Search for files
-const search = FileFinder.search("main.ts");
-if (search.ok) {
-  for (const item of search.value.items) {
-    console.log(item.relativePath);
+// Wait for the initial scan (non-blocking)
+await finder.waitForScan(5000);
+
+// 1. Fuzzy file search (typo resistant)
+const files = finder.fileSearch("typescropt.ts", { pageSize: 10 });
+if (files.ok) {
+  for (const item of files.value.items) {
+    console.log(item.relativePath, item.gitStatus);
   }
 }
 
-// Cleanup when done
-FileFinder.destroy();
+// 2. Glob filter — no fuzzy matching, 100% compatible with npm `glob`
+const globbed = finder.glob("src/**/*.ts");
+if (globbed.ok) console.log(`${globbed.value.totalMatched} TypeScript files`);
+
+// 3. Content search (live grep) with pagination
+const grep = finder.grep("TODO", { mode: "plain", pageSize: 20 });
+if (grep.ok) {
+  for (const m of grep.value.items) {
+    console.log(`${m.relativePath}:${m.lineNumber}: ${m.lineContent}`);
+  }
+}
+
+// 4. Directory search based on the query (typo resistant)
+const dirs = finder.directorySearch("components");
+if (dirs.ok) console.log(dirs.value.items.map((d) => d.relativePath));
+
+// Free the resources when you don't need a file picker anymore
+finder.destroy();
 ```
+
 
 ## API Reference
 
-### `FileFinder.init(options)`
+Verify the latest API in the local interface at [`./src/fff-api.ts`](./src/fff-api.ts). Every field and type is documented.
 
-Initialize the file finder.
-
-```typescript
-interface InitOptions {
-  basePath: string;           // Directory to index (required)
-  frecencyDbPath?: string;    // Frecency DB path (omit to skip frecency)
-  historyDbPath?: string;     // History DB path (omit to skip query tracking)
-  useUnsafeNoLock?: boolean;  // Faster but less safe DB mode
-}
-
-const result = FileFinder.init({ basePath: "/my/project" });
-```
-
-### `FileFinder.search(query, options?)`
-
-Search for files.
-
-```typescript
-interface SearchOptions {
-  maxThreads?: number;          // Parallel threads (0 = auto)
-  currentFile?: string;         // Deprioritize this file
-  comboBoostMultiplier?: number; // Query history boost
-  minComboCount?: number;        // Min history matches
-  pageIndex?: number;            // Pagination offset
-  pageSize?: number;             // Results per page
-}
-
-const result = FileFinder.search("main.ts", { pageSize: 10 });
-if (result.ok) {
-  console.log(`Found ${result.value.totalMatched} files`);
-}
-```
-
-### Query Syntax
-
-- `foo bar` - Match files containing "foo" and "bar"
-- `src/` - Match files in src directory
-- `file.ts:42` - Match file.ts with line 42
-- `file.ts:42:10` - Match with line and column
-
-### `FileFinder.trackAccess(filePath)`
-
-Track file access for frecency scoring.
-
-```typescript
-// Call when user opens a file
-FileFinder.trackAccess("/path/to/file.ts");
-```
-
-### `FileFinder.grep(query, options?)`
-
-Search file contents with SIMD-accelerated matching.
-
-```typescript
-interface GrepOptions {
-  maxFileSize?: number;        // Max file size in bytes (default: 10MB)
-  maxMatchesPerFile?: number;  // Max matches per file (default: 200, set 0 to unlimited) 
-  smartCase?: boolean;         // Case-insensitive if all lowercase (default: true)
-  fileOffset?: number;         // Pagination offset (default: 0)
-  pageLimit?: number;          // Max matches to return (default: 50)
-  mode?: "plain" | "regex" | "fuzzy"; // Search mode (default: "plain")
-  timeBudgetMs?: number;       // Time limit in ms, 0 = unlimited (default: 0)
-}
-
-// Plain text search
-const result = FileFinder.grep("TODO", { pageLimit: 20 });
-if (result.ok) {
-  for (const match of result.value.items) {
-    console.log(`${match.relativePath}:${match.lineNumber}: ${match.lineContent}`);
-  }
-}
-
-// Regex search
-const regexResult = FileFinder.grep("fn\\s+\\w+", { mode: "regex" });
-
-// Fuzzy search
-const fuzzyResult = FileFinder.grep("imprt recat", { mode: "fuzzy" });
-
-// Pagination
-const page1 = FileFinder.grep("error");
-if (page1.ok && page1.value.nextCursor) {
-  const page2 = FileFinder.grep("error", {
-    cursor: page1.value.nextCursor,
-  });
-}
-
-// With file constraints
-const tsOnly = FileFinder.grep("*.ts useState");
-const srcOnly = FileFinder.grep("src/ handleClick");
-```
-
-### `FileFinder.trackQuery(query, selectedFile)`
-
-Track query completion for smart suggestions.
-
-```typescript
-// Call when user selects a file from search
-FileFinder.trackQuery("main", "/path/to/main.ts");
-```
-
-### `FileFinder.healthCheck(testPath?)`
-
-Get diagnostic information.
-
-```typescript
-const health = FileFinder.healthCheck();
-if (health.ok) {
-  console.log(`Version: ${health.value.version}`);
-  console.log(`Indexed: ${health.value.filePicker.indexedFiles} files`);
-}
-```
-
-### Other Methods
-
-- `FileFinder.grep(query, options?)` - Search file contents
-- `FileFinder.scanFiles()` - Trigger rescan
-- `FileFinder.isScanning()` - Check scan status
-- `FileFinder.getScanProgress()` - Get scan progress
-- `FileFinder.waitForScan(timeoutMs)` - Wait for scan
-- `FileFinder.reindex(newPath)` - Change indexed directory
-- `FileFinder.refreshGitStatus()` - Refresh git cache
-- `FileFinder.getHistoricalQuery(offset)` - Get past queries
-- `FileFinder.destroy()` - Cleanup resources
-
-## Result Types
+### Result Types
 
 All methods return a `Result<T>` type for explicit error handling:
 
-```typescript
-type Result<T> = 
-  | { ok: true; value: T }
-  | { ok: false; error: string };
 
-const result = FileFinder.search("foo");
+```typescript
+type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+
+const result = finder.fileSearch("foo");
+
 if (result.ok) {
   // result.value is SearchResult
 } else {
-  // result.error is string
+  // result.error is string error message
 }
 ```
 
-## Search Result Types
-
-```typescript
-interface SearchResult {
-  items: FileItem[];
-  scores: Score[];
-  totalMatched: number;
-  totalFiles: number;
-  location?: Location;
-}
-
-interface FileItem {
-  path: string;
-  relativePath: string;
-  fileName: string;
-  size: number;
-  modified: number;
-  gitStatus: string; // 'clean', 'modified', 'untracked', etc.
-}
-```
-
-## Grep Result Types
-
-```typescript
-interface GrepResult {
-  items: GrepMatch[];
-  totalMatched: number;
-  totalFilesSearched: number;
-  totalFiles: number;
-  filteredFileCount: number;
-  nextCursor: GrepCursor | null; // Pass to options.cursor for next page
-  regexFallbackError?: string;   // Set if regex was invalid
-}
-
-interface GrepMatch {
-  path: string;
-  relativePath: string;
-  fileName: string;
-  gitStatus: string;
-  lineNumber: number;    // 1-based
-  col: number;           // 0-based byte column
-  byteOffset: number;    // Absolute byte offset in file
-  lineContent: string;   // The matched line text
-  matchRanges: [number, number][]; // Byte offsets for highlighting
-  fuzzyScore?: number;   // Only in fuzzy mode
-}
-```
+This SDK calls a native compiled library for your platform at runtime. This is generally safe — fff is battle-tested and stable, and written in a memory-safe language — but there is a class of errors that can't be caught at the Bun/Node level. If you hit one, please report an issue!
 
 ## Building from Source
 
@@ -268,7 +133,7 @@ cargo build --release -p fff-c
 # The binary will be at target/release/libfff_c.{so,dylib,dll}
 ```
 
-## CLI Tools
+## CLI examples
 
 ```bash
 # Download binary manually (fallback if npm package unavailable)

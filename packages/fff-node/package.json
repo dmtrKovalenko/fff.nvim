@@ -34,7 +34,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
+    "url": "git+https://github.com/dmtrKovalenko/fff.git",
     "directory": "packages/fff-node"
   },
   "keywords": [
@@ -53,9 +53,9 @@
     "access": "public"
   },
   "bugs": {
-    "url": "https://github.com/dmtrKovalenko/fff.nvim/issues"
+    "url": "https://github.com/dmtrKovalenko/fff/issues"
   },
-  "homepage": "https://github.com/dmtrKovalenko/fff.nvim#readme",
+  "homepage": "https://github.com/dmtrKovalenko/fff#readme",
   "dependencies": {
     "ffi-rs": "^1.0.0"
   },

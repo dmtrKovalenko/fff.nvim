@@ -14,6 +14,75 @@ use fff::{
     MixedSearchResult, Score, SearchResult,
 };
 
+/// Current used version of [`FffCreateOptions`].
+pub const FFF_CREATE_OPTIONS_VERSION: u32 = 1;
+
+/// Options for `fff_create_instance_with`.
+///
+/// Versioned struct: you populate the struct at your call level, we guarantee that
+/// the version is stable across the version changes, new fields only appended!
+#[repr(C)]
+pub struct FffCreateOptions {
+    /// Set to [`FFF_CREATE_OPTIONS_VERSION`] when allocating. Used by the
+    /// library to determine which trailing fields are populated.
+    pub version: u32,
+    /// Directory to index (required, non-NULL).
+    pub base_path: *const c_char,
+    /// Frecency LMDB database path. NULL/empty to skip frecency tracking.
+    pub frecency_db_path: *const c_char,
+    /// Query history LMDB database path. NULL/empty to skip query tracking.
+    pub history_db_path: *const c_char,
+    /// Pre-populate mmap caches for top-frecency files after the initial scan.
+    pub enable_mmap_cache: bool,
+    /// Build content index after the initial scan for faster grep.
+    pub enable_content_indexing: bool,
+    /// Start a background file-system watcher for live updates.
+    pub watch: bool,
+    /// Enable AI-agent optimizations.
+    pub ai_mode: bool,
+    /// Tracing log file path. NULL/empty to skip log init.
+    pub log_file_path: *const c_char,
+    /// Log level: `"trace" | "debug" | "info" | "warn" | "error"`.
+    /// NULL/empty defaults to `"info"`. Ignored when `log_file_path` is unset.
+    pub log_level: *const c_char,
+    /// Content cache file-count cap. 0 = auto.
+    pub cache_budget_max_files: u64,
+    /// Content cache byte cap. 0 = auto.
+    pub cache_budget_max_bytes: u64,
+    /// Per-file byte cap inside the content cache. 0 = auto.
+    pub cache_budget_max_file_size: u64,
+    /// Allow indexing the filesystem root (`/`). Off by default — root is
+    /// rarely the intended target and floods the watcher with churn.
+    pub enable_fs_root_scanning: bool,
+    /// Allow indexing the user's home directory. Same trade-off as
+    /// `enable_fs_root_scanning`.
+    pub enable_home_dir_scanning: bool,
+    // ----- new version 2+ fields go here, ALWAYS appended -----
+}
+
+impl FffCreateOptions {
+    /// Default values for a v1 options struct.
+    pub fn defaults() -> Self {
+        Self {
+            version: FFF_CREATE_OPTIONS_VERSION,
+            base_path: ptr::null(),
+            frecency_db_path: ptr::null(),
+            history_db_path: ptr::null(),
+            enable_mmap_cache: true,
+            enable_content_indexing: true,
+            watch: true,
+            ai_mode: false,
+            log_file_path: ptr::null(),
+            log_level: ptr::null(),
+            cache_budget_max_files: 0,
+            cache_budget_max_bytes: 0,
+            cache_budget_max_file_size: 0,
+            enable_fs_root_scanning: false,
+            enable_home_dir_scanning: false,
+        }
+    }
+}
+
 /// Allocate a heap CString from a `&str`, returning a raw pointer.
 fn cstring_new(s: &str) -> *mut c_char {
     CString::new(s).unwrap_or_default().into_raw()
@@ -420,7 +489,9 @@ impl FffGrepResult {
 
 /// Result envelope returned by all `fff_*` functions.
 ///
-/// Heap-allocated — the caller must free it with `fff_free_result`.
+/// Heap-allocated. The caller must free it with `fff_free_result`. Calling `fff_free_result`
+/// **does not** deallocate the underlying `handle` pointer. It needs to be cleaned separately.
+/// see (`fff_destroy`, `fff_free_search_result`, `fff_free_grep_result`, `fff_free_string`, etc.).
 ///
 /// Depending on the function, the payload is delivered through different fields:
 ///
@@ -440,18 +511,13 @@ impl FffGrepResult {
 /// | `fff_restart_index`        | (none)        | success flag only             |
 ///
 /// On failure, `success` is false and `error` contains the message.
-///
-/// **Important:** `fff_free_result` frees `error` but does **not** free `handle`.
-/// The caller must free the handle with the appropriate function
-/// (`fff_destroy`, `fff_free_search_result`, `fff_free_grep_result`,
-///  `fff_free_string`, etc.).
 #[repr(C)]
 pub struct FffResult {
     /// Whether the operation succeeded.
     pub success: bool,
     /// Error message on failure. Null on success.
     pub error: *mut c_char,
-    /// Opaque pointer payload (instance handle, typed result struct, or string). May be null.
+    /// Opaque pointer payload. May be null.
     pub handle: *mut c_void,
     /// Integer payload for simple return values (bool as 0/1, counts, etc.).
     pub int_value: i64,
@@ -723,5 +789,36 @@ impl From<fff::file_picker::ScanProgress> for FffScanProgress {
             is_watcher_ready: p.is_watcher_ready,
             is_warmup_complete: p.is_warmup_complete,
         }
+    }
+}
+
+#[cfg(test)]
+mod options_layout_tests {
+    use super::FffCreateOptions;
+    use std::mem::{align_of, offset_of, size_of};
+
+    // THIS TEST HAVE TO BE NEVER UPDATED ONLY ADDED NEW FIELDS
+    // this is needed to ensure ABI backward compatibility
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn fff_create_options_layout_is_stable_64bit() {
+        assert_eq!(size_of::<FffCreateOptions>(), 88);
+        assert_eq!(align_of::<FffCreateOptions>(), 8);
+
+        assert_eq!(offset_of!(FffCreateOptions, version), 0);
+        assert_eq!(offset_of!(FffCreateOptions, base_path), 8);
+        assert_eq!(offset_of!(FffCreateOptions, frecency_db_path), 16);
+        assert_eq!(offset_of!(FffCreateOptions, history_db_path), 24);
+        assert_eq!(offset_of!(FffCreateOptions, enable_mmap_cache), 32);
+        assert_eq!(offset_of!(FffCreateOptions, enable_content_indexing), 33);
+        assert_eq!(offset_of!(FffCreateOptions, watch), 34);
+        assert_eq!(offset_of!(FffCreateOptions, ai_mode), 35);
+        assert_eq!(offset_of!(FffCreateOptions, log_file_path), 40);
+        assert_eq!(offset_of!(FffCreateOptions, log_level), 48);
+        assert_eq!(offset_of!(FffCreateOptions, cache_budget_max_files), 56);
+        assert_eq!(offset_of!(FffCreateOptions, cache_budget_max_bytes), 64);
+        assert_eq!(offset_of!(FffCreateOptions, cache_budget_max_file_size), 72);
+        assert_eq!(offset_of!(FffCreateOptions, enable_fs_root_scanning), 80);
+        assert_eq!(offset_of!(FffCreateOptions, enable_home_dir_scanning), 81);
     }
 }

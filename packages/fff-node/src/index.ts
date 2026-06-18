@@ -22,7 +22,7 @@
  * const finder = result.value;
  *
  * // Wait for initial scan
- * finder.waitForScan(5000);
+ * await finder.waitForScan(5000);
  *
  * // Search for files
  * const search = finder.fileSearch("main.ts");
@@ -44,19 +44,12 @@ export {
   findBinary,
 } from "./binary.js";
 export { closeLibrary } from "./ffi.js";
-export { FileFinder } from "./finder.js";
-export {
-  getLibExtension,
-  getLibFilename,
-  getNpmPackageName,
-  getTriple,
-} from "./platform.js";
-
 export type {
   DbHealth,
   DirItem,
   DirSearchOptions,
   DirSearchResult,
+  FileFinderApi,
   FileItem,
   GrepCursor,
   GrepMatch,
@@ -74,6 +67,13 @@ export type {
   Score,
   SearchOptions,
   SearchResult,
-} from "./types.js";
+} from "./fff-api.js";
 // Result helpers
-export { err, ok } from "./types.js";
+export { err, ok } from "./fff-api.js";
+export { FileFinder } from "./finder.js";
+export {
+  getLibExtension,
+  getLibFilename,
+  getNpmPackageName,
+  getTriple,
+} from "./platform.js";

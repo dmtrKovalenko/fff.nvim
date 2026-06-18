@@ -26,26 +26,63 @@ pub enum Error {
         path: std::path::PathBuf,
         source: std::io::Error,
     },
-    #[error("Failed to open frecency database env: {0}")]
-    EnvOpen(#[source] heed::Error),
-    #[error("Failed to create frecency database: {0}")]
-    DbCreate(#[source] heed::Error),
-    #[error("Failed to open frecency database: {0}")]
-    DbOpen(#[source] heed::Error),
-    #[error("Failed to clear stale readers for frecency database: {0}")]
-    DbClearStaleReaders(#[source] heed::Error),
+    #[error("Something is wrong with the local db instance: {0}")]
+    GenericDbError(#[from] heed::Error),
+    #[error("Failed to open {db} database env: {source}")]
+    EnvOpen {
+        db: &'static str,
+        #[source]
+        source: heed::Error,
+    },
+    #[error("Failed to create {db} database: {source}")]
+    DbCreate {
+        db: &'static str,
+        #[source]
+        source: heed::Error,
+    },
+    #[error("Failed to open {db} database: {source}")]
+    DbOpen {
+        db: &'static str,
+        #[source]
+        source: heed::Error,
+    },
+    #[error("Failed to clear stale readers for {db} database: {source}")]
+    DbClearStaleReaders {
+        db: &'static str,
+        #[source]
+        source: heed::Error,
+    },
 
-    #[error("Failed to start read transaction for frecency database: {0}")]
-    DbStartReadTxn(#[source] heed::Error),
-    #[error("Failed to start write transaction for frecency database: {0}")]
-    DbStartWriteTxn(#[source] heed::Error),
-
-    #[error("Failed to read from frecency database: {0}")]
-    DbRead(#[source] heed::Error),
-    #[error("Failed to write to frecency database: {0}")]
-    DbWrite(#[source] heed::Error),
-    #[error("Failed to commit write transaction to frecency database: {0}")]
-    DbCommit(#[source] heed::Error),
+    #[error("Failed to start read transaction for {db} database: {source}")]
+    DbStartReadTxn {
+        db: &'static str,
+        #[source]
+        source: heed::Error,
+    },
+    #[error("Failed to start write transaction for {db} database: {source}")]
+    DbStartWriteTxn {
+        db: &'static str,
+        #[source]
+        source: heed::Error,
+    },
+    #[error("Failed to read from {db} database: {source}")]
+    DbRead {
+        db: &'static str,
+        #[source]
+        source: heed::Error,
+    },
+    #[error("Failed to write to {db} database: {source}")]
+    DbWrite {
+        db: &'static str,
+        #[source]
+        source: heed::Error,
+    },
+    #[error("Failed to commit write transaction to {db} database: {source}")]
+    DbCommit {
+        db: &'static str,
+        #[source]
+        source: heed::Error,
+    },
     #[error("Failed to start file system watcher: {0}")]
     FileSystemWatch(#[from] notify::Error),
 

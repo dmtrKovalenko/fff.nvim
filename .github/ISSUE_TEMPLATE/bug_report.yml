@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a crash, hang, or incorrect behavior in fff (any frontend — nvim plugin, Node/Bun SDK, MCP server, C SDK).
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Which fff frontend?
+      options:
+        - Neovim plugin (fff.nvim)
+        - MCP server (fff-mcp)
+        - Node SDK (@ff-labs/fff-node)
+        - Bun SDK
+        - C SDK (libfff)
+        - Other / multiple
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: has logs
+      description: |
+        Attach your fff log file — the single most useful thing for debugging.
+
+        fff writes a fresh log file on every process startup, named `fff+<unix-ts>+<pid>.log`, and keeps the last 20. Find the file matching your crashed/buggy run and drag-and-drop it here (or paste its contents).
+
+        Where the log files live:
+
+        | Frontend | Linux / macOS | Windows |
+        |---|---|---|
+        | Neovim plugin | `~/.local/state/nvim/log/fff+*.log` | `%LOCALAPPDATA%\nvim-data\log\fff+*.log` |
+        | MCP server (`fff-mcp`) | `~/.cache/fff_mcp+*.log` (override with `--log-file`) | `%LOCALAPPDATA%\fff_mcp+*.log` |
+        | Node / Bun SDK | path you passed as `logFilePath` to `FileFinder.create({...})` | same |
+        | C SDK | path you passed as `log_file_path` in `FffCreateOptions` | same |
+
+        Neovim users: run `:FFFOpenLog` to open the current session's log directly.
+
+        Also some useful commands:
+
+        ```sh
+        # Neovim plugin
+        ls -t ~/.local/state/nvim/log/fff+*.log | head -1
+
+        # MCP server
+        ls -t ~/.cache/fff_mcp+*.log | head -1
+        ```
+    validations:
+      required: false
+
+  - type: textarea
+    id: body
+    attributes:
+      label: Description
+      description: Please provide as much helpful information as you can
+    validations:
+      required: true

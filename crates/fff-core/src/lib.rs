@@ -92,12 +92,14 @@
 //! ```
 
 mod background_watcher;
+pub(crate) mod parallelism;
 mod scan;
 // public only for benchmarks — the inverted index is still re-exported via
 // `pub use bigram_filter::*` below for external consumers.
 #[doc(hidden)]
 pub mod bigram_filter;
 pub mod bigram_query;
+pub mod constants;
 mod constraints;
 mod error;
 mod score;

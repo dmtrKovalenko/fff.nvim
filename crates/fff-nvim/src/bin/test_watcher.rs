@@ -35,11 +35,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctrlc::set_handler(move || {
         println!("\n🛑 Received interrupt signal, shutting down...");
         if let Ok(mut guard) = picker_for_cleanup.write() {
-            if let Some(mut picker) = guard.take() {
-                picker.stop_background_monitor();
-                println!("🧹 FilePicker cleaned up");
-            }
+            guard.take();
         }
+        println!("🧹 FilePicker cleaned up");
         r.store(false, Ordering::SeqCst);
         std::process::exit(0);
     })?;
@@ -200,9 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Clean up before exit
     if let Ok(mut guard) = shared_picker.write() {
-        if let Some(mut picker) = guard.take() {
-            picker.stop_background_monitor();
-        }
+        guard.take();
     }
 
     Ok(())

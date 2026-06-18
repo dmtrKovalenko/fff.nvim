@@ -5,14 +5,14 @@
   },
   "workspace": {
     "library": [
-      "/opt/homebrew/share/nvim/runtime/lua/vim/_meta",
-      "/opt/homebrew/share/nvim/runtime/lua/vim/shared.lua",
+      "$VIMRUNTIME/lua",
       "${3rd}/luv/library",
       "${3rd}/busted/library"
     ],
     "checkThirdParty": false
   },
   "diagnostics": {
+    "globals": ["vim"],
     "severity": {
       "undefined-global": "Error",
       "undefined-field": "Warning",

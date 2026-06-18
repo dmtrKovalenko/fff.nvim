@@ -134,6 +134,7 @@ Mode precedence:
 - `--fff-mode <mode>` — set mode (see above)
 - `--fff-frecency-db <path>` — path to frecency database (also: `FFF_FRECENCY_DB` env)
 - `--fff-history-db <path>` — path to query history database (also: `FFF_HISTORY_DB` env)
+- `--fff-enable-root-scan` — allow indexing when launched from `/` (also: `FFF_ENABLE_ROOT_SCAN=1` env). FFF refuses to init at the filesystem root by default. Home directory scanning is always enabled for pi.
 
 ## Data
 

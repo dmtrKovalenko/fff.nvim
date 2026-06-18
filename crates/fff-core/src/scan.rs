@@ -1,43 +1,20 @@
-//! Unified scan-phase orchestrator.
-//!
-//! Every (re)index code path — initial scan, FFI-triggered rescan,
-//! watcher overflow rescan — goes through [`ScanJob::run`]. The
-//! orchestrator owns the *sequence* of a scan:
-//!
-//!   1. walk filesystem off-lock
-//!   2. swap `sync_data` under a brief write
-//!   3. apply git status + frecency off-lock
-//!   4. (optional, initial scan only) spawn the filesystem watcher
-//!   5. (optional) post-scan: auto-size cache budget, warmup, bigram
-//!
-//! The picker write lock is held only in step 2 and step 5's index
-//! install — both O(µs-ms), never seconds. Every other FFI caller on
-//! the nvim main thread keeps running.
-//!
-//! ## Entry points
-//!
-//! - [`ScanJob::spawn`] — fire-and-forget from `SharedPicker` state.
-//!   Used by the watcher overflow path and by FFI (`scan_files`).
-//! - [`ScanJob::spawn_initial`] — same, but takes explicit config for
-//!   the very first scan, before the `FilePicker` struct lives inside
-//!   the shared handle.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use rayon::prelude::*;
 use tracing::{error, info};
 
 use crate::FileSync;
 use crate::background_watcher::BackgroundWatcher;
-use crate::bigram_filter::BigramOverlay;
-use crate::bigram_filter::build_bigram_index;
+use crate::bigram_filter::{build_bigram_index, sniff_binary_for_non_indexable};
 use crate::error::Error;
-use crate::file_picker::{BACKGROUND_THREAD_POOL, FFFMode, warmup_mmaps};
+use crate::file_picker::FFFMode;
 use crate::git::GitStatusCache;
+use crate::parallelism::BACKGROUND_THREAD_POOL;
 use crate::shared::{SharedFilePicker, SharedFrecency};
+use crate::simd_path::ArenaPtr;
 use crate::types::ContentCacheBudget;
-use rayon::prelude::*;
 
 #[derive(Clone, Default)]
 pub(crate) struct ScanSignals {
@@ -56,13 +33,16 @@ pub(crate) struct ScanSignals {
 }
 
 /// Which optional phases a scan should run.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub(crate) struct ScanConfig {
     pub(crate) warmup: bool,
     pub(crate) content_indexing: bool,
     pub(crate) watch: bool,
     pub(crate) auto_cache_budget: bool,
     pub(crate) install_watcher: bool,
+    pub(crate) follow_symlinks: bool,
+    pub(crate) enable_fs_root_scanning: bool,
+    pub(crate) enable_home_dir_scanning: bool,
 }
 
 /// A fully-configured scan job ready to run on a background thread.
@@ -81,6 +61,7 @@ pub(crate) struct ScanJob {
     /// side. Reset to 0 at scan start, incremented per-file by the
     /// walker. Shared `Arc` so the UI polls the same atomic.
     scanned_files_counter: Arc<AtomicUsize>,
+    trace_span: tracing::Span,
 }
 
 impl ScanJob {
@@ -104,6 +85,7 @@ impl ScanJob {
         let signals = picker.scan_signals();
         let scanned_files_counter = picker.scanned_files_counter();
         let base_path = picker.base_path().to_path_buf();
+        let trace_span = picker.trace_span();
 
         let new_scan_config = ScanConfig {
             warmup: picker.has_mmap_cache(),
@@ -111,6 +93,9 @@ impl ScanJob {
             watch: picker.has_watcher(),
             auto_cache_budget: !picker.has_explicit_cache_budget(),
             install_watcher: false, // the watcher is independent of rescan, it is not restarting EVER
+            follow_symlinks: picker.follows_symlinks(),
+            enable_fs_root_scanning: picker.fs_root_scanning_enabled(),
+            enable_home_dir_scanning: picker.home_dir_scanning_enabled(),
         };
 
         drop(guard); // just a sanity check
@@ -123,9 +108,11 @@ impl ScanJob {
             config: new_scan_config,
             shared_picker: shared_picker.clone(),
             shared_frecency: shared_frecency.clone(),
+            trace_span,
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_initial(
         shared_picker: SharedFilePicker,
         shared_frecency: SharedFrecency,
@@ -133,6 +120,7 @@ impl ScanJob {
         mode: FFFMode,
         signals: ScanSignals,
         scanned_files_counter: Arc<AtomicUsize>,
+        trace_span: tracing::Span,
         config: ScanConfig,
     ) -> Self {
         Self {
@@ -143,15 +131,20 @@ impl ScanJob {
             signals,
             scanned_files_counter,
             config,
+            trace_span,
         }
     }
 
     /// Spawn the job on a dedicated OS thread. Returns immediately.
     pub fn spawn(self) -> std::thread::JoinHandle<()> {
         self.signals.scanning.store(true, Ordering::Release);
+        let span = self.trace_span.clone();
         std::thread::Builder::new()
             .name("fff-scan".into())
-            .spawn(move || self.run())
+            .spawn(move || {
+                let _g = span.enter();
+                self.run();
+            })
             .expect("failed to spawn fff-scan thread")
     }
 
@@ -164,6 +157,7 @@ impl ScanJob {
             signals,
             scanned_files_counter,
             config,
+            trace_span: _,
         } = self;
 
         let _scanning = ScanningGuard::new(&signals, config.install_watcher);
@@ -177,10 +171,11 @@ impl ScanJob {
         let status_handle = git_workdir.clone().map(FileSync::spawn_git_status);
         let sync = match FileSync::walk_filesystem(
             &base_path,
-            git_workdir,
+            git_workdir.clone(),
             &scanned_files_counter,
             &shared_frecency,
             mode,
+            config.follow_symlinks,
         ) {
             Ok(sync) => sync,
             Err(e) => {
@@ -189,18 +184,21 @@ impl ScanJob {
             }
         };
 
-        if signals.cancelled.load(Ordering::Acquire) {
-            info!("walk completed but picker was replaced, discarding results");
-            return;
-        }
-
-        let git_workdir = sync.git_workdir.clone();
-
         // 2. Brief write to install the freshly-walked file list.
         if let Ok(mut guard) = shared_picker.write()
             && let Some(picker) = guard.as_mut()
         {
+            if signals.cancelled.load(Ordering::Acquire) {
+                info!("scan cancelled between walk and commit, discarding");
+                return;
+            }
+
+            let live_count = sync.live_count;
             picker.commit_new_sync(sync);
+
+            if config.auto_cache_budget && !picker.has_explicit_cache_budget() {
+                picker.set_cache_budget(ContentCacheBudget::new_for_repo(live_count));
+            }
         } else {
             error!("failed to install scan results into picker");
             return;
@@ -217,14 +215,39 @@ impl ScanJob {
             rescubscribe_watcher_post_scan(&shared_picker);
         }
 
-        // 3. Apply git status + frecency off-lock.
+        let mut snapshot = if !signals.cancelled.load(Ordering::Acquire) {
+            shared_picker.read().ok().and_then(|guard| {
+                guard
+                    .as_ref()
+                    .and_then(|picker| unsafe { picker.post_scan_snapshot() })
+            })
+        } else {
+            None
+        };
+
+        // 3. Post-scan warmup + bigram build — runs in parallel with the
+        // git-status thread to overlap the two expensive phases.
+        // Always runs (even with both flags off) so binary-content files
+        // with unknown extensions get reclassified before user search hits.
         if !signals.cancelled.load(Ordering::Acquire)
-            && let Some(status_handle) = status_handle
+            && let Some(snap) = snapshot.as_ref()
         {
-            apply_git_status_and_frecency(&shared_picker, &shared_frecency, status_handle, mode);
+            Self::run_post_scan(&shared_picker, &signals, &config, snap);
         }
 
-        // 4. Install filesystem watcher (initial scan only).
+        // 4. Join and git status, this HAS to be done after the post scan
+        if !signals.cancelled.load(Ordering::Acquire)
+            && let Some(status_handle) = status_handle
+            && let Some(snapshot) = snapshot.as_mut()
+            // THIS DOES WAIT for potentially very long status query
+            && let Ok(Some(git_status)) = status_handle.join()
+        {
+            apply_git_status_and_frecency(git_status, &shared_frecency, mode, snapshot);
+        }
+
+        drop(snapshot); // SNAPSHOT SHOULD NOT BE USED AFTER THIS POINT
+
+        // 5. Install filesystem watcher (initial scan only).
         if config.install_watcher && config.watch && !signals.cancelled.load(Ordering::Acquire) {
             let shared_picker: &SharedFilePicker = &shared_picker;
             let shared_frecency: &SharedFrecency = &shared_frecency;
@@ -236,6 +259,9 @@ impl ScanJob {
                 shared_picker.clone(),
                 shared_frecency.clone(),
                 mode,
+                config.enable_fs_root_scanning,
+                config.enable_home_dir_scanning,
+                tracing::Span::current(),
             ) {
                 Ok(watcher) => {
                     if let Ok(mut guard) = shared_picker.write()
@@ -248,20 +274,8 @@ impl ScanJob {
             };
         }
 
-        // 5. Post-scan warmup + bigram build.
-        if (config.warmup || config.content_indexing) && !signals.cancelled.load(Ordering::Acquire)
-        {
-            Self::run_post_scan(&shared_picker, &signals, &config);
-        }
-
         // 6. Drain any rescan that arrived while we were busy.
-        //
-        // `trigger_full_rescan_async` sets `rescan_pending` whenever a
-        // caller asks for a rescan while `ScanJob::new` would have
-        // returned `Ok(None)` (scan active *or* post-scan busy). We
-        // consume the flag with `swap` so concurrent requests that land
-        // between the check and the follow-up spawn are still captured
-        // by the next invocation.
+        // if user initiated a new rescan we had no way to cancel current post scan, so do it again
         if !signals.cancelled.load(Ordering::Acquire)
             && signals.rescan_pending.swap(false, Ordering::AcqRel)
         {
@@ -271,11 +285,10 @@ impl ScanJob {
                     follow_up.spawn();
                 }
                 Ok(None) => {
-                    // Another scan slipped in between our post-scan exit
-                    // and the `new()` call above. That scan will drain
-                    // the flag we just cleared — but we re-arm it so it
-                    // does.
-                    signals.rescan_pending.store(true, Ordering::Release);
+                    // this should be practically impossible because we do not have any
+                    // queue, but if somehow a new rescan was triggered JUST IN THIS MOMENT
+                    // just ignore it because the ongoing one is fresh enough
+                    tracing::warn!("Post scan was re-triggered, ignoring");
                 }
                 Err(e) => {
                     error!(?e, "Failed to reschedule deferred rescan");
@@ -284,85 +297,62 @@ impl ScanJob {
         }
     }
 
-    #[tracing::instrument(skip_all)]
-    fn run_post_scan(shared_picker: &SharedFilePicker, signals: &ScanSignals, config: &ScanConfig) {
-        // Auto-scale the cache budget before we take the files snapshot
-        if config.auto_cache_budget
-            && !signals.cancelled.load(Ordering::Acquire)
-            && let Ok(mut guard) = shared_picker.write()
-            && let Some(picker) = guard.as_mut()
-            && !picker.has_explicit_cache_budget()
-        {
-            let file_count = picker.get_files().len();
-            picker.set_cache_budget(ContentCacheBudget::new_for_repo(file_count));
-        }
-
-        // we do unsafe dirty capturing here because we GUARANTEE that the files vec is not moving anywhere
-        let Some(unsafe_snapshot) = shared_picker.read().ok().and_then(|guard| {
-            guard
-                .as_ref()
-                .and_then(|picker| unsafe { picker.post_scan_snapshot() })
-        }) else {
-            tracing::error!("Failed to commit post scan reindexing job");
+    /// THIS IS VERY VERY IMPORTANT THAT ANYTHING INSIDE THIS FUNCTION TO NOT READ ANYTHING CLEARABLE OUTSIDE
+    /// this is a very silly off lock implementation that actually matters, and that's why it is crafted
+    /// to never read anything from the picker, it can only WRITE information using single instructions
+    ///
+    /// Things that are safe and immutable - file list, indexes of files, paths, and signals.
+    #[tracing::instrument(skip_all, fields(warmup = ?config.warmup, indexing = ?config.content_indexing))]
+    fn run_post_scan(
+        shared_picker: &SharedFilePicker,
+        signals: &ScanSignals,
+        config: &ScanConfig,
+        unsafe_snapshot: &crate::file_picker::PostScanUnsafeSnapshot,
+    ) {
+        let Some(arena) = unsafe_snapshot
+            .arena // we are never touching overlays so this arena is always correct
+            .as_ref()
+            .map(|s| s.as_arena_ptr())
+        else {
+            tracing::error!("Failed to run post scan: arena is invalid");
             return;
         };
 
-        let files: &[crate::types::FileItem] = unsafe {
-            std::slice::from_raw_parts(unsafe_snapshot.files, unsafe_snapshot.base_count)
-        };
-        let budget: &ContentCacheBudget = unsafe { &*unsafe_snapshot.budget };
-
-        if config.warmup && !signals.cancelled.load(Ordering::Acquire) {
-            warmup_mmaps(
-                files,
-                budget,
-                &unsafe_snapshot.base_path,
-                unsafe_snapshot.arena,
-            );
+        let files: &[crate::types::FileItem] = &unsafe_snapshot.files[..unsafe_snapshot.base_count];
+        if signals.cancelled.load(Ordering::Acquire) {
+            return;
         }
 
-        if config.content_indexing && !signals.cancelled.load(Ordering::Acquire) {
-            let indexable_files = &files[..unsafe_snapshot.indexable_count.min(files.len())];
-            let (index, content_binary) = build_bigram_index(
-                indexable_files,
-                budget,
-                &unsafe_snapshot.base_path,
-                unsafe_snapshot.arena,
-            );
+        if config.content_indexing {
+            let indexable_count = unsafe_snapshot.indexable_count.min(files.len());
+            let (indexable_files, non_indexable_files) = files.split_at(indexable_count);
+            let index = build_bigram_index(indexable_files, &unsafe_snapshot.base_path, arena);
 
             if let Ok(mut guard) = shared_picker.write()
                 && let Some(picker) = guard.as_mut()
             {
-                for &idx in &content_binary {
-                    if let Some(file) = picker.get_file_mut(idx) {
-                        file.set_binary(true);
-                    }
-                }
-                picker.set_bigram_index(index, BigramOverlay::new(unsafe_snapshot.indexable_count));
+                picker.set_bigram_index(index);
             }
+
+            // Bigram only sniffs files <= MAX_INDEXABLE_FILE_SIZE; large
+            // unknown-extension binaries slip past it and would otherwise be
+            // grep-able as text. Cheap header sniff catches those.
+            if !signals.cancelled.load(Ordering::Acquire) {
+                sniff_binary_for_non_indexable(
+                    non_indexable_files,
+                    &unsafe_snapshot.base_path,
+                    arena,
+                );
+            }
+        } else {
+            // this potentially a long running as we are not parallelizing it but it's okay
+            sniff_binary_for_non_indexable(files, &unsafe_snapshot.base_path, arena);
         }
 
-        if config.content_indexing && !signals.cancelled.load(Ordering::Acquire) {
-            let indexable_files = &files[..unsafe_snapshot.indexable_count.min(files.len())];
-            let (index, content_binary) = build_bigram_index(
-                indexable_files,
-                budget,
-                &unsafe_snapshot.base_path,
-                unsafe_snapshot.arena,
-            );
-
-            if let Ok(mut guard) = shared_picker.write()
-                && let Some(picker) = guard.as_mut()
-            {
-                for &idx in &content_binary {
-                    if let Some(file) = picker.get_file_mut(idx) {
-                        file.set_binary(true);
-                    }
-                }
-
-                picker.set_bigram_index(index, BigramOverlay::new(unsafe_snapshot.indexable_count));
-            }
-        }
+        // TODO Skipped as potentially unsafe - figure this out later
+        // if config.warmup && !signals.cancelled.load(Ordering::Acquire) {
+        //     warmup_mmaps(files, budget, &unsafe_snapshot.base_path, arena);
+        // }
     }
 }
 
@@ -414,37 +404,30 @@ fn rescubscribe_watcher_post_scan(shared_picker: &SharedFilePicker) {
     });
 }
 
+#[tracing::instrument(
+    level = "debug",
+    skip_all,
+    fields(file_count = tracing::field::Empty, dirty_count = tracing::field::Empty),
+)]
 fn apply_git_status_and_frecency(
-    shared_picker: &SharedFilePicker,
+    git_cache: GitStatusCache,
     shared_frecency: &SharedFrecency,
-    git_handle: std::thread::JoinHandle<Option<GitStatusCache>>,
     mode: FFFMode,
+    unsafe_snapshot: &mut crate::file_picker::PostScanUnsafeSnapshot,
 ) {
-    let git_cache = match git_handle.join() {
-        Ok(Some(cache)) => cache,
-        Ok(None) => return,
-        Err(_) => {
-            error!("Git status thread panicked");
-            return;
-        }
-    };
-
-    let Some(unsafe_snapshot) = shared_picker.read().ok().and_then(|guard| {
-        guard
-            .as_ref()
-            .and_then(|picker| unsafe { picker.post_scan_snapshot() })
-    }) else {
-        return;
-    };
-
     let frecency = shared_frecency.read().ok();
     let frecency_ref = frecency.as_ref().and_then(|f| f.as_ref());
 
-    let files: &mut [crate::types::FileItem] = unsafe {
-        std::slice::from_raw_parts_mut(unsafe_snapshot.files, unsafe_snapshot.base_count)
-    };
-    let dirs: &[crate::types::DirItem] =
-        unsafe { std::slice::from_raw_parts(unsafe_snapshot.dirs, unsafe_snapshot.dirs_len) };
+    let base_count = unsafe_snapshot.base_count;
+    let files: &mut [crate::types::FileItem] = &mut unsafe_snapshot.files[..base_count];
+    // Dir frecency goes through per-entry `AtomicI32`; a shared slice is
+    // enough and avoids any `&mut` aliasing against the Arc-shared buffer.
+    let dirs: &[crate::types::DirItem] = &unsafe_snapshot.dirs;
+    let arena = unsafe_snapshot
+        .arena
+        .as_ref()
+        .map(|s| s.as_arena_ptr())
+        .unwrap_or(ArenaPtr::null());
 
     // Reset dir frecency before recomputation.
     for dir in dirs.iter() {
@@ -453,37 +436,30 @@ fn apply_git_status_and_frecency(
 
     BACKGROUND_THREAD_POOL.install(|| {
         files.par_iter_mut().for_each(|file| {
+            if unsafe_snapshot.cancelled.load(Ordering::Relaxed) {
+                return;
+            }
+
             let mut buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
-            let absolute_path = file.write_absolute_path(
-                unsafe_snapshot.arena,
-                &unsafe_snapshot.base_path,
-                &mut buf,
-            );
+            let absolute_path =
+                file.write_absolute_path(arena, &unsafe_snapshot.base_path, &mut buf);
 
             file.git_status = git_cache.lookup_status(absolute_path);
             if let Some(frecency) = frecency_ref {
-                let _ = file.update_frecency_scores(
-                    frecency,
-                    unsafe_snapshot.arena,
-                    &unsafe_snapshot.base_path,
-                    mode,
-                );
+                let _ =
+                    file.update_frecency_scores(frecency, arena, &unsafe_snapshot.base_path, mode);
             }
 
             let score = file.access_frecency_score as i32;
             if score > 0 {
-                let dir_idx = file.parent_dir_index() as usize;
+                let dir_idx = file.parent_dir_index as usize;
                 if let Some(dir) = dirs.get(dir_idx) {
                     dir.update_frecency_if_larger(score);
                 }
             }
         });
     });
-    drop(frecency);
 
-    info!(
-        "SCAN: Applied git status to {} files ({} dirty)",
-        unsafe_snapshot.base_count,
-        git_cache.statuses_len(),
-    );
+    let span = tracing::Span::current();
+    span.record("dirty_count", git_cache.statuses_len());
 }

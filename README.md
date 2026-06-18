@@ -6,6 +6,8 @@
 
 Typo-resistant path and content search, frecency-ranked file access, a background watcher, and a lightweight in-memory content index. Way faster than CLIs like ripgrep and fzf in any long-running process that searches more than once.
 
+Powers file search in [opencode](http://github.com/anomalyco/opencode/), [nushell](https://github.com/nushell/nushell), and many more amazing projects!
+
 Originally started as [Neovim plugin](#neovim-plugin) people loved, but it turned out that plenty of AI harnesses and code editors need the same thing: accurate, fast file search as a library. That is what fff is.
 
 ---
@@ -65,9 +67,18 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.ps1 | iex
 ```
 
-The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`](./install-mcp.ps1) if you want to read them first.
+The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`](./install-mcp.ps1) if you want to read them first. They print the exact wiring instructions for your client.
 
-It prints the exact wiring instructions for your client. Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
+### Homebrew (macOS / Linux)
+
+```bash
+brew install dmtrKovalenko/fff/fff-mcp
+brew upgrade fff-mcp   # after new stable releases
+```
+
+Formula lives in [`Formula/fff-mcp.rb`](./Formula/fff-mcp.rb) in this repo and is **auto-bumped on every stable release** (see `bump-homebrew-formula` in [`.github/workflows/release.yaml`](./.github/workflows/release.yaml)). Installs the prebuilt `fff-mcp` binary from [GitHub releases](https://github.com/dmtrKovalenko/fff.nvim/releases).
+
+Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
 
 ### Recommended agent prompt
 
@@ -132,7 +143,7 @@ The Pi extension swaps pi's native tools for FFF implementations and feeds the i
 
 <details id="neovim-plugin">
 <summary>
-<h2>Neovim plugin</h2>
+<h2>fff.nvim</h2>
 </summary>
 
 Demo on the Linux kernel repo (100k files, 8GB):
@@ -212,7 +223,63 @@ require('fff').scan_files()                        -- force rescan
 require('fff').refresh_git_status()                -- refresh git status
 require('fff').find_files_in_dir(path)             -- find in a specific dir
 require('fff').change_indexing_directory(new_path) -- change root
+
+-- Programmatic search (no UI). Useful for plugin integrations.
+require('fff').file_search(query, opts)            -- fuzzy search files / dirs / mixed
+require('fff').content_search(query, opts)         -- programmatic grep
 ```
+
+#### `file_search(query, opts)`
+
+Returns a structured result `{ items, scores, total_matched, total_files?, total_dirs?, location? }`. Each item has a `type` field (`"file"` or `"directory"`) and `name` / `relative_path`. File items also expose `size`, `modified`, `git_status`, `is_binary`, and frecency scores.
+
+```lua
+local r = require('fff').file_search('button', {
+  mode             = 'mixed',  -- 'files' (default) | 'directories' | 'mixed'
+  max_results      = 50,
+  page             = 0,        -- 0-based pagination
+  current_file     = nil,      -- path to deprioritize for distance scoring
+  max_threads      = 4,
+  cwd              = nil,      -- switch indexed root if different (see below)
+  wait_for_index_ms = nil,     -- override the default scan wait timeout
+})
+for _, item in ipairs(r.items) do
+  print(item.type, item.relative_path)
+end
+```
+
+#### `content_search(query, opts)`
+
+Returns a `GrepResult` `{ items, total_matched, total_files_searched, total_files, filtered_file_count, next_file_offset, regex_fallback_error? }`. Each match item has `relative_path`, `name`, `line_number`, `col`, `line_content`, `match_ranges`, plus the same file metadata as `file_search`.
+
+```lua
+local r = require('fff').content_search('TODO', {
+  mode                  = 'plain',  -- 'plain' (default) | 'regex' | 'fuzzy'
+  max_file_size         = 10 * 1024 * 1024,
+  max_matches_per_file  = 100,
+  smart_case            = true,
+  page_size             = 50,
+  file_offset           = 0,
+  time_budget_ms        = 0,
+  trim_whitespace       = false,
+  cwd                   = nil,      -- switch indexed root if different
+  wait_for_index_ms     = nil,      -- override the default scan wait timeout
+})
+for _, m in ipairs(r.items) do
+  print(string.format('%s:%d %s', m.relative_path, m.line_number, m.line_content))
+end
+```
+
+Both functions accept the same constraint syntax as the UI pickers (e.g. `git:modified`, `*.rs`, `!test/`, glob patterns).
+
+#### `cwd` and indexing
+
+Both `file_search` and `content_search` honour an optional `cwd` field. The first call to either function lazily initialises the picker at `config.base_path` (your Neovim cwd by default).
+
+- If `cwd` matches the currently indexed root, the call returns immediately against the existing index.
+- If `cwd` differs, the picker is re-indexed at the new root and the call **blocks** (default up to 10 s) until the new picker is installed and its initial scan completes — so callers always get results from the right tree.
+- If the index is still warming up after a `change_indexing_directory`, you can pass `wait_for_index_ms = N` to block for up to `N` ms regardless of whether `cwd` triggered the swap. Pass `0` to skip waiting entirely (useful for fire-and-forget calls where partial results are acceptable).
+- Invalid or non-existent `cwd` paths return an empty result and emit an error via `vim.notify`.
 
 ### Commands
 
@@ -236,6 +303,12 @@ require('fff').setup({
   max_threads = 4,
   lazy_sync = true,
   prompt_vim_mode = false,
+  follow_symlinks = false,
+  -- Allow indexing the user's $HOME directory. Enabled by default.
+  -- Disable if you strictly sure you don't want this, as it makes whole fff error hard
+  enable_home_dir_scanning = true,
+  -- Allow indexing a filesystem root (e.g. `/`, `C:\`). Disabled by default
+  enable_fs_root_scanning = false,
   layout = {
     height = 0.8,
     width = 0.8,
@@ -243,8 +316,9 @@ require('fff').setup({
     preview_position = 'right',   -- 'left' | 'right' | 'top' | 'bottom'
     preview_size = 0.5,
     flex = { size = 130, wrap = 'top' },
+    min_list_height = 10, --  do not display anything except the list below this threshold
     show_scrollbar = true,
-    path_shorten_strategy = 'middle_number', -- 'middle_number' | 'middle' | 'end'
+    path_shorten_strategy = 'middle_number', -- 'middle_number' | 'middle' | 'end' | 'start'
     anchor = 'center',
   },
   preview = {
@@ -274,6 +348,9 @@ require('fff').setup({
     preview_scroll_down = '<C-d>',
     toggle_debug = '<F2>',
     cycle_grep_modes = '<S-Tab>',
+    -- grep mode only: jump cursor to first match of next/prev file group
+    grep_jump_to_next_file = { '<C-A-n>', '<A-Down>' },
+    grep_jump_to_prev_file = { '<C-A-p>', '<A-Up>' },
     cycle_previous_query = '<C-Up>',
     toggle_select = '<Tab>',
     send_to_quickfix = '<C-q>',
@@ -293,6 +370,10 @@ require('fff').setup({
   git = {
     status_text_color = false, -- true to color filenames by git status
   },
+  select = {
+    -- Return winid to open the chosen file in, or nil to open in the original window
+    select_window = function(current_buf, action) --[[ default impl ]] end,
+  },
   grep = {
     max_file_size = 10 * 1024 * 1024,
     max_matches_per_file = 100,
@@ -300,12 +381,31 @@ require('fff').setup({
     time_budget_ms = 150,
     modes = { 'plain', 'regex', 'fuzzy' },
     trim_whitespace = false,
+    enable_filename_constraint = false, -- treat filename-like tokens (e.g. `score.rs`) in a grep query as a file-path filter scoping the search; off = searched as literal text
+    location_format = ':%d:%d', -- printf format for line:col prefix in grep results, e.g. ':%d' for line-only
   },
-  debug = { enabled = false, show_scores = false },
+  debug = {
+    enabled = false, -- show the file info panel next to the preview
+    show_scores = false, -- inline scores in the file list
+    -- Per-section toggles for the file info panel. Accepts a boolean shorthand
+    -- (`show_file_info = true|false`) to flip everything at once. The panel
+    -- adapts to width: narrow renders sections vertically, wide renders them
+    -- as a two-column grid. Disable a section to also shrink the panel.
+    show_file_info = {
+      file_info = true, -- size, type, git status, frecency
+      score_breakdown = true, -- total + match type, bonuses, modifiers, penalty
+      -- modified + accessed timestamps; pass a table to hide individual rows:
+      --   timings = { modified = false, accessed = true }
+      timings = true,
+      full_path = true, -- relative path at the bottom (wraps if too long)
+    },
+  },
   logging = {
-    enabled = true,
+    -- logs will be written in a parent directory of this file path in files like
+    -- `<stem>+<UTC-timestamp>+<pid>.<ext>`. Run :FFFOpenLog to open current one
     log_file = vim.fn.stdpath('log') .. '/fff.log',
     log_level = 'info',
+    retain_runs = 20,
   },
 })
 ```
@@ -472,6 +572,20 @@ Grep-only:
 
 Mix freely: `git:modified src/**/*.rs !src/**/mod.rs user controller`.
 
+### Open in invoking window
+
+By default fff.nvim will try to open a file in the most suitable window, so any non-file buffers are not affected. You can customize or disable this by providing:
+
+```lua
+require('fff').setup({
+  select = {
+    select_window = function(_current_buf, _action) return nil end,
+  },
+})
+```
+
+Caveat: the chosen file replaces the buffer in the invoking window even if it's a non-modifiable / special buftype. `winfixbuf` windows still fall back to `:split` to avoid `E1513`.
+
 ### Multi-select and quickfix
 
 - `<Tab>`. Toggle selection (shows a thick `▊` in the signcolumn).
@@ -480,6 +594,51 @@ Mix freely: `git:modified src/**/*.rs !src/**/mod.rs user controller`.
 ### Git status highlighting
 
 Sign-column indicators are on by default. To color filename text by git status, set `git.status_text_color = true` and adjust the `hl.git_*` groups. See `:help fff.nvim` for the full list.
+
+### Float colors
+
+The picker maps its float content to `NormalFloat` (via `hl.normal`) and the border to `FloatBorder`. Default `FloatBorder` links to `NormalFloat`, so border and content share a background out of the box and the picker reads as a single popup. Override `hl.normal = 'Normal'` to make the picker blend with the editor instead.
+
+For finer control, set `hl.winhl` to override the per-window `winhighlight`. It accepts either a single string applied to every picker window, or a table with optional `prompt`, `list`, `preview`, and `file_info` keys. Missing keys fall back to the default built from `hl.normal`, `hl.border`, and `hl.title`.
+
+```lua
+-- Apply the same winhighlight to all picker windows
+hl = { winhl = 'Normal:NormalFloat,FloatBorder:FloatBorder,FloatTitle:Title' }
+
+-- Or override specific windows only
+hl = {
+  winhl = {
+    prompt  = 'Normal:Pmenu,FloatBorder:FloatBorder',
+    list    = 'Normal:NormalFloat,FloatBorder:FloatBorder',
+    preview = 'Normal:NormalFloat,FloatBorder:FloatBorder',
+  },
+}
+```
+
+### File info panel
+
+Enable with `debug.enabled = true`. The panel sits above the preview and shows
+file metadata, score breakdown, timestamps and the full absolute path. It
+adapts to the panel width: at narrow widths sections stack vertically (B2),
+at wide widths sections render as a two-column grid (H2). Each section can be
+disabled individually via `debug.show_file_info`.
+
+Customise the panel via `hl`:
+
+| key                     | default           | used for                           |
+| ----------------------- | ----------------- | ---------------------------------- |
+| `file_info_section`     | `Title`           | section header label               |
+| `file_info_separator`   | `FloatBorder`     | dashes that act as section borders |
+| `file_info_label`       | `Comment`         | row labels (Size, Type, Git, ...)  |
+| `file_info_value`       | `Normal` fg       | plain values                       |
+| `file_info_value_dim`   | `NonText`         | dim values, separators inside rows |
+| `file_info_size`        | `Number`          | file size value                    |
+| `file_info_type`        | `Type`            | filetype value                     |
+| `file_info_path`        | `Directory`       | full path                          |
+| `file_info_total_score` | bold + `Number`   | total score (bold)                 |
+| `file_info_match_type`  | bold + `Special`  | match type (bold)                  |
+| `file_info_score_pos`   | `DiagnosticOk`    | positive score components          |
+| `file_info_score_neg`   | `DiagnosticError` | negative score components          |
 
 ### File filtering
 
@@ -495,7 +654,9 @@ Run `:FFFScan` to force a rescan.
 ### Troubleshooting
 
 - `:FFFHealth` verifies picker init, optional dependencies, and DB connectivity.
-- `:FFFOpenLog` opens the log file.
+- `:FFFOpenLog` opens the current session's log file.
+- Historical log files are stored near the main log file `<state>/log/fff+<UTC-timestamp>+<pid>.log` (up to 20 files)
+- For a crash backtrace, run `lldb -- nvim` or `gdb -- nvim` and reproduce
 
 </details>
 
@@ -527,6 +688,9 @@ const hits = finder.value.grep("GetOffTheRecordProfile", {
   afterContext: 1,
   classifyDefinitions: true,
 });
+
+// Run extremely fast glob matching which is significantly (10-100 times) faster than Bun's and Node implementation
+const rustFiles = finder.value.glob("**/*.rs", { pageSize: 100 });
 
 finder.value.destroy();
 ```
@@ -633,6 +797,35 @@ int main(void) {
 }
 ```
 
+### Versioned options struct (preferred)
+
+For instance creation use [`FffCreateOptions`](./crates/fff-c/include/fff.h) — a
+versioned struct that evolves without ABI breaks. C99 designated
+initializers keep call sites readable and zero-init unspecified fields:
+
+```c
+FffResult *res = fff_create_instance_with(&(FffCreateOptions){
+    .version = FFF_CREATE_OPTIONS_VERSION,
+    .base_path = "/path/to/repo",
+    .ai_mode = true,
+    .watch = true,
+    .enable_fs_root_scanning = false,   // off by default
+    .enable_home_dir_scanning = false,  // off by default
+});
+```
+
+### Glob-only search
+
+`fff_glob` filters indexed files by a single glob pattern, ranks by frecency,
+paginates — bypasses the regular query parser entirely. Use this when you
+already have a literal glob (`*.rs`, `**/*.test.ts`, `src/**`) and don't want
+fuzzy matching layered on top.
+
+```c
+FffResult *res = fff_glob(handle, "**/*.rs", "", 0, 0, 100);
+// FffSearchResult in res->handle, free with fff_free_search_result.
+```
+
 ### Notes
 
 - Every function returning `FffResult*` allocates with Rust's `Box`. Free with `fff_free_result`, do not use malloc's free
@@ -645,6 +838,75 @@ Source: [`crates/fff-c/`](./crates/fff-c/).
 
 Stable C ABI. Bind from C/C++, Zig, Go via cgo, Python via ctypes, or anything with C FFI.
 
+<details id="python-bindings">
+<summary>
+<h2>Python bindings</h2>
+</summary>
+
+### Install
+
+```bash
+pip install fff-search
+```
+
+Or build and install from source:
+
+```bash
+cd packages/fff-python
+uv sync --all-extras
+uv run maturin develop --release
+```
+
+### Basic usage
+
+```python
+from fff import FileFinder
+
+with FileFinder("/path/to/project", watch=False) as finder:
+    finder.wait_for_scan_blocking(timeout_ms=5000)
+
+    result = finder.search("main")
+    for item, score in zip(result.items, result.scores):
+        print(f"{item.relative_path}: {score.total}")
+
+    hits = finder.grep("class Profile", mode="plain", before_context=1, after_context=1)
+```
+
+### Async usage
+
+`wait_for_scan` is a coroutine that polls scan status and yields to the event
+loop, so it never blocks other tasks. Use `wait_for_scan_blocking` from
+synchronous code.
+
+```python
+import asyncio
+from fff import FileFinder
+
+async def main():
+    with FileFinder("/path/to/project", watch=False) as finder:
+        await finder.wait_for_scan(timeout_ms=5000)
+        result = finder.search("main")
+        print(result)
+
+asyncio.run(main())
+```
+
+### What you get
+
+- `search`, `glob`, `directory_search`, `mixed_search` — frecency-ranked fuzzy file/dir search
+- `grep` / `multi_grep` — plain, regex, or fuzzy content search with context lines and cursor pagination
+- `track_query` / `get_historical_query` — optional frecency and query-history databases
+- `reindex`, `refresh_git_status`, `scan_progress`, `health_check` — lifecycle and diagnostics
+
+Typed result objects (`FileItem`, `Score`, `GrepMatch`, …) with `py.typed`
+stubs included. Ships as an `abi3` wheel compatible with Python 3.10+.
+
+Source: [`packages/fff-python/`](./packages/fff-python/).
+
+</details>
+
+Native Python bindings built with PyO3. Use them for notebooks, agent scripts, or any Python tool that needs fast file search.
+
 ---
 
 ## What is FFF and why use it over ripgrep or fzf?
@@ -653,7 +915,7 @@ FFF is a file search library, not a CLI. Ripgrep and fzf are great tools, but th
 
 FFF keeps the index and the file cache resident in one long-lived process and exposes the same Rust core through four thin layers: a native crate (`fff-search`), a C library (`libfff_c`), a Node/Bun SDK (`@ff-labs/fff-node`), and an MCP server. You call `FileFinder.create()` once, then every subsequent search hits warm memory. On a 500k-file Chromium checkout, that is the difference between 3-9 **SECONDS** per ripgrep spawn and sub-10 ms per FFF query.
 
-Algorithm for fuzzy matching is much more comprehensive than fzf's algorithm it is **typo-resistant** and we provide a query language with additional constraint parsing for prefiltering e.g. "*.rs !test/ shcema" is a perfectly valid query for fff, but fzf wouldn't find anything even for a single typo in "shcema".
+Algorithm for fuzzy matching is much more comprehensive than fzf's algorithm it is **typo-resistant** and we provide a query language with additional constraint parsing for prefiltering e.g. "\*.rs !test/ shcema" is a perfectly valid query for fff, but fzf wouldn't find anything even for a single typo in "shcema".
 
 ### Why a programmatic API matters
 
@@ -666,7 +928,7 @@ Algorithm for fuzzy matching is much more comprehensive than fzf's algorithm it 
 ### What the core actually does
 
 - **Frecency-ranked fuzzy matching.** Every indexed file carries an access score and a modification score. Searches rank files you have opened recently and frequently above cold results. This is the same idea as VS Code's recently-opened list, but applied to every search result, not just a sidebar.
-- **Typo-resistant matching for both paths and content.** Smith-Waterman fuzzy scoring is available on the grep path; path search uses SIMD-accelerated fuzzy matching (via the [`frizbee`](https://github.com/saghm/frizbee)-derived core) that survives dropped characters and reorderings.
+- **Typo-resistant matching for both paths and content.** Smith-Waterman fuzzy scoring is available on the grep path; path search uses SIMD-accelerated fuzzy matching (via the [`frizbee`](https://github.com/saghen/frizbee)-derived core) that survives dropped characters and reorderings.
 - **Content grep with three modes.** Plain literal (SIMD memmem), regex (the Rust `regex` crate), and fuzzy (Smith-Waterman per line). Auto-detects which mode to use from the pattern, falls back to fuzzy when a plain search returns zero hits.
 - **Multi-pattern OR search.** SIMD Aho-Corasick for "find any of these 20 identifiers at once", which is faster than regex alternation and a lot faster than 20 separate ripgrep runs.
 - **Background file watcher.** The index updates as files change. You never pay for a rescan on the hot path.
@@ -686,7 +948,6 @@ Algorithm for fuzzy matching is much more comprehensive than fzf's algorithm it 
 ### Memory allocation
 
 Yes, fff fundamentally requires more memory than calling a single child process. That is the primary source of the speedup. In practice, alongside one of the most popular file search pickers for Neovim, [fff ends up using less RAM than a burst of ripgrep invocations](https://x.com/neogoose_btw/status/2041606853155811442).
-
 
 FFF also keeps a content index, around 360 bytes per indexed file, so roughly 36 MB for a 100k-file repo. Not every file is indexed - binaries, oversized files, and anything not eligible for grep are skipped. If even that footprint is too much, the index can be backed by a memory-mapped file instead of anonymous RAM.
 

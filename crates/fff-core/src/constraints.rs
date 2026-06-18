@@ -1,6 +1,5 @@
 //! Constraint-based prefiltering for search queries.
 
-use ahash::AHashSet;
 use fff_query_parser::{Constraint, GitStatusFilter};
 use smallvec::SmallVec;
 
@@ -152,87 +151,14 @@ pub fn path_contains_segment(path: &str, segment: &str) -> bool {
     false
 }
 
-#[inline]
-#[allow(clippy::too_many_arguments)]
-fn item_matches_constraint_at_index<T: Constrainable>(
-    item: &T,
-    item_index: usize,
-    constraint: &Constraint<'_>,
-    glob_results: &[(bool, AHashSet<usize>)],
-    glob_idx: &mut usize,
-    negate: bool,
-    arena: ArenaPtr,
-    fname_buf: &mut String,
-    path_buf: &mut String,
-) -> bool {
-    let matches = match constraint {
-        Constraint::Extension(ext) => {
-            item.write_file_name(arena, fname_buf);
-            file_has_extension(fname_buf, ext)
-        }
-        Constraint::Glob(_) => {
-            let result = glob_results
-                .get(*glob_idx)
-                .map(|(is_neg, set)| {
-                    let matched = set.contains(&item_index);
-
-                    if *is_neg { !matched } else { matched }
-                })
-                .unwrap_or(true);
-            *glob_idx += 1;
-            return if negate { !result } else { result };
-        }
-        Constraint::PathSegment(segment) => {
-            item.write_relative_path(arena, path_buf);
-            path_contains_segment(path_buf, segment)
-        }
-        Constraint::FilePath(suffix) => {
-            item.write_relative_path(arena, path_buf);
-            path_ends_with_suffix(path_buf, suffix)
-        }
-        Constraint::GitStatus(status_filter) => match (item.git_status(), status_filter) {
-            (Some(status), GitStatusFilter::Modified) => is_modified_status(status),
-            (Some(status), GitStatusFilter::Untracked) => status.contains(git2::Status::WT_NEW),
-            (Some(status), GitStatusFilter::Staged) => status.intersects(
-                git2::Status::INDEX_NEW
-                    | git2::Status::INDEX_MODIFIED
-                    | git2::Status::INDEX_DELETED
-                    | git2::Status::INDEX_RENAMED
-                    | git2::Status::INDEX_TYPECHANGE,
-            ),
-            (Some(status), GitStatusFilter::Unmodified) => status.is_empty(),
-            (None, GitStatusFilter::Unmodified) => true,
-            (None, _) => false,
-        },
-        Constraint::Not(inner) => {
-            return item_matches_constraint_at_index(
-                item,
-                item_index,
-                inner,
-                glob_results,
-                glob_idx,
-                !negate,
-                arena,
-                fname_buf,
-                path_buf,
-            );
-        }
-
-        // only works with negation
-        Constraint::Text(text) => {
-            item.write_relative_path(arena, path_buf);
-            contains_ascii_ci(path_buf, text)
-        }
-
-        // Parts and Exclude are handled at a higher level
-        Constraint::Parts(_) | Constraint::Exclude(_) | Constraint::FileType(_) => true,
-    };
-
-    if negate { !matches } else { matches }
-}
-
 /// Returns `None` if no constraints are present, `Some(filtered)` otherwise.
-/// Extension constraints use OR logic; all others use AND.
+///
+/// Constraint semantics:
+/// - All `Extension` constraints OR together (file matches if ANY extension hits).
+///   They're split out up front so the per-item loop reads the OR predicate as a
+///   single short-circuit check, not as N AND-merged sub-constraints.
+/// - Every other constraint kind ANDs (file matches only if ALL hold). They're
+///   evaluated in order with short-circuit on first failure.
 pub(crate) fn apply_constraints<'a, T: Constrainable + Sync>(
     items: &'a [T],
     constraints: &[Constraint<'_>],
@@ -241,223 +167,420 @@ pub(crate) fn apply_constraints<'a, T: Constrainable + Sync>(
     if constraints.is_empty() {
         return None;
     }
+    let plan = ConstraintPlan::build(constraints, items, arena);
+    Some(plan.run(items, arena))
+}
 
-    // Separate extension constraints from other constraints — they use OR logic
-    let mut extensions: SmallVec<[&str; 8]> = SmallVec::new();
-    let mut other_constraints: SmallVec<[&Constraint<'_>; 8]> = SmallVec::new();
+#[cfg(feature = "zlob")]
+type GlobPattern = zlob::ZlobPattern;
+#[cfg(not(feature = "zlob"))]
+type GlobPattern = globset::GlobMatcher;
 
-    for constraint in constraints {
-        match constraint {
-            Constraint::Extension(ext) => extensions.push(ext),
-            _ => other_constraints.push(constraint),
+/// How `Constraint::Glob` is evaluated for each item.
+enum GlobStrategy {
+    /// No Glob constraint present.
+    None,
+    /// Pure-glob workload (no Extension filter to reject items first).
+    /// Batch all paths through zlob/globset once; per-item check is a Vec<bool> lookup.
+    Prepass(Vec<Vec<bool>>),
+    /// Mixed workload (Extension filter present). Compile patterns up front, then
+    /// only run them on items that survive the cheap Extension OR check.
+    /// `None` slot = compile failure -> never matches; preserves index alignment.
+    Inline(Vec<Option<GlobPattern>>),
+}
+
+/// Bundles preprocessed constraints for the per-item evaluator.
+pub(crate) struct ConstraintPlan<'q, 'c> {
+    /// OR semantics — file passes if ANY extension matches. Empty = no ext filter.
+    extensions: SmallVec<[&'q str; 8]>,
+    /// AND semantics — file passes only if ALL match.
+    rest: SmallVec<[&'c Constraint<'q>; 8]>,
+    glob: GlobStrategy,
+}
+
+pub(crate) struct ConstraintsBuffers {
+    fname: String,
+    path: String,
+}
+
+impl ConstraintsBuffers {
+    pub(crate) fn new() -> Self {
+        Self {
+            fname: String::with_capacity(64),
+            path: String::with_capacity(64),
+        }
+    }
+}
+
+impl<'q, 'c> ConstraintPlan<'q, 'c> {
+    pub(crate) fn build<T: Constrainable>(
+        constraints: &'c [Constraint<'q>],
+        items: &[T],
+        arena: ArenaPtr,
+    ) -> Self {
+        let mut extensions = SmallVec::new();
+        let mut rest = SmallVec::new();
+        for c in constraints {
+            match c {
+                Constraint::Extension(ext) => extensions.push(*ext),
+                _ => rest.push(c),
+            }
+        }
+        let has_pre_filter = !extensions.is_empty() || rest.iter().any(|&c| !is_glob_node(c));
+        let glob = build_glob_strategy(&rest, has_pre_filter, items, arena);
+        Self {
+            extensions,
+            rest,
+            glob,
         }
     }
 
-    // Only collect paths if we have glob constraints (expensive)
-    let has_globs = other_constraints
-        .iter()
-        .any(|c| matches!(c, Constraint::Glob(_) | Constraint::Not(_)));
+    fn run<'a, T: Constrainable + Sync>(&self, items: &'a [T], arena: ArenaPtr) -> Vec<&'a T> {
+        if items.len() >= PAR_THRESHOLD {
+            use rayon::prelude::*;
+            items
+                .par_iter()
+                .enumerate()
+                .map_init(ConstraintsBuffers::new, |scratch, (i, item)| {
+                    self.matches(item, i, arena, scratch).then_some(item)
+                })
+                .flatten()
+                .collect()
+        } else {
+            let mut scratch = ConstraintsBuffers::new();
+            items
+                .iter()
+                .enumerate()
+                .filter_map(|(i, item)| self.matches(item, i, arena, &mut scratch).then_some(item))
+                .collect()
+        }
+    }
 
-    let glob_results = if has_globs {
-        // Build a single contiguous buffer of all relative paths + offset table.
-        // One allocation for the buffer, one for offsets — NOT one String per file.
-        // On Windows we fold `\\` into `/` while copying so globset/zlob see a
-        // canonical separator. The rewrite is in place on bytes we just wrote.
-        let mut path_buf = Vec::<u8>::new();
-        let mut offsets = Vec::<(usize, usize)>::with_capacity(items.len());
+    #[inline]
+    pub(crate) fn matches<T: Constrainable>(
+        &self,
+        item: &T,
+        index: usize,
+        arena: ArenaPtr,
+        scratch: &mut ConstraintsBuffers,
+    ) -> bool {
+        if !self.passes_extensions(item, arena, scratch) {
+            return false;
+        }
+
+        let mut glob_idx = 0;
+        self.rest.iter().all(|c| {
+            let glob: &GlobStrategy = &self.glob;
+            let glob_idx: &mut usize = &mut glob_idx;
+            let negate = false;
+            let raw = match c {
+                Constraint::Glob(_) => {
+                    let m = match glob {
+                        GlobStrategy::None => true,
+                        GlobStrategy::Prepass(masks) => masks
+                            .get(*glob_idx)
+                            .and_then(|mask| mask.get(index).copied())
+                            .unwrap_or(false),
+                        GlobStrategy::Inline(patterns) => {
+                            item.write_relative_path(arena, &mut scratch.path);
+                            patterns
+                                .get(*glob_idx)
+                                .and_then(|p| p.as_ref())
+                                .map(|p| compiled_matches(p, &scratch.path))
+                                .unwrap_or(false)
+                        }
+                    };
+                    *glob_idx += 1;
+                    m
+                }
+                // Reachable only via `Not(Extension(_))` — bare extensions are split out
+                // up front and handled in `passes_extensions`.
+                Constraint::Extension(ext) => {
+                    item.write_file_name(arena, &mut scratch.fname);
+                    file_has_extension(&scratch.fname, ext)
+                }
+                Constraint::PathSegment(segment) => {
+                    item.write_relative_path(arena, &mut scratch.path);
+                    path_contains_segment(&scratch.path, segment)
+                }
+                Constraint::FilePath(suffix) => {
+                    item.write_relative_path(arena, &mut scratch.path);
+                    path_ends_with_suffix(&scratch.path, suffix)
+                }
+                Constraint::Text(text) => {
+                    // Only meaningful under negation (used as exclude filter).
+                    item.write_relative_path(arena, &mut scratch.path);
+                    contains_ascii_ci(&scratch.path, text)
+                }
+                Constraint::GitStatus(filter) => matches_git_status(item.git_status(), filter),
+                Constraint::Not(inner) => {
+                    return evaluate(item, index, inner, glob, glob_idx, !negate, arena, scratch);
+                }
+                // Pass-throughs — handled at higher levels.
+                Constraint::Parts(_) | Constraint::Exclude(_) | Constraint::FileType(_) => true,
+            };
+            if negate { !raw } else { raw }
+        })
+    }
+
+    #[inline]
+    fn passes_extensions<T: Constrainable>(
+        &self,
+        item: &T,
+        arena: ArenaPtr,
+        scratch: &mut ConstraintsBuffers,
+    ) -> bool {
+        if self.extensions.is_empty() {
+            return true;
+        }
+        item.write_file_name(arena, &mut scratch.fname);
+        self.extensions
+            .iter()
+            .any(|ext| file_has_extension(&scratch.fname, ext))
+    }
+}
+
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn evaluate<T: Constrainable>(
+    item: &T,
+    index: usize,
+    constraint: &Constraint<'_>,
+    glob: &GlobStrategy,
+    glob_idx: &mut usize,
+    negate: bool,
+    arena: ArenaPtr,
+    scratch: &mut ConstraintsBuffers,
+) -> bool {
+    let raw = match constraint {
+        Constraint::Glob(_) => {
+            let m = match glob {
+                GlobStrategy::None => true,
+                GlobStrategy::Prepass(masks) => masks
+                    .get(*glob_idx)
+                    .and_then(|mask| mask.get(index).copied())
+                    .unwrap_or(false),
+                GlobStrategy::Inline(patterns) => {
+                    item.write_relative_path(arena, &mut scratch.path);
+                    patterns
+                        .get(*glob_idx)
+                        .and_then(|p| p.as_ref())
+                        .map(|p| compiled_matches(p, &scratch.path))
+                        .unwrap_or(false)
+                }
+            };
+            *glob_idx += 1;
+            m
+        }
+        // Reachable only via `Not(Extension(_))` — bare extensions are split out
+        // up front and handled in `passes_extensions`.
+        Constraint::Extension(ext) => {
+            item.write_file_name(arena, &mut scratch.fname);
+            file_has_extension(&scratch.fname, ext)
+        }
+        Constraint::PathSegment(segment) => {
+            item.write_relative_path(arena, &mut scratch.path);
+            path_contains_segment(&scratch.path, segment)
+        }
+        Constraint::FilePath(suffix) => {
+            item.write_relative_path(arena, &mut scratch.path);
+            path_ends_with_suffix(&scratch.path, suffix)
+        }
+        Constraint::Text(text) => {
+            // Only meaningful under negation (used as exclude filter).
+            item.write_relative_path(arena, &mut scratch.path);
+            contains_ascii_ci(&scratch.path, text)
+        }
+        Constraint::GitStatus(filter) => matches_git_status(item.git_status(), filter),
+        Constraint::Not(inner) => {
+            return evaluate(item, index, inner, glob, glob_idx, !negate, arena, scratch);
+        }
+        // Pass-throughs — handled at higher levels.
+        Constraint::Parts(_) | Constraint::Exclude(_) | Constraint::FileType(_) => true,
+    };
+    if negate { !raw } else { raw }
+}
+
+#[inline]
+fn matches_git_status(status: Option<git2::Status>, filter: &GitStatusFilter) -> bool {
+    match (status, filter) {
+        (Some(s), GitStatusFilter::Modified) => is_modified_status(s),
+        (Some(s), GitStatusFilter::Untracked) => s.contains(git2::Status::WT_NEW),
+        (Some(s), GitStatusFilter::Staged) => s.intersects(
+            git2::Status::INDEX_NEW
+                | git2::Status::INDEX_MODIFIED
+                | git2::Status::INDEX_DELETED
+                | git2::Status::INDEX_RENAMED
+                | git2::Status::INDEX_TYPECHANGE,
+        ),
+        (Some(s), GitStatusFilter::Unmodified) => s.is_empty(),
+        (None, GitStatusFilter::Unmodified) => true,
+        (None, _) => false,
+    }
+}
+
+#[inline]
+#[cfg(feature = "zlob")]
+fn compiled_matches(p: &GlobPattern, path: &str) -> bool {
+    p.matches_default(path)
+}
+
+#[inline]
+#[cfg(not(feature = "zlob"))]
+fn compiled_matches(p: &GlobPattern, path: &str) -> bool {
+    p.is_match(path)
+}
+
+/// Decide between batch prepass and inline compiled patterns.
+///
+/// `has_pre_filter` = true when something cheaper than glob can reject items first
+/// (extensions OR non-glob constraints in `rest`). In that case inline pays glob
+/// cost only on survivors and beats prepass on every workload we benched. Pure-glob
+/// (no pre-filter) takes prepass — single batched zlob call beats N inline matches.
+fn build_glob_strategy<T: Constrainable>(
+    rest: &[&Constraint<'_>],
+    has_pre_filter: bool,
+    items: &[T],
+    arena: ArenaPtr,
+) -> GlobStrategy {
+    if !contains_glob(rest) {
+        return GlobStrategy::None;
+    }
+    if has_pre_filter {
+        return GlobStrategy::Inline(compile_globs(rest));
+    }
+    let buf = PathBuffer::collect(items, arena);
+    let path_refs = buf.as_strs();
+    GlobStrategy::Prepass(precompute_masks(rest, &path_refs))
+}
+
+/// `Glob` or `Not(Glob)` — the constraint kinds whose evaluation goes through
+/// the GlobStrategy. Everything else can pre-reject items before glob runs.
+fn is_glob_node(c: &Constraint<'_>) -> bool {
+    match c {
+        Constraint::Glob(_) => true,
+        Constraint::Not(inner) => is_glob_node(inner),
+        _ => false,
+    }
+}
+
+fn contains_glob(rest: &[&Constraint<'_>]) -> bool {
+    rest.iter().any(|c| is_glob_node(c))
+}
+
+/// Contiguous byte buffer holding every item's `relative_path`. Single allocation
+/// instead of N `String`s. On Windows the in-place pass folds `\\` -> `/` so the
+/// glob library sees a canonical separator.
+struct PathBuffer {
+    bytes: Vec<u8>,
+    offsets: Vec<(usize, usize)>,
+}
+
+impl PathBuffer {
+    fn collect<T: Constrainable>(items: &[T], arena: ArenaPtr) -> Self {
+        let mut bytes = Vec::<u8>::new();
+        let mut offsets = Vec::with_capacity(items.len());
         let mut tmp = String::with_capacity(64);
-        for item in items.iter() {
-            let start = path_buf.len();
+        for item in items {
+            let start = bytes.len();
             item.write_relative_path(arena, &mut tmp);
-            path_buf.extend_from_slice(tmp.as_bytes());
+            bytes.extend_from_slice(tmp.as_bytes());
             #[cfg(windows)]
-            for b in &mut path_buf[start..] {
+            for b in &mut bytes[start..] {
                 if *b == b'\\' {
                     *b = b'/';
                 }
             }
-            offsets.push((start, path_buf.len() - start));
+            offsets.push((start, bytes.len() - start));
         }
-        let path_refs: Vec<&str> = offsets
-            .iter()
-            .map(|&(off, len)| unsafe { std::str::from_utf8_unchecked(&path_buf[off..off + len]) })
-            .collect();
-        precompute_glob_matches(&other_constraints, &path_refs)
-    } else {
-        Vec::new()
-    };
-
-    let filtered: Vec<&T> = if items.len() >= PAR_THRESHOLD {
-        use rayon::prelude::*;
-        items
-            .par_iter()
-            .enumerate()
-            .map_init(
-                || (String::with_capacity(64), String::with_capacity(64)),
-                |(fname_buf, path_buf), (i, item)| {
-                    if !extensions.is_empty() {
-                        item.write_file_name(arena, fname_buf);
-                        if !extensions
-                            .iter()
-                            .any(|ext| file_has_extension(fname_buf, ext))
-                        {
-                            return None;
-                        }
-                    }
-
-                    let mut glob_idx = 0;
-                    if other_constraints.iter().all(|constraint| {
-                        item_matches_constraint_at_index(
-                            item,
-                            i,
-                            constraint,
-                            &glob_results,
-                            &mut glob_idx,
-                            false,
-                            arena,
-                            fname_buf,
-                            path_buf,
-                        )
-                    }) {
-                        Some(item)
-                    } else {
-                        None
-                    }
-                },
-            )
-            .flatten()
-            .collect()
-    } else {
-        let mut fname_buf = String::with_capacity(64);
-        let mut path_buf = String::with_capacity(64);
-
-        items
-            .iter()
-            .enumerate()
-            .filter(|&(i, item)| {
-                if !extensions.is_empty() {
-                    item.write_file_name(arena, &mut fname_buf);
-                    if !extensions
-                        .iter()
-                        .any(|ext| file_has_extension(&fname_buf, ext))
-                    {
-                        return false;
-                    }
-                }
-
-                let mut glob_idx = 0;
-                other_constraints.iter().all(|constraint| {
-                    item_matches_constraint_at_index(
-                        item,
-                        i,
-                        constraint,
-                        &glob_results,
-                        &mut glob_idx,
-                        false,
-                        arena,
-                        &mut fname_buf,
-                        &mut path_buf,
-                    )
-                })
-            })
-            .map(|(_, item)| item)
-            .collect()
-    };
-
-    Some(filtered)
-}
-
-fn precompute_glob_matches<'a>(
-    constraints: &[&Constraint<'a>],
-    paths: &[&str],
-) -> Vec<(bool, AHashSet<usize>)> {
-    let mut results = Vec::new();
-    for constraint in constraints {
-        collect_glob_indices(constraint, paths, &mut results, false);
+        Self { bytes, offsets }
     }
-    results
+
+    fn as_strs(&self) -> Vec<&str> {
+        self.offsets
+            .iter()
+            .map(|&(off, len)| unsafe {
+                std::str::from_utf8_unchecked(&self.bytes[off..off + len])
+            })
+            .collect()
+    }
 }
 
-fn collect_glob_indices<'a>(
-    constraint: &Constraint<'a>,
-    paths: &[&str],
-    results: &mut Vec<(bool, AHashSet<usize>)>,
-    _is_negated: bool,
-) {
-    match constraint {
-        Constraint::Glob(pattern) => {
-            let indices = match_glob_pattern(pattern, paths);
-            // Negation is handled by the `negate` parameter in
-            // `item_matches_constraint_at_index`, NOT here.  Storing
-            // `is_negated=true` caused a double-negation bug when the
-            // Glob arm also applied `negate`.
-            results.push((false, indices));
-        }
-        Constraint::Not(inner) => {
-            collect_glob_indices(inner, paths, results, true);
-        }
+fn precompute_masks(rest: &[&Constraint<'_>], paths: &[&str]) -> Vec<Vec<bool>> {
+    let mut out = Vec::new();
+    for c in rest {
+        walk_globs(c, &mut |pattern| {
+            out.push(match_glob_pattern(pattern, paths))
+        });
+    }
+    out
+}
+
+fn compile_globs(rest: &[&Constraint<'_>]) -> Vec<Option<GlobPattern>> {
+    let mut out = Vec::new();
+    for c in rest {
+        walk_globs(c, &mut |pattern| out.push(compile_one(pattern)));
+    }
+    out
+}
+
+/// Visit every Glob (including ones nested under Not) in constraint walk order.
+/// Order matters: `glob_idx` in the per-item evaluator increments by one per Glob node.
+fn walk_globs<F: FnMut(&str)>(c: &Constraint<'_>, f: &mut F) {
+    match c {
+        Constraint::Glob(p) => f(p),
+        Constraint::Not(inner) => walk_globs(inner, f),
         _ => {}
     }
 }
 
-/// Match a glob pattern against a list of paths, returning the set of matching indices.
-///
-/// When the `zlob` feature is enabled, delegates to `zlob::zlob_match_paths` (Zig-compiled
-/// C library, fastest). Otherwise falls back to `globset::Glob` (pure Rust).
 #[cfg(feature = "zlob")]
-fn match_glob_pattern(pattern: &str, paths: &[&str]) -> AHashSet<usize> {
-    let Ok(Some(matches)) = zlob::zlob_match_paths(pattern, paths, zlob::ZlobFlags::RECOMMENDED)
-    else {
-        return AHashSet::new();
-    };
-
-    let matched_set: AHashSet<usize> = matches.iter().map(|s| s.as_ptr() as usize).collect();
-
-    if paths.len() >= PAR_THRESHOLD {
-        use rayon::prelude::*;
-        paths
-            .par_iter()
-            .enumerate()
-            .filter(|(_, p)| matched_set.contains(&(p.as_ptr() as usize)))
-            .map(|(i, _)| i)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .collect()
-    } else {
-        paths
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| matched_set.contains(&(p.as_ptr() as usize)))
-            .map(|(i, _)| i)
-            .collect()
-    }
+fn compile_one(pattern: &str) -> Option<GlobPattern> {
+    zlob::ZlobPattern::compile(pattern, zlob::ZlobFlags::RECOMMENDED).ok()
 }
 
 #[cfg(not(feature = "zlob"))]
-fn match_glob_pattern(pattern: &str, paths: &[&str]) -> AHashSet<usize> {
+fn compile_one(pattern: &str) -> Option<GlobPattern> {
+    globset::Glob::new(pattern)
+        .ok()
+        .map(|g| g.compile_matcher())
+}
+
+/// Build a `paths.len()`-sized bitmap. Vec<bool> beats AHashSet ~2× in the per-item
+/// filter loop — no hashing, plain array indexing, sequential prefetcher-friendly.
+#[cfg(feature = "zlob")]
+fn match_glob_pattern(pattern: &str, paths: &[&str]) -> Vec<bool> {
+    let mut mask = vec![false; paths.len()];
+    let Ok(hits) = zlob::zlob_match_paths_indices(pattern, paths, zlob::ZlobFlags::RECOMMENDED)
+    else {
+        return mask;
+    };
+    for i in hits.to_iter() {
+        if i < mask.len() {
+            mask[i] = true;
+        }
+    }
+    mask
+}
+
+#[cfg(not(feature = "zlob"))]
+fn match_glob_pattern(pattern: &str, paths: &[&str]) -> Vec<bool> {
+    let mut mask = vec![false; paths.len()];
     let Ok(glob) = globset::Glob::new(pattern) else {
-        return AHashSet::new();
+        return mask;
     };
     let matcher = glob.compile_matcher();
-
     if paths.len() >= PAR_THRESHOLD {
         use rayon::prelude::*;
-        paths
-            .par_iter()
-            .enumerate()
-            .filter(|(_, p)| matcher.is_match(p))
-            .map(|(i, _)| i)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .collect()
+        mask.par_iter_mut()
+            .zip(paths.par_iter())
+            .for_each(|(slot, p)| *slot = matcher.is_match(p));
     } else {
-        paths
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| matcher.is_match(p))
-            .map(|(i, _)| i)
-            .collect()
+        for (slot, p) in mask.iter_mut().zip(paths.iter()) {
+            *slot = matcher.is_match(p);
+        }
     }
+    mask
 }
 
 #[cfg(test)]
@@ -776,5 +899,80 @@ mod tests {
             paths.contains(&"include/fff.h"),
             "h file should be included"
         );
+    }
+
+    #[test]
+    fn test_inline_glob_path_matches_prepass() {
+        // Mixed (extensions + glob) takes the inline-compiled path.
+        // Pure glob takes the prepass bitmap path. Both must give identical results.
+        let arena_ptr = ArenaPtr(std::ptr::null());
+        let items = vec![
+            TestItem {
+                relative_path: "src/main.rs",
+                file_name: "main.rs",
+            },
+            TestItem {
+                relative_path: "src/lib.ts",
+                file_name: "lib.ts",
+            },
+            TestItem {
+                relative_path: "tests/foo.rs",
+                file_name: "foo.rs",
+            },
+            TestItem {
+                relative_path: "docs/readme.md",
+                file_name: "readme.md",
+            },
+        ];
+
+        let mixed = vec![Constraint::Extension("rs"), Constraint::Glob("src/**")];
+        let mixed_paths: Vec<&str> = apply_constraints(&items, &mixed, arena_ptr)
+            .unwrap()
+            .iter()
+            .map(|i| i.relative_path)
+            .collect();
+        assert_eq!(mixed_paths, vec!["src/main.rs"]);
+
+        let pure_glob = vec![Constraint::Glob("src/**")];
+        let glob_paths: Vec<&str> = apply_constraints(&items, &pure_glob, arena_ptr)
+            .unwrap()
+            .iter()
+            .map(|i| i.relative_path)
+            .collect();
+        assert!(glob_paths.contains(&"src/main.rs"));
+        assert!(glob_paths.contains(&"src/lib.ts"));
+        assert_eq!(glob_paths.len(), 2);
+    }
+
+    #[test]
+    fn test_inline_negated_glob_with_extension() {
+        // Mixed Not(Glob) on inline path — exercise the negate=true branch in
+        // glob_matches_inline through the Not->Glob recursion.
+        let arena_ptr = ArenaPtr(std::ptr::null());
+        let items = vec![
+            TestItem {
+                relative_path: "src/main.rs",
+                file_name: "main.rs",
+            },
+            TestItem {
+                relative_path: "vendor/foo.rs",
+                file_name: "foo.rs",
+            },
+            TestItem {
+                relative_path: "vendor/foo.ts",
+                file_name: "foo.ts",
+            },
+        ];
+
+        let constraints = vec![
+            Constraint::Extension("rs"),
+            Constraint::Not(Box::new(Constraint::Glob("vendor/**"))),
+        ];
+        let paths: Vec<&str> = apply_constraints(&items, &constraints, arena_ptr)
+            .unwrap()
+            .iter()
+            .map(|i| i.relative_path)
+            .collect();
+        assert_eq!(paths, vec!["src/main.rs"]);
     }
 }

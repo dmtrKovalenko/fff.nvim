@@ -912,6 +912,73 @@ fn grep_plain_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
         .collect()
 }
 
+/// Run live grep (fuzzy mode) and return matched file paths.
+/// Exercises the `fuzzy_grep_search` code path which resolves content
+/// via arena pointers — the path that was silently broken for overflow
+/// files before the overflow_arena fix.
+fn grep_fuzzy_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
+    let guard = match shared.read() {
+        Ok(g) => g,
+        Err(_) => return Vec::new(),
+    };
+    let Some(picker) = guard.as_ref() else {
+        return Vec::new();
+    };
+    let parsed = parse_grep_query(query);
+    let opts = GrepSearchOptions {
+        max_file_size: 10 * 1024 * 1024,
+        max_matches_per_file: 200,
+        smart_case: true,
+        file_offset: 0,
+        page_limit: 500,
+        mode: GrepMode::Fuzzy,
+        time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
+        classify_definitions: false,
+        trim_whitespace: false,
+        abort_signal: None,
+    };
+    let result = picker.grep(&parsed, &opts);
+    result
+        .files
+        .iter()
+        .map(|f| normalize(f.relative_path(picker)))
+        .collect()
+}
+
+/// Run live grep (regex mode) and return matched file paths.
+fn grep_regex_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
+    let guard = match shared.read() {
+        Ok(g) => g,
+        Err(_) => return Vec::new(),
+    };
+    let Some(picker) = guard.as_ref() else {
+        return Vec::new();
+    };
+    let parsed = parse_grep_query(query);
+    let opts = GrepSearchOptions {
+        max_file_size: 10 * 1024 * 1024,
+        max_matches_per_file: 200,
+        smart_case: true,
+        file_offset: 0,
+        page_limit: 500,
+        mode: GrepMode::Regex,
+        time_budget_ms: 0,
+        before_context: 0,
+        after_context: 0,
+        classify_definitions: false,
+        trim_whitespace: false,
+        abort_signal: None,
+    };
+    let result = picker.grep(&parsed, &opts);
+    result
+        .files
+        .iter()
+        .map(|f| normalize(f.relative_path(picker)))
+        .collect()
+}
+
 /// Report from [`probe_real_queries`]. `None` means "nothing to probe this
 /// round" (empty live set). `Some(Err)` means a probe disagreed with truth
 /// — convergence should not treat this as success.
@@ -952,12 +1019,21 @@ fn probe_real_queries(shared: &SharedFilePicker, live: &[Live]) -> ProbeOutcome 
         }
     }
 
-    // --- Grep probe: search for the content marker ---
+    // --- Grep probe: search for the content marker using a randomly
+    // rotated grep strategy. Each round picks one of PlainText / Fuzzy /
+    // Regex so over many rounds all three code paths get exercised,
+    // including the overflow-arena resolution that was previously broken
+    // in fuzzy grep.
     if let Some(marker) = extract_marker(&target.abs) {
-        let matches = grep_plain_matches(shared, &marker);
+        let probe_round = PROBE_COUNTER.load(Ordering::Relaxed);
+        let (mode_name, matches) = match probe_round % 3 {
+            0 => ("plain", grep_plain_matches(shared, &marker)),
+            1 => ("fuzzy", grep_fuzzy_matches(shared, &marker)),
+            _ => ("regex", grep_regex_matches(shared, &marker)),
+        };
         if !matches.contains(&target.relative) {
             return Some(Err(format!(
-                "grep({marker:?}) did not return expected live file {:?}\n\
+                "grep[{mode_name}]({marker:?}) did not return expected live file {:?}\n\
                  got {} matched files; first few: {:?}",
                 target.relative,
                 matches.len(),

@@ -14,7 +14,6 @@ use fff::grep::{GrepMode, GrepSearchOptions, has_regex_metacharacters};
 use fff::types::{FileItem, PaginationArgs};
 use fff::{FuzzySearchOptions, QueryParser, SharedFilePicker, SharedFrecency};
 use fff_query_parser::AiGrepConfig;
-use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{ServerHandler, schemars, tool, tool_handler, tool_router};
@@ -186,7 +185,6 @@ pub struct FffServer {
     frecency: SharedFrecency,
     cursor_store: Arc<Mutex<CursorStore>>,
     update_notice_sent: Arc<AtomicBool>,
-    tool_router: ToolRouter<Self>,
 }
 
 impl FffServer {
@@ -196,7 +194,6 @@ impl FffServer {
             frecency,
             cursor_store: Arc::new(Mutex::new(CursorStore::new())),
             update_notice_sent: Arc::new(AtomicBool::new(false)),
-            tool_router: Self::tool_router(),
         }
     }
 

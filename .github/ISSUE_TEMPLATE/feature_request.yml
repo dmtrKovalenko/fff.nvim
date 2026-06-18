@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest something new for fff
+title: "[Suggestion]: "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Which fff frontend(s)?
+      multiple: true
+      options:
+        - Neovim plugin (fff.nvim)
+        - MCP server (fff-mcp)
+        - Node SDK (@ff-labs/fff-node)
+        - Bun SDK (@ff-labs/fff-bun)
+        - C lib (libfff)
+        - Core or Rust crate
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: If you have an idea of the shape of the API, describe it here.
+    validations:
+      required: false

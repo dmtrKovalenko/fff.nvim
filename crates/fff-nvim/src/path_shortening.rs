@@ -8,17 +8,19 @@ use std::borrow::Cow;
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::sync::RwLock;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum PathShortenStrategy {
     #[default]
     MiddleNumber,
     Middle,
     End,
+    Start,
 }
 
 struct CacheEntry {
     shortened: String,
     max_size: usize,
+    strategy: PathShortenStrategy,
 }
 
 struct PathCache {
@@ -35,10 +37,10 @@ impl PathCache {
     }
 
     #[tracing::instrument(skip(self), fields(path = %path.display(), max_size), level = tracing::Level::TRACE)]
-    fn get(&self, path: &Path, max_size: usize) -> Option<&str> {
+    fn get(&self, path: &Path, max_size: usize, strategy: PathShortenStrategy) -> Option<&str> {
         self.map.get(path).and_then(|entry| {
-            // Only return cached value if max_size matches
-            if entry.max_size == max_size {
+            // Only return cached value if both max_size and strategy match
+            if entry.max_size == max_size && entry.strategy == strategy {
                 Some(entry.shortened.as_str())
             } else {
                 None
@@ -46,7 +48,13 @@ impl PathCache {
         })
     }
 
-    fn insert(&mut self, path: PathBuf, shortened: String, max_size: usize) {
+    fn insert(
+        &mut self,
+        path: PathBuf,
+        shortened: String,
+        max_size: usize,
+        strategy: PathShortenStrategy,
+    ) {
         // Simple eviction: clear half the cache when full
         if self.map.len() >= self.max_entries {
             let keys_to_remove: Vec<_> = self
@@ -64,6 +72,7 @@ impl PathCache {
             CacheEntry {
                 shortened,
                 max_size,
+                strategy,
             },
         );
     }
@@ -84,7 +93,7 @@ pub fn shorten_path_with_cache(
         let cache = PATH_SHORTEN_CACHE
             .read()
             .map_err(|_| "Failed to acquire path cache lock".to_string())?;
-        if let Some(cached) = cache.get(path, max_size) {
+        if let Some(cached) = cache.get(path, max_size, strategy) {
             tracing::trace!("Cache hit for path '{}'", path.display());
             return Ok(cached.to_string());
         }
@@ -95,7 +104,7 @@ pub fn shorten_path_with_cache(
         let mut cache = PATH_SHORTEN_CACHE
             .write()
             .map_err(|_| "Failed to acquire path cache lock".to_string())?;
-        cache.insert(path.to_path_buf(), shortened.clone(), max_size);
+        cache.insert(path.to_path_buf(), shortened.clone(), max_size, strategy);
     }
 
     Ok(shortened)
@@ -108,6 +117,7 @@ impl PathShortenStrategy {
             "middle_number" => PathShortenStrategy::MiddleNumber,
             "middle" => PathShortenStrategy::Middle,
             "end" => PathShortenStrategy::End,
+            "start" => PathShortenStrategy::Start,
             _ => PathShortenStrategy::MiddleNumber,
         }
     }
@@ -126,7 +136,10 @@ impl PathShortenStrategy {
 
         // If max_size is too small for smart shortening, just truncate
         if max_size < MIN_SMART_SHORTEN_SIZE {
-            return Self::truncate_str(&path_str, max_size);
+            return match self {
+                PathShortenStrategy::Start => Self::truncate_str_keep_end(&path_str, max_size),
+                _ => Self::truncate_str(&path_str, max_size),
+            };
         }
 
         let components: Vec<&str> = path
@@ -143,7 +156,10 @@ impl PathShortenStrategy {
 
         // For single component, just truncate it
         if components.len() == 1 {
-            return Self::truncate_str(components[0], max_size);
+            return match self {
+                PathShortenStrategy::Start => Self::truncate_str_keep_end(components[0], max_size),
+                _ => Self::truncate_str(components[0], max_size),
+            };
         }
 
         match self {
@@ -181,6 +197,7 @@ impl PathShortenStrategy {
                 let use_number = matches!(self, PathShortenStrategy::MiddleNumber);
                 self.shorten_middle(&components, max_size, use_number, sep)
             }
+            PathShortenStrategy::Start => Self::shorten_start(&components, max_size, sep),
         }
     }
 
@@ -197,6 +214,51 @@ impl PathShortenStrategy {
 
         // Just take the first max_len characters - no ".." suffix
         s.chars().take(max_len).collect()
+    }
+
+    fn truncate_str_keep_end(s: &str, max_len: usize) -> String {
+        if max_len == 0 {
+            return String::new();
+        }
+
+        let char_count = s.chars().count();
+        if char_count <= max_len {
+            return s.to_string();
+        }
+
+        s.chars().skip(char_count - max_len).collect()
+    }
+
+    // e.g. ".../parts/ai_extracted.rs"
+    fn shorten_start(components: &[&str], max_size: usize, sep: char) -> String {
+        let total = components.len();
+        let last = components[total - 1];
+
+        // Try smallest hidden_count first to maximize shown context.
+        for hidden in 1..total {
+            let right_parts = &components[hidden..];
+            let ellipsis = Self::make_ellipsis(hidden, false);
+
+            let right_content_len: usize = right_parts.iter().map(|s| s.len()).sum();
+            let right_seps = right_parts.len().saturating_sub(1);
+            let total_len = ellipsis.len() + 1 + right_content_len + right_seps;
+
+            if total_len <= max_size {
+                let mut result = String::with_capacity(total_len);
+                result.push_str(&ellipsis);
+                result.push(sep);
+                for (i, part) in right_parts.iter().enumerate() {
+                    if i > 0 {
+                        result.push(sep);
+                    }
+                    result.push_str(part);
+                }
+                return result;
+            }
+        }
+
+        // Even ellipsis + last won't fit: show the end of the last component.
+        Self::truncate_str_keep_end(last, max_size)
     }
 
     fn shorten_middle(
@@ -519,6 +581,56 @@ mod tests {
     }
 
     #[test]
+    fn test_path_shorten_strategy_start() {
+        let path = Path::new("core_workflow_service/db/model/parts/ai_extracted");
+
+        // Ample space - full path fits
+        let shortened = PathShortenStrategy::Start.shorten_path(path, 100);
+        assert_eq!(
+            shortened,
+            "core_workflow_service/db/model/parts/ai_extracted"
+        );
+
+        // 25 chars - should drop first components, keep tail intact
+        let shortened = PathShortenStrategy::Start.shorten_path(path, 25);
+        assert!(
+            shortened.len() <= 25,
+            "Result '{}' should be <= 25 chars",
+            shortened
+        );
+        assert!(
+            shortened.ends_with("ai_extracted"),
+            "Should preserve last component, got '{}'",
+            shortened
+        );
+        assert!(
+            shortened.starts_with('.'),
+            "Should start with ellipsis, got '{}'",
+            shortened
+        );
+
+        // Tight space where ellipsis + last won't fit: should still end with
+        // (a suffix of) the last component, never any leading content.
+        let shortened = PathShortenStrategy::Start.shorten_path(path, 8);
+        assert!(shortened.len() <= 8);
+        assert!(
+            "ai_extracted".ends_with(shortened.as_str()),
+            "Tight start shortening must keep end of last component, got '{}'",
+            shortened
+        );
+
+        // Single long component falls back to keeping the end
+        let path2 = Path::new("very_long_directory_name_with_many_chars");
+        let shortened = PathShortenStrategy::Start.shorten_path(path2, 10);
+        assert_eq!(shortened.len(), 10);
+        assert!(
+            "very_long_directory_name_with_many_chars".ends_with(shortened.as_str()),
+            "Should keep end of single component, got '{}'",
+            shortened
+        );
+    }
+
+    #[test]
     fn test_shorten_path_caching() {
         let path = Path::new("home/user/projects/rust/project/src/components/ui");
 
@@ -535,6 +647,14 @@ mod tests {
         assert!(
             result3.len() >= result1.len(),
             "More space should allow longer result"
+        );
+
+        // Different strategy must NOT return the cached MiddleNumber result.
+        let result_start = shorten_path_with_cache(PathShortenStrategy::Start, 25, path).unwrap();
+        let direct_start = PathShortenStrategy::Start.shorten_path(path, 25);
+        assert_eq!(
+            result_start, direct_start,
+            "Cache must be keyed on strategy, not return stale result"
         );
     }
 
@@ -562,6 +682,16 @@ mod tests {
                 );
 
                 let shortened = PathShortenStrategy::Middle.shorten_path(path, max_size);
+                assert!(
+                    shortened.len() <= max_size,
+                    "Path '{}' with max_size {} produced '{}' ({} chars)",
+                    path_str,
+                    max_size,
+                    shortened,
+                    shortened.len()
+                );
+
+                let shortened = PathShortenStrategy::Start.shorten_path(path, max_size);
                 assert!(
                     shortened.len() <= max_size,
                     "Path '{}' with max_size {} produced '{}' ({} chars)",

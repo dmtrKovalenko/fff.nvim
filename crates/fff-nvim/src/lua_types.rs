@@ -1,6 +1,9 @@
 use fff::file_picker::FilePicker;
 use fff::git::format_git_status;
-use fff::{FileItem, GrepResult, Location, Score, SearchResult};
+use fff::{
+    DirItem, DirSearchResult, FileItem, GrepResult, Location, MixedItemRef, MixedSearchResult,
+    Score, SearchResult,
+};
 use mlua::prelude::*;
 
 pub struct SearchResultLua<'a> {
@@ -25,6 +28,28 @@ impl<'a> GrepResultLua<'a> {
     }
 }
 
+pub struct DirSearchResultLua<'a> {
+    inner: DirSearchResult<'a>,
+    picker: &'a FilePicker,
+}
+
+impl<'a> DirSearchResultLua<'a> {
+    pub fn new(inner: DirSearchResult<'a>, picker: &'a FilePicker) -> Self {
+        Self { inner, picker }
+    }
+}
+
+pub struct MixedSearchResultLua<'a> {
+    inner: MixedSearchResult<'a>,
+    picker: &'a FilePicker,
+}
+
+impl<'a> MixedSearchResultLua<'a> {
+    pub fn new(inner: MixedSearchResult<'a>, picker: &'a FilePicker) -> Self {
+        Self { inner, picker }
+    }
+}
+
 struct LuaPosition((i32, i32));
 
 impl IntoLua for LuaPosition {
@@ -38,6 +63,7 @@ impl IntoLua for LuaPosition {
 
 fn file_item_into_lua(item: &FileItem, lua: &Lua, picker: &FilePicker) -> LuaResult<LuaValue> {
     let table = lua.create_table()?;
+    table.set("type", "file")?;
     table.set("relative_path", item.relative_path(picker))?;
     table.set("name", item.file_name(picker))?;
     table.set("size", item.size)?;
@@ -50,6 +76,20 @@ fn file_item_into_lua(item: &FileItem, lua: &Lua, picker: &FilePicker) -> LuaRes
     table.set("total_frecency_score", item.total_frecency_score())?;
     table.set("git_status", format_git_status(item.git_status))?;
     table.set("is_binary", item.is_binary())?;
+    Ok(LuaValue::Table(table))
+}
+
+fn dir_item_into_lua(item: &DirItem, lua: &Lua, picker: &FilePicker) -> LuaResult<LuaValue> {
+    let table = lua.create_table()?;
+    let name = item
+        .dir_name(picker)
+        .trim_end_matches(std::path::MAIN_SEPARATOR)
+        .trim_end_matches('/')
+        .to_owned();
+    table.set("type", "directory")?;
+    table.set("relative_path", item.relative_path(picker))?;
+    table.set("name", name)?;
+    table.set("max_access_frecency", item.max_access_frecency())?;
     Ok(LuaValue::Table(table))
 }
 
@@ -66,6 +106,24 @@ fn score_into_lua(score: &Score, lua: &Lua) -> LuaResult<LuaValue> {
     table.set("path_alignment_bonus", score.path_alignment_bonus)?;
     table.set("match_type", score.match_type)?;
     table.set("exact_match", score.exact_match)?;
+    Ok(LuaValue::Table(table))
+}
+
+fn location_into_lua(location: &Location, lua: &Lua) -> LuaResult<LuaValue> {
+    let table = lua.create_table()?;
+    match location {
+        Location::Line(line) => {
+            table.set("line", *line)?;
+        }
+        Location::Position { line, col } => {
+            table.set("line", *line)?;
+            table.set("col", *col)?;
+        }
+        Location::Range { start, end } => {
+            table.set("start", LuaPosition(*start))?;
+            table.set("end", LuaPosition(*end))?;
+        }
+    }
     Ok(LuaValue::Table(table))
 }
 
@@ -91,23 +149,62 @@ impl IntoLua for SearchResultLua<'_> {
         table.set("total_files", self.inner.total_files)?;
 
         if let Some(location) = &self.inner.location {
-            let location_table = lua.create_table()?;
+            table.set("location", location_into_lua(location, lua)?)?;
+        }
 
-            match location {
-                Location::Line(line) => {
-                    location_table.set("line", *line)?;
-                }
-                Location::Position { line, col } => {
-                    location_table.set("line", *line)?;
-                    location_table.set("col", *col)?;
-                }
-                Location::Range { start, end } => {
-                    location_table.set("start", LuaPosition(*start))?;
-                    location_table.set("end", LuaPosition(*end))?;
-                }
-            }
+        Ok(LuaValue::Table(table))
+    }
+}
 
-            table.set("location", location_table)?;
+impl IntoLua for DirSearchResultLua<'_> {
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+        let table = lua.create_table()?;
+
+        let items_table = lua.create_table()?;
+        for (i, item) in self.inner.items.iter().enumerate() {
+            items_table.set(i + 1, dir_item_into_lua(item, lua, self.picker)?)?;
+        }
+        table.set("items", items_table)?;
+
+        let scores_table = lua.create_table()?;
+        for (i, score) in self.inner.scores.iter().enumerate() {
+            scores_table.set(i + 1, score_into_lua(score, lua)?)?;
+        }
+        table.set("scores", scores_table)?;
+
+        table.set("total_matched", self.inner.total_matched)?;
+        table.set("total_dirs", self.inner.total_dirs)?;
+
+        Ok(LuaValue::Table(table))
+    }
+}
+
+impl IntoLua for MixedSearchResultLua<'_> {
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+        let table = lua.create_table()?;
+
+        let items_table = lua.create_table()?;
+        for (i, item) in self.inner.items.iter().enumerate() {
+            let lua_item = match item {
+                MixedItemRef::File(file) => file_item_into_lua(file, lua, self.picker)?,
+                MixedItemRef::Dir(dir) => dir_item_into_lua(dir, lua, self.picker)?,
+            };
+            items_table.set(i + 1, lua_item)?;
+        }
+        table.set("items", items_table)?;
+
+        let scores_table = lua.create_table()?;
+        for (i, score) in self.inner.scores.iter().enumerate() {
+            scores_table.set(i + 1, score_into_lua(score, lua)?)?;
+        }
+        table.set("scores", scores_table)?;
+
+        table.set("total_matched", self.inner.total_matched)?;
+        table.set("total_files", self.inner.total_files)?;
+        table.set("total_dirs", self.inner.total_dirs)?;
+
+        if let Some(location) = &self.inner.location {
+            table.set("location", location_into_lua(location, lua)?)?;
         }
 
         Ok(LuaValue::Table(table))
@@ -142,6 +239,11 @@ impl IntoLua for GrepResultLua<'_> {
             item.set("line_number", m.line_number)?;
             item.set("col", m.col)?;
             item.set("byte_offset", m.byte_offset)?;
+
+            // There is a little race window when fff can return matches inside of a non-binary
+            // classified entities, the window is minimal but it errors out neovim so guard it
+            let is_binary_content = m.line_content.as_bytes().contains(&0u8);
+            item.set("is_binary_content", is_binary_content)?;
             item.set("line_content", m.line_content.as_str())?;
 
             // Match byte ranges within line_content

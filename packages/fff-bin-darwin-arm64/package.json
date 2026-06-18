@@ -12,7 +12,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dmtrKovalenko/fff.nvim.git",
+    "url": "git+https://github.com/dmtrKovalenko/fff.git",
     "directory": "packages/fff-bin-darwin-arm64"
   }
 }

@@ -1,9 +1,12 @@
+use crate::constants::MAX_INDEXABLE_FILE_SIZE;
 use ahash::AHashMap;
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSlice;
 use std::cell::UnsafeCell;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+
+use crate::{FileItem, constants};
 
 /// Maximum number of distinct bigrams tracked in the inverted index.
 /// 95 printable ASCII chars (32..=126) after lowercasing → ~70 distinct → 4900 possible.
@@ -13,6 +16,19 @@ const MAX_BIGRAM_COLUMNS: usize = 5000;
 
 /// Sentinel value: bigram has no allocated column.
 const NO_COLUMN: u16 = u16::MAX;
+
+/// 1024 × u64 = 8 KB covers all 65536 possible bigram keys.
+const SEEN_WORDS: usize = 1024;
+
+/// Content size where the branchless two-pass `add_long_content` overtakes
+/// the single-pass `add_short_content`: ~-35% on 4 KB files, but its fixed
+/// flush scan dominates files under ~1 KB. See bigram_bench `bigram_build`.
+const LONG_CONTENT_MIN_LEN: usize = 1024;
+
+thread_local! {
+    static NORM_BUF: std::cell::RefCell<Vec<u8>> =
+        std::cell::RefCell::new(Vec::with_capacity(4096));
+}
 
 /// Temporary sync dense builder for the bigram index.
 /// Builds from the many threads reading file contents in parallel
@@ -87,17 +103,6 @@ impl BigramIndexBuilder {
         }
     }
 
-    /// SAFETY: caller must not access the same `word_idx` slot from
-    /// another thread concurrently. Partitioning in
-    /// `file_picker::build_bigram_index` enforces this.
-    #[inline(always)]
-    unsafe fn column_word_ptr(&self, col: u16, word_idx: usize) -> *mut u64 {
-        unsafe {
-            self.col_data_ptr()
-                .add(col as usize * self.words + word_idx)
-        }
-    }
-
     /// Test/bench accessor for a column's raw bitset words. Assumes the
     /// caller has joined all writers (no concurrent mutation).
     #[cfg(test)]
@@ -107,15 +112,7 @@ impl BigramIndexBuilder {
         &slab[start..start + self.words]
     }
 
-    // `pub` (via `#[doc(hidden)]`) only so the criterion bench can drive
-    // `add_file_content` directly. External consumers should use
-    // `build_bigram_index` instead.
-    ///
-    /// SAFETY: concurrent callers must partition `file_idx` by
-    /// word-aligned ranges so that `file_idx / 64` never collides across
-    /// threads. The `file_picker::build_bigram_index` driver enforces
-    /// this via `par_chunks` with a word-aligned chunk size.
-    #[doc(hidden)]
+    #[doc(hidden)] // `pub` (via `#[doc(hidden)]`) only for benchmarking
     pub fn add_file_content(&self, skip_builder: &Self, file_idx: usize, content: &[u8]) {
         if content.len() < 2 {
             return;
@@ -125,70 +122,170 @@ impl BigramIndexBuilder {
         let word_idx = file_idx / 64;
         let bit_mask = 1u64 << (file_idx % 64);
 
-        // Stack-local dedup bitsets: 1024 × u64 = 8 KB each, covers all 65536
-        // bigram keys with margin. Has to fit in L1 cache.
-        let mut seen_consec = [0u64; 1024];
-        let mut seen_skip = [0u64; 1024];
-
-        // Normalise each byte as we stream and carry a 2-byte history
-        // across iterations so each input byte is normalised exactly once
-        // even though it participates in up to three bigrams (as `cur`,
-        // then `prev`, then `skip_prev`). Benchmarked against a NEON
-        // pre-pass variant — the pre-pass needs a heap scratch per call,
-        // which kills throughput unless content is gigantic. Inline
-        // normalisation is the faster choice for realistic file sizes.
-        let bytes = content;
-        let len = bytes.len();
-
-        let mut n0 = normalize_byte_scalar(bytes[0]);
-        let mut n1 = normalize_byte_scalar(bytes[1]);
-
-        if n0 != u16::MAX && n1 != u16::MAX {
-            let key = (n0 << 8) | n1;
-            self.record_bigram(&mut seen_consec, key, word_idx, bit_mask);
-        }
-
-        for &b in &bytes[2..len] {
-            let cur = normalize_byte_scalar(b);
-            if cur != u16::MAX {
-                if n1 != u16::MAX {
-                    let key = (n1 << 8) | cur;
-                    self.record_bigram(&mut seen_consec, key, word_idx, bit_mask);
-                }
-                if n0 != u16::MAX {
-                    let key = (n0 << 8) | cur;
-                    skip_builder.record_bigram(&mut seen_skip, key, word_idx, bit_mask);
-                }
+        NORM_BUF.with_borrow_mut(|buf| {
+            let len = content.len();
+            if buf.len() < len {
+                buf.resize(len.next_power_of_two().max(4096), 0);
             }
-            n0 = n1;
-            n1 = cur;
-        }
+
+            normalize_bytes(content, &mut buf[..len]);
+            let n = &buf[..len];
+
+            // Both paths record the identical bigram set; the split exists
+            // purely for speed (see LONG_CONTENT_MIN_LEN).
+            if len >= LONG_CONTENT_MIN_LEN {
+                self.add_long_content(skip_builder, n, word_idx, bit_mask);
+            } else {
+                self.add_short_content(skip_builder, n, word_idx, bit_mask);
+            }
+        });
 
         self.populated.fetch_add(1, Ordering::Relaxed);
         skip_builder.populated.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Mark `key` as present for the file whose column-word is `word_idx`
-    /// and bit position is `bit_mask`, de-duplicating via the caller-owned
-    /// `seen` bitmap so we only touch the shared column slab at most once
-    /// per unique bigram per file.
-    ///
-    /// SAFETY: under the partitioning invariant on `add_file_content`
-    /// the `word_idx` slot this touches is owned exclusively by the
-    /// current thread, so a plain `|=` through the raw pointer is
-    /// race-free (no atomic RMW needed).
+    // Branchless two-pass: set every pair in stack-local bitmaps, including
+    // pairs touching the 0 sentinel — flush_seen masks those out. ~-35% vs
+    // the single pass on 4 KB files.
     #[inline(always)]
-    fn record_bigram(&self, seen: &mut [u64; 1024], key: u16, word_idx: usize, bit_mask: u64) {
+    fn add_long_content(&self, skip_builder: &Self, n: &[u8], word_idx: usize, bit_mask: u64) {
+        // Stack-local dedup bitsets: 1024 × u64 = 8 KB each, covers all 65536
+        // bigram keys. Has to fit in L1 cache.
+        let mut seen_consec = [0u64; SEEN_WORDS];
+        let mut seen_skip = [0u64; SEEN_WORDS];
+
+        let mut n0 = n[0];
+        let mut n1 = n[1];
+
+        let key = (n0 as usize) << 8 | n1 as usize;
+        // SAFETY: key < 65536, so key >> 6 < 1024 = SEEN_WORDS.
+        unsafe { *seen_consec.get_unchecked_mut(key >> 6) |= 1u64 << (key & 63) };
+
+        for &cur in &n[2..] {
+            let ck = (n1 as usize) << 8 | cur as usize;
+            let sk = (n0 as usize) << 8 | cur as usize;
+            unsafe {
+                *seen_consec.get_unchecked_mut(ck >> 6) |= 1u64 << (ck & 63);
+                *seen_skip.get_unchecked_mut(sk >> 6) |= 1u64 << (sk & 63);
+            }
+
+            n0 = n1;
+            n1 = cur;
+        }
+
+        self.flush_seen(&seen_consec, word_idx, bit_mask);
+        skip_builder.flush_seen(&seen_skip, word_idx, bit_mask);
+    }
+
+    #[inline(always)]
+    fn add_short_content(&self, skip_builder: &Self, n: &[u8], word_idx: usize, bit_mask: u64) {
+        let mut seen_consec = [0u64; SEEN_WORDS];
+        let mut seen_skip = [0u64; SEEN_WORDS];
+
+        let consec_base = self.col_data_ptr();
+        let consec_words = self.words;
+        let skip_base = skip_builder.col_data_ptr();
+        let skip_words = skip_builder.words;
+
+        let mut n0 = n[0];
+        let mut n1 = n[1];
+
+        if n0 != 0 && n1 != 0 {
+            let key = (n0 as u16) << 8 | n1 as u16;
+            self.record_bigram(
+                &mut seen_consec,
+                key,
+                word_idx,
+                bit_mask,
+                consec_base,
+                consec_words,
+            );
+        }
+
+        for &cur in &n[2..] {
+            if cur != 0 {
+                if n1 != 0 {
+                    let key = (n1 as u16) << 8 | cur as u16;
+                    self.record_bigram(
+                        &mut seen_consec,
+                        key,
+                        word_idx,
+                        bit_mask,
+                        consec_base,
+                        consec_words,
+                    );
+                }
+                if n0 != 0 {
+                    let key = (n0 as u16) << 8 | cur as u16;
+                    skip_builder.record_bigram(
+                        &mut seen_skip,
+                        key,
+                        word_idx,
+                        bit_mask,
+                        skip_base,
+                        skip_words,
+                    );
+                }
+            }
+            n0 = n1;
+            n1 = cur;
+        }
+    }
+
+    #[inline(always)]
+    fn record_bigram(
+        &self,
+        seen: &mut [u64; SEEN_WORDS],
+        key: u16,
+        word_idx: usize,
+        bit_mask: u64,
+        col_base: *mut u64,
+        words: usize,
+    ) {
         let k = key as usize;
         let w = k >> 6;
         let bit = 1u64 << (k & 63);
-        if seen[w] & bit == 0 {
-            seen[w] |= bit;
+        // SAFETY: w = key/64 with key: u16, so w < 1024 = SEEN_WORDS.
+        let prev = unsafe { *seen.get_unchecked(w) };
+        if prev & bit == 0 {
+            unsafe {
+                *seen.get_unchecked_mut(w) = prev | bit;
+            }
             let col = self.get_or_alloc_column(key);
             if col != NO_COLUMN {
                 unsafe {
-                    let p = self.column_word_ptr(col, word_idx);
+                    let p = col_base.add(col as usize * words + word_idx);
                     *p |= bit_mask;
+                }
+            }
+        }
+    }
+
+    fn flush_seen(&self, seen: &[u64; SEEN_WORDS], word_idx: usize, bit_mask: u64) {
+        let col_base = self.col_data_ptr();
+        let words = self.words;
+        for (blk, block) in seen.chunks_exact(8).enumerate() {
+            // OR-test whole blocks so the mostly-empty bitmap scans fast.
+            if block.iter().fold(0u64, |a, &w| a | w) == 0 {
+                continue;
+            }
+            for (j, &word_bits) in block.iter().enumerate() {
+                let w = blk * 8 + j;
+                let mut bits = match w & 3 {
+                    _ if w < 4 => 0,
+                    0 => word_bits & !1,
+                    _ => word_bits,
+                };
+                while bits != 0 {
+                    let key = (w << 6 | bits.trailing_zeros() as usize) as u16;
+                    bits &= bits - 1;
+                    let col = self.get_or_alloc_column(key);
+                    if col != NO_COLUMN {
+                        unsafe {
+                            let p = col_base.add(col as usize * words + word_idx);
+                            *p |= bit_mask;
+                        }
+                    }
                 }
             }
         }
@@ -480,22 +577,117 @@ impl BigramFilter {
     }
 }
 
-/// Map a single input byte to its normalised form used by the bigram
-/// builder: `u16::MAX` when not printable ASCII (outside `32..=126`),
-/// otherwise the lowercased byte value in `0..=126`. The `u16::MAX`
-/// sentinel can never collide with a printable-ASCII byte so the consumer
-/// can test `!= u16::MAX` without false positives.
-///
-/// Branchless and `#[inline(always)]`: LLVM lifts the ASCII-range check
-/// and the conditional-lowercase OR into a handful of instructions per
-/// call, so calling this inside a hot loop matches a hand-unrolled
-/// equivalent.
+/// Single-byte normalize: 0 for non-printable, lowercased byte otherwise.
+/// 0 is a safe sentinel: lowered printable bytes are 32..=126.
 #[inline(always)]
-fn normalize_byte_scalar(b: u8) -> u16 {
+fn normalize_byte_scalar(b: u8) -> u8 {
     let printable = b.wrapping_sub(32) <= 94;
-    // Branchless lowercase: OR 0x20 iff byte is in 'A'..='Z'.
     let lower = b | ((b.wrapping_sub(b'A') < 26) as u8 * 0x20);
-    if printable { lower as u16 } else { u16::MAX }
+    if printable { lower } else { 0 }
+}
+
+/// Bulk version: write `dst[i]` = `normalize_byte_scalar(src[i])` for `i`
+/// in `0..src.len()`. Inlined-scalar so LLVM auto-vectorises with the
+/// build's baseline SIMD; on x86_64 we runtime-dispatch to AVX2.
+/// Caller guarantees `dst.len() >= src.len()`.
+#[inline(always)]
+fn normalize_bytes(src: &[u8], dst: &mut [u8]) {
+    debug_assert!(dst.len() >= src.len());
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            unsafe { normalize_bytes_avx2(src, dst) };
+            return;
+        }
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        unsafe { normalize_bytes_neon(src, dst) };
+        return;
+    }
+
+    #[allow(unused)]
+    normalize_bytes_scalar(src, dst);
+}
+
+#[inline(always)]
+fn normalize_bytes_scalar(src: &[u8], dst: &mut [u8]) {
+    for (i, &b) in src.iter().enumerate() {
+        dst[i] = normalize_byte_scalar(b);
+    }
+}
+
+/// AVX2 normalize: 32 bytes/iter. AVX2 only has signed cmp, so unsigned
+/// range checks use `min(max(v, lo), hi) == v`.
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[target_feature(enable = "avx2")]
+unsafe fn normalize_bytes_avx2(src: &[u8], dst: &mut [u8]) {
+    use std::arch::x86_64::*;
+    let len = src.len();
+    let mut i = 0;
+    let p_lo = _mm256_set1_epi8(32);
+    let p_hi = _mm256_set1_epi8(126u8 as i8);
+    let u_lo = _mm256_set1_epi8(b'A' as i8);
+    let u_hi = _mm256_set1_epi8(b'Z' as i8);
+    let or20 = _mm256_set1_epi8(0x20);
+    while i + 32 <= len {
+        unsafe {
+            let v = _mm256_loadu_si256(src.as_ptr().add(i) as *const __m256i);
+            // printable_mask: v in [32, 126]
+            let clamp_p = _mm256_min_epu8(_mm256_max_epu8(v, p_lo), p_hi);
+            let printable = _mm256_cmpeq_epi8(v, clamp_p);
+            // is_upper_mask: v in [65, 90]
+            let clamp_u = _mm256_min_epu8(_mm256_max_epu8(v, u_lo), u_hi);
+            let is_upper = _mm256_cmpeq_epi8(v, clamp_u);
+            let or_bits = _mm256_and_si256(is_upper, or20);
+            let lower = _mm256_or_si256(v, or_bits);
+            let out = _mm256_and_si256(lower, printable);
+            _mm256_storeu_si256(dst.as_mut_ptr().add(i) as *mut __m256i, out);
+        }
+        i += 32;
+    }
+    while i < len {
+        dst[i] = normalize_byte_scalar(src[i]);
+        i += 1;
+    }
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[target_feature(enable = "neon")]
+unsafe fn normalize_bytes_neon(src: &[u8], dst: &mut [u8]) {
+    use std::arch::aarch64::*;
+    let len = src.len();
+    let mut i = 0;
+    let v32 = vdupq_n_u8(32);
+    let v127 = vdupq_n_u8(127);
+    let va = vdupq_n_u8(b'A');
+    let vz1 = vdupq_n_u8(b'Z' + 1);
+    let v20 = vdupq_n_u8(0x20);
+
+    while i + 16 <= len {
+        unsafe {
+            let v = vld1q_u8(src.as_ptr().add(i));
+            // printable: v >= 32 AND v < 127
+            let ge32 = vcgeq_u8(v, v32);
+            let lt127 = vcltq_u8(v, v127);
+            let print_mask = vandq_u8(ge32, lt127);
+            // is_upper: v >= 'A' AND v < 'Z'+1
+            let ge_a = vcgeq_u8(v, va);
+            let lt_z1 = vcltq_u8(v, vz1);
+            let upper_mask = vandq_u8(ge_a, lt_z1);
+            let or_bits = vandq_u8(upper_mask, v20);
+            let lower = vorrq_u8(v, or_bits);
+            let out = vandq_u8(lower, print_mask);
+
+            vst1q_u8(dst.as_mut_ptr().add(i), out);
+        }
+        i += 16;
+    }
+    while i < len {
+        dst[i] = normalize_byte_scalar(src[i]);
+        i += 1;
+    }
 }
 
 pub fn extract_bigrams(content: &[u8]) -> Vec<u16> {
@@ -596,7 +788,6 @@ impl BigramOverlay {
     }
 }
 
-pub const BIGRAM_CONTENT_CAP: usize = 64 * 1024;
 const BIGRAM_CHUNK_FILES: usize = 4 * 64;
 
 /// Sparse-column cutoff for the skip-1 sub-index. Rare skip columns add
@@ -605,51 +796,55 @@ const BIGRAM_CHUNK_FILES: usize = 4 * 64;
 const SKIP_INDEX_MIN_DENSITY_PCT: u32 = 12;
 
 thread_local! {
-    /// Per-rayon-worker reusable read buffer. 64 KB is too large to
-    /// keep on the default pthread stack (macOS ships 512 KB), so the
-    /// buffer lives on the heap behind a `Box<[u8; N]>`. TLS keeps the
-    /// allocation alive for the thread's lifetime so we pay the cost
-    /// once, not per file.
-    static READ_BUF: std::cell::RefCell<Box<[u8; BIGRAM_CONTENT_CAP]>> =
-        std::cell::RefCell::new(Box::new([0u8; BIGRAM_CONTENT_CAP]));
+    /// Reusable read buffer that is allocated per thread and used for reading files
+    static READ_BUF: std::cell::RefCell<Box<[u8]>> =
+        std::cell::RefCell::new(vec![0u8; MAX_INDEXABLE_FILE_SIZE].into_boxed_slice());
 }
 
-/// Outcome of processing one file's content.
-enum FileOutcome {
-    /// Content contained a NUL byte — mark the file as binary so future
-    /// greps skip it without re-reading.
-    Binary,
-    /// Read succeeded and the content was fed to the bigram builder.
-    Indexed,
-    /// File was empty or failed to open; nothing to do.
-    Skipped,
+/// Reads bigram chunk, we *SHOULD NOT* use mmap cache here because bigram is built off-lock
+/// if the watcher thread tries to invalidate mmap during the borrow from it - UAB or segfaut
+///
+/// mmap should only be used by the locked version of grep which absolutely minimizes any riscs
+#[inline]
+fn read_bigram_chunk<'a>(
+    file: &FileItem,
+    base_fd: libc::c_int,
+    base_path: &std::path::Path,
+    arena: crate::simd_path::ArenaPtr,
+    buf: &'a mut [u8],
+    path_buf: &mut [u8; crate::simd_path::PATH_BUF_SIZE],
+) -> Option<&'a [u8]> {
+    let want = (file.size as usize).min(MAX_INDEXABLE_FILE_SIZE);
+    let filled = file.read_trimmed_into_buf(base_fd, base_path, arena, path_buf, &mut buf[..want]);
+    if filled == 0 {
+        return None;
+    }
+
+    let data = &buf[..filled];
+
+    Some(data)
 }
 
 #[tracing::instrument(skip_all, name = "Building Bigram Index", level = tracing::Level::DEBUG)]
 pub(crate) fn build_bigram_index(
     files: &[crate::types::FileItem],
-    budget: &crate::types::ContentCacheBudget,
     base_path: &std::path::Path,
     arena: crate::simd_path::ArenaPtr,
-) -> (BigramFilter, Vec<usize>) {
-    let start = std::time::Instant::now();
-    tracing::info!("Building bigram index for {} files...", files.len());
-
+) -> BigramFilter {
     let builder = BigramIndexBuilder::new(files.len());
     let skip_builder = BigramIndexBuilder::new(files.len());
 
-    // this does remove a memcpy for every single file + actually reducing open time on macos
     #[cfg(unix)]
     let base_fd: libc::c_int = open_base_dir_fd(base_path);
     #[cfg(not(unix))]
     let base_fd: i32 = -1;
 
-    // `content_binary` is only touched from the Binary branch below, so
-    // the mutex is cold in practice. A lock-free collector wasn't worth
-    // the complexity.
-    let content_binary: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
-
-    crate::file_picker::BACKGROUND_THREAD_POOL.install(|| {
+    // Always reads each file into the thread-local READ_BUF — never aliases the
+    // persistent mmap cache. See `read_bigram_chunk` for the rationale: this
+    // pass runs detached on the background pool without holding the picker
+    // read lock, so a watcher event mutating a `FileItem` would race any
+    // borrow we took from a cached `Mmap`.
+    crate::parallelism::BACKGROUND_THREAD_POOL.install(|| {
         files
             .par_chunks(BIGRAM_CHUNK_FILES)
             .enumerate()
@@ -657,183 +852,75 @@ pub(crate) fn build_bigram_index(
                 let base_idx = chunk_idx * BIGRAM_CHUNK_FILES;
                 for (offset, file) in chunk.iter().enumerate() {
                     let file_idx = base_idx + offset;
-                    let outcome = process_file(
-                        file,
-                        file_idx,
-                        &builder,
-                        &skip_builder,
-                        base_fd,
-                        base_path,
-                        arena,
-                        budget,
-                    );
-                    if matches!(outcome, FileOutcome::Binary) {
-                        content_binary.lock().unwrap().push(file_idx);
+
+                    if file.is_binary() || file.size == 0 {
+                        return;
                     }
+
+                    READ_BUF.with(|read_cell| {
+                        let mut buf = read_cell.borrow_mut();
+                        let mut path_buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
+
+                        if let Some(content) = read_bigram_chunk(
+                            file,
+                            base_fd,
+                            base_path,
+                            arena,
+                            &mut buf[..],
+                            &mut path_buf,
+                        ) {
+                            // we have to manually ensure that every byte is a valid text byte to
+                            // perform this we have to scan every file, first 512 bytes is not enough
+                            // so basically we rely on the fact that first 2MB will always contain
+                            // an invalid text sequence if this is not a binary file.
+                            //
+                            // Need to find a better way to do this.
+                            file.set_binary(crate::types::detect_binary_content(content));
+
+                            builder.add_file_content(&skip_builder, file_idx, content);
+                        }
+                    });
                 }
             });
     });
 
     #[cfg(unix)]
     if base_fd >= 0 {
-        // SAFETY: we opened `base_fd` at the top of this function and
-        // no worker still references it once the rayon pool joined.
         unsafe { libc::close(base_fd) };
     }
 
-    let content_binary_vec = content_binary.into_inner().unwrap();
-
-    let cols = builder.columns_used();
     let mut index = builder.compress(None);
     let skip_index = skip_builder.compress(Some(SKIP_INDEX_MIN_DENSITY_PCT));
     index.set_skip_index(skip_index);
 
-    // Builder buffers were freed by `compress()` above (one deallocation
-    // each); nudge mimalloc to return them (and any transient allocs)
-    // to the OS.
+    // in progress bigram walk + rust's ignore crate allocates shit ton of garbage memory
+    // all custom allocators would think this is available resource while we do not allocate
+    // after the sync, so it's very important to let the unused memory go back to the OS
     crate::file_picker::hint_allocator_collect();
 
-    tracing::info!(
-        "Bigram index built in {:.2}s — {} dense columns for {} files",
-        start.elapsed().as_secs_f64(),
-        cols,
-        files.len(),
-    );
-    if !content_binary_vec.is_empty() {
-        tracing::info!(
-            "Bigram build detected {} content-binary files (not caught by extension)",
-            content_binary_vec.len(),
-        );
-    }
-
-    (index, content_binary_vec)
+    index
 }
 
-/// Process one file: read up to `BIGRAM_CONTENT_CAP` bytes, feed them
-/// to the bigram builder (or record as binary / skipped).
-///
-/// `base_fd` is the parent-directory fd for the Unix `openat` fast
-/// path, or `-1` to force the portable `std::fs::File::open` fallback.
-#[inline]
-#[allow(clippy::too_many_arguments)]
-fn process_file(
-    file: &crate::types::FileItem,
-    file_idx: usize,
-    builder: &BigramIndexBuilder,
-    skip_builder: &BigramIndexBuilder,
-    base_fd: i32,
+#[tracing::instrument(skip_all, name = "Sniffing Large Files Binary", level = tracing::Level::DEBUG)]
+pub(crate) fn sniff_binary_for_non_indexable(
+    files: &[FileItem],
     base_path: &std::path::Path,
     arena: crate::simd_path::ArenaPtr,
-    budget: &crate::types::ContentCacheBudget,
-) -> FileOutcome {
-    if file.is_binary() || file.size == 0 || file.size > budget.max_file_size {
-        return FileOutcome::Skipped;
-    }
-
-    // Zero-copy fast path: the warmup phase may have cached this file's
-    // content already. Avoid re-reading from disk.
-    if let Some(cached) = file.get_content(arena, base_path, budget) {
-        if crate::file_picker::detect_binary_content(cached) {
-            return FileOutcome::Binary;
-        }
-        let capped = &cached[..cached.len().min(BIGRAM_CONTENT_CAP)];
-        builder.add_file_content(skip_builder, file_idx, capped);
-        return FileOutcome::Indexed;
-    }
-
-    let want = (file.size as usize).min(BIGRAM_CONTENT_CAP);
+) {
+    // Non-indexable files are few in a typical repo, so a serial pass with a
+    // single reused chunk buffer beats spinning up the thread pool.
     let mut path_buf = [0u8; crate::simd_path::PATH_BUF_SIZE];
+    let mut chunk = vec![0u8; crate::types::BINARY_CLASSIFICATION_CHUNK_SIZE];
 
-    READ_BUF.with(|read_cell| {
-        let mut buf = read_cell.borrow_mut();
-        let filled = read_file_content(
-            file,
-            base_fd,
-            base_path,
-            arena,
-            &mut path_buf,
-            &mut buf[..want],
-        );
-        if filled == 0 {
-            return FileOutcome::Skipped;
+    for file in files {
+        // check only the files that we are able to grep
+        if file.size == 0 || file.size > constants::MAX_FFFILE_SIZE {
+            continue;
         }
-        let data = &buf[..filled];
-        if crate::file_picker::detect_binary_content(data) {
-            return FileOutcome::Binary;
-        }
-        builder.add_file_content(skip_builder, file_idx, data);
-        FileOutcome::Indexed
-    })
-}
 
-/// Read up to `buf.len()` bytes of `file`'s content into `buf`. Returns
-/// the number of bytes actually read (0 on any error, so callers treat
-/// failures as "skip").
-#[inline]
-fn read_file_content(
-    file: &crate::types::FileItem,
-    base_fd: i32,
-    base_path: &std::path::Path,
-    arena: crate::simd_path::ArenaPtr,
-    path_buf: &mut [u8; crate::simd_path::PATH_BUF_SIZE],
-    buf: &mut [u8],
-) -> usize {
-    #[cfg(unix)]
-    {
-        read_file_content_unix(file, base_fd, base_path, arena, path_buf, buf)
+        let abs = file.write_absolute_path(arena, base_path, &mut path_buf);
+        file.detect_binary_per_byte(abs, &mut chunk);
     }
-    #[cfg(not(unix))]
-    {
-        let _ = base_fd;
-        read_file_content_std(file, base_path, arena, path_buf, buf)
-    }
-}
-
-#[cfg(unix)]
-fn read_file_content_unix(
-    file: &crate::types::FileItem,
-    base_fd: libc::c_int,
-    base_path: &std::path::Path,
-    arena: crate::simd_path::ArenaPtr,
-    path_buf: &mut [u8; crate::simd_path::PATH_BUF_SIZE],
-    buf: &mut [u8],
-) -> usize {
-    let fd = if base_fd >= 0 {
-        let rel_cstr = file.write_relative_cstr(arena, path_buf);
-        // SAFETY: `rel_cstr` is NUL-terminated, `base_fd` is a valid
-        // directory descriptor owned by the caller.
-        unsafe { libc::openat(base_fd, rel_cstr.as_ptr(), libc::O_RDONLY) }
-    } else {
-        use std::os::unix::io::IntoRawFd;
-        let abs = file.write_absolute_path(arena, base_path, path_buf);
-        match std::fs::File::open(abs) {
-            Ok(f) => f.into_raw_fd(),
-            Err(_) => return 0,
-        }
-    };
-    if fd < 0 {
-        return 0;
-    }
-
-    let mut filled = 0usize;
-    while filled < buf.len() {
-        // SAFETY: `fd` is an owned descriptor, `buf[filled..]` is a
-        // valid writable slice for `buf.len() - filled` bytes.
-        let n = unsafe {
-            libc::read(
-                fd,
-                buf[filled..].as_mut_ptr() as *mut libc::c_void,
-                (buf.len() - filled) as libc::size_t,
-            )
-        };
-        if n <= 0 {
-            break;
-        }
-        filled += n as usize;
-    }
-    // SAFETY: matching close for the owned descriptor.
-    unsafe { libc::close(fd) };
-    filled
 }
 
 /// Open the base directory for the `openat` fast path. Returns `-1` on
@@ -856,33 +943,6 @@ fn open_base_dir_fd(base_path: &std::path::Path) -> libc::c_int {
             libc::O_RDONLY | libc::O_DIRECTORY,
         )
     }
-}
-
-/// Portable fallback (Windows + non-`openat` Unix): `std::fs::File` +
-/// `Read::read` into `buf`. Used on Windows unconditionally, and on
-/// Unix when the base directory fd could not be opened.
-#[cfg(not(unix))]
-fn read_file_content_std(
-    file: &crate::types::FileItem,
-    base_path: &std::path::Path,
-    arena: crate::simd_path::ArenaPtr,
-    path_buf: &mut [u8; crate::simd_path::PATH_BUF_SIZE],
-    buf: &mut [u8],
-) -> usize {
-    use std::io::Read;
-    let abs = file.write_absolute_path(arena, base_path, path_buf);
-    let Ok(mut f) = std::fs::File::open(abs) else {
-        return 0;
-    };
-    let mut filled = 0usize;
-    while filled < buf.len() {
-        match f.read(&mut buf[filled..]) {
-            Ok(0) => break,
-            Ok(n) => filled += n,
-            Err(_) => return 0,
-        }
-    }
-    filled
 }
 
 #[cfg(test)]
@@ -1113,6 +1173,25 @@ mod tests {
         run_and_compare(&mixed[..127]); // scalar path
         run_and_compare(&mixed); // SIMD path (256 bytes)
         run_and_compare(&mixed[..192]); // SIMD path with scalar tail
+    }
+
+    #[test]
+    fn add_file_long_short_paths_agree() {
+        // Same mixed content checked just below, at, and above
+        // LONG_CONTENT_MIN_LEN so both add_short_content and add_long_content
+        // are validated against the reference implementation.
+        let mut mixed = Vec::with_capacity(LONG_CONTENT_MIN_LEN * 2);
+        for i in 0..LONG_CONTENT_MIN_LEN * 2 {
+            mixed.push(match i % 11 {
+                0 => 0,
+                1 => 0x7F,
+                2 => b'\n',
+                _ => 32 + ((i * 31) % 95) as u8,
+            });
+        }
+        run_and_compare(&mixed[..LONG_CONTENT_MIN_LEN - 1]);
+        run_and_compare(&mixed[..LONG_CONTENT_MIN_LEN]);
+        run_and_compare(&mixed);
     }
 
     #[test]

@@ -30,16 +30,20 @@ export function getTriple(): string {
  * Detect whether we're on musl or glibc Linux
  */
 function detectLinuxLibc(): string {
+  let output = "";
   try {
-    const lddOutput = execSync("ldd --version 2>&1", {
+    output = execSync("ldd --version 2>&1", {
       encoding: "utf-8",
       timeout: 5000,
     });
-    if (lddOutput.toLowerCase().includes("musl")) {
-      return "unknown-linux-musl";
-    }
-  } catch {
-    // ldd failed, assume glibc
+  } catch (e: unknown) {
+    // Alpine/musl: `ldd --version` exits with code 1 but still prints
+    // "musl libc ..." — execSync surfaces that on the error object.
+    const err = e as { stdout?: string | Buffer; stderr?: string | Buffer };
+    output = String(err?.stdout ?? "") + String(err?.stderr ?? "");
+  }
+  if (output.toLowerCase().includes("musl")) {
+    return "unknown-linux-musl";
   }
   return "unknown-linux-gnu";
 }

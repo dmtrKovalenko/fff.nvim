@@ -841,13 +841,17 @@ fn score_filtered_by_frecency<'a>(
     match files {
         FileItems::All(s) => s
             .par_iter()
-            .filter(|f| !f.is_deleted())
-            .map(&score_file)
+            .filter_map(|f| {
+                let live = !f.is_deleted();
+                live.then_some(score_file(f))
+            })
             .collect(),
         FileItems::Filtered(v) => v
             .iter()
-            .filter(|f| !f.is_deleted())
-            .map(|&file| score_file(file))
+            .filter_map(|f| {
+                let live = !f.is_deleted();
+                live.then_some(score_file(f))
+            })
             .collect(),
     }
 }

@@ -3,8 +3,14 @@ name: Lua CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
 
 jobs:
   lua-ls:

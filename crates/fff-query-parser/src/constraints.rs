@@ -1,3 +1,5 @@
+use crate::glob_detect::has_wildcards;
+
 /// Constraint types that can be extracted from a query
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint<'a> {
@@ -33,6 +35,40 @@ pub enum Constraint<'a> {
     /// Negation constraint: !extension:rs -> Not(Extension("rs"))
     /// Negates the inner constraint
     Not(Box<Constraint<'a>>),
+}
+
+impl Constraint<'_> {
+    #[inline(always)]
+    pub fn is_filename_constraint_token(token: &str) -> bool {
+        let bytes = token.as_bytes();
+
+        // Must NOT end with / or .
+        if token.is_empty() || (bytes.last() == Some(&b'/') && bytes.first() != Some(&b'.')) {
+            return false;
+        }
+
+        // Must NOT contain wildcards (those are globs)
+        if has_wildcards(token) {
+            return false;
+        }
+
+        // Get the filename component (after last /)
+        let filename = token.rsplit('/').next().unwrap_or(token);
+
+        // Extension must exist and look like a real file extension:
+        // starts with an ASCII letter (rejects version numbers like "v2.0"),
+        // followed by alphanumeric chars, max 10 chars total.
+        match filename.rfind('.') {
+            None => false,
+            Some(dot_idx) => {
+                let extension = &filename[dot_idx + 1..];
+
+                !extension.is_empty()
+                    && extension.len() <= 10 // just an sassumption
+                    && extension.bytes().all(|b| b.is_ascii_alphanumeric())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

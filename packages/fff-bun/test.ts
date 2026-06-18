@@ -126,7 +126,7 @@ async function main() {
     const finder2 = finder2Result.value;
     console.log("  Second instance created successfully");
 
-    finder2.waitForScan(5000);
+    finder2.waitForScanBlocking(5000);
     const search2 = finder2.fileSearch("Cargo.toml");
     if (search2.ok) {
       console.log(

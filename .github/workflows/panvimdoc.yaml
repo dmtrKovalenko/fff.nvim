@@ -1,7 +1,8 @@
 on:
-  push:
-    branches-ignore:
-      - main
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
 name: docs
 
 jobs:
@@ -9,27 +10,76 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v5
         with:
-          # fetch last 2 commits required for auto force push back
+          ref: main
           fetch-depth: 2
+
+      - name: Extract Neovim section from README.md
+        run: |
+          awk '
+            /^<details id="neovim-plugin">/ { capture=1; next }
+            capture && /^<\/details>/        { capture=0; exit }
+            capture && /^<summary>$/         { next }
+            capture && /^<\/summary>$/       { next }
+            capture && /<h2>.*<\/h2>/ {
+              gsub(/<\/?h2>/, "")
+              sub(/^[[:space:]]+/, "")
+              print "# " $0
+              print ""
+              print "The best file search picker for Neovim. Frecency-ranked, typo-resistant, git-award, very fast."
+              print ""
+              next
+            }
+            capture { print }
+          ' README.md > .panvimdoc-input.md
+          test -s .panvimdoc-input.md
 
       - name: panvimdoc
         uses: kdheepak/panvimdoc@main
         with:
           vimdoc: fff.nvim
+          pandoc: .panvimdoc-input.md
           version: "Neovim >= 0.10.0"
           demojify: true
           treesitter: true
 
-      - name: Get last commit message
-        id: last-commit
-        run: |
-          echo "message=$(git log -1 --pretty=%s)" >> $GITHUB_OUTPUT
-          echo "author=$(git log -1 --pretty=\"%an <%ae>\")" >> $GITHUB_OUTPUT
+      - name: Cleanup intermediate file
+        run: rm -f .panvimdoc-input.md
 
-      - uses: stefanzweifel/git-auto-commit-action@v6
+      # panvimdoc stamps "Last change: <today>" every run, so a daily cron always
+      # produces a one-line diff. Skip the PR unless a non-date line changed.
+      - name: Detect real doc changes
+        id: docdiff
+        run: |
+          if git diff --quiet -I 'Last change:' -- doc/fff.nvim.txt; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create pull request
+        id: cpr
+        if: steps.docdiff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
         with:
-          commit_author: ${{ steps.last-commit.outputs.author }}
-          commit_message: "chore: Update docs for - ${{ steps.last-commit.outputs.message }}"
+          branch: bot/regenerate-vimdoc
+          token: ${{ secrets.GUSTAV_PAT }}
+          delete-branch: true
+          title: "chore: regenerate Neovim vimdoc"
+          commit-message: |
+            chore: regenerate Neovim vimdoc
+
+            Co-authored-by: Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>
+          author: "gustav-fff <66k7bxj9m6@privaterelay.appleid.com>"
+          committer: "gustav-fff <66k7bxj9m6@privaterelay.appleid.com>"
+          body: Automated vimdoc regeneration from README.md, scribed by Gustav.
+          add-paths: doc/fff.nvim.txt
+
+      - name: Enable auto-merge
+        if: steps.cpr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GUSTAV_PAT }}
+        run: gh pr merge --auto --squash "${{ steps.cpr.outputs.pull-request-number }}"
