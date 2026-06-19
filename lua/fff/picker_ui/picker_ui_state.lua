@@ -30,8 +30,9 @@ M.state = {
   last_render_ctx = nil,
   location = nil,
 
-  -- Skip the next on_input_change (set during resume's buffer write)
-  suppress_input_change = false,
+  -- Cursor index to restore after the next search completes (set on resume).
+  -- Lets the re-search run for fresh results while keeping the saved position.
+  pending_restore_cursor = nil,
 
   -- History cycling state
   history_offset = nil,
@@ -120,6 +121,7 @@ function M.reset_state()
   M.state.item_to_lines = {}
   M.state.last_render_ctx = nil
   M.state.location = nil
+  M.state.pending_restore_cursor = nil
 
   M.reset_history_state()
 

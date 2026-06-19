@@ -169,11 +169,11 @@ local function restore_from_state(state, source_label)
   M.state.suggestion_items = state.suggestion_items
   M.state.suggestion_source = state.suggestion_source
 
-  -- Writing the query below triggers on_lines -> on_input_change, which would
-  -- re-run the search and reset the cursor to the first result. Suppress it so
-  -- the restored items and cursor are kept as-is.
+  -- Writing the query below triggers on_lines -> on_input_change, which re-runs
+  -- the search (results may have changed since close). Stash the saved cursor so
+  -- that re-search restores the position instead of resetting it to the top.
   if state.query and state.query ~= '' then
-    M.state.suppress_input_change = true
+    M.state.pending_restore_cursor = M.state.cursor
     vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { M.state.config.prompt .. state.query })
   end
 

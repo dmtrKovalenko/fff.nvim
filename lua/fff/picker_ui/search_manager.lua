@@ -101,7 +101,14 @@ function M.update_results_sync()
 
   if S.suggestion_items and #S.suggestion_items > 0 then S.filtered_items = S.suggestion_items end
 
-  S.cursor = 1
+  -- On resume, restore the saved cursor onto the fresh results (clamped, since
+  -- the result set may have changed since close). Otherwise reset to the top.
+  if S.pending_restore_cursor then
+    S.cursor = math.max(1, math.min(S.pending_restore_cursor, #S.filtered_items))
+    S.pending_restore_cursor = nil
+  else
+    S.cursor = 1
+  end
 
   P.render_debounced()
 end
@@ -218,13 +225,6 @@ end
 
 function M.on_input_change()
   if not P.state.active then return end
-
-  -- Restore writes the query into the input buffer, which triggers this via
-  -- on_lines. Skip the resulting search so the restored cursor/items survive.
-  if S.suppress_input_change then
-    S.suppress_input_change = false
-    return
-  end
 
   local lines = vim.api.nvim_buf_get_lines(S.input_buf, 0, -1, false)
   local prompt_len = #S.config.prompt
