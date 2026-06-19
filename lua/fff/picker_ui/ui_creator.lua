@@ -371,8 +371,10 @@ function M.setup_keymaps()
         end
       end)
     end
-    set_keymap('n', 'cc', clear_query_line, input_opts)
-    set_keymap('n', 'S', clear_query_line, input_opts)
+    -- remap=true so existing user mappings of cc/S still resolve
+    local clear_opts = vim.tbl_extend('force', input_opts, { noremap = false, remap = true })
+    set_keymap('n', 'cc', clear_query_line, clear_opts)
+    set_keymap('n', 'S', clear_query_line, clear_opts)
   else
     set_keymap({ 'i', 'n' }, keymaps.close, P.close, input_opts)
   end
