@@ -582,6 +582,7 @@ mod tests {
         assert!(!search_packed_pair(b"", b"x"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn guard_page_no_overread() {
         // Place each haystack so it ENDS exactly at a PROT_NONE guard page; any

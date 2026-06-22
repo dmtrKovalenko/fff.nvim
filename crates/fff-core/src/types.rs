@@ -711,22 +711,21 @@ impl FileItem {
 
         // Read the file into an owned, reusable buffer rather than mmap it.
         //
-        // mmap-backed grep races with concurrent modification: if the file is
-        // truncated or rewritten while a mapping is live (an editor or coding
-        // agent changing the workspace), the pages past the new EOF become
-        // invalid and the next read — including a SIMD prefilter load over the
-        // whole file — faults with SIGBUS, aborting the entire process. The old
-        // cached fast path made it worse: an `OnceLock<Mmap>` created at index
-        // time could be served long after the file changed on disk. An owned
-        // read() copy is immune; a shrinking file just yields a shorter buffer,
-        // never a fault. `buf` is a per-worker scratch Vec reused across files,
-        // so this is one bounded copy per file, not a per-query allocation. (The
-        // content cache stays warm for the file picker via `get_cached_content`;
-        // only the grep reader stopped trusting a possibly-stale mapping.)
+        // Read into a reusable owned buffer, not mmap: an mmap'd file that is
+        // truncated/rewritten mid-grep (editor or agent edits) faults with
+        // SIGBUS on the pages past its new EOF. `buf` is per-worker, reused.
         let _ = mmap_slot;
-        let mut file = std::fs::File::open(&abs).ok()?;
+        let file = std::fs::File::open(&abs).ok()?;
         buf.clear();
-        file.read_to_end(buf).ok()?;
+        // Cap the read at the budget: `self.size` is the stale indexed size, so
+        // a file that GREW past `max_file_size` since indexing must not balloon
+        // memory. Read one byte over the cap and bail if it exceeds it.
+        file.take(max_file_size.saturating_add(1))
+            .read_to_end(buf)
+            .ok()?;
+        if buf.len() as u64 > max_file_size {
+            return None;
+        }
         Some(buf.as_slice())
     }
 }
