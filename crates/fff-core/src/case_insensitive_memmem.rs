@@ -583,6 +583,54 @@ mod tests {
     }
 
     #[test]
+    fn guard_page_no_overread() {
+        // Place each haystack so it ENDS exactly at a PROT_NONE guard page; any
+        // SIMD load reading >=1 byte past the haystack end faults. This is the
+        // necessary condition for the production mmap'd-file SIGBUS.
+        unsafe {
+            let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+            let total = page * 2;
+            let base = libc::mmap(
+                std::ptr::null_mut(),
+                total,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_ANON | libc::MAP_PRIVATE,
+                -1,
+                0,
+            ) as *mut u8;
+            assert_ne!(base as isize, -1, "mmap failed");
+            assert_eq!(
+                libc::mprotect(base.add(page) as *mut _, page, libc::PROT_NONE),
+                0,
+                "mprotect failed"
+            );
+            let filler = b"the quick brown fox jumps over a lazy dog while searching files";
+            for i in 0..page {
+                *base.add(i) = filler[i % filler.len()];
+            }
+            for hlen in 1..=600usize {
+                let start = base.add(page - hlen);
+                let hay = std::slice::from_raw_parts(start, hlen);
+                let maxn = core::cmp::min(48, hlen);
+                for nlen in 2..=maxn {
+                    // (a) needle == haystack tail → match at the very end, so
+                    //     verify runs at candidate==last_start near the boundary.
+                    let mut needle = vec![0u8; nlen];
+                    for k in 0..nlen {
+                        needle[k] = ascii_fold_byte(*start.add(hlen - nlen + k));
+                    }
+                    let _ = search_packed_pair(hay, &needle);
+                    // (b) no-match needle → SIMD scans the whole haystack.
+                    let mut nope = needle.clone();
+                    nope[nlen - 1] = b'~';
+                    let _ = search_packed_pair(hay, &nope);
+                }
+            }
+            libc::munmap(base as *mut _, total);
+        }
+    }
+
+    #[test]
     fn packed_pair_matches_search() {
         let haystacks: &[&[u8]] = &[
             b"The quick brown fox jumps over the lazy dog",

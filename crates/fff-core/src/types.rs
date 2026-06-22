@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(not(target_os = "windows"))]
-use crate::constants::{FRESH_MMAP_THRESHOLD, MMAP_THRESHOLD};
+use crate::constants::MMAP_THRESHOLD;
 use crate::constants::{MAX_CACHED_CONTENT_BYTES, MAX_FFFILE_SIZE, PATH_BUF_SIZE};
 use crate::constraints::Constrainable;
 use crate::query_tracker::QueryMatchEntry;
@@ -702,16 +702,6 @@ impl FileItem {
         base_path: &Path,
         budget: &ContentCacheBudget,
     ) -> Option<&'a [u8]> {
-        #[cfg(not(target_os = "windows"))]
-        {
-            // Fast path: persistent cache hit (zero-copy). Safe here because
-            // grep callers hold the picker read lock for the lifetime of the
-            // returned slice — see [`Self::get_cached_content`] safety note.
-            if let Some(cached) = self.get_cached_content(arena, base_path, budget) {
-                return Some(cached);
-            }
-        }
-
         let max_file_size = budget.max_file_size;
         if self.is_binary() || self.size == 0 || self.size > max_file_size {
             return None;
@@ -719,21 +709,24 @@ impl FileItem {
 
         let abs = self.absolute_path(arena, base_path);
 
-        #[cfg(not(target_os = "windows"))]
-        if self.size >= FRESH_MMAP_THRESHOLD {
-            let file = std::fs::File::open(&abs).ok()?;
-            let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
-            let stored = mmap_slot.insert(mmap);
-            return Some(&stored[..]);
-        } else {
-            let _ = (mmap_slot, arena);
-        }
-
-        let len = self.size as usize;
-        buf.resize(len, 0);
-
+        // Read the file into an owned, reusable buffer rather than mmap it.
+        //
+        // mmap-backed grep races with concurrent modification: if the file is
+        // truncated or rewritten while a mapping is live (an editor or coding
+        // agent changing the workspace), the pages past the new EOF become
+        // invalid and the next read — including a SIMD prefilter load over the
+        // whole file — faults with SIGBUS, aborting the entire process. The old
+        // cached fast path made it worse: an `OnceLock<Mmap>` created at index
+        // time could be served long after the file changed on disk. An owned
+        // read() copy is immune; a shrinking file just yields a shorter buffer,
+        // never a fault. `buf` is a per-worker scratch Vec reused across files,
+        // so this is one bounded copy per file, not a per-query allocation. (The
+        // content cache stays warm for the file picker via `get_cached_content`;
+        // only the grep reader stopped trusting a possibly-stale mapping.)
+        let _ = mmap_slot;
         let mut file = std::fs::File::open(&abs).ok()?;
-        file.read_exact(buf).ok()?;
+        buf.clear();
+        file.read_to_end(buf).ok()?;
         Some(buf.as_slice())
     }
 }

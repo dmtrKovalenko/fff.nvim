@@ -1835,3 +1835,49 @@ fn plain_text_smart_case_finds_uppercase_content_with_lowercase_query() {
         "lowercase query should case-insensitively match 'VFIO-KVM'"
     );
 }
+
+/// Regression: grep must read the CURRENT file content even when the file was
+/// rewritten after indexing.
+///
+/// Grep used to read file content through an mmap — both a per-`FileItem`
+/// `OnceLock<Mmap>` cache and a fresh mmap for large files. When an editor or
+/// coding agent rewrites a file between greps (the common case for fff's nvim
+/// picker / MCP agent), reading it back through the stale/now-shorter mapping
+/// either returns stale matches or, once the file shrinks past a page boundary,
+/// faults with SIGBUS and aborts the whole host process. Reading grep content
+/// into an owned buffer fixes both: a changed file simply yields its new bytes.
+#[test]
+fn grep_reflects_file_rewrite_without_stale_mmap() {
+    let tmp = TempDir::new().unwrap();
+    let full = tmp.path().join("big.txt");
+
+    // Large enough to take the mmap path (> FRESH_MMAP_THRESHOLD), needle first.
+    let filler = "lorem ipsum dolor sit amet consectetur\n".repeat(60_000); // ~2.3 MB
+    fs::write(&full, format!("NEEDLE_TOKEN\n{filler}")).unwrap();
+
+    let mut picker = FilePicker::new(FilePickerOptions {
+        base_path: tmp.path().to_string_lossy().to_string(),
+        enable_mmap_cache: true, // exercise the cached-mmap path
+        watch: false,
+        ..Default::default()
+    })
+    .expect("Failed to create FilePicker");
+    picker.collect_files().expect("Failed to collect files");
+
+    let q = parse_grep_query("NEEDLE_TOKEN");
+    // First grep matches (and, on the old code, caches an mmap of the file).
+    assert_eq!(picker.grep(&q, &plain_opts()).matches.len(), 1);
+
+    // The file is rewritten much SHORTER with the needle removed — exactly what
+    // an editor / coding agent does mid-session. No re-index (`collect_files`).
+    fs::write(&full, "tiny replacement, no token here\n").unwrap();
+
+    // The second grep must reflect the NEW content: zero matches. The old reader
+    // returned the stale cached match (== 1) or SIGBUS-aborted on the shrunk
+    // mapping; both fail this assertion.
+    assert_eq!(
+        picker.grep(&q, &plain_opts()).matches.len(),
+        0,
+        "grep returned stale content from a cached mmap after the file changed"
+    );
+}
