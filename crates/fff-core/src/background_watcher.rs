@@ -246,19 +246,11 @@ impl BackgroundWatcher {
         // On macOS, each `watch()` call creates a separate FSEventStream. Large
         // repos (e.g. Chromium with 487K+ files) can have tens of thousands of
         // directories, which exhausts the per-process FSEvents stream limit and
-        // causes "unable to start FSEvent stream" errors. When the directory
-        // count exceeds the threshold we fall back to a single Recursive watch
-        // on the base path. FSEvents handles this efficiently with one kernel
-        // stream for the entire subtree. Gitignored paths are already filtered
-        // in the event handler via `should_include_file()`.
+        // causes "unable to start FSEvent stream" errors. So we have to make on recursive scan
         //
         // On Linux (inotify), RecursiveMode::Recursive creates one kernel watch
         // per subdirectory *including* gitignored ones, wasting file descriptors.
         // The per-directory NonRecursive approach is always used on Linux.
-        //
-        // New directories created at runtime are detected via Create events on
-        // the parent and dynamically added by the owner thread via watch_tx.
-
         if use_recursive {
             debouncer.watch(base_path.as_path(), RecursiveMode::Recursive)?;
             info!(
@@ -271,7 +263,7 @@ impl BackgroundWatcher {
             debouncer.watch(base_path.as_path(), RecursiveMode::NonRecursive)?;
 
             // Stream watch-dir registration directly under the picker
-            // read lock. Only Linux (inotify) reaches this branch —
+            // read lock. Only Linux (inotify) reaches this branch
             // macOS always takes the recursive path above. `inotify`'s
             // `inotify_add_watch()` is fast-fail: on ENOSPC it returns
             // immediately, no kernel retry loop, so holding the read
@@ -279,8 +271,7 @@ impl BackgroundWatcher {
             //
             // Abort the loop after a run of failures. Once ENOSPC hits,
             // further calls won't succeed until the user raises
-            // `fs.inotify.max_user_watches`, so there's no value in
-            // continuing.
+            // `fs.inotify.max_user_watches`, so there's no value in continuing.
             const MAX_CONSECUTIVE_WATCH_FAILURES: usize = 16;
 
             let mut watched = 0usize;
@@ -428,9 +419,18 @@ fn handle_debounced_events(
         }
 
         // When macOS FSEvents (or other backends) overflow their event buffer, the kernel
-        // drops individual events and emits a Rescan flag telling us to re-scan the subtree.
-        // Without handling this, modified source files can be silently missed.
+        // drops individual events and emits a rescan flag telling us to re-scan the subtree
         if debounced_event.event.need_rescan() {
+            if debounced_event.event.paths.len() < 16 // this should be usually one event
+                && debounced_event
+                    .paths
+                    .iter()
+                    // but we are smart enough and not falling into the paths
+                    .all(|p| should_include_file(p, repo.as_ref()))
+            {
+                break;
+            }
+
             warn!(
                 "Received rescan event for paths {:?}, triggering full rescan",
                 debounced_event.event.paths
@@ -441,11 +441,15 @@ fn handle_debounced_events(
 
         tracing::debug!(event = ?debounced_event.event, "Processing FS event");
         for path in &debounced_event.event.paths {
-            if is_ignore_definition_path(path) {
+            if matches!(
+                path.file_name().and_then(|f| f.to_str()),
+                Some(".ignore") | Some(".gitignore")
+            ) {
                 info!(
                     "Detected change in ignore definition file: {}",
                     path.display()
                 );
+
                 need_full_rescan = true;
                 break;
             }
@@ -485,15 +489,12 @@ fn handle_debounced_events(
             } else if is_removal || !path.exists() {
                 paths_to_remove.push(path.as_path());
             } else if path.is_dir() {
-                // New directory — collect it so the caller can register a
-                // watcher. No filesystem scanning: files that arrive later
-                // will be handled by the newly registered watch.
                 if !is_path_ignored(path, &repo) {
                     new_dirs_to_watch.push(path.to_path_buf());
                 }
             } else {
                 // For additions/modifications, still filter gitignored files.
-                if should_include_file(path, &repo) {
+                if should_include_file(path, repo.as_ref()) {
                     paths_to_add_or_modify.push(path.as_path());
                 }
             }
@@ -719,7 +720,7 @@ fn track_files_from_new_directories(
     for entry in entries.flatten() {
         if entry.file_type().is_ok_and(|ft| ft.is_file()) {
             let path = entry.path();
-            if should_include_file(&path, &repo) {
+            if should_include_file(&path, repo.as_ref()) {
                 files_to_add.push(path);
             }
         }
@@ -767,7 +768,7 @@ fn track_files_from_new_directories(
     );
 }
 
-fn should_include_file(path: &Path, repo: &Option<Repository>) -> bool {
+fn should_include_file(path: &Path, repo: Option<&Repository>) -> bool {
     // Directories are not indexed — only regular files (and symlinks to files).
     if path.is_dir() {
         return false;
@@ -776,28 +777,25 @@ fn should_include_file(path: &Path, repo: &Option<Repository>) -> bool {
     match repo.as_ref() {
         Some(repo) => repo.is_path_ignored(path) != Ok(true),
         None => {
-            // No git repo — apply basic sanity filters.
+            // When we have no git repo apply basic sanity filters to preve
             // Hidden directories are skipped by the watcher setup (hidden(true)),
             // but events can still arrive for files in known non-code directories.
-            !is_non_code_directory(path)
+            !crate::ignore::is_non_code_directory(path)
         }
     }
-}
-
-fn is_non_code_directory(path: &Path) -> bool {
-    crate::ignore::is_non_code_directory(path)
 }
 
 #[inline]
 fn is_path_ignored(path: &Path, repo: &Option<Repository>) -> bool {
     match repo.as_ref() {
         Some(repo) => repo.is_path_ignored(path) == Ok(true),
-        None => is_non_code_directory(path),
+        None => crate::ignore::is_non_code_directory(path),
     }
 }
 
 #[inline]
 pub(crate) fn is_git_file(path: &Path) -> bool {
+    // it could be in submodule
     path.components()
         .any(|component| component.as_os_str() == ".git")
 }
@@ -813,18 +811,14 @@ fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) 
         // Only react to changes that rewrite the worktree state: commits,
         // staging, checkouts, merges, conflict resolution. Ref-only updates
         // under refs/ (fetch, push, tag writes, pack-refs) do not change
-        // which files are modified/untracked, so we deliberately skip them —
+        // which files are modified/untracked, so we deliberately skip them
         // watching refs/ recursively would cost one inotify watch per ref
         // namespace on repos with many branches/remotes.
         if path_in_git_dir == Path::new("index") || path_in_git_dir == Path::new("index.lock") {
             return true;
         }
+
         if path_in_git_dir == Path::new("HEAD") {
-            return true;
-        }
-        if path_in_git_dir == Path::new("info/exclude")
-            || path_in_git_dir == Path::new("info/sparse-checkout")
-        {
             return true;
         }
 
@@ -838,13 +832,6 @@ fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) 
     false
 }
 
-fn is_ignore_definition_path(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|f| f.to_str()),
-        Some(".ignore") | Some(".gitignore")
-    )
-}
-
 fn watch_git_status_paths(debouncer: &mut Debouncer, git_workdir: Option<&PathBuf>) {
     let Some(workdir) = git_workdir else {
         return;
@@ -855,21 +842,10 @@ fn watch_git_status_paths(debouncer: &mut Debouncer, git_workdir: Option<&PathBu
         return;
     }
 
-    // Watch .git/ non-recursively to catch top-level files:
-    // index, index.lock, HEAD, MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD.
-    // We intentionally do NOT watch refs/ — individual ref updates don't
-    // affect worktree status, and a recursive watch there blows up inotify
-    // watch counts on repos with many branches/remotes/tags.
+    // We have tried to be smart about the internal git state but
+    // it appeared more harmful that it's worth it, so we just watch
+    // for the most obvious paths like HEAD, MERGE_HEAD, index.lock
     if let Err(e) = debouncer.watch(&git_dir, RecursiveMode::NonRecursive) {
         warn!("Failed to watch .git directory: {}", e);
-        return;
-    }
-
-    // Watch info/ non-recursively for exclude and sparse-checkout
-    let info_dir = git_dir.join("info");
-    if info_dir.is_dir()
-        && let Err(e) = debouncer.watch(&info_dir, RecursiveMode::NonRecursive)
-    {
-        warn!("Failed to watch .git/info: {}", e);
     }
 }

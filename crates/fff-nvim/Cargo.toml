@@ -1,6 +1,6 @@
 [package]
 name = "fff-nvim"
-version = "0.9.5"
+version = "0.9.6"
 edition = "2024"
 
 [lib]
@@ -17,10 +17,10 @@ ahash = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-fff = { package = "fff-search", path = "../fff-core", version = "0.9.5", features = [
+fff = { package = "fff-search", path = "../fff-core", version = "0.9.6", features = [
 	"mimalloc-collect",
 ] }
-fff-query-parser = { path = "../fff-query-parser", version = "0.9.5" }
+fff-query-parser = { path = "../fff-query-parser", version = "0.9.6" }
 chrono = { version = "0.4", features = ["serde"] }
 ctrlc = "3.4.2"
 git2 = { workspace = true }

@@ -1,4 +1,4 @@
-name: Prebuild
+name: Build & Publish
 
 on:
   push:
@@ -612,7 +612,7 @@ jobs:
         with:
           # Workflow runs on detached HEAD at the v* tag — explicit target needed.
           branch: main
-          commit_message: "chore: bump fff-mcp release artifacts to v${{ steps.version.outputs.version }} [skip ci]"
+          commit_message: "chore: bump fff-mcp release artifacts to v${{ steps.version.outputs.version }}"
           file_pattern: "Formula/fff-mcp.rb install-mcp.sh"
           commit_user_name: github-actions[bot]
           commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
@@ -621,9 +621,7 @@ jobs:
     name: Publish Python wheels to PyPI
     needs: [build-python, build-python-sdist]
     runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_TO_PYPI == 'true') ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish_pypi == true)
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/use-trusted-publishing' || startsWith(github.ref, 'refs/tags/v'))
     environment:
       name: pypi
       url: https://pypi.org/p/fff-search

@@ -357,6 +357,24 @@ function M.setup_keymaps()
   if S.config.prompt_vim_mode then
     set_keymap('n', keymaps.close, P.close, input_opts)
     set_keymap('i', '<C-c>', P.close, input_opts)
+
+    -- cc/S clear the whole line, wiping the prompt buffer's prompt and leaving
+    -- a stray icon behind. Reset to just the prompt and re-enter insert instead.
+    local function clear_query_line()
+      local prompt = S.config.prompt
+      vim.api.nvim_set_option_value('modifiable', true, { buf = S.input_buf })
+      vim.api.nvim_buf_set_lines(S.input_buf, 0, -1, false, { prompt })
+      vim.schedule(function()
+        if S.input_win and vim.api.nvim_win_is_valid(S.input_win) then
+          vim.api.nvim_win_set_cursor(S.input_win, { 1, #prompt })
+          vim.cmd('startinsert!')
+        end
+      end)
+    end
+    -- remap=true so existing user mappings of cc/S still resolve
+    local clear_opts = vim.tbl_extend('force', input_opts, { noremap = false, remap = true })
+    set_keymap('n', 'cc', clear_query_line, clear_opts)
+    set_keymap('n', 'S', clear_query_line, clear_opts)
   else
     set_keymap({ 'i', 'n' }, keymaps.close, P.close, input_opts)
   end

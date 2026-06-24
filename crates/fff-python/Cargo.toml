@@ -1,6 +1,6 @@
 [package]
 name = "fff-python"
-version = "0.9.5"
+version = "0.9.6"
 edition = "2024"
 
 [lib]
@@ -12,7 +12,7 @@ default = []
 zlob = ["fff/zlob"]
 
 [dependencies]
-fff = { package = "fff-search", path = "../fff-core", version = "0.9.5" }
-fff-query-parser = { path = "../fff-query-parser", version = "0.9.5" }
+fff = { package = "fff-search", path = "../fff-core", version = "0.9.6" }
+fff-query-parser = { path = "../fff-query-parser", version = "0.9.6" }
 git2 = { workspace = true }
 pyo3 = { version = "0.24.0", features = ["extension-module", "abi3-py310"] }

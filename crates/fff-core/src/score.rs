@@ -276,7 +276,7 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
     let working_dirs: Vec<&DirItem> = if parsed_query.constraints.is_empty() {
         dirs.iter().collect()
     } else {
-        match apply_constraints(dirs, &parsed_query.constraints, arena) {
+        match apply_constraints(dirs, &parsed_query.constraints, arena, arena) {
             Some(filtered) if !filtered.is_empty() => filtered,
             Some(_) => return (vec![], vec![], 0),
             None => dirs.iter().collect(),
@@ -488,7 +488,7 @@ fn match_and_score_in_arena<'a>(
     let working_files: FileItems<'a> = if parsed.constraints.is_empty() {
         FileItems::All(files)
     } else {
-        match apply_constraints(files, &parsed.constraints, arena) {
+        match apply_constraints(files, &parsed.constraints, arena, arena) {
             Some(filtered) if !filtered.is_empty() => FileItems::Filtered(filtered),
             Some(_) => {
                 return vec![];

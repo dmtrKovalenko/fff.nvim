@@ -1018,6 +1018,7 @@ pub(crate) fn multi_grep_search<'a>(
         base_file_count,
         options,
         arena,
+        overflow_arena,
     );
 
     // If constraints yielded 0 files and we had FilePath constraints,
@@ -1032,6 +1033,7 @@ pub(crate) fn multi_grep_search<'a>(
             base_file_count,
             options,
             arena,
+            overflow_arena,
         );
         files_to_search = retry_files;
         filtered_file_count = retry_count;
@@ -1440,12 +1442,18 @@ fn prefilter_files<'a>(
     base_count: usize,
     options: &GrepSearchOptions,
     arena: crate::simd_path::ArenaPtr,
+    overflow_arena: crate::simd_path::ArenaPtr,
 ) -> (Vec<&'a FileItem>, usize) {
     let max_file_size = options.max_file_size;
     let plan = if constraints.is_empty() {
         None
     } else {
-        Some(ConstraintPlan::build(constraints, files, arena))
+        Some(ConstraintPlan::build(
+            constraints,
+            files,
+            arena,
+            overflow_arena,
+        ))
     };
 
     let mut scratch = ConstraintsBuffers::new();
@@ -1482,7 +1490,7 @@ fn prefilter_files<'a>(
                             continue;
                         }
                         if let Some(plan) = plan.as_ref()
-                            && !plan.matches(f, file_idx, arena, &mut scratch)
+                            && !plan.matches(f, file_idx, arena, overflow_arena, &mut scratch)
                         {
                             continue;
                         }
@@ -1514,7 +1522,7 @@ fn prefilter_files<'a>(
                     continue;
                 }
                 if let Some(ref p) = plan
-                    && !p.matches(f, boundary + offset, arena, &mut scratch)
+                    && !p.matches(f, boundary + offset, arena, overflow_arena, &mut scratch)
                 {
                     continue;
                 }
@@ -1533,7 +1541,7 @@ fn prefilter_files<'a>(
                     continue;
                 }
                 if let Some(ref p) = plan
-                    && !p.matches(f, idx, arena, &mut scratch)
+                    && !p.matches(f, idx, arena, overflow_arena, &mut scratch)
                 {
                     continue;
                 }
@@ -2047,6 +2055,7 @@ pub(crate) fn grep_search<'a>(
                 base_count,
                 options,
                 arena,
+                overflow_arena,
             );
 
             if files_to_search.is_empty()
@@ -2060,6 +2069,7 @@ pub(crate) fn grep_search<'a>(
                     base_count,
                     options,
                     arena,
+                    overflow_arena,
                 );
 
                 files_to_search = retry_files;
@@ -2179,6 +2189,7 @@ pub(crate) fn grep_search<'a>(
         bigram_boundary,
         options,
         arena,
+        overflow_arena,
     );
 
     if files_to_search.is_empty()
@@ -2191,6 +2202,7 @@ pub(crate) fn grep_search<'a>(
             bigram_boundary,
             options,
             arena,
+            overflow_arena,
         );
         files_to_search = retry_files;
         filtered_file_count = retry_count;

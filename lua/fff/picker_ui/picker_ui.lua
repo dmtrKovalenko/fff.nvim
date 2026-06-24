@@ -169,8 +169,11 @@ local function restore_from_state(state, source_label)
   M.state.suggestion_items = state.suggestion_items
   M.state.suggestion_source = state.suggestion_source
 
-  -- Set the query text in the input buffer
+  -- Writing the query below triggers on_lines -> on_input_change, which re-runs
+  -- the search (results may have changed since close). Stash the saved cursor so
+  -- that re-search restores the position instead of resetting it to the top.
   if state.query and state.query ~= '' then
+    M.state.pending_restore_cursor = M.state.cursor
     vim.api.nvim_buf_set_lines(M.state.input_buf, 0, -1, false, { M.state.config.prompt .. state.query })
   end
 
@@ -186,7 +189,7 @@ local function restore_from_state(state, source_label)
     if M.state.active and M.state.input_win and vim.api.nvim_win_is_valid(M.state.input_win) then
       local prompt_len = #M.state.config.prompt
       vim.api.nvim_win_set_cursor(M.state.input_win, { 1, prompt_len + #state.query })
-      vim.cmd('startinsert!')
+      vim.cmd('stopinsert')
     end
   end)
 

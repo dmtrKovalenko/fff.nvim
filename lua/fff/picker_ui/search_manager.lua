@@ -101,7 +101,14 @@ function M.update_results_sync()
 
   if S.suggestion_items and #S.suggestion_items > 0 then S.filtered_items = S.suggestion_items end
 
-  S.cursor = 1
+  -- On resume, restore the saved cursor onto the fresh results (clamped, since
+  -- the result set may have changed since close). Otherwise reset to the top.
+  if S.pending_restore_cursor then
+    S.cursor = math.max(1, math.min(S.pending_restore_cursor, #S.filtered_items))
+    S.pending_restore_cursor = nil
+  else
+    S.cursor = 1
+  end
 
   P.render_debounced()
 end

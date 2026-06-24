@@ -1,6 +1,6 @@
 [package]
 name = "fff-search"
-version = "0.9.5"
+version = "0.9.6"
 edition = "2024"
 license = "MIT"
 authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
