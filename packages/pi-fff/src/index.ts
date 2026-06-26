@@ -944,10 +944,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       if (!arg) {
         const mode = getMode();
         const flag = pi.getFlag("fff-mode") ?? "unset";
-        ctx.ui.notify(
-          `Current mode: '${mode}' (flag: ${flag})`,
-          "info",
-        );
+        ctx.ui.notify(`Current mode: '${mode}' (flag: ${flag})`, "info");
         return;
       }
 
