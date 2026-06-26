@@ -12,7 +12,7 @@
 /**
  * Current used version of [`FffCreateOptions`].
  */
-#define FFF_CREATE_OPTIONS_VERSION 1
+#define FFF_CREATE_OPTIONS_VERSION 2
 
 /**
  * Result envelope returned by all `fff_*` functions.
@@ -133,6 +133,12 @@ typedef struct FffCreateOptions {
    * `enable_fs_root_scanning`.
    */
   bool enable_home_dir_scanning;
+  /**
+   * When `true` (default), submodule directories are walked and reported in
+   * git status. When `false`, submodule paths are skipped during traversal
+   * and excluded from git status.
+   */
+  bool support_submodules;
 } FffCreateOptions;
 
 /**
@@ -514,6 +520,32 @@ struct FffResult *fff_create_instance_with(const struct FffCreateOptions *opts);
  * UTF-8 or NULL. The struct itself is consumed by value.
  */
 struct FffResult *fff_create_instance_with_value(struct FffCreateOptions opts);
+
+/**
+ * Create a new file finder instance (v3, with submodule support toggle).
+ *
+ * Identical to [`fff_create_instance2`] except for the trailing
+ * `support_submodules` flag. When `true` (recommended default), submodule
+ * directories are walked and reported in git status. When `false`, submodule
+ * paths are skipped during traversal and excluded from git status.
+ *
+ * ## Safety
+ * String parameters must be valid null-terminated UTF-8 or NULL.
+ */
+struct FffResult *fff_create_instance3(const char *base_path,
+                                       const char *frecency_db_path,
+                                       const char *history_db_path,
+                                       bool _use_unsafe_no_lock,
+                                       bool enable_mmap_cache,
+                                       bool enable_content_indexing,
+                                       bool watch,
+                                       bool ai_mode,
+                                       const char *log_file_path,
+                                       const char *log_level,
+                                       uint64_t cache_budget_max_files,
+                                       uint64_t cache_budget_max_bytes,
+                                       uint64_t cache_budget_max_file_size,
+                                       bool support_submodules);
 
 /**
  * Destroy a file finder instance and free all its resources.

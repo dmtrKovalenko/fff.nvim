@@ -15,7 +15,7 @@ use fff::{
 };
 
 /// Current used version of [`FffCreateOptions`].
-pub const FFF_CREATE_OPTIONS_VERSION: u32 = 1;
+pub const FFF_CREATE_OPTIONS_VERSION: u32 = 2;
 
 /// Options for `fff_create_instance_with`.
 ///
@@ -57,7 +57,11 @@ pub struct FffCreateOptions {
     /// Allow indexing the user's home directory. Same trade-off as
     /// `enable_fs_root_scanning`.
     pub enable_home_dir_scanning: bool,
-    // ----- new version 2+ fields go here, ALWAYS appended -----
+    // ----- v2 fields -----
+    /// Track files inside git submodules. When true, submodule contents are
+    /// indexed and their git status reflected in results.
+    pub support_submodules: bool,
+    // ----- new version 3+ fields go here, ALWAYS appended -----
 }
 
 impl FffCreateOptions {
@@ -79,6 +83,7 @@ impl FffCreateOptions {
             cache_budget_max_file_size: 0,
             enable_fs_root_scanning: false,
             enable_home_dir_scanning: false,
+            support_submodules: true,
         }
     }
 }
@@ -804,6 +809,7 @@ mod options_layout_tests {
     fn fff_create_options_layout_is_stable_64bit() {
         assert_eq!(size_of::<FffCreateOptions>(), 88);
         assert_eq!(align_of::<FffCreateOptions>(), 8);
+        assert_eq!(offset_of!(FffCreateOptions, support_submodules), 82);
 
         assert_eq!(offset_of!(FffCreateOptions, version), 0);
         assert_eq!(offset_of!(FffCreateOptions, base_path), 8);

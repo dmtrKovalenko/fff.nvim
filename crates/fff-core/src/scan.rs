@@ -33,7 +33,7 @@ pub(crate) struct ScanSignals {
 }
 
 /// Which optional phases a scan should run.
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct ScanConfig {
     pub(crate) warmup: bool,
     pub(crate) content_indexing: bool,
@@ -43,6 +43,23 @@ pub(crate) struct ScanConfig {
     pub(crate) follow_symlinks: bool,
     pub(crate) enable_fs_root_scanning: bool,
     pub(crate) enable_home_dir_scanning: bool,
+    pub(crate) support_submodules: bool,
+}
+
+impl Default for ScanConfig {
+    fn default() -> Self {
+        Self {
+            warmup: false,
+            content_indexing: false,
+            watch: false,
+            auto_cache_budget: false,
+            install_watcher: false,
+            follow_symlinks: false,
+            enable_fs_root_scanning: false,
+            enable_home_dir_scanning: false,
+            support_submodules: true,
+        }
+    }
 }
 
 /// A fully-configured scan job ready to run on a background thread.
@@ -96,6 +113,7 @@ impl ScanJob {
             follow_symlinks: picker.follows_symlinks(),
             enable_fs_root_scanning: picker.fs_root_scanning_enabled(),
             enable_home_dir_scanning: picker.home_dir_scanning_enabled(),
+            support_submodules: picker.has_submodule_support(),
         };
 
         drop(guard); // just a sanity check
@@ -168,7 +186,9 @@ impl ScanJob {
 
         // 1. Start git discovery and walk filesystem off-lock.
         let git_workdir = FileSync::discover_git_workdir(&base_path);
-        let status_handle = git_workdir.clone().map(FileSync::spawn_git_status);
+        let status_handle = git_workdir
+            .clone()
+            .map(|wd| FileSync::spawn_git_status(wd, config.support_submodules));
         let sync = match FileSync::walk_filesystem(
             &base_path,
             git_workdir.clone(),
@@ -176,6 +196,7 @@ impl ScanJob {
             &shared_frecency,
             mode,
             config.follow_symlinks,
+            config.support_submodules,
         ) {
             Ok(sync) => sync,
             Err(e) => {
@@ -261,6 +282,7 @@ impl ScanJob {
                 mode,
                 config.enable_fs_root_scanning,
                 config.enable_home_dir_scanning,
+                config.support_submodules,
                 tracing::Span::current(),
             ) {
                 Ok(watcher) => {

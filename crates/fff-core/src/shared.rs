@@ -222,6 +222,7 @@ impl SharedFilePicker {
             };
 
             let git_root = picker.git_root().map(|p| p.to_path_buf());
+            let support_submodules = picker.has_submodule_support();
             drop(guard); // updating git status could take very long time, there is not risky as we
             // do not allow any mutations and deletions of files from the sync
 
@@ -233,7 +234,7 @@ impl SharedFilePicker {
 
             GitStatusCache::read_git_status(
                 git_root.as_deref(),
-                &mut crate::git::default_status_options(),
+                &mut crate::git::default_status_options(support_submodules),
             )
         };
 

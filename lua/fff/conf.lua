@@ -380,6 +380,10 @@ local function init()
     -- Git integration
     git = {
       status_text_color = false, -- Apply git status colors to filename text (default: false, only sign column)
+      -- When true (default), git submodules are walked during indexing and their
+      -- statuses are reported by libgit2. When false, submodule directories are
+      -- skipped from traversal and excluded from the git status cache.
+      support_submodules = true,
     },
     debug = {
       enabled = false, -- Show file info panel in preview

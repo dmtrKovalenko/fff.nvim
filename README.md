@@ -335,6 +335,7 @@ require('fff').setup({
   },
   git = {
     status_text_color = false, -- true to color filenames by git status
+    support_submodules = true, -- walk into submodules and report their git status; set false to skip them
   },
   select = {
     -- Return winid to open the chosen file in, or nil to open in the original window

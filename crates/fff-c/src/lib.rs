@@ -295,6 +295,7 @@ pub unsafe extern "C" fn fff_create_instance_with(opts: *const FffCreateOptions)
             follow_symlinks: false,
             enable_fs_root_scanning: opts.enable_fs_root_scanning,
             enable_home_dir_scanning: opts.enable_home_dir_scanning,
+            support_submodules: opts.support_submodules,
         },
     ) {
         return FffResult::err(&format!("Failed to init file picker: {}", e));
@@ -308,6 +309,50 @@ pub unsafe extern "C" fn fff_create_instance_with(opts: *const FffCreateOptions)
 
     let fff_handle = Box::into_raw(instance) as *mut c_void;
     FffResult::ok_handle(fff_handle)
+}
+
+/// Create a new file finder instance (v3, with submodule support toggle).
+///
+/// Identical to [`fff_create_instance2`] except for the trailing
+/// `support_submodules` flag. When `true` (recommended default), submodule
+/// directories are walked and reported in git status. When `false`, submodule
+/// paths are skipped during traversal and excluded from git status.
+///
+/// ## Safety
+/// String parameters must be valid null-terminated UTF-8 or NULL.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn fff_create_instance3(
+    base_path: *const c_char,
+    frecency_db_path: *const c_char,
+    history_db_path: *const c_char,
+    _use_unsafe_no_lock: bool,
+    enable_mmap_cache: bool,
+    enable_content_indexing: bool,
+    watch: bool,
+    ai_mode: bool,
+    log_file_path: *const c_char,
+    log_level: *const c_char,
+    cache_budget_max_files: u64,
+    cache_budget_max_bytes: u64,
+    cache_budget_max_file_size: u64,
+    support_submodules: bool,
+) -> *mut FffResult {
+    let mut opts = FffCreateOptions::defaults();
+    opts.base_path = base_path;
+    opts.frecency_db_path = frecency_db_path;
+    opts.history_db_path = history_db_path;
+    opts.enable_mmap_cache = enable_mmap_cache;
+    opts.enable_content_indexing = enable_content_indexing;
+    opts.watch = watch;
+    opts.ai_mode = ai_mode;
+    opts.log_file_path = log_file_path;
+    opts.log_level = log_level;
+    opts.cache_budget_max_files = cache_budget_max_files;
+    opts.cache_budget_max_bytes = cache_budget_max_bytes;
+    opts.cache_budget_max_file_size = cache_budget_max_file_size;
+    opts.support_submodules = support_submodules;
+    unsafe { fff_create_instance_with(&opts as *const FffCreateOptions) }
 }
 
 /// Calling-convention adapter for [`fff_create_instance_with`].
@@ -1018,7 +1063,7 @@ pub unsafe extern "C" fn fff_restart_index(
         Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
     };
 
-    let (warmup_caches, content_indexing, watch, mode, fs_root, home_dir) =
+    let (warmup_caches, content_indexing, watch, mode, fs_root, home_dir, support_submodules) =
         if let Some(ref picker) = *guard {
             (
                 picker.has_mmap_cache(),
@@ -1027,9 +1072,10 @@ pub unsafe extern "C" fn fff_restart_index(
                 picker.mode(),
                 picker.fs_root_scanning_enabled(),
                 picker.home_dir_scanning_enabled(),
+                picker.has_submodule_support(),
             )
         } else {
-            (false, true, true, FFFMode::default(), false, false)
+            (false, true, true, FFFMode::default(), false, false, true)
         };
 
     drop(guard);
@@ -1047,6 +1093,7 @@ pub unsafe extern "C" fn fff_restart_index(
             follow_symlinks: false,
             enable_fs_root_scanning: fs_root,
             enable_home_dir_scanning: home_dir,
+            support_submodules,
         },
     ) {
         Ok(()) => FffResult::ok_empty(),

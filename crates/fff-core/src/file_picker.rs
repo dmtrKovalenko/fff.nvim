@@ -413,6 +413,10 @@ pub struct FilePickerOptions {
     /// Allow indexing the user's home directory. Off by default for the same
     /// reason as `enable_fs_root_scanning`.
     pub enable_home_dir_scanning: bool,
+    /// When `true` (default), submodule directories are walked and their
+    /// statuses are reported by libgit2. When `false`, submodule paths are
+    /// skipped during traversal and excluded from git status.
+    pub support_submodules: bool,
 }
 
 impl Default for FilePickerOptions {
@@ -427,6 +431,7 @@ impl Default for FilePickerOptions {
             follow_symlinks: false,
             enable_fs_root_scanning: false,
             enable_home_dir_scanning: false,
+            support_submodules: true,
         }
     }
 }
@@ -446,6 +451,7 @@ pub struct FilePicker {
     follow_symlinks: bool,
     enable_fs_root_scanning: bool,
     enable_home_dir_scanning: bool,
+    support_submodules: bool,
     trace_span: tracing::Span,
     trace_id: String,
 }
@@ -511,6 +517,10 @@ impl FilePicker {
 
     pub fn home_dir_scanning_enabled(&self) -> bool {
         self.enable_home_dir_scanning
+    }
+
+    pub fn has_submodule_support(&self) -> bool {
+        self.support_submodules
     }
 
     pub fn trace_id(&self) -> &str {
@@ -726,6 +736,7 @@ impl FilePicker {
             follow_symlinks: options.follow_symlinks,
             enable_fs_root_scanning: options.enable_fs_root_scanning,
             enable_home_dir_scanning: options.enable_home_dir_scanning,
+            support_submodules: options.support_submodules,
             trace_span,
             trace_id,
         })
@@ -751,6 +762,7 @@ impl FilePicker {
         let warmup = picker.enable_mmap_cache;
         let content_indexing = picker.enable_content_indexing;
         let watch = picker.watch;
+        let support_submodules = picker.support_submodules;
         let mode = picker.mode;
         let follow_symlinks = picker.follow_symlinks;
         let enable_fs_root_scanning = picker.enable_fs_root_scanning;
@@ -794,6 +806,7 @@ impl FilePicker {
                 follow_symlinks,
                 enable_fs_root_scanning,
                 enable_home_dir_scanning,
+                support_submodules,
             },
         )
         .spawn();
@@ -814,7 +827,10 @@ impl FilePicker {
         self.scanned_files_count.store(0, Ordering::Relaxed);
 
         let git_workdir = FileSync::discover_git_workdir(&self.base_path);
-        let git_handle = git_workdir.clone().map(FileSync::spawn_git_status);
+        let support_submodules = self.support_submodules;
+        let git_handle = git_workdir
+            .clone()
+            .map(|wd| FileSync::spawn_git_status(wd, support_submodules));
 
         let empty_frecency = SharedFrecency::default();
         let sync = FileSync::walk_filesystem(
@@ -824,6 +840,7 @@ impl FilePicker {
             &empty_frecency,
             self.mode,
             self.follow_symlinks,
+            self.support_submodules,
         )?;
 
         self.sync_data = sync;
@@ -873,6 +890,7 @@ impl FilePicker {
             self.mode,
             self.enable_fs_root_scanning,
             self.enable_home_dir_scanning,
+            self.support_submodules,
             self.trace_span.clone(),
         )?;
         self.background_watcher = Some(watcher);
@@ -1766,11 +1784,14 @@ impl FileSync {
         git_workdir
     }
 
-    pub(crate) fn spawn_git_status(git_workdir: PathBuf) -> JoinHandle<Option<GitStatusCache>> {
+    pub(crate) fn spawn_git_status(
+        git_workdir: PathBuf,
+        support_submodules: bool,
+    ) -> JoinHandle<Option<GitStatusCache>> {
         std::thread::spawn(move || {
             GitStatusCache::read_git_status(
                 Some(git_workdir.as_path()),
-                &mut crate::git::initial_scan_status_options(),
+                &mut crate::git::initial_scan_status_options(support_submodules),
             )
         })
     }
@@ -1786,6 +1807,7 @@ impl FileSync {
         shared_frecency: &SharedFrecency,
         mode: FFFMode,
         follow_symlinks: bool,
+        support_submodules: bool,
     ) -> Result<FileSync, Error> {
         use ignore::WalkBuilder;
 
@@ -1809,6 +1831,20 @@ impl FileSync {
 
         if !is_git_repo && let Some(overrides) = non_git_repo_overrides(base_path) {
             walk_builder.overrides(overrides);
+        }
+
+        // When submodule support is disabled, collect submodule absolute paths
+        // up-front and prune them from the walk via filter_entry. We resolve
+        // each submodule path relative to its containing repository workdir
+        // (which may itself be a submodule) so nested setups work.
+        if !support_submodules && let Some(workdir) = git_workdir.as_ref() {
+            let submodule_paths = collect_submodule_paths(workdir);
+            if !submodule_paths.is_empty() {
+                debug!(count = submodule_paths.len(), "Skipping submodule paths");
+                walk_builder.filter_entry(move |entry| {
+                    !submodule_paths.iter().any(|p| entry.path() == p.as_path())
+                });
+            }
         }
 
         let walker = walk_builder.build_parallel();
@@ -1989,6 +2025,34 @@ pub(crate) fn warmup_mmaps(
             break;
         }
     }
+}
+
+/// Resolve every submodule registered under `workdir` to its absolute on-disk
+/// path. Includes nested submodules by descending into each submodule's own
+/// repository when it is initialized. Returns normalized paths suitable for
+/// equality comparison against `WalkBuilder` entries.
+fn collect_submodule_paths(workdir: &Path) -> Vec<PathBuf> {
+    let Ok(repo) = Repository::open(workdir) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    let mut stack: Vec<(Repository, PathBuf)> = vec![(repo, workdir.to_path_buf())];
+    while let Some((repo, root)) = stack.pop() {
+        let Ok(submodules) = repo.submodules() else {
+            continue;
+        };
+        for sm in submodules {
+            let abs = root.join(sm.path());
+            let abs = crate::path_utils::normalize(abs);
+            // Recurse into initialized submodules so nested ones are found too.
+            if let Ok(sub_repo) = sm.open() {
+                stack.push((sub_repo, abs.clone()));
+            }
+            out.push(abs);
+        }
+    }
+    out
 }
 
 /// This does both thing (yes sorry all the OOP morons)

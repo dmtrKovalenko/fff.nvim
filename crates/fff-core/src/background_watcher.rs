@@ -44,6 +44,7 @@ impl BackgroundWatcher {
         mode: FFFMode,
         enable_fs_root_scanning: bool,
         enable_home_dir_scanning: bool,
+        support_submodules: bool,
         trace_span: tracing::Span,
     ) -> Result<Self, Error> {
         info!(
@@ -94,6 +95,7 @@ impl BackgroundWatcher {
             mode,
             use_recursive,
             watch_tx_for_debouncer,
+            support_submodules,
         )?;
 
         info!("Background file watcher initialized successfully");
@@ -148,6 +150,7 @@ impl BackgroundWatcher {
                         &strong_picker,
                         &owner_frecency,
                         &owner_git_workdir,
+                        support_submodules,
                     );
 
                     // Transient strong ref drops here, back
@@ -165,6 +168,7 @@ impl BackgroundWatcher {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_debouncer(
         base_path: PathBuf,
         git_workdir: Option<PathBuf>,
@@ -173,6 +177,7 @@ impl BackgroundWatcher {
         mode: FFFMode,
         use_recursive: bool,
         watch_tx: mpsc::Sender<PathBuf>,
+        support_submodules: bool,
     ) -> Result<Debouncer, Error> {
         let config = Config::default()
             // do not follow symlinks as then notifiers spawns a bunch of events for symlinked
@@ -215,6 +220,7 @@ impl BackgroundWatcher {
                             &strong_picker,
                             &shared_frecency,
                             mode,
+                            support_submodules,
                         );
 
                         // every new directory creates had to be reflected in the picker state
@@ -393,6 +399,7 @@ fn handle_debounced_events(
     shared_picker: &SharedFilePicker,
     shared_frecency: &SharedFrecency,
     mode: FFFMode,
+    support_submodules: bool,
 ) -> Vec<PathBuf> {
     // this will be called very often, we have to minimiy the lock time for file picker
     let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
@@ -678,6 +685,7 @@ fn handle_debounced_events(
                 let status = match GitStatusCache::git_status_for_paths(
                     &repo,
                     &files_to_update_git_status,
+                    support_submodules,
                 ) {
                     Ok(s) => s,
                     Err(e) => {
@@ -709,6 +717,7 @@ fn track_files_from_new_directories(
     shared_picker: &SharedFilePicker,
     shared_frecency: &SharedFrecency,
     git_workdir: &Option<PathBuf>,
+    support_submodules: bool,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -745,13 +754,14 @@ fn track_files_from_new_directories(
     }
 
     if let Some(repo) = repo.as_ref() {
-        let status = match GitStatusCache::git_status_for_paths(repo, &files_to_add) {
-            Ok(status) => status,
-            Err(e) => {
-                tracing::error!(?e, "inject_existing_files: git status query failed");
-                return;
-            }
-        };
+        let status =
+            match GitStatusCache::git_status_for_paths(repo, &files_to_add, support_submodules) {
+                Ok(status) => status,
+                Err(e) => {
+                    tracing::error!(?e, "inject_existing_files: git status query failed");
+                    return;
+                }
+            };
 
         if let Ok(mut guard) = shared_picker.write()
             && let Some(ref mut picker) = *guard

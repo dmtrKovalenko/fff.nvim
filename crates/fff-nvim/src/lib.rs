@@ -62,12 +62,24 @@ pub fn destroy_query_db(_: &Lua, _: ()) -> LuaResult<bool> {
 /// Opts table accepted by `init_file_picker` / `restart_index_in_path`.
 /// Backwards compat: positional `follow_symlinks: bool` argument still works
 /// — callers that pass a table use the named fields instead.
-#[derive(Default)]
 struct PickerInitOpts {
     follow_symlinks: bool,
     enable_fs_root_scanning: bool,
     enable_home_dir_scanning: bool,
     enable_filename_constraint: bool,
+    support_submodules: bool,
+}
+
+impl Default for PickerInitOpts {
+    fn default() -> Self {
+        Self {
+            follow_symlinks: false,
+            enable_fs_root_scanning: false,
+            enable_home_dir_scanning: false,
+            enable_filename_constraint: false,
+            support_submodules: true,
+        }
+    }
 }
 
 impl PickerInitOpts {
@@ -92,6 +104,9 @@ impl PickerInitOpts {
                 enable_filename_constraint: t
                     .get::<Option<bool>>("enable_filename_constraint")?
                     .unwrap_or(false),
+                support_submodules: t
+                    .get::<Option<bool>>("support_submodules")?
+                    .unwrap_or(true),
             }),
             other => Err(LuaError::RuntimeError(format!(
                 "init opts must be a table, boolean, or nil — got {}",
@@ -128,6 +143,7 @@ pub fn init_file_picker(
             follow_symlinks: opts.follow_symlinks,
             enable_fs_root_scanning: opts.enable_fs_root_scanning,
             enable_home_dir_scanning: opts.enable_home_dir_scanning,
+            support_submodules: opts.support_submodules,
             ..Default::default()
         },
     )
@@ -175,7 +191,7 @@ pub fn restart_index_in_path(
         // Inherit current picker's scanning flags when caller didn't pass
         // explicit opts — otherwise a `:cd ~` after init would silently lose
         // the user's `enable_home_dir_scanning = true` setting.
-        let (follow_symlinks, fs_root, home_dir) = {
+        let (follow_symlinks, fs_root, home_dir, support_submodules) = {
             let guard = match FILE_PICKER.read() {
                 Ok(g) => g,
                 Err(_) => return,
@@ -193,11 +209,13 @@ pub fn restart_index_in_path(
                     p.follows_symlinks() || opts.follow_symlinks,
                     p.fs_root_scanning_enabled() || opts.enable_fs_root_scanning,
                     p.home_dir_scanning_enabled() || opts.enable_home_dir_scanning,
+                    p.has_submodule_support() && opts.support_submodules,
                 ),
                 None => (
                     opts.follow_symlinks,
                     opts.enable_fs_root_scanning,
                     opts.enable_home_dir_scanning,
+                    opts.support_submodules,
                 ),
             }
         };
@@ -220,6 +238,7 @@ pub fn restart_index_in_path(
                 follow_symlinks,
                 enable_fs_root_scanning: fs_root,
                 enable_home_dir_scanning: home_dir,
+                support_submodules,
                 ..Default::default()
             },
         ) {

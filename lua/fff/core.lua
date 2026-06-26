@@ -116,6 +116,7 @@ M.change_indexing_directory = function(new_path)
     enable_fs_root_scanning = config.enable_fs_root_scanning,
     enable_home_dir_scanning = config.enable_home_dir_scanning,
     enable_filename_constraint = config.grep and config.grep.enable_filename_constraint,
+    support_submodules = config.git and config.git.support_submodules,
   })
   if not ok then
     vim.notify('Failed to change directory: ' .. err, vim.log.levels.ERROR)
@@ -152,6 +153,7 @@ M.ensure_initialized = function()
     enable_fs_root_scanning = config.enable_fs_root_scanning,
     enable_home_dir_scanning = config.enable_home_dir_scanning,
     enable_filename_constraint = config.grep and config.grep.enable_filename_constraint,
+    support_submodules = config.git and config.git.support_submodules,
   })
   if not ok then
     vim.notify('Failed to initialize file picker: ' .. tostring(result), vim.log.levels.ERROR)
