@@ -1,5 +1,5 @@
 *fff.nvim.txt*
-                             For Neovim >= 0.10.0    Last change: 2026 June 18
+                             For Neovim >= 0.10.0    Last change: 2026 June 27
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -46,9 +46,10 @@ LAZY.NVIM
           function() require('fff').live_grep({ grep = { modes = { 'fuzzy', 'plain' } } }) end,
           desc = 'Live fffuzy grep',
         },
-        { "fc",
-          function() require('fff').live_grep({ query = vim.fn.expand("<cword>") }) end,
-          desc = 'Search current word',
+        { "fw",
+          function() require('fff').live_grep_under_cursor() end,
+          mode = { 'n', 'x' },
+          desc = 'Search current word / selection',
         },
       },
     }
@@ -84,6 +85,7 @@ PUBLIC API ~
 >lua
     require('fff').find_files()                        -- find files in current repo
     require('fff').live_grep()                         -- live content grep
+    require('fff').live_grep_under_cursor()            -- grep <cword> in normal, selection in visual
     require('fff').scan_files()                        -- force rescan
     require('fff').refresh_git_status()                -- refresh git status
     require('fff').find_files_in_dir(path)             -- find in a specific dir
