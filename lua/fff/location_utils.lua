@@ -204,7 +204,6 @@ function M.highlight_grep_matches(bufnr, location, namespace)
 
   -- Build case-insensitive pattern if the query has no uppercase (smart case)
   local has_upper = search_text:match('[A-Z]')
-  local escaped = vim.pesc(search_text)
 
   -- Highlight pattern occurrences in a window around the target line.
   -- Limit to ±200 lines from target to keep it fast for large files.
@@ -218,7 +217,7 @@ function M.highlight_grep_matches(bufnr, location, namespace)
   for idx, line in ipairs(lines) do
     local i = scan_start + idx - 1
     local search_line = has_upper and line or line:lower()
-    local search_pat = has_upper and escaped or escaped:lower()
+    local search_pat = has_upper and search_text or search_text:lower()
     local start_pos = 1
     while true do
       local s, e = search_line:find(search_pat, start_pos, true)
