@@ -41,6 +41,10 @@ local FIXTURE_FILES = {
   ['tests/main_test.rs'] = '#[test] fn main_test() {}\n',
   ['tests/integration.rs'] = '#[test] fn it() {}\n',
   ['tests/regression.rs'] = '#[test] fn regress() {}\n',
+  -- Deeply nested file used to verify dir path shortening when the directory
+  -- column cannot fit in full. Filename must always render unabridged; the
+  -- directory column is the part that gets shrunk to the available space.
+  ['src/components/widgets/forms/inputs/very_long_widget_name.tsx'] = 'export const VeryLongWidgetName = () => null\n',
 }
 
 --- @class fff.snapshot.Fixture

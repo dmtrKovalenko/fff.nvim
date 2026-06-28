@@ -214,6 +214,43 @@ for _, prompt in ipairs(PROMPT_POSITIONS) do
   end
 end
 
+T['dir_position'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function() setup({ cols = 140, rows = 32 }) end,
+    post_case = teardown,
+  },
+})
+
+T['dir_position']['right'] = function()
+  child.lua([[
+    local conf = require('fff.conf')
+    local cfg = conf.get()
+    cfg.layout.dir_position = 'right'
+  ]])
+  open_picker('bottom')
+  assert_snapshot_match()
+end
+
+-- Long-path overflow: filename must render in full; directory column must be
+-- shrunk via path_shorten_strategy to fit the remaining space without
+-- colliding with the filename.
+T['dir_position_right_overflow'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function() setup({ cols = 70, rows = 24, winborder = 'rounded' }) end,
+    post_case = teardown,
+  },
+})
+
+T['dir_position_right_overflow']['narrow'] = function()
+  child.lua([[
+    local conf = require('fff.conf')
+    local cfg = conf.get()
+    cfg.layout.dir_position = 'right'
+  ]])
+  open_picker('bottom', 'very_long_widget_name')
+  assert_snapshot_match()
+end
+
 T['scrollbar'] = MiniTest.new_set({
   hooks = {
     pre_case = function() setup({ cols = 140, rows = 32 }) end,

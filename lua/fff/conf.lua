@@ -9,6 +9,7 @@ local M = {}
 --- @field min_list_height number
 --- @field show_scrollbar boolean
 --- @field path_shorten_strategy string
+--- @field dir_position string 'left' or 'right'
 
 --- @class FffPreviewConfig
 --- @field enabled boolean
@@ -241,6 +242,10 @@ local function init()
       -- 'end': truncates from the end, keeps the start (home/user/projects)
       -- 'start': truncates from the start, keeps the end (.../parts/ai_extracted)
       path_shorten_strategy = 'middle',
+      -- Where the directory path is rendered relative to the filename:
+      -- 'left' (default): icon filename dir/path
+      -- 'right': icon filename<padding>dir/path  -- right-aligned for easier scanning
+      dir_position = 'left',
     },
     preview = {
       enabled = true,

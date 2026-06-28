@@ -48,15 +48,22 @@ function M.render_line(item, ctx, item_idx) -- luacheck: ignore item_idx
     end
   end
 
-  -- Format filename and path
-  -- Don't reserve space for frecency - path takes priority
+  -- Format filename and path. Path takes priority over frecency on overflow.
+  -- Right-align mode reserves 2 extra columns: 1 separating filename from the
+  -- right-aligned dir virt_text, 1 trailing margin. format_file_display will
+  -- shrink dir_path to fit; filename is always shown in full.
+  local right_align_dir = ctx.config.layout and ctx.config.layout.dir_position == 'right'
   local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
-  local available_width = math.max(ctx.max_path_width - icon_width, 40)
+  local reserved = right_align_dir and 2 or 0
+  local available_width = math.max(ctx.max_path_width - icon_width - reserved, 40)
   local filename, dir_path = ctx.format_file_display(item, available_width)
 
+  local inline_dir = right_align_dir and '' or dir_path
+  local sep = inline_dir == '' and '' or ' '
+
   -- Build line
-  local line = icon and string.format('%s %s %s%s', icon, filename, dir_path, frecency)
-    or string.format('%s %s%s', filename, dir_path, frecency)
+  local line = icon and string.format('%s %s%s%s%s', icon, filename, sep, inline_dir, frecency)
+    or string.format('%s%s%s%s', filename, sep, inline_dir, frecency)
 
   local padding = math.max(0, ctx.win_width - vim.fn.strdisplaywidth(line) + 5)
   table.insert(lines, line .. string.rep(' ', padding))
@@ -83,8 +90,10 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
 
   -- Get icon and paths
   local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
+  local right_align_dir = ctx.config.layout and ctx.config.layout.dir_position == 'right'
   local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
-  local available_width = math.max(ctx.max_path_width - icon_width, 40)
+  local reserved = right_align_dir and 2 or 0
+  local available_width = math.max(ctx.max_path_width - icon_width - reserved, 40)
   local filename, dir_path = ctx.format_file_display(item, available_width)
 
   -- 1. Cursor highlight
@@ -141,17 +150,26 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
 
   -- 5. Directory path (dimmed)
   if #filename > 0 and #dir_path > 0 then
-    local prefix_len = #filename + 1 -- filename bytes + space
-    if icon then
-      prefix_len = prefix_len + #icon + 1 -- if icon add icon bytes + space
+    if right_align_dir then
+      local dir_width = vim.fn.strdisplaywidth(dir_path)
+      vim.api.nvim_buf_set_extmark(buf, ns_id, line_idx - 1, 0, {
+        virt_text = { { dir_path, ctx.config.hl.directory_path }, { ' ' } },
+        virt_text_win_col = math.max(0, ctx.max_path_width - dir_width - 1),
+        hl_mode = 'combine',
+      })
+    else
+      local prefix_len = #filename + 1 -- filename bytes + space
+      if icon then
+        prefix_len = prefix_len + #icon + 1 -- if icon add icon bytes + space
+      end
+      vim.api.nvim_buf_set_extmark(
+        buf,
+        ns_id,
+        line_idx - 1,
+        prefix_len,
+        { end_col = prefix_len + #dir_path, hl_group = ctx.config.hl.directory_path }
+      )
     end
-    vim.api.nvim_buf_set_extmark(
-      buf,
-      ns_id,
-      line_idx - 1,
-      prefix_len,
-      { end_col = prefix_len + #dir_path, hl_group = ctx.config.hl.directory_path }
-    )
   end
 
   -- 6. Current file

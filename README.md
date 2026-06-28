@@ -285,6 +285,11 @@ require('fff').setup({
     min_list_height = 10, --  do not display anything except the list below this threshold
     show_scrollbar = true,
     path_shorten_strategy = 'middle_number', -- 'middle_number' | 'middle' | 'end' | 'start'
+    -- 'left'  : `filename dir/path`
+    -- 'right' : `filename                                   dir/path`
+    -- Filename always renders in full; on overflow the directory column is
+    -- shrunk by `path_shorten_strategy` to fit available space.
+    dir_position = 'left',        -- 'left' | 'right'
     anchor = 'center',
   },
   preview = {
