@@ -78,10 +78,11 @@ const FFF_CREATE_OPTIONS_STRUCT = {
   cache_budget_max_file_size: DataType.U64,
   enable_fs_root_scanning: DataType.U8,
   enable_home_dir_scanning: DataType.U8,
+  follow_symlinks: DataType.U8,
 };
 
 // ALWAYS KEEP IN SYNC WITH fff.h
-const FFF_CREATE_OPTIONS_VERSION = 1;
+const FFF_CREATE_OPTIONS_VERSION = 2;
 
 /** Grep mode constants matching the C API (u8). */
 const GREP_MODE_PLAIN = 0;
@@ -359,6 +360,7 @@ export function ffiCreate(
   cacheBudgetMaxFileSize: number,
   enableFsRootScanning: boolean,
   enableHomeDirScanning: boolean,
+  followSymlinks: boolean,
 ): Result<NativeHandle> {
   loadLibrary();
 
@@ -378,6 +380,7 @@ export function ffiCreate(
     cache_budget_max_file_size: cacheBudgetMaxFileSize,
     enable_fs_root_scanning: enableFsRootScanning ? 1 : 0,
     enable_home_dir_scanning: enableHomeDirScanning ? 1 : 0,
+    follow_symlinks: followSymlinks ? 1 : 0,
   };
 
   const rawPtr = load({

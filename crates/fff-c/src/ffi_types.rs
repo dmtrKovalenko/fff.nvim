@@ -15,7 +15,7 @@ use fff::{
 };
 
 /// Current used version of [`FffCreateOptions`].
-pub const FFF_CREATE_OPTIONS_VERSION: u32 = 1;
+pub const FFF_CREATE_OPTIONS_VERSION: u32 = 2;
 
 /// Options for `fff_create_instance_with`.
 ///
@@ -57,7 +57,12 @@ pub struct FffCreateOptions {
     /// Allow indexing the user's home directory. Same trade-off as
     /// `enable_fs_root_scanning`.
     pub enable_home_dir_scanning: bool,
-    // ----- new version 2+ fields go here, ALWAYS appended -----
+    // ----- v2 fields -----
+    /// Follow symlinks during scan and watcher walks. Off by default —
+    /// enabling this without external loop protection can wedge the watcher
+    /// on cyclic symlink graphs. Caller is responsible for the trade-off.
+    pub follow_symlinks: bool,
+    // ----- new version 3+ fields go here, ALWAYS appended -----
 }
 
 impl FffCreateOptions {
@@ -79,6 +84,7 @@ impl FffCreateOptions {
             cache_budget_max_file_size: 0,
             enable_fs_root_scanning: false,
             enable_home_dir_scanning: false,
+            follow_symlinks: false,
         }
     }
 }
@@ -820,5 +826,6 @@ mod options_layout_tests {
         assert_eq!(offset_of!(FffCreateOptions, cache_budget_max_file_size), 72);
         assert_eq!(offset_of!(FffCreateOptions, enable_fs_root_scanning), 80);
         assert_eq!(offset_of!(FffCreateOptions, enable_home_dir_scanning), 81);
+        assert_eq!(offset_of!(FffCreateOptions, follow_symlinks), 82);
     }
 }

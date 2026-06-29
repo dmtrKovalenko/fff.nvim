@@ -52,7 +52,7 @@ local function wait_for_scan(expected_dir, timeout_ms)
 end
 
 describe('picker find_files_in_dir path resolution (issue #389)', function()
-  local sandbox_root, target_dir, other_cwd, target_filename
+  local sandbox_root, target_dir, other_cwd, target_filename, second_filename
 
   before_each(function()
     sandbox_root = vim.fn.tempname()
@@ -64,6 +64,11 @@ describe('picker find_files_in_dir path resolution (issue #389)', function()
     target_filename = 'issue389_target.lua'
     local fd = assert(io.open(target_dir .. '/' .. target_filename, 'w'))
     fd:write('-- issue #389 regression fixture\nreturn true\n')
+    fd:close()
+
+    second_filename = 'issue389_second.lua'
+    fd = assert(io.open(target_dir .. '/' .. second_filename, 'w'))
+    fd:write('-- issue #389 second fixture\nreturn true\n')
     fd:close()
 
     -- Clear the DirChanged autocmd that a previous test run (e.g. fff_core_spec)
@@ -127,6 +132,7 @@ describe('picker find_files_in_dir path resolution (issue #389)', function()
     picker_ui.state.location = nil
     picker_ui.state.suggestion_source = nil
     picker_ui.state.selected_files = {}
+    picker_ui.state.selected_file_order = {}
     picker_ui.state.selected_items = {}
 
     picker_ui.select('edit')
@@ -146,5 +152,46 @@ describe('picker find_files_in_dir path resolution (issue #389)', function()
     local expected = norm(target_dir .. '/' .. target_filename)
     local actual = norm(bufname)
     assert.are.equal(expected, actual)
+  end)
+
+  it(':edit loads all selected files as listed buffers', function()
+    assert.is_true(require('fff.core').change_indexing_directory(target_dir))
+    wait_for_scan(target_dir, 10000)
+
+    local items = file_picker.search_files('', nil, nil, nil, nil)
+    local selected = {}
+    for _, item in ipairs(items) do
+      if item.name == target_filename or item.name == second_filename then table.insert(selected, item) end
+    end
+    assert.are.equal(2, #selected, 'expected both fixture files in picker results')
+
+    picker_ui.state.active = true
+    picker_ui.state.filtered_items = items
+    picker_ui.state.cursor = 1
+    picker_ui.state.query = ''
+    picker_ui.state.mode = nil
+    picker_ui.state.location = nil
+    picker_ui.state.suggestion_source = nil
+    picker_ui.state.selected_files = {}
+    picker_ui.state.selected_file_order = {}
+    picker_ui.state.selected_items = {}
+
+    for _, item in ipairs(selected) do
+      picker_ui.state.selected_files[item.relative_path] = true
+      table.insert(picker_ui.state.selected_file_order, item.relative_path)
+    end
+
+    picker_ui.select('edit')
+
+    local expected_first = norm(target_dir .. '/' .. selected[1].name)
+    vim.wait(2000, function() return norm(vim.api.nvim_buf_get_name(0)) == expected_first end)
+    assert.are.equal(expected_first, norm(vim.api.nvim_buf_get_name(0)))
+
+    for _, item in ipairs(selected) do
+      local path = norm(target_dir .. '/' .. item.name)
+      local bufnr = vim.fn.bufnr(path)
+      assert.is_true(bufnr > 0, 'expected selected file to have a buffer: ' .. path)
+      assert.are.equal(1, vim.fn.buflisted(bufnr), 'expected selected file to be listed: ' .. path)
+    end
   end)
 end)

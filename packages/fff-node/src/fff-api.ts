@@ -97,17 +97,15 @@ export interface InitOptions {
   /** Override for the per-file byte cap in the content cache. */
   cacheBudgetMaxFileSize?: number;
   /**
-   * Allow indexing the filesystem root (`/`). Off by default — root is
-   * rarely the intended target and floods the watcher with churn-prone
-   * events. Setting this true is opt-in and the caller is responsible for
-   * the resulting fs-event volume.
-   */
+   * Allow indexing the filesystem root (`/`). Off by default, having fff instance at the large folder  
+   * will generally require file watcher
+  * */
+
   enableFsRootScanning?: boolean;
-  /**
-   * Allow indexing the user's home directory. Same trade-off as
-   * `enableFsRootScanning`.
-   */
+  /** Allow indexing the user's home directory. Same trade-off as `enableFsRootScanning`. */
   enableHomeDirScanning?: boolean;
+  /** Follow symlinks for directories */
+  followSymlinks?: boolean;
 }
 
 /**

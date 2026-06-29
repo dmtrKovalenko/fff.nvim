@@ -43,23 +43,17 @@ export interface InitOptions {
   frecencyDbPath?: string;
   /** Path to query history database (optional, omit to skip query tracker initialization) */
   historyDbPath?: string;
-  /**
-   * @deprecated No-op. The no-lock LMDB flags showed no measurable win under
-   * realistic contention and are now ignored. Kept for source-compat.
-   */
+  /** @deprecated no-op */
   useUnsafeNoLock?: boolean;
   /**
    * Disable mmap cache warmup after the initial scan. When mmap cache is
    * enabled (the default), the first grep search is as fast as subsequent
    * ones at the cost of a longer scan time and higher initial memory usage.
-   * (default: false)
    */
   disableMmapCache?: boolean;
   /**
    * Disable the content index built after the initial scan.
    * Content indexing enables faster content-aware filtering during grep.
-   * When omitted, follows `disableMmapCache` for backward compatibility.
-   * (default: follows `disableMmapCache`)
    */
   disableContentIndexing?: boolean;
   /**
@@ -91,17 +85,15 @@ export interface InitOptions {
   /** Override for the per-file byte cap in the content cache. */
   cacheBudgetMaxFileSize?: number;
   /**
-   * Allow indexing the filesystem root (`/`). Off by default — root is
-   * rarely the intended target and floods the watcher with churn-prone
-   * events. Setting this true is opt-in and the caller is responsible for
-   * the resulting fs-event volume.
-   */
+   * Allow indexing the filesystem root (`/`). 
+   * Off by default, having fff instance at the large folder will generally require 
+   * file watcher and indexing which will consume a lot of resources if performed uncontrolled
+   **/
   enableFsRootScanning?: boolean;
-  /**
-   * Allow indexing the user's home directory. Same trade-off as
-   * `enableFsRootScanning`.
-   */
+  /** Allow indexing the user's home directory. Same trade-off as `enableFsRootScanning`. */
   enableHomeDirScanning?: boolean;
+  /** Follow symlinks for directories */
+  followSymlinks?: boolean;
 }
 
 /**
@@ -547,10 +539,16 @@ export interface FileFinderApi {
   glob(pattern: string, options?: GlobOptions): Result<SearchResult>;
 
   /** Fuzzy directory search. */
-  directorySearch(query: string, options?: DirSearchOptions): Result<DirSearchResult>;
+  directorySearch(
+    query: string,
+    options?: DirSearchOptions,
+  ): Result<DirSearchResult>;
 
   /** Fuzzy search over files and directories interleaved by score. */
-  mixedSearch(query: string, options?: SearchOptions): Result<MixedSearchResult>;
+  mixedSearch(
+    query: string,
+    options?: SearchOptions,
+  ): Result<MixedSearchResult>;
 
   /** Content search (live grep). */
   grep(query: string, options?: GrepOptions): Result<GrepResult>;

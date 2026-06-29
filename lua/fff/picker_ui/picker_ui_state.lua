@@ -65,6 +65,7 @@ M.state = {
 
   -- Selection state
   selected_files = {},
+  selected_file_order = {},
   selected_items = {},
 
   -- Cross-mode suggestion state
@@ -142,6 +143,7 @@ function M.reset_state()
   M.state.grep_regex_fallback_error = nil
 
   M.state.selected_files = {}
+  M.state.selected_file_order = {}
   M.state.selected_items = {}
   M.state.suggestion_items = nil
   M.state.suggestion_source = nil
@@ -161,6 +163,7 @@ end
 -- Clear all selections
 function M.clear_selections()
   M.state.selected_files = {}
+  M.state.selected_file_order = {}
   M.state.selected_items = {}
 end
 
@@ -210,12 +213,48 @@ function M.toggle_selection()
     was_selected = M.state.selected_files[item.relative_path]
     if was_selected then
       M.state.selected_files[item.relative_path] = nil
+      M.state.selected_file_order = vim.tbl_filter(
+        function(path) return path ~= item.relative_path end,
+        M.state.selected_file_order
+      )
     else
       M.state.selected_files[item.relative_path] = true
+      table.insert(M.state.selected_file_order, item.relative_path)
     end
   end
 
   return was_selected
+end
+
+-- Ordered, deduped selected file entries for opening (file mode only).
+-- Each entry has the raw fff relative_path and a cwd-relative edit_path.
+function M.get_selected_file_entries()
+  if not next(M.state.selected_files) then return {} end
+
+  local entries = {}
+  local seen = {}
+
+  local function add(relative_path)
+    if not relative_path or seen[relative_path] or not M.state.selected_files[relative_path] then return end
+
+    local abs_path = canonicalize_fff_path(relative_path)
+    if not abs_path then return end
+
+    seen[relative_path] = true
+    table.insert(entries, {
+      relative_path = relative_path,
+      edit_path = vim.fn.fnamemodify(abs_path, ':.'),
+    })
+  end
+
+  for _, relative_path in ipairs(M.state.selected_file_order) do
+    add(relative_path)
+  end
+  for relative_path, _ in pairs(M.state.selected_files) do
+    add(relative_path)
+  end
+
+  return entries
 end
 
 return M

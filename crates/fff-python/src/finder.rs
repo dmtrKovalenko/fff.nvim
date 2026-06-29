@@ -176,6 +176,7 @@ impl FileFinder {
         cache_budget_max_file_size=0,
         enable_fs_root_scanning=false,
         enable_home_dir_scanning=false,
+        follow_symlinks=false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -194,6 +195,7 @@ impl FileFinder {
         cache_budget_max_file_size: u64,
         enable_fs_root_scanning: bool,
         enable_home_dir_scanning: bool,
+        follow_symlinks: bool,
     ) -> PyResult<Self> {
         let shared_picker = SharedFilePicker::default();
         let shared_frecency = SharedFrecency::default();
@@ -243,7 +245,7 @@ impl FileFinder {
                         cache_budget_max_bytes,
                         cache_budget_max_file_size,
                     ),
-                    follow_symlinks: false,
+                    follow_symlinks,
                     enable_fs_root_scanning,
                     enable_home_dir_scanning,
                 },
@@ -742,7 +744,7 @@ impl FileFinder {
             }
             let canonical = fff::path_utils::canonicalize(&new_path).map_err(py_err)?;
 
-            let (warmup_caches, content_indexing, watch, mode, fs_root, home_dir) = {
+            let (warmup_caches, content_indexing, watch, mode, fs_root, home_dir, follow_symlinks) = {
                 let guard = picker.read().map_err(py_err)?;
                 if let Some(ref picker) = *guard {
                     (
@@ -752,9 +754,10 @@ impl FileFinder {
                         picker.mode(),
                         picker.fs_root_scanning_enabled(),
                         picker.home_dir_scanning_enabled(),
+                        picker.follows_symlinks(),
                     )
                 } else {
-                    (false, true, true, FFFMode::default(), false, false)
+                    (false, true, true, FFFMode::default(), false, false, false)
                 }
             };
 
@@ -772,7 +775,7 @@ impl FileFinder {
                         cache_budget_max_bytes,
                         cache_budget_max_file_size,
                     ),
-                    follow_symlinks: false,
+                    follow_symlinks,
                     enable_fs_root_scanning: fs_root,
                     enable_home_dir_scanning: home_dir,
                 },

@@ -12,7 +12,7 @@
 /**
  * Current used version of [`FffCreateOptions`].
  */
-#define FFF_CREATE_OPTIONS_VERSION 1
+#define FFF_CREATE_OPTIONS_VERSION 2
 
 /**
  * Result envelope returned by all `fff_*` functions.
@@ -100,10 +100,7 @@ typedef struct FffCreateOptions {
    */
   bool ai_mode;
   /**
-   * Path-shape hint for the per-session log file. Each call writes a fresh
-   * sibling file `<stem>+<UTC-timestamp>+<pid>.<ext>` next to this path.
-   * The literal path is never written to, so concurrent processes get
-   * unique per-pid files. NULL/empty to skip log init.
+   * Tracing log file path. NULL/empty to skip log init.
    */
   const char *log_file_path;
   /**
@@ -133,6 +130,12 @@ typedef struct FffCreateOptions {
    * `enable_fs_root_scanning`.
    */
   bool enable_home_dir_scanning;
+  /**
+   * Follow symlinks during scan and watcher walks. Off by default —
+   * enabling this without external loop protection can wedge the watcher
+   * on cyclic symlink graphs. Caller is responsible for the trade-off.
+   */
+  bool follow_symlinks;
 } FffCreateOptions;
 
 /**

@@ -1,29 +1,19 @@
-//! FFF MCP server — tool definitions and handlers.
-//!
-//! Uses the `rmcp` crate's `#[tool_router]` / `#[tool_handler]` macros
-//! for declarative tool registration. Each tool method directly calls
-//! `fff-core` APIs (no C FFI overhead).
-
-use std::borrow::Cow;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-
 use crate::cursor::CursorStore;
 use crate::output::{GrepFormatter, OutputMode, file_suffix};
 use fff::grep::{GrepMode, GrepSearchOptions, has_regex_metacharacters};
 use fff::types::{FileItem, PaginationArgs};
-use fff::{FuzzySearchOptions, QueryParser, SharedFilePicker, SharedFrecency};
+use fff::{FuzzySearchOptions, QueryParser, SharedFilePicker};
 use fff_query_parser::AiGrepConfig;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{ServerHandler, schemars, tool, tool_handler, tool_router};
+use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Normalize the caller-supplied `maxResults`.
-///
-/// `None`, `Some(0)`, and non-positive / non-finite values fall back to
-/// `default`. Issue #400 reported that grep returned 0 items for
-/// `maxResults: 0` while `find_files` returned the entire dataset; treating
-/// 0 as "use the default" makes both tools behave consistently.
+const SCAN_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn normalize_max_results(raw: Option<f64>, default: usize) -> usize {
     match raw {
         None => default,
@@ -181,34 +171,64 @@ pub struct MultiGrepParams {
 #[derive(Clone)]
 pub struct FffServer {
     picker: SharedFilePicker,
-    #[allow(dead_code)]
-    frecency: SharedFrecency,
     cursor_store: Arc<Mutex<CursorStore>>,
     update_notice_sent: Arc<AtomicBool>,
+    last_activity: Arc<AtomicU64>,
+    scan_ready: Arc<AtomicBool>,
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 impl FffServer {
-    pub fn new(picker: SharedFilePicker, frecency: SharedFrecency) -> Self {
+    pub fn new(picker: SharedFilePicker) -> Self {
         Self {
             picker,
-            frecency,
             cursor_store: Arc::new(Mutex::new(CursorStore::new())),
             update_notice_sent: Arc::new(AtomicBool::new(false)),
+            last_activity: Arc::new(AtomicU64::new(now_secs())),
+            scan_ready: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    #[allow(dead_code)]
-    pub fn wait_for_scan(&self) {
+    pub fn last_activity(&self) -> Arc<AtomicU64> {
+        self.last_activity.clone()
+    }
+
+    fn bump_activity(&self) {
+        self.last_activity.store(now_secs(), Ordering::Relaxed);
+    }
+
+    fn wait_for_scan(&self, timeout: std::time::Duration) -> Result<(), ErrorData> {
+        if self.scan_ready.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
+        let deadline = std::time::Instant::now() + timeout;
+
         loop {
-            let guard = self.picker.read().ok();
-            let is_scanning = guard
+            let is_scanning = self
+                .picker
+                .read()
+                .ok()
                 .as_ref()
                 .and_then(|g| g.as_ref())
                 .map(|p| p.is_scan_active())
                 .unwrap_or(true);
 
             if !is_scanning {
-                break;
+                self.scan_ready.store(true, Ordering::Relaxed);
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ErrorData::internal_error(
+                    "Index is still building; retry shortly",
+                    None,
+                ));
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
@@ -407,6 +427,9 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<FindFilesParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        self.bump_activity();
+        self.wait_for_scan(SCAN_READY_TIMEOUT)?;
+
         let max_results = normalize_max_results(params.max_results, 20);
         let query = &params.query;
 
@@ -519,6 +542,9 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<GrepParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        self.bump_activity();
+        self.wait_for_scan(SCAN_READY_TIMEOUT)?;
+
         let max_results = normalize_max_results(params.max_results, 20);
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
@@ -553,6 +579,9 @@ impl FffServer {
         &self,
         Parameters(params): Parameters<MultiGrepParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        self.bump_activity();
+        self.wait_for_scan(SCAN_READY_TIMEOUT)?;
+
         let mut result = self.multi_grep_inner(params)?;
         self.maybe_append_update_notice(&mut result);
         Ok(result)
