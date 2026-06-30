@@ -281,6 +281,9 @@ require('fff').setup({
     prompt_position = 'bottom',   -- or 'top'
     preview_position = 'right',   -- 'left' | 'right' | 'top' | 'bottom'
     preview_size = 0.5,
+    -- Border style for the picker windows. Leave unset (nil) to follow the
+    -- global `vim.o.winborder`; set it to override fff's borders independently.
+    border = nil, -- 'single' | 'double' | 'rounded' | 'solid' | 'shadow' | 'none'
     flex = { size = 130, wrap = 'top' },
     min_list_height = 10, --  do not display anything except the list below this threshold
     show_scrollbar = true,
