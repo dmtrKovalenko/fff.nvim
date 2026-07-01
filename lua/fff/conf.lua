@@ -9,6 +9,7 @@ local M = {}
 --- @field min_list_height number
 --- @field show_scrollbar boolean
 --- @field path_shorten_strategy string
+--- @field border? 'single'|'double'|'rounded'|'solid'|'shadow'|'none' Border preset; falls back to `vim.o.winborder` when nil
 
 --- @class FffPreviewConfig
 --- @field enabled boolean
@@ -225,6 +226,10 @@ local function init()
       prompt_position = 'bottom', -- or 'top'
       preview_position = 'right', -- or 'left', 'right', 'top', 'bottom'
       preview_size = 0.5,
+      -- Border style for the picker windows: 'single', 'double', 'rounded',
+      -- 'solid', 'shadow' or 'none'. Leave unset (nil) to follow the global
+      -- `vim.o.winborder` setting.
+      border = nil,
       flex = { -- set to nil to disable flex layout
         size = 130, -- column threshold: if screen width >= size, use preview_position; otherwise use wrap
         wrap = 'top', -- position to use when screen is narrower than size

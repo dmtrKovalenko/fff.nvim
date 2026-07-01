@@ -21,10 +21,15 @@ local T_JUNCTION_PRESETS = {
   none = { '', '', '', '', '' },
 }
 
-local function get_border_chars()
-  local winborder = vim.o.winborder or 'single'
+-- Resolve which border preset to draw. `config.layout.border` overrides the
+-- global `winborder`; when unset we fall back to `vim.o.winborder` so fff keeps
+-- respecting the user's global preference.
+local function get_border_chars(config)
+  local border = config and config.layout and config.layout.border
+  if border == nil or border == '' then border = vim.o.winborder end
+  if border == nil or border == '' then border = 'single' end
 
-  if BORDER_PRESETS[winborder] then return BORDER_PRESETS[winborder], T_JUNCTION_PRESETS[winborder] end
+  if BORDER_PRESETS[border] then return BORDER_PRESETS[border], T_JUNCTION_PRESETS[border] end
   return BORDER_PRESETS.single, T_JUNCTION_PRESETS.single
 end
 
@@ -244,7 +249,7 @@ end
 --- Build the per-window configs (for `nvim_open_win`) from a finished layout.
 --- Handles all the corner/T-junction resolution so adjacent floats line up.
 local function build_window_configs(layout, config, prompt_position, preview_position)
-  local border_chars, t_junctions = get_border_chars()
+  local border_chars, t_junctions = get_border_chars(config)
   local has_preview = layout.preview ~= nil
   local title = ' ' .. (config.title or 'FFFiles') .. ' '
 
