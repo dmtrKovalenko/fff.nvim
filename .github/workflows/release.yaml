@@ -2,7 +2,7 @@ name: Build & Publish
 
 on:
   push:
-    branches: ["**"]
+    branches: [main, feat/implement-buffers-support]
     tags:
       - "v*"
   pull_request:
