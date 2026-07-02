@@ -477,24 +477,18 @@ end
 
 --- Open the buffer picker
 --- @param opts? table Optional configuration to override defaults
-function M.buffers(opts)
-  require('fff.pickers').open('buffers', opts)
-end
+function M.buffers(opts) require('fff.pickers').open('buffers', opts) end
 
 --- Open the colors picker (similar to fzf.vim :Colors)
 --- Lists available colorschemes with fuzzy search and live preview
 --- @param opts? table Optional configuration to override defaults
 --- @param opts.bang? boolean If true, fullscreen mode (no live preview, like fzf.vim)
-function M.colors(opts)
-  require('fff.pickers').open('colors', opts)
-end
+function M.colors(opts) require('fff.pickers').open('colors', opts) end
 
 --- Open the git files picker (similar to fzf.vim :GFiles?)
 --- Lists git status files with fuzzy search and live preview
 --- @param opts? table Optional configuration to override defaults
-function M.git_files(opts)
-  require('fff.pickers').open('git_files', opts)
-end
+function M.git_files(opts) require('fff.pickers').open('git_files', opts) end
 
 -- Strip wrapper punctuation that frequently surrounds paths in prose: leading
 -- markdown-link `[`, parens `(`, brackets `<`, quotes; trailing sentence

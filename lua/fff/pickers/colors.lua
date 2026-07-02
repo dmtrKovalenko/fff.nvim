@@ -96,18 +96,14 @@ end
 --- @param query string Search query
 --- @return table Filtered list of colorscheme items
 function M.filter_colorschemes(items, query)
-  if not query or query == '' then
-    return items
-  end
+  if not query or query == '' then return items end
 
   local filtered = {}
   local query_lower = query:lower()
 
   for _, item in ipairs(items) do
     local match_target = (item.name or ''):lower()
-    if match_target:find(query_lower, 1, true) then
-      table.insert(filtered, item)
-    end
+    if match_target:find(query_lower, 1, true) then table.insert(filtered, item) end
   end
 
   return filtered
@@ -133,18 +129,14 @@ M.state = {
 
 local function get_prompt_position()
   local config = M.state.config
-  if config and config.layout and config.layout.prompt_position then
-    return config.layout.prompt_position
-  end
+  if config and config.layout and config.layout.prompt_position then return config.layout.prompt_position end
   return 'bottom'
 end
 
 function M.create_ui()
   local config = M.state.config
 
-  if not M.state.ns_id then
-    M.state.ns_id = vim.api.nvim_create_namespace('fff_colors_picker')
-  end
+  if not M.state.ns_id then M.state.ns_id = vim.api.nvim_create_namespace('fff_colors_picker') end
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
@@ -152,12 +144,8 @@ function M.create_ui()
   -- Calculate dimensions
   local width_ratio = config.layout.width or 0.8
   local height_ratio = config.layout.height or 0.8
-  if type(width_ratio) == 'function' then
-    width_ratio = width_ratio(terminal_width, terminal_height)
-  end
-  if type(height_ratio) == 'function' then
-    height_ratio = height_ratio(terminal_width, terminal_height)
-  end
+  if type(width_ratio) == 'function' then width_ratio = width_ratio(terminal_width, terminal_height) end
+  if type(height_ratio) == 'function' then height_ratio = height_ratio(terminal_width, terminal_height) end
 
   local width = math.floor(terminal_width * width_ratio)
   local height = math.floor(terminal_height * height_ratio)
@@ -259,23 +247,17 @@ function M.setup_windows()
   vim.api.nvim_create_autocmd('WinLeave', {
     group = picker_group,
     callback = function()
-      if not M.state.active then
-        return
-      end
+      if not M.state.active then return end
 
       local current_win = vim.api.nvim_get_current_win()
       local is_picker_window = vim.tbl_contains(picker_windows, current_win)
 
       if is_picker_window then
         vim.defer_fn(function()
-          if not M.state.active then
-            return
-          end
+          if not M.state.active then return end
 
           local new_win = vim.api.nvim_get_current_win()
-          if not vim.tbl_contains(picker_windows, new_win) then
-            M.close()
-          end
+          if not vim.tbl_contains(picker_windows, new_win) then M.close() end
         end, 10)
       end
     end,
@@ -305,17 +287,13 @@ function M.setup_keymaps()
   -- Handle input changes
   vim.api.nvim_buf_attach(M.state.input_buf, false, {
     on_lines = function()
-      vim.schedule(function()
-        M.on_input_change()
-      end)
+      vim.schedule(function() M.on_input_change() end)
     end,
   })
 end
 
 function M.on_input_change()
-  if not M.state.active then
-    return
-  end
+  if not M.state.active then return end
 
   local lines = vim.api.nvim_buf_get_lines(M.state.input_buf, 0, -1, false)
   local prompt_len = #(M.state.config.prompt or 'Colors> ')
@@ -331,9 +309,7 @@ function M.on_input_change()
 end
 
 function M.update_results()
-  if not M.state.active then
-    return
-  end
+  if not M.state.active then return end
 
   -- Filter colorschemes
   M.state.filtered_items = M.filter_colorschemes(M.state.items, M.state.query)
@@ -351,9 +327,7 @@ function M.update_results()
 end
 
 function M.render_list()
-  if not M.state.active then
-    return
-  end
+  if not M.state.active then return end
 
   local items = M.state.filtered_items
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
@@ -406,14 +380,7 @@ function M.render_list()
     vim.api.nvim_win_set_cursor(M.state.list_win, { cursor_line, 0 })
 
     -- Highlight cursor line
-    vim.api.nvim_buf_add_highlight(
-      M.state.list_buf,
-      M.state.ns_id,
-      M.state.config.hl.cursor,
-      cursor_line - 1,
-      0,
-      -1
-    )
+    vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, M.state.config.hl.cursor, cursor_line - 1, 0, -1)
 
     -- Add highlights for each visible item
     for i = 1, display_count do
@@ -439,9 +406,7 @@ function M.render_list()
 end
 
 function M.update_status()
-  if not M.state.active or not M.state.ns_id then
-    return
-  end
+  if not M.state.active or not M.state.ns_id then return end
 
   local status_info = string.format('%d/%d', #M.state.filtered_items, #M.state.items)
 
@@ -458,31 +423,21 @@ end
 
 --- Apply colorscheme preview when cursor moves
 function M.preview_colorscheme()
-  if not M.state.active then
-    return
-  end
+  if not M.state.active then return end
 
   local items = M.state.filtered_items
-  if #items == 0 or M.state.cursor > #items then
-    return
-  end
+  if #items == 0 or M.state.cursor > #items then return end
 
   local item = items[M.state.cursor]
-  if not item then
-    return
-  end
+  if not item then return end
 
   -- Apply the colorscheme for preview
   pcall(vim.cmd, 'colorscheme ' .. item.name)
 end
 
 function M.move_up()
-  if not M.state.active then
-    return
-  end
-  if #M.state.filtered_items == 0 then
-    return
-  end
+  if not M.state.active then return end
+  if #M.state.filtered_items == 0 then return end
 
   M.state.cursor = math.max(M.state.cursor - 1, 1)
   M.render_list()
@@ -490,12 +445,8 @@ function M.move_up()
 end
 
 function M.move_down()
-  if not M.state.active then
-    return
-  end
-  if #M.state.filtered_items == 0 then
-    return
-  end
+  if not M.state.active then return end
+  if #M.state.filtered_items == 0 then return end
 
   M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
   M.render_list()
@@ -503,19 +454,13 @@ function M.move_down()
 end
 
 function M.select()
-  if not M.state.active then
-    return
-  end
+  if not M.state.active then return end
 
   local items = M.state.filtered_items
-  if #items == 0 or M.state.cursor > #items then
-    return
-  end
+  if #items == 0 or M.state.cursor > #items then return end
 
   local item = items[M.state.cursor]
-  if not item then
-    return
-  end
+  if not item then return end
 
   local selected_colorscheme = item.name
 
@@ -529,18 +474,14 @@ end
 --- Close the picker
 --- @param selected boolean|nil If true, user selected a colorscheme; if false/nil, restore original
 function M.close(selected)
-  if not M.state.active then
-    return
-  end
+  if not M.state.active then return end
 
   vim.cmd('stopinsert')
   M.state.active = false
 
   local windows = { M.state.input_win, M.state.list_win }
   for _, win in ipairs(windows) do
-    if win and vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_win_close(win, true)
-    end
+    if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
   end
 
   local buffers = { M.state.input_buf, M.state.list_buf }
@@ -552,9 +493,7 @@ function M.close(selected)
   end
 
   -- Restore original colorscheme if user cancelled
-  if not selected and M.original_colorscheme then
-    pcall(vim.cmd, 'colorscheme ' .. M.original_colorscheme)
-  end
+  if not selected and M.original_colorscheme then pcall(vim.cmd, 'colorscheme ' .. M.original_colorscheme) end
 
   -- Reset state
   M.state.input_win = nil
@@ -575,9 +514,7 @@ end
 --- @param opts? table Optional configuration to override defaults
 --- @param opts.bang? boolean If true, use fullscreen mode (no live preview)
 function M.open(opts)
-  if M.state.active then
-    return
-  end
+  if M.state.active then return end
 
   opts = opts or {}
 
@@ -585,9 +522,7 @@ function M.open(opts)
   local merged_config = vim.tbl_deep_extend('force', config or {}, opts or {})
 
   -- Override prompt for colors picker
-  if merged_config.prompt == nil or merged_config.prompt == config.prompt then
-    merged_config.prompt = 'Colors> '
-  end
+  if merged_config.prompt == nil or merged_config.prompt == config.prompt then merged_config.prompt = 'Colors> ' end
 
   M.state.config = merged_config
   M.state.active = true
