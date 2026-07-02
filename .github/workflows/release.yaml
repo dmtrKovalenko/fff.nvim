@@ -2,7 +2,7 @@ name: Build & Publish
 
 on:
   push:
-    branches: [main, fix/use-trusted-publishing]
+    branches: [main, feat/implement-buffers-support]
     tags:
       - "v*"
   pull_request:
@@ -462,7 +462,7 @@ jobs:
     name: Release
     needs: [build-nvim, build-c, build-mcp, build-python, build-python-sdist]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/use-trusted-publishing' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.event_name == 'push' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: write
     steps:
@@ -593,7 +593,7 @@ jobs:
 
             Update mcp via:
             ```sh
-            curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/vinitkumar/fff-plus.nvim/main/install-mcp.sh | bash
             ```
 
       - name: Bump Homebrew formula (uses local checksums)
@@ -621,7 +621,7 @@ jobs:
     name: Publish Python wheels to PyPI
     needs: [build-python, build-python-sdist]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/use-trusted-publishing' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.repository_owner == 'dmtrKovalenko' && github.event_name == 'push' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v'))
     environment:
       name: pypi
       url: https://pypi.org/p/fff-search
@@ -646,7 +646,7 @@ jobs:
     name: Publish Rust crates
     needs: [build-nvim, build-c, build-mcp]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/use-trusted-publishing' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.repository_owner == 'dmtrKovalenko' && github.event_name == 'push' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
       id-token: write
@@ -677,7 +677,7 @@ jobs:
     name: Publish npm packages
     needs: [build-c]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/use-trusted-publishing' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.repository_owner == 'dmtrKovalenko' && github.event_name == 'push' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
       id-token: write

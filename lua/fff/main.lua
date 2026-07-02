@@ -477,39 +477,18 @@ end
 
 --- Open the buffer picker
 --- @param opts? table Optional configuration to override defaults
-function M.buffers(opts)
-  local buffers_ok, buffers = pcall(require, 'fff.buffers')
-  if buffers_ok then
-    buffers.open(opts)
-  else
-    vim.notify('Failed to load buffer picker', vim.log.levels.ERROR)
-  end
-end
+function M.buffers(opts) require('fff.pickers').open('buffers', opts) end
 
 --- Open the colors picker (similar to fzf.vim :Colors)
 --- Lists available colorschemes with fuzzy search and live preview
 --- @param opts? table Optional configuration to override defaults
 --- @param opts.bang? boolean If true, fullscreen mode (no live preview, like fzf.vim)
-function M.colors(opts)
-  local colors_ok, colors = pcall(require, 'fff.colors')
-  if colors_ok then
-    colors.open(opts)
-  else
-    vim.notify('Failed to load colors picker: ' .. tostring(colors), vim.log.levels.ERROR)
-  end
-end
+function M.colors(opts) require('fff.pickers').open('colors', opts) end
 
 --- Open the git files picker (similar to fzf.vim :GFiles?)
 --- Lists git status files with fuzzy search and live preview
 --- @param opts? table Optional configuration to override defaults
-function M.git_files(opts)
-  local git_files_ok, git_files = pcall(require, 'fff.git_files')
-  if git_files_ok then
-    git_files.open(opts)
-  else
-    vim.notify('Failed to load git files picker: ' .. tostring(git_files), vim.log.levels.ERROR)
-  end
-end
+function M.git_files(opts) require('fff.pickers').open('git_files', opts) end
 
 -- Strip wrapper punctuation that frequently surrounds paths in prose: leading
 -- markdown-link `[`, parens `(`, brackets `<`, quotes; trailing sentence

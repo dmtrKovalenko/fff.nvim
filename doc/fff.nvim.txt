@@ -25,9 +25,9 @@ LAZY.NVIM
 
 >lua
     {
-      'dmtrKovalenko/fff.nvim',
+      'vinitkumar/fff-plus.nvim',
       build = function()
-        -- downloads a prebuilt binary or falls back to cargo build
+        -- downloads a prebuilt binary from this fork's GitHub releases
         require("fff.download").download_or_build_binary()
       end,
       -- for nixos:
@@ -62,13 +62,13 @@ LAZY.NVIM
 VIM.PACK
 
 >lua
-    vim.pack.add({ 'https://github.com/dmtrKovalenko/fff.nvim' })
+    vim.pack.add({ 'https://github.com/vinitkumar/fff-plus.nvim' })
     
     vim.api.nvim_create_autocmd('PackChanged', {
       callback = function(ev)
         local name, kind = ev.data.spec.name, ev.data.kind
-        if name == 'fff.nvim' and (kind == 'install' or kind == 'update') then
-          if not ev.data.active then vim.cmd.packadd('fff.nvim') end
+        if name == 'fff-plus.nvim' and (kind == 'install' or kind == 'update') then
+          if not ev.data.active then vim.cmd.packadd('fff-plus.nvim') end
           require('fff.download').download_or_build_binary()
         end
       end,
@@ -76,6 +76,9 @@ VIM.PACK
     
     vim.g.fff = {
       lazy_sync = true,
+      download = {
+        github_repo = 'vinitkumar/fff-plus.nvim',
+      },
       debug = { enabled = true, show_scores = true },
     }
     
