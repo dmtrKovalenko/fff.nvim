@@ -1,4 +1,4 @@
-<img alt="fff-plus.nvim" src="./assets/logo-orange.png" width="300">
+<img alt="f3+ logo for fff-plus.nvim" src="./assets/logo-f3-plus-orange.png" width="300">
 
 # fff-plus.nvim
 
