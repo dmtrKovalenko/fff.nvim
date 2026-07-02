@@ -1,22 +1,74 @@
-<img alt="FFF" src="./assets/logo-orange.png" width="300">
+<img alt="fff-plus.nvim" src="./assets/logo-orange.png" width="300">
+
+# fff-plus.nvim
 
 <p>
-  <i>A file search toolkit for humans and AI agents. Really fast.</i>
+  <i>A fast Neovim picker suite built on the Rust-powered FFF search engine.</i>
 </p>
 
-Typo-resistant path and content search, frecency-ranked file access, a background watcher, and a lightweight in-memory content index. Way faster than CLIs like ripgrep and fzf in any long-running process that searches more than once.
+`fff-plus.nvim` is a maintained fork of [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.nvim). It keeps the original fast fuzzy file search, live grep, frecency ranking, background watcher, and in-memory content index, then adds the picker suite many Neovim users expect: buffers, git files, and colorschemes.
 
-Powers file search in [opencode](http://github.com/anomalyco/opencode/), [nushell](https://github.com/nushell/nushell), and many more amazing projects!
+## Installation
 
-Originally started as [Neovim plugin](#neovim-plugin) people loved, but it turned out that plenty of AI harnesses and code editors need the same thing: accurate, fast file search as a library. That is what fff is.
+Prebuilt Neovim binaries are published by this fork's CI on the [fff-plus.nvim releases page](https://github.com/vinitkumar/fff-plus.nvim/releases). Normal installs should not need Rust locally; the build hook downloads the matching binary for your platform and only falls back to `cargo build --release` if the download fails.
+
+### lazy.nvim
+
+```lua
+{
+  'vinitkumar/fff-plus.nvim',
+  build = function()
+    require('fff.download').download_or_build_binary()
+  end,
+  lazy = false, -- fff-plus.nvim lazy-initializes itself
+  opts = {
+    download = {
+      github_repo = 'vinitkumar/fff-plus.nvim',
+    },
+  },
+  keys = {
+    { 'ff', function() require('fff').find_files() end, desc = 'FFF files' },
+    { '<leader>b', function() require('fff').buffers() end, desc = 'FFF buffers' },
+    { '<leader>g', function() require('fff').git_files() end, desc = 'FFF git files' },
+    { '<leader>c', function() require('fff').colors() end, desc = 'FFF colors' },
+    { 'fg', function() require('fff').live_grep() end, desc = 'FFF grep' },
+  },
+}
+```
+
+### vim.pack
+
+```lua
+vim.pack.add({ 'https://github.com/vinitkumar/fff-plus.nvim' })
+
+vim.api.nvim_create_autocmd('PackChanged', {
+  callback = function(ev)
+    local name, kind = ev.data.spec.name, ev.data.kind
+    if name == 'fff-plus.nvim' and (kind == 'install' or kind == 'update') then
+      if not ev.data.active then vim.cmd.packadd('fff-plus.nvim') end
+      require('fff.download').download_or_build_binary()
+    end
+  end,
+})
+
+vim.g.fff = {
+  lazy_sync = true,
+  download = {
+    github_repo = 'vinitkumar/fff-plus.nvim',
+  },
+}
+
+vim.keymap.set('n', 'ff', function() require('fff').find_files() end, { desc = 'FFF files' })
+vim.keymap.set('n', '<leader>b', function() require('fff').buffers() end, { desc = 'FFF buffers' })
+vim.keymap.set('n', '<leader>g', function() require('fff').git_files() end, { desc = 'FFF git files' })
+vim.keymap.set('n', '<leader>c', function() require('fff').colors() end, { desc = 'FFF colors' })
+```
 
 ---
 
-Pick what you are interested in:
+## What changed in this fork?
 
-## Why This Fork?
-
-This fork, **fff-plus.nvim**, extends [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.nvim) into a **complete picker ecosystem**. The upstream project is an excellent, blazing-fast fuzzy file finder powered by Rust. This fork keeps all of that and adds the pickers you actually need day-to-day:
+`fff-plus.nvim` extends upstream into a more complete picker ecosystem:
 
 | Feature | Upstream | This Fork |
 |---------|----------|-----------|
@@ -29,11 +81,13 @@ This fork, **fff-plus.nvim**, extends [dmtrKovalenko/fff.nvim](https://github.co
 | Query constraints (`status:`, `*.ext`, `!exclude`) | ✅ | ✅ |
 | Git status signs + text coloring | ✅ | ✅ |
 
-**In short:** upstream focused on making file finding extremely fast with Rust. This fork fills the "where's the rest of the picker suite?" gap, bringing it closer to feature parity with Telescope and fzf.vim while keeping the Rust-powered speed.
+**In short:** upstream focused on making file finding extremely fast with Rust. This fork keeps that foundation, adds the missing picker surface, and publishes fork-owned CI binaries so users can install without building locally.
 
 See [FORK.md](./FORK.md) for the maintenance policy and picker boundary used by this fork.
 
 ---
+
+Pick what you are interested in:
 
 <details id="mcp-server">
 <summary>
@@ -145,7 +199,7 @@ The Pi extension swaps pi's native tools for FFF implementations and feeds the i
 
 <details id="neovim-plugin">
 <summary>
-<h2>fff.nvim</h2>
+<h2>fff-plus.nvim</h2>
 </summary>
 
 Demo on the Linux kernel repo (100k files, 8GB):
@@ -154,14 +208,15 @@ https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 
 ### Installation
 
+Prebuilt binaries are downloaded from `vinitkumar/fff-plus.nvim` by default. The downloader resolves the tag for the installed commit and fetches the matching release asset, so pinned plugin installs use the binary built for that exact commit.
+
 #### lazy.nvim
 
 ```lua
 {
   'vinitkumar/fff-plus.nvim',
   build = function()
-    -- downloads a prebuilt binary from this fork's GitHub releases
-    require("fff.download").download_or_build_binary()
+    require('fff.download').download_or_build_binary()
   end,
   -- for nixos:
   -- build = "nix run .#release",
@@ -173,16 +228,16 @@ https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
   },
   lazy = false, -- the plugin lazy-initialises itself
   keys = {
-    { "ff", function() require('fff').find_files() end, desc = 'FFFind files' },
-    { "<leader>b", function() require('fff').buffers() end, desc = 'FFF Buffers' },
-    { "<leader>c", function() require('fff').colors() end, desc = 'FFF Colors' },
-    { "<leader>g", function() require('fff').git_files() end, desc = 'FFF Git Files' },
-    { "fg", function() require('fff').live_grep() end, desc = 'LiFFFe grep' },
-    { "fz",
+    { 'ff', function() require('fff').find_files() end, desc = 'FFF files' },
+    { '<leader>b', function() require('fff').buffers() end, desc = 'FFF buffers' },
+    { '<leader>c', function() require('fff').colors() end, desc = 'FFF colors' },
+    { '<leader>g', function() require('fff').git_files() end, desc = 'FFF git files' },
+    { 'fg', function() require('fff').live_grep() end, desc = 'FFF grep' },
+    { 'fz',
       function() require('fff').live_grep({ grep = { modes = { 'fuzzy', 'plain' } } }) end,
-      desc = 'Live fffuzy grep',
+      desc = 'FFF fuzzy grep',
     },
-    { "fw",
+    { 'fw',
       function() require('fff').live_grep_under_cursor() end,
       mode = { 'n', 'x' },
       desc = 'Search current word / selection',
@@ -214,10 +269,10 @@ vim.g.fff = {
   debug = { enabled = true, show_scores = true },
 }
 
-vim.keymap.set('n', 'ff', function() require('fff').find_files() end, { desc = 'FFFind files' })
-vim.keymap.set('n', '<leader>b', function() require('fff').buffers() end, { desc = 'FFF Buffers' })
-vim.keymap.set('n', '<leader>c', function() require('fff').colors() end, { desc = 'FFF Colors' })
-vim.keymap.set('n', '<leader>g', function() require('fff').git_files() end, { desc = 'FFF Git Files' })
+vim.keymap.set('n', 'ff', function() require('fff').find_files() end, { desc = 'FFF files' })
+vim.keymap.set('n', '<leader>b', function() require('fff').buffers() end, { desc = 'FFF buffers' })
+vim.keymap.set('n', '<leader>c', function() require('fff').colors() end, { desc = 'FFF colors' })
+vim.keymap.set('n', '<leader>g', function() require('fff').git_files() end, { desc = 'FFF git files' })
 ```
 
 ### Public API
@@ -584,7 +639,7 @@ Mix freely: `git:modified src/**/*.rs !src/**/mod.rs user controller`.
 
 ### Open in invoking window
 
-By default fff.nvim will try to open a file in the most suitable window, so any non-file buffers are not affected. You can customize or disable this by providing:
+By default fff-plus.nvim will try to open a file in the most suitable window, so any non-file buffers are not affected. You can customize or disable this by providing:
 
 ```lua
 require('fff').setup({
@@ -747,8 +802,6 @@ cargo build --release -p fff-c --features zlob
 ```
 
 The output is a `cdylib` (`libfff_c.so` / `libfff_c.dylib` / `fff_c.dll`). The header lives at [`crates/fff-c/include/fff.h`](./crates/fff-c/include/fff.h).
-
-Prebuilt Neovim binaries for this fork are published by CI on the [fff-plus.nvim releases page](https://github.com/vinitkumar/fff-plus.nvim/releases). The plugin downloader uses those release assets by default, so users should not need Rust installed for normal installation.
 
 ### Install
 
