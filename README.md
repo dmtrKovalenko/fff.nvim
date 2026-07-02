@@ -16,7 +16,7 @@ Pick what you are interested in:
 
 ## Why This Fork?
 
-This fork extends [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.nvim) into a **complete picker ecosystem**. The upstream project is an excellent, blazing-fast fuzzy file finder powered by Rust. This fork keeps all of that and adds the pickers you actually need day-to-day:
+This fork, **fff-plus.nvim**, extends [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.nvim) into a **complete picker ecosystem**. The upstream project is an excellent, blazing-fast fuzzy file finder powered by Rust. This fork keeps all of that and adds the pickers you actually need day-to-day:
 
 | Feature | Upstream | This Fork |
 |---------|----------|-----------|
@@ -30,6 +30,8 @@ This fork extends [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.
 | Git status signs + text coloring | ✅ | ✅ |
 
 **In short:** upstream focused on making file finding extremely fast with Rust. This fork fills the "where's the rest of the picker suite?" gap, bringing it closer to feature parity with Telescope and fzf.vim while keeping the Rust-powered speed.
+
+See [FORK.md](./FORK.md) for the maintenance policy and picker boundary used by this fork.
 
 ---
 
@@ -156,9 +158,9 @@ https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 
 ```lua
 {
-  'dmtrKovalenko/fff.nvim',
+  'vinitkumar/fff-plus.nvim',
   build = function()
-    -- downloads a prebuilt binary or falls back to cargo build
+    -- downloads a prebuilt binary from this fork's GitHub releases
     require("fff.download").download_or_build_binary()
   end,
   -- for nixos:
@@ -192,13 +194,13 @@ https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 #### vim.pack
 
 ```lua
-vim.pack.add({ 'https://github.com/dmtrKovalenko/fff.nvim' })
+vim.pack.add({ 'https://github.com/vinitkumar/fff-plus.nvim' })
 
 vim.api.nvim_create_autocmd('PackChanged', {
   callback = function(ev)
     local name, kind = ev.data.spec.name, ev.data.kind
-    if name == 'fff.nvim' and (kind == 'install' or kind == 'update') then
-      if not ev.data.active then vim.cmd.packadd('fff.nvim') end
+    if name == 'fff-plus.nvim' and (kind == 'install' or kind == 'update') then
+      if not ev.data.active then vim.cmd.packadd('fff-plus.nvim') end
       require('fff.download').download_or_build_binary()
     end
   end,
@@ -206,6 +208,9 @@ vim.api.nvim_create_autocmd('PackChanged', {
 
 vim.g.fff = {
   lazy_sync = true,
+  download = {
+    github_repo = 'vinitkumar/fff-plus.nvim',
+  },
   debug = { enabled = true, show_scores = true },
 }
 
@@ -743,7 +748,7 @@ cargo build --release -p fff-c --features zlob
 
 The output is a `cdylib` (`libfff_c.so` / `libfff_c.dylib` / `fff_c.dll`). The header lives at [`crates/fff-c/include/fff.h`](./crates/fff-c/include/fff.h).
 
-Prebuilt binaries for every version, including every commit on main, are on the [releases page](https://github.com/dmtrKovalenko/fff.nvim/releases). The same binaries also ship inside the `@ff-labs/fff-bin-*` npm packages.
+Prebuilt Neovim binaries for this fork are published by CI on the [fff-plus.nvim releases page](https://github.com/vinitkumar/fff-plus.nvim/releases). The plugin downloader uses those release assets by default, so users should not need Rust installed for normal installation.
 
 ### Install
 

@@ -91,6 +91,7 @@ local M = {}
 --- @field wrap_around boolean
 --- @field file_picker table
 --- @field grep FffGrepConfig
+--- @field download table
 
 ---@class fff.conf.State
 local state = {
@@ -410,6 +411,9 @@ local function init()
       -- How many session log files to retain. Newest are kept, older are
       -- pruned on the next startup. Set to 0 to disable retention.
       retain_runs = 20,
+    },
+    download = {
+      github_repo = 'vinitkumar/fff-plus.nvim',
     },
     -- find_files settings
     file_picker = {

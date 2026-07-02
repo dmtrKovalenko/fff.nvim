@@ -3,7 +3,7 @@ local system = require('fff.utils.system')
 local fs_utils = require('fff.utils.fs')
 local fff_version = require('fff.utils.version')
 
-local GITHUB_REPO = 'dmtrKovalenko/fff.nvim'
+local DEFAULT_GITHUB_REPO = 'vinitkumar/fff-plus.nvim'
 
 local function get_binary_dir(plugin_dir) return plugin_dir .. '/../target/release' end
 
@@ -86,10 +86,11 @@ local function download_from_github(version, binary_path, opts, callback)
   local triple = system.get_triple()
   local extension = system.get_lib_extension()
   local binary_name = triple .. '.' .. extension
-  local url = string.format('https://github.com/%s/releases/download/%s/%s', GITHUB_REPO, version, binary_name)
+  local repo = opts.github_repo or DEFAULT_GITHUB_REPO
+  local url = string.format('https://github.com/%s/releases/download/%s/%s', repo, version, binary_name)
 
   vim.schedule(function()
-    vim.notify(string.format('Downloading fff.nvim binary for ' .. version), vim.log.levels.INFO)
+    vim.notify(string.format('Downloading fff.nvim binary for %s from %s', version, repo), vim.log.levels.INFO)
     vim.notify(string.format('Do not open fff until you see a success notification.'), vim.log.levels.WARN)
   end)
 
@@ -168,6 +169,9 @@ function M.ensure_downloaded(opts, callback)
     local binary_path = get_binary_path(plugin_dir)
     download_from_github(release_tag, binary_path, opts, callback)
   end
+
+  local config = require('fff.conf').get()
+  if opts.github_repo == nil and config.download then opts.github_repo = config.download.github_repo end
 
   if opts.version then
     on_release_tag(opts.version)

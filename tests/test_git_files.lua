@@ -5,7 +5,7 @@
 
 local function test_module_loads()
   print("Testing git_files module loads...")
-  local git_files = require('lua.fff.git_files')
+  local git_files = require('fff.pickers.git_files')
   assert(git_files, "git_files module should load")
   assert(type(git_files.open) == 'function', "git_files.open should be a function")
   assert(type(git_files.get_git_root) == 'function', "git_files.get_git_root should be a function")
@@ -15,7 +15,7 @@ end
 
 local function test_main_function_exists()
   print("Testing git_files function in main module...")
-  local main = require('lua.fff.main')
+  local main = require('fff.main')
   assert(main.git_files, "git_files function should exist in main module")
   assert(type(main.git_files) == 'function', "git_files should be a function")
   print("✓ git_files function exists in main module")

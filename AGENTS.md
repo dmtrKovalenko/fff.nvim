@@ -98,6 +98,7 @@ Located at the score.rs file
 - Document the types of public functions in every module
 - Use `vim.validate()` for validating user inputs in public functions
 - Try to reuse as much of existing functions as possible
+- Add fork-owned pickers through `lua/fff/pickers/init.lua` and keep the top-level API in `lua/fff/main.lua` as a thin entrypoint.
 - When working on new features for the UI **IT IS EXTREMELY IMPORTANT** to keep the core functionality of navigating between files, selecting, and seeing the preview working as is. NEVER break anything from the core UI functionality, only add new features on top of the current UI.
 - When making a large chunk of code make lua test that opens neovim at `~/dev/lightsource` and opens the picker to test the ui functionality across the actual code.
 - When adding a new highlights or any new shortcuts and configurable UI options add them to the neovim config. AND IMPORTANT: update the README.md with the new configuration options.
