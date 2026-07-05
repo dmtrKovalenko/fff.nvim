@@ -11,10 +11,6 @@ path = "src/lib.rs"
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [[bench]]
-name = "parse_bench"
-harness = false
-
-[[bench]]
 name = "bigram_bench"
 harness = false
 

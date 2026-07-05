@@ -82,10 +82,18 @@ fn select_rare_pair(needle_lower: &[u8]) -> (usize, usize) {
 
 #[inline]
 fn verify_scalar(h: *const u8, needle_lower: &[u8]) -> bool {
-    for (i, _) in needle_lower.iter().enumerate() {
+    verify_scalar_from(h, needle_lower, 0)
+}
+
+/// Byte-by-byte case-folded compare from `i` to the end of the needle.
+/// Also serves as the scalar tail of the SIMD verify kernels.
+#[inline]
+fn verify_scalar_from(h: *const u8, needle_lower: &[u8], mut i: usize) -> bool {
+    while i < needle_lower.len() {
         if ascii_fold_byte(unsafe { *h.add(i) }) != needle_lower[i] {
             return false;
         }
+        i += 1;
     }
     true
 }
@@ -155,13 +163,7 @@ unsafe fn verify_avx2(h: *const u8, needle_lower: &[u8]) -> bool {
     }
 
     // Scalar tail: handle remaining bytes that don't fill a full 32-byte vector.
-    while i < len {
-        if ascii_fold_byte(unsafe { *h.add(i) }) != needle_lower[i] {
-            return false;
-        }
-        i += 1;
-    }
-    true
+    verify_scalar_from(h, needle_lower, i)
 }
 
 // ======== NEON + dotprod (aarch64) ===========================================
@@ -240,13 +242,63 @@ unsafe fn verify_neon_dotprod(h: *const u8, needle_lower: &[u8]) -> bool {
     }
 
     // Scalar tail
-    while i < len {
-        if ascii_fold_byte(unsafe { *h.add(i) }) != needle_lower[i] {
-            return false;
+    verify_scalar_from(h, needle_lower, i)
+}
+
+/// Shared scalar tail for the packed-pair kernels: scan the last few
+/// positions that couldn't fill a full vector via memchr on the rarer byte.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[inline(always)]
+unsafe fn packed_pair_tail(
+    haystack: &[u8],
+    needle_lower: &[u8],
+    i1: usize,
+    i2: usize,
+    offset: usize,
+    last_start: usize,
+) -> bool {
+    let ptr = haystack.as_ptr();
+    if offset <= last_start {
+        let rare_pos =
+            if case_insensitive_rank(needle_lower[i1]) <= case_insensitive_rank(needle_lower[i2]) {
+                i1
+            } else {
+                i2
+            };
+        let rare_byte = needle_lower[rare_pos];
+        let tail_start = offset + rare_pos;
+        let tail_end = last_start + rare_pos + 1;
+        if tail_start < tail_end {
+            let tail_space = &haystack[tail_start..tail_end];
+            if rare_byte.is_ascii_lowercase() {
+                for pos in memchr::memchr2_iter(rare_byte, ascii_swap_case(rare_byte), tail_space) {
+                    let candidate = offset + pos;
+                    if unsafe { verify_dispatch(ptr.add(candidate), needle_lower) } {
+                        return true;
+                    }
+                }
+            } else {
+                for pos in memchr::memchr_iter(rare_byte, tail_space) {
+                    let candidate = offset + pos;
+                    if unsafe { verify_dispatch(ptr.add(candidate), needle_lower) } {
+                        return true;
+                    }
+                }
+            }
         }
-        i += 1;
     }
-    true
+    false
+}
+
+/// Both case variants of a needle byte for SIMD splatting.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[inline(always)]
+fn case_variants(b: u8) -> (u8, u8) {
+    if b.is_ascii_lowercase() {
+        (b, ascii_swap_case(b))
+    } else {
+        (b, b)
+    }
 }
 
 /// NEON packed-pair kernel: scan 16 haystack positions per iteration,
@@ -267,18 +319,8 @@ unsafe fn search_packed_pair_neon(
     let ptr = haystack.as_ptr();
     let last_start = hlen - n;
 
-    let b1 = needle_lower[i1];
-    let b1_alt = if b1.is_ascii_lowercase() {
-        ascii_swap_case(b1)
-    } else {
-        b1
-    };
-    let b2 = needle_lower[i2];
-    let b2_alt = if b2.is_ascii_lowercase() {
-        ascii_swap_case(b2)
-    } else {
-        b2
-    };
+    let (b1, b1_alt) = case_variants(needle_lower[i1]);
+    let (b2, b2_alt) = case_variants(needle_lower[i2]);
 
     let v1_lo = vdupq_n_u8(b1);
     let v1_hi = vdupq_n_u8(b1_alt);
@@ -314,38 +356,7 @@ unsafe fn search_packed_pair_neon(
         offset += 16;
     }
 
-    // Tail: remaining positions that couldn't fill a full vector.
-    if offset <= last_start {
-        let rare_pos =
-            if case_insensitive_rank(needle_lower[i1]) <= case_insensitive_rank(needle_lower[i2]) {
-                i1
-            } else {
-                i2
-            };
-        let rare_byte = needle_lower[rare_pos];
-        let tail_start = offset + rare_pos;
-        let tail_end = last_start + rare_pos + 1;
-        if tail_start < tail_end {
-            let tail_space = &haystack[tail_start..tail_end];
-            if rare_byte.is_ascii_lowercase() {
-                for pos in memchr::memchr2_iter(rare_byte, ascii_swap_case(rare_byte), tail_space) {
-                    let candidate = offset + pos;
-                    if unsafe { verify_dispatch(ptr.add(candidate), needle_lower) } {
-                        return true;
-                    }
-                }
-            } else {
-                for pos in memchr::memchr_iter(rare_byte, tail_space) {
-                    let candidate = offset + pos;
-                    if unsafe { verify_dispatch(ptr.add(candidate), needle_lower) } {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-
-    false
+    unsafe { packed_pair_tail(haystack, needle_lower, i1, i2, offset, last_start) }
 }
 
 #[inline]
@@ -387,18 +398,8 @@ unsafe fn search_packed_pair_avx2(
     let ptr = haystack.as_ptr();
     let last_start = hlen - n; // last valid match-start position
 
-    let b1 = needle_lower[i1];
-    let b1_alt = if b1.is_ascii_lowercase() {
-        ascii_swap_case(b1)
-    } else {
-        b1
-    };
-    let b2 = needle_lower[i2];
-    let b2_alt = if b2.is_ascii_lowercase() {
-        ascii_swap_case(b2)
-    } else {
-        b2
-    };
+    let (b1, b1_alt) = case_variants(needle_lower[i1]);
+    let (b2, b2_alt) = case_variants(needle_lower[i2]);
 
     let v1_lo = _mm256_set1_epi8(b1 as i8);
     let v1_hi = _mm256_set1_epi8(b1_alt as i8);
@@ -444,39 +445,7 @@ unsafe fn search_packed_pair_avx2(
         offset += 32;
     }
 
-    // Tail: remaining positions that couldn't fill a full vector.
-    // Use memchr2 on the rarest byte for these last few positions.
-    if offset <= last_start {
-        let rare_pos =
-            if case_insensitive_rank(needle_lower[i1]) <= case_insensitive_rank(needle_lower[i2]) {
-                i1
-            } else {
-                i2
-            };
-        let rare_byte = needle_lower[rare_pos];
-        let tail_start = offset + rare_pos;
-        let tail_end = last_start + rare_pos + 1;
-        if tail_start < tail_end {
-            let tail_space = &haystack[tail_start..tail_end];
-            if rare_byte.is_ascii_lowercase() {
-                for pos in memchr::memchr2_iter(rare_byte, ascii_swap_case(rare_byte), tail_space) {
-                    let candidate = offset + pos;
-                    if unsafe { verify_dispatch(ptr.add(candidate), needle_lower) } {
-                        return true;
-                    }
-                }
-            } else {
-                for pos in memchr::memchr_iter(rare_byte, tail_space) {
-                    let candidate = offset + pos;
-                    if unsafe { verify_dispatch(ptr.add(candidate), needle_lower) } {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-
-    false
+    unsafe { packed_pair_tail(haystack, needle_lower, i1, i2, offset, last_start) }
 }
 
 /// Packed-pair case-insensitive substring search.

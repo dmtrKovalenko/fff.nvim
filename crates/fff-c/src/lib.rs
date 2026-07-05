@@ -105,6 +105,74 @@ fn default_i32(val: i32, default: i32) -> i32 {
     if val == 0 { default } else { val }
 }
 
+/// Recover the instance from the opaque handle or early-return the error result.
+macro_rules! try_inst {
+    ($handle:expr) => {
+        match unsafe { instance_ref($handle) } {
+            Ok(i) => i,
+            Err(e) => return e,
+        }
+    };
+}
+
+/// Convert a required C string or early-return an error result.
+macro_rules! try_cstr {
+    ($ptr:expr, $msg:expr) => {
+        match unsafe { cstr_to_str($ptr) } {
+            Some(s) => s,
+            None => return FffResult::err($msg),
+        }
+    };
+}
+
+/// Bind `$guard`/`$picker` to a read-locked picker ref, early-returning on
+/// poisoned lock or uninitialized picker.
+macro_rules! read_picker {
+    ($inst:expr, $guard:ident, $picker:ident) => {
+        let $guard = match $inst.picker.read() {
+            Ok(g) => g,
+            Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
+        };
+        let $picker = match $guard.as_ref() {
+            Some(p) => p,
+            None => {
+                return FffResult::err(
+                    "File picker not initialized. Call fff_create_instance first.",
+                );
+            }
+        };
+    };
+}
+
+/// Base path of the current picker, or `None` if the lock is poisoned or the
+/// picker is not initialized.
+fn project_path(inst: &FffInstance) -> Option<PathBuf> {
+    inst.picker
+        .read()
+        .ok()?
+        .as_ref()
+        .map(|p| p.base_path().to_path_buf())
+}
+
+/// Reconstruct a heap array and run `f` on each element before dropping it.
+unsafe fn free_array<T>(ptr: *mut T, count: usize, f: impl Fn(&mut T)) {
+    if !ptr.is_null() {
+        let mut items = unsafe { Vec::from_raw_parts(ptr, count, count) };
+        for item in &mut items {
+            f(item);
+        }
+    }
+}
+
+/// Pointer to the `index`-th element of a result array, or null when out of
+/// bounds. Shared body of the `fff_*_get_*` accessors.
+unsafe fn elem_at<T>(items: *const T, count: u32, index: u32) -> *const T {
+    if items.is_null() || index >= count {
+        return std::ptr::null();
+    }
+    unsafe { items.add(index as usize) }
+}
+
 /// Create a new file finder instance (legacy 8-arg positional signature).
 ///
 /// @deprecated Use [`fff_create_instance_with`] (or
@@ -382,32 +450,16 @@ pub unsafe extern "C" fn fff_search(
     combo_boost_multiplier: i32,
     min_combo_count: u32,
 ) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
-    let query_str = match unsafe { cstr_to_str(query) } {
-        Some(s) => s,
-        None => return FffResult::err("Query is null or invalid UTF-8"),
-    };
+    let query_str = try_cstr!(query, "Query is null or invalid UTF-8");
 
     let current_file_str = unsafe { optional_cstr(current_file) };
     let page_size = default_u32(page_size, 100) as usize;
     let min_combo_count = default_u32(min_combo_count, 3);
     let combo_boost_multiplier = default_i32(combo_boost_multiplier, 100);
 
-    let picker_guard = match inst.picker.read() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
-
-    let picker = match picker_guard.as_ref() {
-        Some(p) => p,
-        None => {
-            return FffResult::err("File picker not initialized. Call fff_create_instance first.");
-        }
-    };
+    read_picker!(inst, picker_guard, picker);
 
     // Get query tracker ref for combo matching
     let qt_guard = match inst.query_tracker.read() {
@@ -468,10 +520,7 @@ pub unsafe extern "C" fn fff_glob(
     page_index: u32,
     page_size: u32,
 ) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
     let pattern_str = match unsafe { cstr_to_str(pattern) } {
         Some(s) if !s.is_empty() => s,
@@ -481,17 +530,7 @@ pub unsafe extern "C" fn fff_glob(
     let current_file_str = unsafe { optional_cstr(current_file) };
     let page_size = default_u32(page_size, 100) as usize;
 
-    let picker_guard = match inst.picker.read() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
-
-    let picker = match picker_guard.as_ref() {
-        Some(p) => p,
-        None => {
-            return FffResult::err("File picker not initialized. Call fff_create_instance first.");
-        }
-    };
+    read_picker!(inst, picker_guard, picker);
 
     let results = picker.glob(
         pattern_str,
@@ -535,30 +574,14 @@ pub unsafe extern "C" fn fff_search_directories(
     page_index: u32,
     page_size: u32,
 ) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
-    let query_str = match unsafe { cstr_to_str(query) } {
-        Some(s) => s,
-        None => return FffResult::err("Query is null or invalid UTF-8"),
-    };
+    let query_str = try_cstr!(query, "Query is null or invalid UTF-8");
 
     let current_file_str = unsafe { optional_cstr(current_file) };
     let page_size = default_u32(page_size, 100) as usize;
 
-    let picker_guard = match inst.picker.read() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
-
-    let picker = match picker_guard.as_ref() {
-        Some(p) => p,
-        None => {
-            return FffResult::err("File picker not initialized. Call fff_create_instance first.");
-        }
-    };
+    read_picker!(inst, picker_guard, picker);
 
     let parser = QueryParser::new(fff_query_parser::DirSearchConfig);
     let parsed = parser.parse(query_str);
@@ -613,32 +636,16 @@ pub unsafe extern "C" fn fff_search_mixed(
     combo_boost_multiplier: i32,
     min_combo_count: u32,
 ) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
-    let query_str = match unsafe { cstr_to_str(query) } {
-        Some(s) => s,
-        None => return FffResult::err("Query is null or invalid UTF-8"),
-    };
+    let query_str = try_cstr!(query, "Query is null or invalid UTF-8");
 
     let current_file_str = unsafe { optional_cstr(current_file) };
     let page_size = default_u32(page_size, 100) as usize;
     let min_combo_count = default_u32(min_combo_count, 3);
     let combo_boost_multiplier = default_i32(combo_boost_multiplier, 100);
 
-    let picker_guard = match inst.picker.read() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
-
-    let picker = match picker_guard.as_ref() {
-        Some(p) => p,
-        None => {
-            return FffResult::err("File picker not initialized. Call fff_create_instance first.");
-        }
-    };
+    read_picker!(inst, picker_guard, picker);
 
     let qt_guard = match inst.query_tracker.read() {
         Ok(q) => q,
@@ -704,27 +711,11 @@ pub unsafe extern "C" fn fff_live_grep(
     after_context: u32,
     classify_definitions: bool,
 ) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
-    let query_str = match unsafe { cstr_to_str(query) } {
-        Some(s) => s,
-        None => return FffResult::err("Query is null or invalid UTF-8"),
-    };
+    let query_str = try_cstr!(query, "Query is null or invalid UTF-8");
 
-    let picker_guard = match inst.picker.read() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
-
-    let picker = match picker_guard.as_ref() {
-        Some(p) => p,
-        None => {
-            return FffResult::err("File picker not initialized. Call fff_create_instance first.");
-        }
-    };
+    read_picker!(inst, picker_guard, picker);
 
     let is_ai = picker.mode().is_ai();
     let parsed = if is_ai {
@@ -791,10 +782,7 @@ pub unsafe extern "C" fn fff_multi_grep(
     after_context: u32,
     classify_definitions: bool,
 ) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
     let patterns_str = match unsafe { cstr_to_str(patterns_joined) } {
         Some(s) if !s.is_empty() => s,
@@ -808,17 +796,7 @@ pub unsafe extern "C" fn fff_multi_grep(
 
     let constraints_str = unsafe { optional_cstr(constraints) };
 
-    let picker_guard = match inst.picker.read() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
-
-    let picker = match picker_guard.as_ref() {
-        Some(p) => p,
-        None => {
-            return FffResult::err("File picker not initialized. Call fff_create_instance first.");
-        }
-    };
+    read_picker!(inst, picker_guard, picker);
 
     let is_ai = picker.mode().is_ai();
 
@@ -862,10 +840,7 @@ pub unsafe extern "C" fn fff_multi_grep(
 /// `fff_handle` must be a valid instance pointer from `fff_create_instance`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fff_scan_files(fff_handle: *mut c_void) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
     // Async: rescan runs on a BG thread, caller returns immediately.
     // Use `fff_is_scanning` / `fff_wait_for_scan` to observe progress.
@@ -902,20 +877,9 @@ pub unsafe extern "C" fn fff_is_scanning(fff_handle: *mut c_void) -> bool {
 /// `fff_handle` must be a valid instance pointer from `fff_create_instance`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fff_get_base_path(fff_handle: *mut c_void) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
-    let guard = match inst.picker.read() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
-
-    let picker = match guard.as_ref() {
-        Some(p) => p,
-        None => return FffResult::err("File picker not initialized"),
-    };
+    read_picker!(inst, guard, picker);
 
     FffResult::ok_string(&picker.base_path().to_string_lossy())
 }
@@ -926,20 +890,9 @@ pub unsafe extern "C" fn fff_get_base_path(fff_handle: *mut c_void) -> *mut FffR
 /// `fff_handle` must be a valid instance pointer from `fff_create_instance`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fff_get_scan_progress(fff_handle: *mut c_void) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
-    let guard = match inst.picker.read() {
-        Ok(g) => g,
-        Err(e) => return FffResult::err(&format!("Failed to acquire file picker lock: {}", e)),
-    };
-
-    let picker = match guard.as_ref() {
-        Some(p) => p,
-        None => return FffResult::err("File picker not initialized"),
-    };
+    read_picker!(inst, guard, picker);
 
     let result = Box::into_raw(Box::new(FffScanProgress::from(picker.get_scan_progress())));
     FffResult::ok_handle(result as *mut c_void)
@@ -954,10 +907,7 @@ pub unsafe extern "C" fn fff_wait_for_scan(
     fff_handle: *mut c_void,
     timeout_ms: u64,
 ) -> *mut FffResult {
-    let FffInstance { picker, .. } = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let FffInstance { picker, .. } = try_inst!(fff_handle);
 
     let completed = picker.wait_for_scan(Duration::from_millis(timeout_ms));
     FffResult::ok_int(completed as i64)
@@ -972,10 +922,7 @@ pub unsafe extern "C" fn fff_wait_for_watcher(
     fff_handle: *mut c_void,
     timeout_ms: u64,
 ) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
     let completed = inst
         .picker
@@ -993,15 +940,9 @@ pub unsafe extern "C" fn fff_restart_index(
     fff_handle: *mut c_void,
     new_path: *const c_char,
 ) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
-    let path_str = match unsafe { cstr_to_str(new_path) } {
-        Some(s) => s,
-        None => return FffResult::err("Path is null or invalid UTF-8"),
-    };
+    let path_str = try_cstr!(new_path, "Path is null or invalid UTF-8");
 
     let path = PathBuf::from(&path_str);
     if !path.exists() {
@@ -1061,10 +1002,7 @@ pub unsafe extern "C" fn fff_restart_index(
 /// `fff_handle` must be a valid instance pointer from `fff_create_instance`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fff_refresh_git_status(fff_handle: *mut c_void) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
     match inst.picker.refresh_git_status(&inst.frecency) {
         Ok(count) => FffResult::ok_int(count as i64),
@@ -1083,35 +1021,19 @@ pub unsafe extern "C" fn fff_track_query(
     query: *const c_char,
     file_path: *const c_char,
 ) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
-    let query_str = match unsafe { cstr_to_str(query) } {
-        Some(s) => s,
-        None => return FffResult::err("Query is null or invalid UTF-8"),
-    };
+    let query_str = try_cstr!(query, "Query is null or invalid UTF-8");
 
-    let path_str = match unsafe { cstr_to_str(file_path) } {
-        Some(s) => s,
-        None => return FffResult::err("File path is null or invalid UTF-8"),
-    };
+    let path_str = try_cstr!(file_path, "File path is null or invalid UTF-8");
 
     let file_path = match fff::path_utils::canonicalize(path_str) {
         Ok(p) => p,
         Err(e) => return FffResult::err(&format!("Failed to canonicalize path: {}", e)),
     };
 
-    let project_path = {
-        let guard = match inst.picker.read() {
-            Ok(g) => g,
-            Err(_) => return FffResult::ok_int(0),
-        };
-        match guard.as_ref() {
-            Some(p) => p.base_path().to_path_buf(),
-            None => return FffResult::ok_int(0),
-        }
+    let Some(project_path) = project_path(inst) else {
+        return FffResult::ok_int(0);
     };
 
     let mut qt_guard = match inst.query_tracker.write() {
@@ -1137,20 +1059,10 @@ pub unsafe extern "C" fn fff_get_historical_query(
     fff_handle: *mut c_void,
     offset: u64,
 ) -> *mut FffResult {
-    let inst = match unsafe { instance_ref(fff_handle) } {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
+    let inst = try_inst!(fff_handle);
 
-    let project_path = {
-        let guard = match inst.picker.read() {
-            Ok(g) => g,
-            Err(_) => return FffResult::ok_empty(),
-        };
-        match guard.as_ref() {
-            Some(p) => p.base_path().to_path_buf(),
-            None => return FffResult::ok_empty(),
-        }
+    let Some(project_path) = project_path(inst) else {
+        return FffResult::ok_empty();
     };
 
     let qt_guard = match inst.query_tracker.read() {
@@ -1375,19 +1287,8 @@ pub unsafe extern "C" fn fff_free_search_result(result: *mut FffSearchResult) {
     unsafe {
         let result = Box::from_raw(result);
         let count = result.count as usize;
-
-        if !result.items.is_null() {
-            let mut items = Vec::from_raw_parts(result.items, count, count);
-            for item in &mut items {
-                item.free_strings();
-            }
-        }
-        if !result.scores.is_null() {
-            let mut scores = Vec::from_raw_parts(result.scores, count, count);
-            for score in &mut scores {
-                score.free_strings();
-            }
-        }
+        free_array(result.items, count, |item| item.free_strings());
+        free_array(result.scores, count, |score| score.free_strings());
     }
 }
 
@@ -1403,14 +1304,10 @@ pub unsafe extern "C" fn fff_search_result_get_item(
     result: *const FffSearchResult,
     index: u32,
 ) -> *const FffFileItem {
-    if result.is_null() {
+    let Some(result) = (unsafe { result.as_ref() }) else {
         return std::ptr::null();
-    }
-    let result = unsafe { &*result };
-    if index >= result.count || result.items.is_null() {
-        return std::ptr::null();
-    }
-    unsafe { result.items.add(index as usize) }
+    };
+    unsafe { elem_at(result.items, result.count, index) }
 }
 
 /// Get a pointer to the `index`-th `FffScore` in a search result.
@@ -1425,14 +1322,10 @@ pub unsafe extern "C" fn fff_search_result_get_score(
     result: *const FffSearchResult,
     index: u32,
 ) -> *const FffScore {
-    if result.is_null() {
+    let Some(result) = (unsafe { result.as_ref() }) else {
         return std::ptr::null();
-    }
-    let result = unsafe { &*result };
-    if index >= result.count || result.scores.is_null() {
-        return std::ptr::null();
-    }
-    unsafe { result.scores.add(index as usize) }
+    };
+    unsafe { elem_at(result.scores, result.count, index) }
 }
 
 /// Free a grep result returned by `fff_live_grep` or `fff_multi_grep`.
@@ -1452,13 +1345,7 @@ pub unsafe extern "C" fn fff_free_grep_result(result: *mut FffGrepResult) {
     unsafe {
         let result = Box::from_raw(result);
         let count = result.count as usize;
-
-        if !result.items.is_null() {
-            let mut items = Vec::from_raw_parts(result.items, count, count);
-            for item in &mut items {
-                item.free_fields();
-            }
-        }
+        free_array(result.items, count, |item| item.free_fields());
         if !result.regex_fallback_error.is_null() {
             drop(CString::from_raw(result.regex_fallback_error));
         }
@@ -1477,14 +1364,10 @@ pub unsafe extern "C" fn fff_grep_result_get_match(
     result: *const FffGrepResult,
     index: u32,
 ) -> *const FffGrepMatch {
-    if result.is_null() {
+    let Some(result) = (unsafe { result.as_ref() }) else {
         return std::ptr::null();
-    }
-    let result = unsafe { &*result };
-    if index >= result.count || result.items.is_null() {
-        return std::ptr::null();
-    }
-    unsafe { result.items.add(index as usize) }
+    };
+    unsafe { elem_at(result.items, result.count, index) }
 }
 
 /// Free a scan progress result returned by `fff_get_scan_progress`.
@@ -1572,19 +1455,8 @@ pub unsafe extern "C" fn fff_free_dir_search_result(result: *mut FffDirSearchRes
     unsafe {
         let result = Box::from_raw(result);
         let count = result.count as usize;
-
-        if !result.items.is_null() {
-            let mut items = Vec::from_raw_parts(result.items, count, count);
-            for item in &mut items {
-                item.free_strings();
-            }
-        }
-        if !result.scores.is_null() {
-            let mut scores = Vec::from_raw_parts(result.scores, count, count);
-            for score in &mut scores {
-                score.free_strings();
-            }
-        }
+        free_array(result.items, count, |item| item.free_strings());
+        free_array(result.scores, count, |score| score.free_strings());
     }
 }
 
@@ -1597,14 +1469,10 @@ pub unsafe extern "C" fn fff_dir_search_result_get_item(
     result: *const FffDirSearchResult,
     index: u32,
 ) -> *const FffDirItem {
-    if result.is_null() {
+    let Some(result) = (unsafe { result.as_ref() }) else {
         return std::ptr::null();
-    }
-    let result = unsafe { &*result };
-    if index >= result.count || result.items.is_null() {
-        return std::ptr::null();
-    }
-    unsafe { result.items.add(index as usize) }
+    };
+    unsafe { elem_at(result.items, result.count, index) }
 }
 
 /// Get a pointer to the `index`-th `FffScore` in a directory search result.
@@ -1616,14 +1484,10 @@ pub unsafe extern "C" fn fff_dir_search_result_get_score(
     result: *const FffDirSearchResult,
     index: u32,
 ) -> *const FffScore {
-    if result.is_null() {
+    let Some(result) = (unsafe { result.as_ref() }) else {
         return std::ptr::null();
-    }
-    let result = unsafe { &*result };
-    if index >= result.count || result.scores.is_null() {
-        return std::ptr::null();
-    }
-    unsafe { result.scores.add(index as usize) }
+    };
+    unsafe { elem_at(result.scores, result.count, index) }
 }
 
 // ---------------------------------------------------------------------------
@@ -1644,19 +1508,8 @@ pub unsafe extern "C" fn fff_free_mixed_search_result(result: *mut FffMixedSearc
     unsafe {
         let result = Box::from_raw(result);
         let count = result.count as usize;
-
-        if !result.items.is_null() {
-            let mut items = Vec::from_raw_parts(result.items, count, count);
-            for item in &mut items {
-                item.free_strings();
-            }
-        }
-        if !result.scores.is_null() {
-            let mut scores = Vec::from_raw_parts(result.scores, count, count);
-            for score in &mut scores {
-                score.free_strings();
-            }
-        }
+        free_array(result.items, count, |item| item.free_strings());
+        free_array(result.scores, count, |score| score.free_strings());
     }
 }
 
@@ -1669,14 +1522,10 @@ pub unsafe extern "C" fn fff_mixed_search_result_get_item(
     result: *const FffMixedSearchResult,
     index: u32,
 ) -> *const FffMixedItem {
-    if result.is_null() {
+    let Some(result) = (unsafe { result.as_ref() }) else {
         return std::ptr::null();
-    }
-    let result = unsafe { &*result };
-    if index >= result.count || result.items.is_null() {
-        return std::ptr::null();
-    }
-    unsafe { result.items.add(index as usize) }
+    };
+    unsafe { elem_at(result.items, result.count, index) }
 }
 
 /// Get a pointer to the `index`-th `FffScore` in a mixed search result.
@@ -1688,12 +1537,8 @@ pub unsafe extern "C" fn fff_mixed_search_result_get_score(
     result: *const FffMixedSearchResult,
     index: u32,
 ) -> *const FffScore {
-    if result.is_null() {
+    let Some(result) = (unsafe { result.as_ref() }) else {
         return std::ptr::null();
-    }
-    let result = unsafe { &*result };
-    if index >= result.count || result.scores.is_null() {
-        return std::ptr::null();
-    }
-    unsafe { result.scores.add(index as usize) }
+    };
+    unsafe { elem_at(result.scores, result.count, index) }
 }
