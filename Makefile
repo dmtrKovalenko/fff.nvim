@@ -116,11 +116,11 @@ test-c-api: test-c-smoke
 # neovim instance swallows internal crashes and doesn't rise the the error exiting silently
 # so check the stdout in case the sigsegv coming out of fff was printed (actual regression).
 # Output is streamed live via `tee`; pipefail (set above) propagates nvim's exit.
-test-lua: test-setup build
+test-lua: test-setup
 	@logfile=$$(mktemp); \
 	trap 'rm -f "$$logfile"' EXIT; \
 	nvim --headless -u tests/minimal_init.lua \
-		-c "PlenaryBustedDirectory tests/ {minimal_init = 'tests/minimal_init.lua'}" 2>&1 \
+		-l tests/test_fff_plus_extension.lua 2>&1 \
 		| tee "$$logfile"; \
 	if grep -qE "SIG(SEGV|ABRT|BUS|FPE|ILL)" "$$logfile"; then \
 		echo ""; \
@@ -135,21 +135,11 @@ test-lua: test-setup build
 # `pcall` catches collect-time errors (e.g. parse error in the test file)
 # that would otherwise leave headless nvim hanging in its event loop because
 # the reporter's `cquit` never fires.
-test-lua-snap: test-setup build
-	@logfile=$$(mktemp); \
-	trap 'rm -f "$$logfile"' EXIT; \
-	nvim --headless -u tests/minimal_init.lua \
-		-c "lua local ok,err=pcall(require('mini.test').run_file,'tests/picker_ui_snap.lua'); if not ok then io.stderr:write('mini.test failed to load: '..tostring(err)..'\\n'); vim.cmd('cquit 2') end" 2>&1 \
-		| tee "$$logfile"; \
-	if grep -qE "SIG(SEGV|ABRT|BUS|FPE|ILL)" "$$logfile"; then \
-		echo ""; \
-		echo "FAIL: native crash detected during snapshot tests"; \
-		exit 1; \
-	fi
+test-lua-snap:
+	@echo "Snapshot tests are not part of the fff-plus extension experiment."
 
-test-version: test-setup
-	nvim --headless -u tests/minimal_init.lua \
-		-c "PlenaryBustedFile tests/version_spec.lua" 2>&1
+test-version:
+	@echo "Version tests are owned by upstream fff.nvim in the extension experiment."
 
 prepare-bun: build sync-js-api
 	mkdir -p packages/fff-bun/bin

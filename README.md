@@ -6,32 +6,34 @@
   <i>A fast Neovim picker suite built on the Rust-powered FFF search engine.</i>
 </p>
 
-`fff-plus.nvim` is a maintained fork of [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.nvim). It keeps the original fast fuzzy file search, live grep, frecency ranking, background watcher, and in-memory content index, then adds the picker suite many Neovim users expect: buffers, git files, and colorschemes.
+`fff-plus.nvim` is an experimental extension plugin for [dmtrKovalenko/fff.nvim](https://github.com/dmtrKovalenko/fff.nvim). Upstream `fff.nvim` keeps owning fast fuzzy file search, live grep, frecency ranking, the Rust binary, the downloader, and the background index. This plugin layers on the picker suite many Neovim users expect: buffers, git files, and colorschemes.
 
 ## Installation
 
-Prebuilt Neovim binaries are published by this fork's CI on the [fff-plus.nvim releases page](https://github.com/vinitkumar/fff-plus.nvim/releases). Normal installs should not need Rust locally; the build hook downloads the matching binary for your platform and only falls back to `cargo build --release` if the download fails.
+Install upstream `fff.nvim` first, then install `fff-plus.nvim` as an extension. In this experiment, upstream remains responsible for prebuilt binaries and normal `fff` setup.
 
 ### lazy.nvim
 
 ```lua
 {
-  'vinitkumar/fff-plus.nvim',
+  'dmtrKovalenko/fff.nvim',
   build = function()
     require('fff.download').download_or_build_binary()
   end,
-  lazy = false, -- fff-plus.nvim lazy-initializes itself
+  lazy = false,
+},
+{
+  'vinitkumar/fff-plus.nvim',
+  dependencies = { 'dmtrKovalenko/fff.nvim' },
   opts = {
-    download = {
-      github_repo = 'vinitkumar/fff-plus.nvim',
-    },
+    legacy_commands = false,
   },
   keys = {
     { 'ff', function() require('fff').find_files() end, desc = 'FFF files' },
-    { '<leader>b', function() require('fff').buffers() end, desc = 'FFF buffers' },
-    { '<leader>g', function() require('fff').git_files() end, desc = 'FFF git files' },
-    { '<leader>c', function() require('fff').colors() end, desc = 'FFF colors' },
     { 'fg', function() require('fff').live_grep() end, desc = 'FFF grep' },
+    { '<leader>b', function() require('fff_plus').buffers() end, desc = 'FFF+ buffers' },
+    { '<leader>g', function() require('fff_plus').git_files() end, desc = 'FFF+ git files' },
+    { '<leader>c', function() require('fff_plus').colors() end, desc = 'FFF+ colors' },
   },
 }
 ```
@@ -39,13 +41,16 @@ Prebuilt Neovim binaries are published by this fork's CI on the [fff-plus.nvim r
 ### vim.pack
 
 ```lua
-vim.pack.add({ 'https://github.com/vinitkumar/fff-plus.nvim' })
+vim.pack.add({
+  'https://github.com/dmtrKovalenko/fff.nvim',
+  'https://github.com/vinitkumar/fff-plus.nvim',
+})
 
 vim.api.nvim_create_autocmd('PackChanged', {
   callback = function(ev)
     local name, kind = ev.data.spec.name, ev.data.kind
-    if name == 'fff-plus.nvim' and (kind == 'install' or kind == 'update') then
-      if not ev.data.active then vim.cmd.packadd('fff-plus.nvim') end
+    if name == 'fff.nvim' and (kind == 'install' or kind == 'update') then
+      if not ev.data.active then vim.cmd.packadd('fff.nvim') end
       require('fff.download').download_or_build_binary()
     end
   end,
@@ -53,37 +58,38 @@ vim.api.nvim_create_autocmd('PackChanged', {
 
 vim.g.fff = {
   lazy_sync = true,
-  download = {
-    github_repo = 'vinitkumar/fff-plus.nvim',
-  },
+}
+
+vim.g.fff_plus = {
+  legacy_commands = false,
 }
 
 vim.keymap.set('n', 'ff', function() require('fff').find_files() end, { desc = 'FFF files' })
-vim.keymap.set('n', '<leader>b', function() require('fff').buffers() end, { desc = 'FFF buffers' })
-vim.keymap.set('n', '<leader>g', function() require('fff').git_files() end, { desc = 'FFF git files' })
-vim.keymap.set('n', '<leader>c', function() require('fff').colors() end, { desc = 'FFF colors' })
+vim.keymap.set('n', '<leader>b', function() require('fff_plus').buffers() end, { desc = 'FFF+ buffers' })
+vim.keymap.set('n', '<leader>g', function() require('fff_plus').git_files() end, { desc = 'FFF+ git files' })
+vim.keymap.set('n', '<leader>c', function() require('fff_plus').colors() end, { desc = 'FFF+ colors' })
 ```
 
 ---
 
-## What changed in this fork?
+## What changed in this experiment?
 
-`fff-plus.nvim` extends upstream into a more complete picker ecosystem:
+`fff-plus.nvim` extends upstream into a more complete picker ecosystem without patching upstream files:
 
-| Feature | Upstream | This Fork |
+| Feature | Upstream | fff-plus |
 |---------|----------|-----------|
-| **`:Buffers` picker** | ❌ | ✅ Full buffer list with modified, current, and alternate indicators |
-| **`:GFiles` picker** | ❌ | ✅ Dedicated picker for `git status` files with status indicators and preview |
-| **`:Colors` picker** | ❌ | ✅ Browse and switch colorschemes with live preview |
+| **`:FFFPlusBuffers` picker** | ❌ | ✅ Full buffer list with modified, current, and alternate indicators |
+| **`:FFFPlusGFiles` picker** | ❌ | ✅ Dedicated picker for `git status` files with status indicators and preview |
+| **`:FFFPlusColors` picker** | ❌ | ✅ Browse and switch colorschemes with live preview |
 | Fuzzy file search with frecency | ✅ | ✅ |
 | Live grep (plain, regex, fuzzy) | ✅ | ✅ |
 | Multi-select + quickfix | ✅ | ✅ |
 | Query constraints (`status:`, `*.ext`, `!exclude`) | ✅ | ✅ |
 | Git status signs + text coloring | ✅ | ✅ |
 
-**In short:** upstream focused on making file finding extremely fast with Rust. This fork keeps that foundation, adds the missing picker surface, and publishes fork-owned CI binaries so users can install without building locally.
+**In short:** upstream focuses on making file finding extremely fast with Rust. This experiment keeps that foundation upstream and puts the missing picker surface in a separate plugin.
 
-See [FORK.md](./FORK.md) for the maintenance policy and picker boundary used by this fork.
+See [EXPERIMENT_EXTENSION_PLUGIN.md](./EXPERIMENT_EXTENSION_PLUGIN.md) for the maintenance tradeoffs behind this extension-plugin experiment.
 
 ---
 
@@ -208,13 +214,13 @@ https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 
 ### Installation
 
-Prebuilt binaries are downloaded from `vinitkumar/fff-plus.nvim` by default. The downloader resolves the tag for the installed commit and fetches the matching release asset, so pinned plugin installs use the binary built for that exact commit.
+Install upstream `fff.nvim` first so it can provide the Rust backend, downloader, file picker, live grep, and background index. Then install `fff-plus.nvim` for the extra picker surface.
 
 #### lazy.nvim
 
 ```lua
 {
-  'vinitkumar/fff-plus.nvim',
+  'dmtrKovalenko/fff.nvim',
   build = function()
     require('fff.download').download_or_build_binary()
   end,
@@ -227,11 +233,18 @@ Prebuilt binaries are downloaded from `vinitkumar/fff-plus.nvim` by default. The
     },
   },
   lazy = false, -- the plugin lazy-initialises itself
+},
+{
+  'vinitkumar/fff-plus.nvim',
+  dependencies = { 'dmtrKovalenko/fff.nvim' },
+  opts = {
+    legacy_commands = false,
+  },
   keys = {
     { 'ff', function() require('fff').find_files() end, desc = 'FFF files' },
-    { '<leader>b', function() require('fff').buffers() end, desc = 'FFF buffers' },
-    { '<leader>c', function() require('fff').colors() end, desc = 'FFF colors' },
-    { '<leader>g', function() require('fff').git_files() end, desc = 'FFF git files' },
+    { '<leader>b', function() require('fff_plus').buffers() end, desc = 'FFF+ buffers' },
+    { '<leader>c', function() require('fff_plus').colors() end, desc = 'FFF+ colors' },
+    { '<leader>g', function() require('fff_plus').git_files() end, desc = 'FFF+ git files' },
     { 'fg', function() require('fff').live_grep() end, desc = 'FFF grep' },
     { 'fz',
       function() require('fff').live_grep({ grep = { modes = { 'fuzzy', 'plain' } } }) end,
@@ -249,13 +262,16 @@ Prebuilt binaries are downloaded from `vinitkumar/fff-plus.nvim` by default. The
 #### vim.pack
 
 ```lua
-vim.pack.add({ 'https://github.com/vinitkumar/fff-plus.nvim' })
+vim.pack.add({
+  'https://github.com/dmtrKovalenko/fff.nvim',
+  'https://github.com/vinitkumar/fff-plus.nvim',
+})
 
 vim.api.nvim_create_autocmd('PackChanged', {
   callback = function(ev)
     local name, kind = ev.data.spec.name, ev.data.kind
-    if name == 'fff-plus.nvim' and (kind == 'install' or kind == 'update') then
-      if not ev.data.active then vim.cmd.packadd('fff-plus.nvim') end
+    if name == 'fff.nvim' and (kind == 'install' or kind == 'update') then
+      if not ev.data.active then vim.cmd.packadd('fff.nvim') end
       require('fff.download').download_or_build_binary()
     end
   end,
@@ -263,16 +279,17 @@ vim.api.nvim_create_autocmd('PackChanged', {
 
 vim.g.fff = {
   lazy_sync = true,
-  download = {
-    github_repo = 'vinitkumar/fff-plus.nvim',
-  },
   debug = { enabled = true, show_scores = true },
 }
 
+vim.g.fff_plus = {
+  legacy_commands = false,
+}
+
 vim.keymap.set('n', 'ff', function() require('fff').find_files() end, { desc = 'FFF files' })
-vim.keymap.set('n', '<leader>b', function() require('fff').buffers() end, { desc = 'FFF buffers' })
-vim.keymap.set('n', '<leader>c', function() require('fff').colors() end, { desc = 'FFF colors' })
-vim.keymap.set('n', '<leader>g', function() require('fff').git_files() end, { desc = 'FFF git files' })
+vim.keymap.set('n', '<leader>b', function() require('fff_plus').buffers() end, { desc = 'FFF+ buffers' })
+vim.keymap.set('n', '<leader>c', function() require('fff_plus').colors() end, { desc = 'FFF+ colors' })
+vim.keymap.set('n', '<leader>g', function() require('fff_plus').git_files() end, { desc = 'FFF+ git files' })
 ```
 
 ### Public API
@@ -285,6 +302,9 @@ require('fff').scan_files()                        -- force rescan
 require('fff').refresh_git_status()                -- refresh git status
 require('fff').find_files_in_dir(path)             -- find in a specific dir
 require('fff').change_indexing_directory(new_path) -- change root
+require('fff_plus').buffers()                      -- open buffer picker
+require('fff_plus').colors()                       -- open colorscheme picker
+require('fff_plus').git_files()                    -- open git files picker
 
 -- Programmatic search (no UI). Useful for plugin integrations.
 require('fff').file_search(query, opts)            -- fuzzy search files / dirs / mixed
@@ -482,18 +502,19 @@ require('fff').setup({
 ```lua
 require('fff').find_files()                         -- Find files in current directory
 require('fff').find_in_git_root()                   -- Find files in the current git repository
-require('fff').buffers()                            -- Open buffer picker (similar to fzf.vim :Buffers)
-require('fff').colors()                             -- Open colors picker (similar to fzf.vim :Colors)
-require('fff').git_files()                          -- Open git files picker (similar to fzf.vim :GFiles?)
 require('fff').scan_files()                         -- Trigger rescan of files in the current directory
 require('fff').refresh_git_status()                 -- Refresh git status for the active file list
 require('fff').find_files_in_dir(path)              -- Find files in a specific directory
 require('fff').change_indexing_directory(new_path)  -- Change the base directory for the file picker
+
+require('fff_plus').buffers()                       -- Open buffer picker (similar to fzf.vim :Buffers)
+require('fff_plus').colors()                        -- Open colors picker (similar to fzf.vim :Colors)
+require('fff_plus').git_files()                     -- Open git files picker (similar to fzf.vim :GFiles?)
 ```
 
 #### Buffer Picker
 
-The buffer picker (`:FFFBuffers`) provides a fast way to switch between open buffers, similar to fzf.vim's `:Buffers` command.
+The buffer picker (`:FFFPlusBuffers`) provides a fast way to switch between open buffers, similar to fzf.vim's `:Buffers` command.
 
 **Features:**
 - Buffers sorted by most recently accessed
@@ -519,12 +540,12 @@ The buffer picker (`:FFFBuffers`) provides a fast way to switch between open buf
 **Example keybinding:**
 
 ```lua
-vim.keymap.set('n', '<leader>b', function() require('fff').buffers() end, { desc = 'FFF Buffers' })
+vim.keymap.set('n', '<leader>b', function() require('fff_plus').buffers() end, { desc = 'FFF+ Buffers' })
 ```
 
 #### Colors Picker
 
-The colors picker (`:Colors`) provides a fast way to browse and switch colorschemes, similar to fzf.vim's `:Colors` command.
+The colors picker (`:FFFPlusColors`) provides a fast way to browse and switch colorschemes, similar to fzf.vim's `:Colors` command.
 
 **Features:**
 - Lists all available colorschemes from runtimepath and packages
@@ -545,12 +566,12 @@ The colors picker (`:Colors`) provides a fast way to browse and switch colorsche
 **Example keybinding:**
 
 ```lua
-vim.keymap.set('n', '<leader>c', function() require('fff').colors() end, { desc = 'FFF Colors' })
+vim.keymap.set('n', '<leader>c', function() require('fff_plus').colors() end, { desc = 'FFF+ Colors' })
 ```
 
 #### Git Files Picker
 
-The git files picker (`:GFiles`) provides a fast way to browse files with git status, similar to fzf.vim's `:GFiles?` command.
+The git files picker (`:FFFPlusGFiles`) provides a fast way to browse files with git status, similar to fzf.vim's `:GFiles?` command.
 
 **Features:**
 - Lists all files with git status (modified, staged, untracked, deleted, etc.)
@@ -576,7 +597,7 @@ The git files picker (`:GFiles`) provides a fast way to browse files with git st
 **Example keybinding:**
 
 ```lua
-vim.keymap.set('n', '<leader>g', function() require('fff').git_files() end, { desc = 'FFF Git Files' })
+vim.keymap.set('n', '<leader>g', function() require('fff_plus').git_files() end, { desc = 'FFF+ Git Files' })
 ```
 
 #### Multiple Key Bindings

@@ -1,4 +1,4 @@
---- FFF.nvim Colors Picker - Similar to fzf.vim :Colors command
+--- fff-plus.nvim Colors Picker - Similar to fzf.vim :Colors command
 --- Lists and fuzzy-searches through colorschemes with live preview
 
 local M = {}
@@ -136,7 +136,7 @@ end
 function M.create_ui()
   local config = M.state.config
 
-  if not M.state.ns_id then M.state.ns_id = vim.api.nvim_create_namespace('fff_colors_picker') end
+  if not M.state.ns_id then M.state.ns_id = vim.api.nvim_create_namespace('fff_plus_colors_picker') end
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
@@ -217,11 +217,11 @@ function M.setup_buffers()
   vim.api.nvim_buf_set_name(M.state.list_buf, 'fff colors list')
 
   vim.api.nvim_buf_set_option(M.state.input_buf, 'buftype', 'prompt')
-  vim.api.nvim_buf_set_option(M.state.input_buf, 'filetype', 'fff_colors_input')
+  vim.api.nvim_buf_set_option(M.state.input_buf, 'filetype', 'fff_plus_colors_input')
   vim.fn.prompt_setprompt(M.state.input_buf, M.state.config.prompt or 'Colors> ')
 
   vim.api.nvim_buf_set_option(M.state.list_buf, 'buftype', 'nofile')
-  vim.api.nvim_buf_set_option(M.state.list_buf, 'filetype', 'fff_colors_list')
+  vim.api.nvim_buf_set_option(M.state.list_buf, 'filetype', 'fff_plus_colors_list')
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
 end
 
@@ -241,7 +241,7 @@ function M.setup_windows()
   vim.api.nvim_win_set_option(M.state.list_win, 'winhighlight', win_hl)
 
   -- Close picker when focus leaves
-  local picker_group = vim.api.nvim_create_augroup('fff_colors_picker_focus', { clear = true })
+  local picker_group = vim.api.nvim_create_augroup('fff_plus_colors_picker_focus', { clear = true })
   local picker_windows = { M.state.input_win, M.state.list_win }
 
   vim.api.nvim_create_autocmd('WinLeave', {
@@ -507,7 +507,7 @@ function M.close(selected)
   M.state.ns_id = nil
   M.original_colorscheme = nil
 
-  pcall(vim.api.nvim_del_augroup_by_name, 'fff_colors_picker_focus')
+  pcall(vim.api.nvim_del_augroup_by_name, 'fff_plus_colors_picker_focus')
 end
 
 --- Open the colors picker

@@ -1,11 +1,11 @@
---- FFF.nvim Git Files Picker - Similar to fzf.vim :GFiles? command
+--- fff-plus.nvim Git Files Picker - Similar to fzf.vim :GFiles? command
 --- Lists and fuzzy-searches through git status files with preview
 
 local M = {}
 
 local conf = require('fff.conf')
 local preview = require('fff.file_picker.preview')
-local git_utils = require('fff.git_utils')
+local git_utils = require('fff_plus.git_utils')
 
 -- Initialize preview module with config (required before using preview functions)
 local preview_config = conf.get().preview
@@ -135,7 +135,7 @@ end
 function M.create_ui()
   local config = M.state.config
 
-  if not M.state.ns_id then M.state.ns_id = vim.api.nvim_create_namespace('fff_git_files_picker') end
+  if not M.state.ns_id then M.state.ns_id = vim.api.nvim_create_namespace('fff_plus_git_files_picker') end
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
@@ -237,16 +237,16 @@ function M.setup_buffers()
   if M.is_preview_enabled() then vim.api.nvim_buf_set_name(M.state.preview_buf, 'fff git files preview') end
 
   vim.api.nvim_buf_set_option(M.state.input_buf, 'buftype', 'prompt')
-  vim.api.nvim_buf_set_option(M.state.input_buf, 'filetype', 'fff_git_files_input')
+  vim.api.nvim_buf_set_option(M.state.input_buf, 'filetype', 'fff_plus_git_files_input')
   vim.fn.prompt_setprompt(M.state.input_buf, M.state.config.prompt or '🦆 ')
 
   vim.api.nvim_buf_set_option(M.state.list_buf, 'buftype', 'nofile')
-  vim.api.nvim_buf_set_option(M.state.list_buf, 'filetype', 'fff_git_files_list')
+  vim.api.nvim_buf_set_option(M.state.list_buf, 'filetype', 'fff_plus_git_files_list')
   vim.api.nvim_buf_set_option(M.state.list_buf, 'modifiable', false)
 
   if M.is_preview_enabled() then
     vim.api.nvim_buf_set_option(M.state.preview_buf, 'buftype', 'nofile')
-    vim.api.nvim_buf_set_option(M.state.preview_buf, 'filetype', 'fff_git_files_preview')
+    vim.api.nvim_buf_set_option(M.state.preview_buf, 'filetype', 'fff_plus_git_files_preview')
     vim.api.nvim_buf_set_option(M.state.preview_buf, 'modifiable', false)
   end
 end
@@ -274,7 +274,7 @@ function M.setup_windows()
   end
 
   -- Close picker when focus leaves
-  local picker_group = vim.api.nvim_create_augroup('fff_git_files_picker_focus', { clear = true })
+  local picker_group = vim.api.nvim_create_augroup('fff_plus_git_files_picker_focus', { clear = true })
   local picker_windows = { M.state.input_win, M.state.list_win }
   if M.state.preview_win then table.insert(picker_windows, M.state.preview_win) end
 
@@ -588,7 +588,7 @@ function M.close()
   M.state.ns_id = nil
   M.state.last_preview_file = nil
 
-  pcall(vim.api.nvim_del_augroup_by_name, 'fff_git_files_picker_focus')
+  pcall(vim.api.nvim_del_augroup_by_name, 'fff_plus_git_files_picker_focus')
 end
 
 function M.setup_keymaps()
