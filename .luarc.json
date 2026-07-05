@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime": {
+    "version": "LuaJIT"
+  },
+  "workspace": {
+    "library": [
+      "$VIMRUNTIME/lua",
+      "${3rd}/luv/library",
+      "${3rd}/busted/library"
+    ],
+    "checkThirdParty": false
+  },
+  "diagnostics": {
+    "globals": ["vim"],
+    "severity": {
+      "undefined-global": "Error",
+      "undefined-field": "Warning",
+      "missing-return": "Warning",
+      "redundant-parameter": "Warning",
+      "param-type-mismatch": "Warning",
+      "assign-type-mismatch": "Warning",
+      "cast-type-mismatch": "Warning",
+      "deprecated": "Warning",
+      "undefined-doc-param": "Warning"
+    },
+    "neededFileStatus": {
+      "undefined-global": "Any",
+      "undefined-field": "Any",
+      "missing-return": "Any",
+      "redundant-parameter": "Any",
+      "param-type-mismatch": "Any",
+      "assign-type-mismatch": "Any",
+      "cast-type-mismatch": "Any",
+      "deprecated": "Any",
+      "undefined-doc-param": "Any"
+    }
+  },
+  "type": {
+    "checkTableShape": true
+  }
+}

@@ -1,12 +1,17 @@
 doc/tags
 target/
-.archive.lua
-_*.lua
+node_modules/
+
+# Local plugin-manager and scratch configs
 .lazy.lua
-dual/
-result
-.direnv
-.devenv
-.repro/
-.wrangler/
-*.so
+_*.lua
+
+# Test and editor noise
+fff-test.log
+*.swp
+*.swo
+*~
+
+# IDEs
+.idea/
+.vscode/

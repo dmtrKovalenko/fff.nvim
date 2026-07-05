@@ -1,0 +1,41 @@
+name: Lua CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lua/**"
+      - "plugin/**"
+      - "tests/**"
+      - "Makefile"
+      - ".github/workflows/lua.yml"
+  pull_request:
+    paths:
+      - "lua/**"
+      - "plugin/**"
+      - "tests/**"
+      - "Makefile"
+      - ".github/workflows/lua.yml"
+
+jobs:
+  test:
+    name: Extension tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Neovim and LuaJIT
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y luajit
+          curl -L https://github.com/neovim/neovim/releases/download/v0.11.5/nvim-linux-x86_64.tar.gz -o /opt/nvim.tar.gz
+          mkdir /opt/nvim
+          tar xzf /opt/nvim.tar.gz -C /opt/nvim
+          mv /opt/nvim/nvim-linux-x86_64/* /opt/nvim
+          echo "/opt/nvim/bin" >> "$GITHUB_PATH"
+
+      - name: Bytecode check
+        run: make lint
+
+      - name: Run extension tests
+        run: make test-lua

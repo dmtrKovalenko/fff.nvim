@@ -10,11 +10,13 @@ on:
     paths:
       - "**/*.lua"
       - .stylua.toml
+      - Makefile
       - .github/workflows/stylua.yaml
   pull_request:
     paths:
       - "**/*.lua"
       - .stylua.toml
+      - Makefile
       - .github/workflows/stylua.yaml
 
 env:
@@ -25,7 +27,7 @@ jobs:
     name: Check lua files using Stylua
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
@@ -34,4 +36,4 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: latest
-          args: --color=always --check .
+          args: --color=always --check lua plugin tests/test_fff_plus_extension.lua
