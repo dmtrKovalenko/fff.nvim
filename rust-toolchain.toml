@@ -1,9 +1,0 @@
-[toolchain]
-channel = "stable"
-components = [
-  "clippy",
-  "rustfmt",
-  "llvm-tools",
-  "rust-src",
-  "rust-analyzer",
-]

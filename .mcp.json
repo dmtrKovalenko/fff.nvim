@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "fff": {
-      "type": "stdio",
-      "command": "./target/release/fff-mcp",
-      "args": []
-    }
-  }
-}
