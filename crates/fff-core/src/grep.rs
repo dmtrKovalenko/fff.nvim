@@ -228,6 +228,14 @@ fn replace_unescaped_newline_escapes(text: &str) -> String {
     String::from_utf8(result).unwrap_or_else(|_| text.to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaseMode {
+    #[default]
+    Smart,
+    Sensitive,
+    Insensitive,
+}
+
 /// Controls how the grep pattern is interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GrepMode {
@@ -334,7 +342,10 @@ pub use crate::constants::MAX_FFFILE_SIZE;
 pub struct GrepSearchOptions {
     pub max_file_size: u64,
     pub max_matches_per_file: usize,
+    #[deprecated(note = "use `case_mode` instead")]
     pub smart_case: bool,
+    /// When `Some`, overrides `smart_case`.
+    pub case_mode: Option<CaseMode>,
     /// File-based pagination offset: index into the sorted/filtered file list
     /// to start searching from. Pass 0 for the first page, then use
     /// `GrepResult::next_file_offset` for subsequent pages.
@@ -364,12 +375,25 @@ pub struct GrepSearchOptions {
     pub abort_signal: Option<Arc<AtomicBool>>,
 }
 
+impl GrepSearchOptions {
+    fn effective_case_mode(&self) -> CaseMode {
+        #[allow(deprecated)]
+        match self.case_mode {
+            Some(m) => m,
+            None if self.smart_case => CaseMode::Smart,
+            None => CaseMode::Sensitive,
+        }
+    }
+}
+
 impl Default for GrepSearchOptions {
     fn default() -> Self {
+        #[allow(deprecated)]
         Self {
             max_file_size: MAX_FFFILE_SIZE,
             max_matches_per_file: 200,
             smart_case: true,
+            case_mode: None,
             file_offset: 0,
             page_limit: 50,
             mode: GrepMode::default(),
@@ -1047,11 +1071,10 @@ pub(crate) fn multi_grep_search<'a>(
         };
     }
 
-    // Smart case: case-insensitive when all patterns are lowercase
-    let case_insensitive = if options.smart_case {
-        !patterns.iter().any(|p| p.chars().any(|c| c.is_uppercase()))
-    } else {
-        false
+    let case_insensitive = match options.effective_case_mode() {
+        CaseMode::Smart => !patterns.iter().any(|p| p.chars().any(|c| c.is_uppercase())),
+        CaseMode::Insensitive => true,
+        CaseMode::Sensitive => false,
     };
 
     let ac = aho_corasick::AhoCorasickBuilder::new()
@@ -1119,7 +1142,7 @@ const fn is_utf8_char_boundary(b: u8) -> bool {
 /// - The input is passed directly to the regex engine without escaping
 /// - Smart case still applies
 /// - Returns `None` for invalid regex patterns — the caller falls back to literal mode
-fn build_regex(pattern: &str, smart_case: bool) -> Result<regex::bytes::Regex, String> {
+fn build_regex(pattern: &str, case_mode: CaseMode) -> Result<regex::bytes::Regex, String> {
     if pattern.is_empty() {
         return Err("empty pattern".to_string());
     }
@@ -1130,10 +1153,10 @@ fn build_regex(pattern: &str, smart_case: bool) -> Result<regex::bytes::Regex, S
         pattern.to_string()
     };
 
-    let case_insensitive = if smart_case {
-        !pattern.chars().any(|c| c.is_uppercase())
-    } else {
-        false
+    let case_insensitive = match case_mode {
+        CaseMode::Smart => !pattern.chars().any(|c| c.is_uppercase()),
+        CaseMode::Insensitive => true,
+        CaseMode::Sensitive => false,
     };
 
     regex::bytes::RegexBuilder::new(&regex_pattern)
@@ -2003,10 +2026,10 @@ pub(crate) fn grep_search<'a>(
         };
     }
 
-    let case_insensitive = if options.smart_case {
-        !grep_text.chars().any(|c| c.is_uppercase())
-    } else {
-        false
+    let case_insensitive = match options.effective_case_mode() {
+        CaseMode::Smart => !grep_text.chars().any(|c| c.is_uppercase()),
+        CaseMode::Insensitive => true,
+        CaseMode::Sensitive => false,
     };
 
     let mut regex_fallback_error: Option<String> = None;
@@ -2099,7 +2122,7 @@ pub(crate) fn grep_search<'a>(
                 overflow_arena,
             );
         }
-        GrepMode::Regex => build_regex(&grep_text, options.smart_case)
+        GrepMode::Regex => build_regex(&grep_text, options.effective_case_mode())
             .inspect_err(|err| {
                 tracing::warn!("Regex compilation failed for {}. Error {}", grep_text, err);
 
@@ -2456,7 +2479,7 @@ mod tests {
         let options = super::GrepSearchOptions {
             max_file_size: MAX_FFFILE_SIZE,
             max_matches_per_file: 0,
-            smart_case: true,
+            case_mode: Some(super::CaseMode::Smart),
             file_offset: 0,
             page_limit: 100,
             mode: super::GrepMode::PlainText,
@@ -2466,6 +2489,7 @@ mod tests {
             classify_definitions: false,
             trim_whitespace: false,
             abort_signal: None,
+            ..Default::default()
         };
         let no_cancel = AtomicBool::new(false);
 
@@ -2640,7 +2664,7 @@ mod tests {
         let options = super::GrepSearchOptions {
             max_file_size: MAX_FFFILE_SIZE,
             max_matches_per_file: 0,
-            smart_case: true,
+            case_mode: Some(super::CaseMode::Smart),
             file_offset: 0,
             page_limit: 100,
             mode: super::GrepMode::PlainText,
@@ -2650,6 +2674,7 @@ mod tests {
             classify_definitions: false,
             trim_whitespace: false,
             abort_signal: Some(std::sync::Arc::new(AtomicBool::new(false))),
+            ..Default::default()
         };
         let result = picker.grep(&query, &options);
 

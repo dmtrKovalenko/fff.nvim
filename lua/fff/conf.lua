@@ -57,6 +57,7 @@ local M = {}
 --- @field max_file_size number
 --- @field max_matches_per_file number
 --- @field smart_case boolean
+--- @field case_mode? "smart"|"sensitive"|"insensitive"
 --- @field time_budget_ms number
 --- @field modes string[]
 --- @field trim_whitespace boolean
@@ -419,7 +420,8 @@ local function init()
     grep = {
       max_file_size = 10 * 1024 * 1024, -- Skip files larger than 10MB
       max_matches_per_file = 100, -- Maximum matches per file (set 0 to unlimited)
-      smart_case = true, -- Case-insensitive unless query has uppercase
+      smart_case = true, -- Case-insensitive unless query has uppercase (legacy; prefer case_mode)
+      case_mode = nil, -- Optional: "smart" | "sensitive" | "insensitive". Overrides smart_case when set.
       time_budget_ms = 150, -- Max search time in ms per call (prevents UI freeze, 0 = no limit)
       modes = { 'plain', 'regex', 'fuzzy' }, -- Available grep modes and their cycling order
       trim_whitespace = false, -- Strip leading whitespace from matched lines (useful for cleaner display)

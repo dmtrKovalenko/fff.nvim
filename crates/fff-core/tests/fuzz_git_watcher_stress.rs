@@ -891,7 +891,7 @@ fn grep_plain_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
     let opts = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
-        smart_case: true,
+        case_mode: Some(fff_search::grep::CaseMode::Smart),
         file_offset: 0,
         page_limit: 500,
         mode: GrepMode::PlainText,
@@ -901,6 +901,7 @@ fn grep_plain_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
         classify_definitions: false,
         trim_whitespace: false,
         abort_signal: None,
+        ..Default::default()
     };
     let result = picker.grep(&parsed, &opts);
     // `GrepResult::files` is the already-deduplicated list of files that
@@ -928,7 +929,7 @@ fn grep_fuzzy_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
     let opts = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
-        smart_case: true,
+        case_mode: Some(fff_search::grep::CaseMode::Smart),
         file_offset: 0,
         page_limit: 500,
         mode: GrepMode::Fuzzy,
@@ -938,6 +939,7 @@ fn grep_fuzzy_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
         classify_definitions: false,
         trim_whitespace: false,
         abort_signal: None,
+        ..Default::default()
     };
     let result = picker.grep(&parsed, &opts);
     result
@@ -960,7 +962,7 @@ fn grep_regex_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
     let opts = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
-        smart_case: true,
+        case_mode: Some(fff_search::grep::CaseMode::Smart),
         file_offset: 0,
         page_limit: 500,
         mode: GrepMode::Regex,
@@ -970,6 +972,7 @@ fn grep_regex_matches(shared: &SharedFilePicker, query: &str) -> Vec<String> {
         classify_definitions: false,
         trim_whitespace: false,
         abort_signal: None,
+        ..Default::default()
     };
     let result = picker.grep(&parsed, &opts);
     result

@@ -436,6 +436,7 @@ pub fn live_grep(
         grep_mode,
         time_budget_ms,
         trim_whitespace,
+        case_mode,
     ): (
         String,
         Option<usize>,
@@ -446,6 +447,7 @@ pub fn live_grep(
         Option<String>,
         Option<u64>,
         Option<bool>,
+        Option<String>,
     ),
 ) -> LuaResult<LuaValue> {
     let file_picker_guard = FILE_PICKER.read().into_lua_result()?;
@@ -460,10 +462,21 @@ pub fn live_grep(
         _ => fff::GrepMode::PlainText, // "plain" or nil or unknown
     };
 
+    let case_mode = match case_mode.as_deref() {
+        Some("smart") => Some(fff::CaseMode::Smart),
+        Some("sensitive") => Some(fff::CaseMode::Sensitive),
+        Some("insensitive") => Some(fff::CaseMode::Insensitive),
+        _ => Some(if smart_case.unwrap_or(true) {
+            fff::CaseMode::Smart
+        } else {
+            fff::CaseMode::Sensitive
+        }),
+    };
+
     let options = fff::GrepSearchOptions {
         max_file_size: max_file_size.unwrap_or(10 * 1024 * 1024),
         max_matches_per_file: max_matches_per_file.unwrap_or(200),
-        smart_case: smart_case.unwrap_or(true),
+        case_mode,
         file_offset: file_offset.unwrap_or(0),
         page_limit: page_size.unwrap_or(50),
         mode,
@@ -473,6 +486,7 @@ pub fn live_grep(
         classify_definitions: false,
         trim_whitespace: trim_whitespace.unwrap_or(false),
         abort_signal: None,
+        ..Default::default()
     };
 
     let result = picker.grep(&parsed_query, &options);

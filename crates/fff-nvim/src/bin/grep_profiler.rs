@@ -88,7 +88,7 @@ impl<'a> GrepBench<'a> {
             options: GrepSearchOptions {
                 max_file_size: 10 * 1024 * 1024,
                 max_matches_per_file: 200,
-                smart_case: true,
+                case_mode: Some(fff::grep::CaseMode::Smart),
                 file_offset: 0,
                 page_limit: 50,
                 mode,
@@ -98,6 +98,7 @@ impl<'a> GrepBench<'a> {
                 classify_definitions: false,
                 trim_whitespace: false,
                 abort_signal: None,
+                ..Default::default()
             },
         }
     }
@@ -409,7 +410,7 @@ fn main() {
         let opts = GrepSearchOptions {
             max_file_size: 10 * 1024 * 1024,
             max_matches_per_file: 200,
-            smart_case: true,
+            case_mode: Some(fff::grep::CaseMode::Smart),
             file_offset,
             page_limit: 50,
             mode: Default::default(),
@@ -419,6 +420,7 @@ fn main() {
             classify_definitions: false,
             trim_whitespace: false,
             abort_signal: None,
+            ..Default::default()
         };
         let start = Instant::now();
         let result = picker.grep(&parsed, &opts);

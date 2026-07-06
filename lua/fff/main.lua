@@ -323,6 +323,7 @@ end
 --- @field max_file_size? number Skip files larger than N bytes (default: config.grep.max_file_size).
 --- @field max_matches_per_file? number Cap matches per file, 0 = unlimited (default: config.grep.max_matches_per_file).
 --- @field smart_case? boolean Case-insensitive when query is all lowercase (default: config.grep.smart_case).
+--- @field case_mode? "smart"|"sensitive"|"insensitive" Explicit case mode (default: config.grep.case_mode). Overrides smart_case.
 --- @field page_size? number Max matches returned (default: 50).
 --- @field file_offset? number File-based pagination offset (default: 0).
 --- @field time_budget_ms? number Max wall-clock time, 0 = unlimited (default: config.grep.time_budget_ms).
@@ -369,6 +370,7 @@ function M.content_search(query, opts)
     max_file_size = opts.max_file_size or grep_cfg.max_file_size,
     max_matches_per_file = opts.max_matches_per_file or grep_cfg.max_matches_per_file,
     smart_case = opts.smart_case == nil and grep_cfg.smart_case or opts.smart_case,
+    case_mode = opts.case_mode == nil and grep_cfg.case_mode or opts.case_mode,
     time_budget_ms = opts.time_budget_ms or grep_cfg.time_budget_ms,
     trim_whitespace = opts.trim_whitespace == nil and grep_cfg.trim_whitespace or opts.trim_whitespace,
   }

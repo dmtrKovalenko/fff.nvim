@@ -1,6 +1,6 @@
 use crate::cursor::CursorStore;
 use crate::output::{GrepFormatter, OutputMode, file_suffix};
-use fff::grep::{GrepMode, GrepSearchOptions, has_regex_metacharacters};
+use fff::grep::{CaseMode, GrepMode, GrepSearchOptions, has_regex_metacharacters};
 use fff::types::{FileItem, PaginationArgs};
 use fff::{FuzzySearchOptions, QueryParser, SharedFilePicker};
 use fff_query_parser::AiGrepConfig;
@@ -56,7 +56,7 @@ fn make_grep_options(
         GrepSearchOptions {
             max_file_size: 10 * 1024 * 1024,
             max_matches_per_file: matches_per_file,
-            smart_case: true,
+            case_mode: Some(CaseMode::Smart),
             file_offset,
             page_limit: 50,
             mode,
@@ -66,6 +66,7 @@ fn make_grep_options(
             classify_definitions: true,
             trim_whitespace: true,
             abort_signal: None,
+            ..Default::default()
         },
         auto_expand,
     )

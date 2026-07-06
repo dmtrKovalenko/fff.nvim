@@ -627,7 +627,7 @@ fn bench_grep_search(c: &mut Criterion) {
     let options = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 0,
-        smart_case: true,
+        case_mode: Some(fff::grep::CaseMode::Smart),
         file_offset: 0,
         page_limit: 100,
         mode: GrepMode::PlainText,
@@ -637,6 +637,7 @@ fn bench_grep_search(c: &mut Criterion) {
         classify_definitions: false,
         trim_whitespace: false,
         abort_signal: None,
+        ..Default::default()
     };
 
     let test_queries = vec![

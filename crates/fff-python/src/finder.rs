@@ -5,8 +5,8 @@ use fff::file_picker::FilePicker;
 use fff::frecency::FrecencyTracker;
 use fff::query_tracker::QueryTracker;
 use fff::{
-    FFFMode, FilePickerOptions, FuzzySearchOptions, GrepSearchOptions, PaginationArgs, QueryParser,
-    SharedFilePicker, SharedFrecency, SharedQueryTracker,
+    CaseMode, FFFMode, FilePickerOptions, FuzzySearchOptions, GrepSearchOptions, PaginationArgs,
+    QueryParser, SharedFilePicker, SharedFrecency, SharedQueryTracker,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -90,7 +90,11 @@ fn grep_options(
     GrepSearchOptions {
         max_file_size: defaulted_u64(max_file_size, defaults.max_file_size),
         max_matches_per_file: max_matches_per_file as usize,
-        smart_case,
+        case_mode: Some(if smart_case {
+            CaseMode::Smart
+        } else {
+            CaseMode::Sensitive
+        }),
         file_offset: cursor_offset,
         page_limit: defaulted_usize(page_limit, defaults.page_limit),
         mode,
@@ -100,6 +104,7 @@ fn grep_options(
         classify_definitions,
         trim_whitespace: false,
         abort_signal: None,
+        ..Default::default()
     }
 }
 

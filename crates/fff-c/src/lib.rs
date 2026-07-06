@@ -736,7 +736,11 @@ pub unsafe extern "C" fn fff_live_grep(
     let options = fff::GrepSearchOptions {
         max_file_size: default_u64(max_file_size, 10 * 1024 * 1024),
         max_matches_per_file: max_matches_per_file as usize,
-        smart_case,
+        case_mode: Some(if smart_case {
+            fff::CaseMode::Smart
+        } else {
+            fff::CaseMode::Sensitive
+        }),
         file_offset: file_offset as usize,
         page_limit: default_u32(page_limit, 50) as usize,
         mode: grep_mode_from_u8(mode),
@@ -746,6 +750,7 @@ pub unsafe extern "C" fn fff_live_grep(
         classify_definitions,
         trim_whitespace: false,
         abort_signal: None,
+        ..Default::default()
     };
 
     let result = picker.grep(&parsed, &options);
@@ -839,7 +844,11 @@ pub unsafe extern "C" fn fff_multi_grep(
     let options = fff::GrepSearchOptions {
         max_file_size: default_u64(max_file_size, 10 * 1024 * 1024),
         max_matches_per_file: max_matches_per_file as usize,
-        smart_case,
+        case_mode: Some(if smart_case {
+            fff::CaseMode::Smart
+        } else {
+            fff::CaseMode::Sensitive
+        }),
         file_offset: file_offset as usize,
         page_limit: default_u32(page_limit, 50) as usize,
         mode: fff::GrepMode::PlainText, // ignored by multi_grep_search
@@ -849,6 +858,7 @@ pub unsafe extern "C" fn fff_multi_grep(
         classify_definitions,
         trim_whitespace: false,
         abort_signal: None,
+        ..Default::default()
     };
 
     let result = picker.multi_grep(&patterns, constraint_refs, &options);

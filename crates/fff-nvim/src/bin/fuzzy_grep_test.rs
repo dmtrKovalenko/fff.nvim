@@ -27,7 +27,7 @@ fn run_fuzzy_query(picker: &FilePicker, query: &str, label: &str) {
     let options = GrepSearchOptions {
         max_file_size: 10 * 1024 * 1024,
         max_matches_per_file: 200,
-        smart_case: true,
+        case_mode: Some(fff::grep::CaseMode::Smart),
         file_offset: 0,
         page_limit: 100,
         mode: GrepMode::Fuzzy,
@@ -37,6 +37,7 @@ fn run_fuzzy_query(picker: &FilePicker, query: &str, label: &str) {
         classify_definitions: false,
         trim_whitespace: false,
         abort_signal: None,
+        ..Default::default()
     };
 
     let parsed = parse_grep_query(query);
