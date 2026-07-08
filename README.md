@@ -812,7 +812,7 @@ If you are running one grep from a terminal, `rg` is still the right tool. If yo
 - `crates/fff-nvim` - Lua/mlua bindings for the Neovim plugin.
 - `crates/fff-mcp` - MCP server binary.
 - `packages/fff-node` - Node.js SDK (`@ff-labs/fff-node`).
-- `packages/fff-bun` - Bun SDK (`@ff-labs/fff-node`).
+- `packages/fff-bun` - Bun SDK (`@ff-labs/fff-bun`).
 - `packages/pi-fff` - pi extension (`@ff-labs/pi-fff`).
 - `lua/` - Neovim-side plugin code.
 
