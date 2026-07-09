@@ -759,6 +759,13 @@ fn is_dotgit_change_affecting_status(changed: &Path, repo: &Option<Repository>) 
             return true;
         }
 
+        // some of the git ops are not involving nethier index nor HEAD change, or sometimes
+        // index updates can arrive too late after the change - that's why we track the log
+        // the actual user action, once user
+        if path_in_git_dir == Path::new("logs/HEAD") {
+            return true;
+        }
+
         if let Some(fname) = path_in_git_dir.file_name().and_then(|f| f.to_str())
             && matches!(fname, "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD")
         {
@@ -784,5 +791,63 @@ fn watch_git_status_paths(debouncer: &mut Debouncer, git_workdir: Option<&PathBu
     // for the most obvious paths like HEAD, MERGE_HEAD, index.lock
     if let Err(e) = debouncer.watch(&git_dir, RecursiveMode::NonRecursive) {
         warn!("Failed to watch .git directory: {}", e);
+    }
+
+    // `.git` above is non-recursive, so on Linux (per-dir inotify watches)
+    // events for `logs/HEAD` — the commit-finished signal used by
+    // `is_dotgit_change_affecting_status` — would never be delivered without
+    // watching `.git/logs` itself. On macOS/Windows the recursive base watch
+    // already covers it; an extra watch is harmless there.
+    let logs_dir = git_dir.join("logs");
+    if logs_dir.is_dir()
+        && let Err(e) = debouncer.watch(&logs_dir, RecursiveMode::NonRecursive)
+    {
+        warn!("Failed to watch .git/logs directory: {}", e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dotgit_status_filter_matches_worktree_state_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
+        let git_dir = repo.path().to_path_buf();
+        let repo = Some(repo);
+
+        let affecting = ["index", "index.lock", "HEAD", "logs/HEAD", "MERGE_HEAD"];
+        for p in affecting {
+            assert!(
+                is_dotgit_change_affecting_status(&git_dir.join(p), &repo),
+                "{p} must trigger a git status rescan"
+            );
+        }
+
+        // Ref-only updates (fetch/push/tags) and commit scratch files must not.
+        let non_affecting = [
+            "refs/heads/main",
+            "refs/heads/main.lock",
+            "logs/refs/remotes/origin/main",
+            "COMMIT_EDITMSG",
+            "packed-refs",
+        ];
+        for p in non_affecting {
+            assert!(
+                !is_dotgit_change_affecting_status(&git_dir.join(p), &repo),
+                "{p} must NOT trigger a git status rescan"
+            );
+        }
+
+        // Worktree paths outside .git never match.
+        assert!(!is_dotgit_change_affecting_status(
+            &tmp.path().join("src/main.rs"),
+            &repo
+        ));
+        assert!(!is_dotgit_change_affecting_status(
+            &git_dir.join("index"),
+            &None
+        ));
     }
 }
