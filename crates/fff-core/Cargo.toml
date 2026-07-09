@@ -34,6 +34,8 @@ required-features = ["zlob"]
 default = ["ripgrep"]
 # Enable C FFI exports
 ffi = []
+# Enables POC definition classification for grep result matched lines
+definitions = []
 # Pure-Rust filesystem walker + glob matcher (ignore + globset crates).
 ripgrep = ["dep:ignore", "dep:globset", "fff-query-parser/ripgrep"]
 # Call mi_collect(true) after large allocator churn (bigram build).

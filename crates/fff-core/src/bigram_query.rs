@@ -199,7 +199,7 @@ pub(crate) fn fuzzy_to_bigram_query(query: &str, num_probes: usize) -> BigramQue
         return BigramQuery::Any;
     }
 
-    // the simpliest case, just check that every bigram is present either consec or not
+    // the simplest case, just check that every bigram is present either consec or not
     if max_typos == 0 {
         return simplify_and(
             bigram_keys

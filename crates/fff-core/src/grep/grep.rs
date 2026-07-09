@@ -7,9 +7,8 @@ use crate::{
     types::{ContentCacheBudget, FileItem, FileSliceExt, MmapSlot},
 };
 use aho_corasick::AhoCorasick;
-pub use fff_grep::{
+use fff_grep::{
     Searcher, SearcherBuilder, Sink, SinkMatch,
-    lines::{self, LineStep},
     matcher::{Match, Matcher, NoError},
 };
 use fff_query_parser::{Constraint, FFFQuery, GrepConfig, QueryParser};
@@ -20,151 +19,26 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::Level;
 
-/// Detect if a line looks like a code definition (struct, fn, class, etc.)
-pub fn is_definition_line(line: &str) -> bool {
-    let s = line.trim_start().as_bytes();
-    let s = skip_modifiers(s);
-    is_definition_keyword(s)
+use super::utils::{GrepResult, strip_line_terminators};
+
+#[cfg(feature = "definitions")]
+#[inline]
+pub(super) fn classify_definition(enabled: bool, line: &str) -> bool {
+    enabled && super::classify::is_definition_line(line)
 }
 
-/// Modifier keywords that can precede a definition keyword.
-/// Each must be followed by whitespace to be consumed.
-const MODIFIERS: &[&[u8]] = &[
-    b"pub",
-    b"export",
-    b"default",
-    b"async",
-    b"abstract",
-    b"unsafe",
-    b"static",
-    b"protected",
-    b"private",
-    b"public",
-];
-
-/// Definition keywords to detect.
-const DEF_KEYWORDS: &[&[u8]] = &[
-    b"struct",
-    b"fn",
-    b"enum",
-    b"trait",
-    b"impl",
-    b"class",
-    b"interface",
-    b"function",
-    b"def",
-    b"func",
-    b"type",
-    b"module",
-    b"object",
-];
-
-/// Skip zero or more modifier keywords (including `pub(crate)` style visibility).
-fn skip_modifiers(mut s: &[u8]) -> &[u8] {
-    loop {
-        // Handle `pub(...)` — e.g. `pub(crate)`, `pub(super)`
-        if s.starts_with(b"pub(")
-            && let Some(end) = s.iter().position(|&b| b == b')')
-        {
-            s = skip_ws(&s[end + 1..]);
-            continue;
-        }
-        let mut matched = false;
-        for &kw in MODIFIERS {
-            if s.starts_with(kw) {
-                let rest = &s[kw.len()..];
-                if rest.first().is_some_and(|b| b.is_ascii_whitespace()) {
-                    s = skip_ws(rest);
-                    matched = true;
-                    break;
-                }
-            }
-        }
-        if !matched {
-            return s;
-        }
-    }
-}
-
-/// Check if `s` starts with a definition keyword followed by a word boundary.
-fn is_definition_keyword(s: &[u8]) -> bool {
-    for &kw in DEF_KEYWORDS {
-        if s.starts_with(kw) {
-            let after = s.get(kw.len());
-            // Word boundary: end of input, or next byte is not alphanumeric/underscore
-            if after.is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_') {
-                return true;
-            }
-        }
-    }
+#[cfg(not(feature = "definitions"))]
+#[inline]
+pub(super) fn classify_definition(_enabled: bool, _line: &str) -> bool {
     false
-}
-
-/// Skip ASCII whitespace.
-#[inline]
-fn skip_ws(s: &[u8]) -> &[u8] {
-    let n = s
-        .iter()
-        .position(|b| !b.is_ascii_whitespace())
-        .unwrap_or(s.len());
-    &s[n..]
-}
-
-/// Detect import/use lines — lower value than definitions or usages.
-///
-/// Checks if the line (after leading whitespace) starts with a common
-/// import statement prefix. Pure byte-level checks, no regex.
-pub fn is_import_line(line: &str) -> bool {
-    let s = line.trim_start().as_bytes();
-    s.starts_with(b"import ")
-        || s.starts_with(b"import\t")
-        || (s.starts_with(b"from ") && s.get(5).is_some_and(|&b| b == b'\'' || b == b'"'))
-        || s.starts_with(b"use ")
-        || s.starts_with(b"use\t")
-        || starts_with_require(s)
-        || starts_with_include(s)
-}
-
-/// Match `require(` or `require (`.
-#[inline]
-fn starts_with_require(s: &[u8]) -> bool {
-    if !s.starts_with(b"require") {
-        return false;
-    }
-    let rest = &s[b"require".len()..];
-    rest.first() == Some(&b'(') || (rest.first() == Some(&b' ') && rest.get(1) == Some(&b'('))
-}
-
-/// Match `# include ` (with optional spaces after `#`).
-#[inline]
-fn starts_with_include(s: &[u8]) -> bool {
-    if s.first() != Some(&b'#') {
-        return false;
-    }
-    let rest = skip_ws(&s[1..]);
-    rest.starts_with(b"include ") || rest.starts_with(b"include\t")
-}
-
-/// Determine whether `text` contains any regex metacharacters.
-/// Uses `regex::escape` from the regex crate as the source of truth — if the
-/// escaped form differs from the original, the text contains characters that
-/// would be interpreted as regex syntax. This is deterministic and always in
-/// sync with the regex engine (no hand-rolled heuristic to maintain).
-///
-/// Callers can use this to choose between `GrepMode::Regex` and
-/// `GrepMode::PlainText`. When `Regex` mode is chosen and the pattern turns
-/// out to be invalid, `grep_search` already falls back to plain-text matching
-/// and populates `regex_fallback_error`.
-pub fn has_regex_metacharacters(text: &str) -> bool {
-    regex::escape(text) != text
 }
 
 /// Check if `text` contains `\n` that is NOT preceded by another `\`.
 ///
-/// `\n` → true (user wants multiline search)
-/// `\\n` → false (escaped backslash followed by literal `n`, e.g. `\\nvim-data`)
+/// `\n` -> true (user wants multiline search)
+/// `\\n` -> false (escaped backslash followed by literal `n`, e.g. `\\nvim-data`)
 #[inline]
-fn has_unescaped_newline_escape(text: &str) -> bool {
+pub(super) fn has_unescaped_newline_escape(text: &str) -> bool {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len().saturating_sub(1) {
@@ -175,7 +49,7 @@ fn has_unescaped_newline_escape(text: &str) -> bool {
                 while backslash_count <= i && bytes[i - backslash_count] == b'\\' {
                     backslash_count += 1;
                 }
-                // Odd number of backslashes before 'n' → real \n escape
+                // Odd number of backslashes before 'n' -> real \n escape
                 if backslash_count % 2 == 1 {
                     return true;
                 }
@@ -191,9 +65,9 @@ fn has_unescaped_newline_escape(text: &str) -> bool {
 
 /// Replace only unescaped `\n` sequences with real newlines.
 ///
-/// `\n` → newline character
-/// `\\n` → preserved as-is (literal backslash + `n`)
-fn replace_unescaped_newline_escapes(text: &str) -> String {
+/// `\n` -> newline character
+/// `\\n` -> preserved as-is (literal backslash + `n`)
+pub(super) fn replace_unescaped_newline_escapes(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut result = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -226,18 +100,16 @@ pub enum GrepMode {
     /// Literal plain text match: default path that doesn't require any regex machinery
     #[default]
     PlainText,
-    /// Regex mode: the query is treated as a regular expression.
-    /// Uses the same `grep-matcher` / `regex::bytes::Regex` engine.
-    /// Invalid regex patterns will return zero results (not an error).
+    /// Regex mode: uses the same exact matching engine as ripgrep
     Regex,
-    /// Fuzzy mode: the query is treated as a fuzzy needle matched against
-    /// each line using neo_frizbee's Smith-Waterman scoring. Lines are ranked
-    /// by match score. Individual matched character positions are reported
-    /// as highlight ranges.
+    /// Smart fuzzy mode, allows user to make either a couple of single char typos or long gaps
+    /// e.g. shcema -> shcema, or UserController -> UserAuthController
+    ///
+    /// Significatnly slower than plain text, especially on unindexed FilePicker
     Fuzzy,
 }
 
-/// A single content match within a file.
+/// A single content match within a file
 #[derive(Debug, Clone)]
 pub struct GrepMatch {
     /// Index into the deduplicated `files` vec of the GrepResult.
@@ -292,29 +164,6 @@ impl GrepMatch {
             }
         }
     }
-}
-
-/// Result of a grep search.
-#[derive(Debug, Clone, Default)]
-pub struct GrepResult<'a> {
-    pub matches: Vec<GrepMatch>,
-    /// Deduplicated file references for the returned matches.
-    pub files: Vec<&'a FileItem>,
-    /// Number of files actually searched in this call.
-    pub total_files_searched: usize,
-    /// Total number of indexed files (before filtering).
-    pub total_files: usize,
-    /// Total number of searchable files (after filtering out binary, too-large, etc.).
-    pub filtered_file_count: usize,
-    /// Number of files that contained at least one match.
-    pub files_with_matches: usize,
-    /// The file offset to pass for the next page. `0` if there are no more files.
-    /// Callers should store this and pass it as `file_offset` in the next call.
-    pub next_file_offset: usize,
-    /// When regex mode fails to compile the pattern, the search falls back to
-    /// literal matching and this field contains the compilation error message.
-    /// The UI can display this to inform the user their regex was invalid.
-    pub regex_fallback_error: Option<String>,
 }
 
 pub use crate::constants::MAX_FFFILE_SIZE;
@@ -397,17 +246,6 @@ impl GrepContext<'_, '_> {
     }
 }
 
-/// Lightweight wrapper around `regex::bytes::Regex` implementing the
-/// `grep_matcher::Matcher` trait required by `grep-searcher`.
-///
-/// When `is_multiline` is false (the common case), we report `\n` as the
-/// line terminator. This enables the **fast** search path in `fff-searcher`:
-/// the searcher calls `find()` once on the entire remaining buffer, letting
-/// the regex DFA skip non-matching content in a single pass.
-///
-/// For multiline patterns we must NOT report a line terminator — the regex
-/// can match across line boundaries, so the searcher needs the `MultiLine`
-/// strategy.
 struct RegexMatcher<'r> {
     regex: &'r regex::bytes::Regex,
     is_multiline: bool,
@@ -493,14 +331,7 @@ impl SinkState {
         let byte_offset = mat.absolute_byte_offset();
 
         // Trim trailing newline/CR directly on bytes to avoid UTF-8 conversion.
-        let trimmed_len = {
-            let mut len = line_bytes.len();
-            while len > 0 && matches!(line_bytes[len - 1], b'\n' | b'\r') {
-                len -= 1;
-            }
-            len
-        };
-        let trimmed_bytes = &line_bytes[..trimmed_len];
+        let trimmed_bytes = strip_line_terminators(line_bytes);
 
         // Truncate for display (floor to a char boundary).
         let display_bytes = truncate_display_bytes(trimmed_bytes);
@@ -521,7 +352,7 @@ impl SinkState {
         context_before: Vec<String>,
         context_after: Vec<String>,
     ) {
-        let is_definition = self.classify_definitions && is_definition_line(&line_content);
+        let is_definition = classify_definition(self.classify_definitions, &line_content);
         self.matches.push(GrepMatch {
             file_index: self.file_index,
             line_number,
@@ -607,7 +438,7 @@ impl SinkState {
 
 /// Truncate a byte slice for display, respecting UTF-8 char boundaries.
 #[inline]
-fn truncate_display_bytes(bytes: &[u8]) -> &[u8] {
+pub(super) fn truncate_display_bytes(bytes: &[u8]) -> &[u8] {
     if bytes.len() <= MAX_LINE_DISPLAY_LEN {
         bytes
     } else {
@@ -854,11 +685,7 @@ pub(crate) fn multi_grep_search<'a>(
     let total_files = files.live_count();
 
     if patterns.is_empty() || patterns.iter().all(|p| p.is_empty()) {
-        return GrepResult {
-            total_files,
-            filtered_file_count: total_files,
-            ..Default::default()
-        };
+        return GrepResult::empty(total_files, total_files);
     }
 
     // Bigram prefiltering: OR the candidate bitsets for each pattern.
@@ -935,11 +762,7 @@ pub(crate) fn multi_grep_search<'a>(
     }
 
     if files_to_search.is_empty() {
-        return GrepResult {
-            total_files,
-            filtered_file_count,
-            ..Default::default()
-        };
+        return GrepResult::empty(total_files, filtered_file_count);
     }
 
     // Smart case: case-insensitive when all patterns are lowercase
@@ -1003,17 +826,6 @@ const fn is_utf8_char_boundary(b: u8) -> bool {
     (b as i8) >= -0x40
 }
 
-/// Build a regex from the user's grep text.
-///
-/// In `PlainText` mode:
-/// - Escapes the input for literal matching (users type text, not regex)
-/// - Applies smart case: case-insensitive unless query has uppercase
-/// - Detects `\n` for multiline
-///
-/// In `Regex` mode:
-/// - The input is passed directly to the regex engine without escaping
-/// - Smart case still applies
-/// - Returns `None` for invalid regex patterns — the caller falls back to literal mode
 fn build_regex(pattern: &str, smart_case: bool) -> Result<regex::bytes::Regex, String> {
     if pattern.is_empty() {
         return Err("empty pattern".to_string());
@@ -1048,7 +860,10 @@ fn build_regex(pattern: &str, smart_case: bool) -> Result<regex::bytes::Regex, S
 ///
 /// Each matched character becomes its own (byte_start, byte_end) pair.
 /// Adjacent characters are merged into a single contiguous range.
-fn char_indices_to_byte_offsets(line: &str, char_indices: &[usize]) -> SmallVec<[(u32, u32); 4]> {
+pub(super) fn char_indices_to_byte_offsets(
+    line: &str,
+    char_indices: &[usize],
+) -> SmallVec<[(u32, u32); 4]> {
     if char_indices.is_empty() {
         return SmallVec::new();
     }
@@ -1111,11 +926,12 @@ where
     let mut page_filled = false;
 
     // Each chunk is a rayon barrier. A flat small chunk over 500k files = ~7800
-    // barriers; ×2 growth makes it logarithmic. But a too-aggressive growth
+    // barriers; x2 growth makes it logarithmic. But a too-aggressive growth
     // over-scans: when a page fills mid-chunk, the whole submitted chunk still
-    // runs. So only grow when the prefilter is weak (large candidate set);
-    // when bigram cut the set in half, keep fixed small chunks for cheap
-    // page-fill termination.
+    // runs.
+    //
+    // So only grow when the prefilter is weak (large candidate set);
+    // when bigram cut the set in half, keep fixed small chunks for cheap page-fill termination.
     let base_chunk = rayon::current_num_threads() * 4;
     let prefilter_strong = ctx.total_files > 0 && files_to_search.len() * 2 < ctx.total_files;
     let max_chunk = if prefilter_strong {
@@ -1245,83 +1061,6 @@ where
         total_files_searched: files_consumed,
         total_files: ctx.total_files,
         filtered_file_count: ctx.filtered_file_count,
-        next_file_offset,
-        regex_fallback_error: None,
-    }
-}
-
-/// Flatten per-file results into the final `GrepResult`.
-///
-/// Shared post-processing for both `run_file_search` (simple closure) and
-/// `fuzzy_grep_search` (which uses `map_init` for per-thread matcher reuse).
-fn collect_grep_results<'a>(
-    per_file_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)>,
-    files_to_search_len: usize,
-    options: &GrepSearchOptions,
-    total_files: usize,
-    filtered_file_count: usize,
-    budget_exceeded: bool,
-) -> GrepResult<'a> {
-    let page_limit = options.page_limit;
-
-    // Each match stores a `file_index` pointing into `result_files` so that
-    // consumers (FFI JSON, Lua) can look up file metadata without duplicating
-    // it across every match from the same file.
-    let mut result_files: Vec<&'a FileItem> = Vec::new();
-    let mut all_matches: Vec<GrepMatch> = Vec::new();
-    // files_consumed tracks how far into files_to_search we have advanced,
-    // counting every file whose results were emitted (with or without matches).
-    // We use the batch_idx of the last consumed file + 1, which is correct
-    // because per_file_results only contains files that had matches, and
-    // files between them that had no matches were still searched and can be
-    // safely skipped on the next page.
-    let mut files_consumed: usize = 0;
-
-    for (batch_idx, file, file_matches) in per_file_results {
-        // batch_idx is the 0-based position in files_to_search.
-        // Advance files_consumed to include this file and all no-match files before it.
-        files_consumed = batch_idx + 1;
-
-        let file_result_idx = result_files.len();
-        result_files.push(file);
-
-        for mut m in file_matches {
-            m.file_index = file_result_idx;
-            if options.trim_whitespace {
-                m.trim_leading_whitespace();
-            }
-            all_matches.push(m);
-        }
-
-        // page_limit is a soft cap: we always finish the current file before
-        // stopping, so no matches are dropped. A page may return up to
-        // page_limit + max_matches_per_file - 1 matches in the worst case.
-        if all_matches.len() >= page_limit {
-            break;
-        }
-    }
-
-    // If no file had any match, we searched the entire slice.
-    if result_files.is_empty() {
-        files_consumed = files_to_search_len;
-    }
-
-    let has_more = budget_exceeded
-        || (all_matches.len() >= page_limit && files_consumed < files_to_search_len);
-
-    let next_file_offset = if has_more {
-        options.file_offset + files_consumed
-    } else {
-        0
-    };
-
-    GrepResult {
-        matches: all_matches,
-        files_with_matches: result_files.len(),
-        files: result_files,
-        total_files_searched: files_consumed,
-        total_files,
-        filtered_file_count,
         next_file_offset,
         regex_fallback_error: None,
     }
@@ -1464,385 +1203,6 @@ fn prefilter_files<'a>(
     }
 }
 
-/// Fuzzy grep search using SIMD-accelerated `neo_frizbee::match_list`.
-///
-/// Why this doesn't use `grep-searcher` / `GrepSink`
-///
-/// PlainText and Regex modes use the `grep-searcher` pipeline: a `Matcher`
-/// finds candidate lines, and a `Sink` collects them one at a time. This
-/// works well because memchr/regex can *skip* non-matching lines in O(n)
-/// without scoring every one.
-///
-/// Fuzzy matching is fundamentally different. Every line is a candidate —
-/// the Smith-Waterman score determines whether it passes, not a substring
-/// or pattern test. The `Matcher::find_at` trait forces per-line calls to
-/// the *reference* (scalar) smith-waterman, which is O(needle × line_len)
-/// per line. For a 10k-line file that's 10k sequential reference calls.
-///
-/// For each file:
-///   1. mmap the file, split lines via memchr '\n' (tracking line numbers + byte offsets)
-///   2. Batch all lines through `match_list` (SIMD smith-waterman)
-///   3. Filter results by `min_score`
-///   4. Call `match_indices` only on passing lines to get character highlight offsets
-#[allow(clippy::too_many_arguments)]
-fn fuzzy_grep_search<'a>(
-    grep_text: &str,
-    files_to_search: &[&'a FileItem],
-    options: &GrepSearchOptions,
-    total_files: usize,
-    filtered_file_count: usize,
-    case_insensitive: bool,
-    budget: &ContentCacheBudget,
-    abort_signal: &AtomicBool,
-    base_path: &Path,
-    arena: crate::simd_path::ArenaPtr,
-    overflow_arena: crate::simd_path::ArenaPtr,
-) -> GrepResult<'a> {
-    // max_typos controls how many *needle* characters can be unmatched.
-    // A transposition (e.g. "shcema" → "schema") costs ~1 typo with
-    // default gap penalties. We scale max_typos by needle length:
-    //   1-2 chars → 0 typos (exact subsequence only)
-    //   3-5 chars → 1 typo
-    //   6+  chars → 2 typos
-    // Cap at 2: higher values (3+) let the SIMD prefilter pass lines
-    // missing key characters entirely (e.g. query "flvencodeX" matching
-    // lines without 'l' or 'v'). Quality comes from the post-match filters.
-    let max_typos = (grep_text.len() / 3).min(2);
-    let scoring = neo_frizbee::Scoring {
-        // Use default gap penalties. Higher values (e.g. 20) cause
-        // smith-waterman to prefer *dropping needle chars* over paying
-        // gap costs, which inflates the typo count and breaks
-        // transposition matching ("shcema" → "schema" becomes 3 typos instead of 1)
-        exact_match_bonus: 100,
-        // gap_open_penalty: 4,
-        // gap_extend_penalty: 2,
-        prefix_bonus: 0,
-        capitalization_bonus: if case_insensitive { 0 } else { 4 },
-        ..neo_frizbee::Scoring::default()
-    };
-
-    let matcher = neo_frizbee::Matcher::new(
-        grep_text,
-        &neo_frizbee::Config {
-            // Use the real max_typos so frizbee's SIMD prefilter actually rejects non-matching lines (~2 SIMD instructions per line vs full SW scoring).
-            max_typos: Some(max_typos as u16),
-            sort: false,
-            scoring,
-            ..Default::default()
-        },
-    );
-
-    // Minimum score threshold: 50% of a perfect contiguous match.
-    // With default scoring (match_score=12, matching_case_bonus=4 = 16/char),
-    // a transposition costs ~5 from a gap, keeping the score well above 50%.
-    let perfect_score = (grep_text.len() as u16) * 16;
-    let min_score = (perfect_score * 50) / 100;
-
-    // Target identifiers are often longer than the query due to delimiters
-    // (e.g. query "flvencodepicture" → "ff_flv_encode_picture_header").
-    // Allow 3x needle length to accommodate underscore/dot-separated names.
-    let max_match_span = grep_text.len() * 3;
-    let needle_len = grep_text.len();
-
-    // Each delimiter (_, .) in the target creates a gap. A typical C/Rust
-    // identifier like "ff_flv_encode_picture_header" has 4-5 underscores.
-    // Scale generously so delimiter gaps don't reject valid matches.
-    let max_gaps = (needle_len / 3).max(2);
-
-    // File-level prefilter: collect unique needle chars (both cases) for
-    // a fast memchr scan.  If a file doesn't contain enough distinct
-    // needle characters, skip it entirely — no line splitting needed.
-    let needle_bytes = grep_text.as_bytes();
-    let mut unique_needle_chars: Vec<u8> = Vec::new();
-    for &b in needle_bytes {
-        let lo = b.to_ascii_lowercase();
-        let hi = b.to_ascii_uppercase();
-        if !unique_needle_chars.contains(&lo) {
-            unique_needle_chars.push(lo);
-        }
-        if lo != hi && !unique_needle_chars.contains(&hi) {
-            unique_needle_chars.push(hi);
-        }
-    }
-
-    // How many distinct needle chars must appear in the file.
-    // With max_typos allowed, we need at least (unique_count - max_typos).
-    let unique_count = {
-        let mut seen = [false; 256];
-        for &b in needle_bytes {
-            seen[b.to_ascii_lowercase() as usize] = true;
-        }
-        seen.iter().filter(|&&v| v).count()
-    };
-    let min_chars_required = unique_count.saturating_sub(max_typos);
-
-    let time_budget = if options.time_budget_ms > 0 {
-        Some(std::time::Duration::from_millis(options.time_budget_ms))
-    } else {
-        None
-    };
-    let search_start = std::time::Instant::now();
-    let budget_exceeded = AtomicBool::new(false);
-    let max_matches_per_file = options.max_matches_per_file;
-
-    // for fuzzy match we need a bit smarter chunking as the amount of work we have to perform is
-    // exponentially larger than the original grep (and the nature of work is) - in short we have to
-    // understand if the approximate index prefilter got us a lot of candidates or not
-    //
-    // if we have a few candidates -> likely we have a lot of matches, so verify the check faster
-    // if we have a lot of candidates -> rely on a larger chunk pipelining more parallel lines at once
-    let page_limit = options.page_limit;
-    let base_chunk = rayon::current_num_threads() * 4;
-    let prefilter_strong = total_files > 0 && files_to_search.len() * 2 < total_files;
-    let max_chunk = if prefilter_strong {
-        base_chunk
-    } else {
-        (base_chunk * 256).max(8 * 1024)
-    };
-
-    let growth = if prefilter_strong { 1 } else { 2 };
-    let mut chunk_size = base_chunk;
-    let mut chunk_start = 0;
-    let mut running_matches = 0usize;
-    let mut per_file_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)> = Vec::new();
-
-    while chunk_start < files_to_search.len() {
-        let chunk_end = (chunk_start + chunk_size).min(files_to_search.len());
-        let chunk = &files_to_search[chunk_start..chunk_end];
-        let chunk_offset = chunk_start;
-        chunk_start = chunk_end;
-        chunk_size = (chunk_size * growth).min(max_chunk);
-
-        // Parallel phase with `map_init`: each rayon worker thread clones the
-        // matcher once and gets a reusable read buffer + mmap slot. Buffer holds
-        // small files, slot holds fresh mmap for cache-miss files
-        // ≥ FRESH_MMAP_THRESHOLD.
-        let chunk_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)> = chunk
-            .par_iter()
-            .enumerate()
-            .map_init(
-                || {
-                    (
-                        matcher.clone(),
-                        Vec::with_capacity(64 * 1024),
-                        MmapSlot::default(),
-                    )
-                },
-                |(matcher, buf, mmap_slot), (local_idx, file)| {
-                    if abort_signal.load(Ordering::Relaxed) {
-                        budget_exceeded.store(true, Ordering::Relaxed);
-                        return None;
-                    }
-
-                    if let Some(budget) = time_budget
-                        && search_start.elapsed() > budget
-                    {
-                        budget_exceeded.store(true, Ordering::Relaxed);
-                        return None;
-                    }
-
-                    let file_arena = if file.is_overflow() {
-                        overflow_arena
-                    } else {
-                        arena
-                    };
-
-                    let file_bytes =
-                        file.get_content_for_search(buf, mmap_slot, file_arena, base_path, budget)?;
-
-                    // File-level prefilter: check if enough distinct needle chars
-                    // exist anywhere in the file bytes.  Uses memchr for speed.
-                    if min_chars_required > 0 {
-                        let mut chars_found = 0usize;
-                        for &ch in &unique_needle_chars {
-                            if memchr::memchr(ch, file_bytes).is_some() {
-                                chars_found += 1;
-                                if chars_found >= min_chars_required {
-                                    break;
-                                }
-                            }
-                        }
-                        if chars_found < min_chars_required {
-                            return None;
-                        }
-                    }
-
-                    // Validate the whole file as UTF-8 once upfront. Source code
-                    // files are virtually always valid UTF-8; this single check
-                    // replaces per-line from_utf8 calls (~8% of fuzzy grep time).
-                    let file_is_utf8 = std::str::from_utf8(file_bytes).is_ok();
-
-                    // Reuse grep-searcher's LineStep for SIMD-accelerated line iteration.
-                    let mut stepper = LineStep::new(b'\n', 0, file_bytes.len());
-                    let estimated_lines = (file_bytes.len() / 40).max(64);
-                    let mut file_lines: Vec<&str> = Vec::with_capacity(estimated_lines);
-                    let mut line_meta: Vec<(u64, u64)> = Vec::with_capacity(estimated_lines);
-                    let line_term_lf = fff_grep::LineTerminator::byte(b'\n');
-                    let line_term_cr = fff_grep::LineTerminator::byte(b'\r');
-
-                    let mut line_number: u64 = 1;
-                    while let Some(line_match) = stepper.next_match(file_bytes) {
-                        let byte_offset = line_match.start() as u64;
-
-                        // Strip line terminators (\n, \r).
-                        let trimmed = lines::without_terminator(
-                            lines::without_terminator(&file_bytes[line_match], line_term_lf),
-                            line_term_cr,
-                        );
-
-                        if !trimmed.is_empty() {
-                            // SAFETY: when the whole file is valid UTF-8, every
-                            // sub-slice split on ASCII byte boundaries (\n, \r)
-                            // is also valid UTF-8.
-                            let line_str = if file_is_utf8 {
-                                unsafe { std::str::from_utf8_unchecked(trimmed) }
-                            } else if let Ok(s) = std::str::from_utf8(trimmed) {
-                                s
-                            } else {
-                                line_number += 1;
-                                continue;
-                            };
-                            file_lines.push(line_str);
-                            line_meta.push((line_number, byte_offset));
-                        }
-
-                        line_number += 1;
-                    }
-
-                    if file_lines.is_empty() {
-                        return None;
-                    }
-
-                    // Single-pass: score + indices in one Smith-Waterman run per line.
-                    let matches_with_indices = matcher.match_list_indices(&file_lines);
-                    let mut file_matches: Vec<GrepMatch> = Vec::new();
-
-                    for mut match_indices in matches_with_indices {
-                        if match_indices.score < min_score {
-                            continue;
-                        }
-
-                        let idx = match_indices.index as usize;
-                        let raw_line = file_lines[idx];
-
-                        let truncated = truncate_display_bytes(raw_line.as_bytes());
-                        let display_line = if truncated.len() < raw_line.len() {
-                            // SAFETY: truncate_display_bytes preserves UTF-8 char boundaries
-                            &raw_line[..truncated.len()]
-                        } else {
-                            raw_line
-                        };
-
-                        // If the line was truncated, re-compute indices on the shorter string.
-                        if display_line.len() < raw_line.len() {
-                            let Some(re_indices) = matcher
-                                .match_list_indices(&[display_line])
-                                .into_iter()
-                                .next()
-                            else {
-                                continue;
-                            };
-                            match_indices = re_indices;
-                        }
-
-                        match_indices.indices.sort_unstable();
-
-                        // Minimum matched chars: at least (needle_len - max_typos)
-                        // characters must appear. This is consistent with the typo
-                        // budget: each typo can drop one needle char from the alignment.
-                        let min_matched = needle_len.saturating_sub(max_typos).max(1);
-                        if match_indices.indices.len() < min_matched {
-                            continue;
-                        }
-
-                        let indices = &match_indices.indices;
-
-                        if let (Some(&first), Some(&last)) = (indices.first(), indices.last()) {
-                            // Span check: reject widely scattered matches.
-                            let span = last - first + 1;
-                            if span > max_match_span {
-                                continue;
-                            }
-
-                            // Density check: matched chars / span must be dense enough.
-                            // Relaxed for perfect subsequence matches (all needle chars
-                            // present), slightly relaxed for typo matches to handle
-                            // delimiter-heavy targets (e.g. "ff_flv_encode_picture_header"
-                            // has span inflated by underscores → density ~68%).
-                            let density = (indices.len() * 100) / span;
-                            let min_density = if indices.len() >= needle_len {
-                                45 // Perfect subsequence — relaxed (delimiters inflate span)
-                            } else {
-                                65 // Has typos — moderately strict
-                            };
-                            if density < min_density {
-                                continue;
-                            }
-
-                            // Gap count check: count discontinuities in the indices.
-                            let gap_count = indices.windows(2).filter(|w| w[1] != w[0] + 1).count();
-                            if gap_count > max_gaps {
-                                continue;
-                            }
-                        }
-
-                        let (ln, bo) = line_meta[idx];
-                        let match_byte_offsets =
-                            char_indices_to_byte_offsets(display_line, &match_indices.indices);
-                        let col = match_byte_offsets
-                            .first()
-                            .map(|r| r.0 as usize)
-                            .unwrap_or(0);
-
-                        file_matches.push(GrepMatch {
-                            file_index: 0,
-                            line_number: ln,
-                            col,
-                            byte_offset: bo,
-                            is_definition: options.classify_definitions
-                                && is_definition_line(display_line),
-                            line_content: display_line.to_string(),
-                            match_byte_offsets,
-                            fuzzy_score: Some(match_indices.score),
-                            context_before: Vec::new(),
-                            context_after: Vec::new(),
-                        });
-
-                        if max_matches_per_file != 0 && file_matches.len() >= max_matches_per_file {
-                            break;
-                        }
-                    }
-
-                    if file_matches.is_empty() {
-                        return None;
-                    }
-
-                    Some((chunk_offset + local_idx, *file, file_matches))
-                },
-            )
-            .flatten()
-            .collect();
-
-        for result in chunk_results {
-            running_matches += result.2.len();
-            per_file_results.push(result);
-        }
-
-        if running_matches >= page_limit || budget_exceeded.load(Ordering::Relaxed) {
-            break;
-        }
-    }
-
-    collect_grep_results(
-        per_file_results,
-        files_to_search.len(),
-        options,
-        total_files,
-        filtered_file_count,
-        budget_exceeded.load(Ordering::Relaxed),
-    )
-}
-
 /// Perform a grep search across all indexed files.
 ///
 /// When `query` is empty, returns git-modified/untracked files sorted by
@@ -1873,7 +1233,7 @@ pub(crate) fn grep_search<'a>(
     let grep_text = if !matches!(query.fuzzy_query, fff_query_parser::FuzzyQuery::Empty) {
         query.grep_text()
     } else {
-        // Constraint-only or empty query — use raw_query for backslash-escape handling.
+        // if constraint-only or empty query we use raw_query for backslash-escape handling
         let t = query.raw_query.trim();
         if t.starts_with('\\') && t.len() > 1 {
             let suffix = &t[1..];
@@ -1889,14 +1249,7 @@ pub(crate) fn grep_search<'a>(
     };
 
     if grep_text.is_empty() {
-        return GrepResult {
-            total_files,
-            filtered_file_count: total_files,
-            next_file_offset: 0,
-            matches: Vec::with_capacity(4),
-            files: Vec::new(),
-            ..Default::default()
-        };
+        return GrepResult::empty(total_files, total_files);
     }
 
     let case_insensitive = if options.smart_case {
@@ -1973,15 +1326,10 @@ pub(crate) fn grep_search<'a>(
             }
 
             if files_to_search.is_empty() {
-                return GrepResult {
-                    total_files,
-                    filtered_file_count,
-                    next_file_offset: 0,
-                    ..Default::default()
-                };
+                return GrepResult::empty(total_files, filtered_file_count);
             }
 
-            return fuzzy_grep_search(
+            return super::fuzzy_grep::fuzzy_grep_search(
                 &grep_text,
                 &files_to_search,
                 options,
@@ -2012,8 +1360,6 @@ pub(crate) fn grep_search<'a>(
         grep_text.to_string()
     };
 
-    // Build the finder pattern once — used by PlainTextSink (and as a
-    // literal-needle fallback anchor when regex compilation fell back to plain).
     let finder_pattern: Vec<u8> = if case_insensitive {
         effective_pattern.as_bytes().to_ascii_lowercase()
     } else {
@@ -2071,9 +1417,8 @@ pub(crate) fn grep_search<'a>(
         None
     };
 
-    // Bigram bitset only covers `files[..bigram_boundary]`. Overflow + unindexable
-    // tail files past the boundary are always retained — `prefilter_files` walks them
-    // via the linear sweep after the bitset walk.
+    // Bigram bitset only covers `files[..bigram_boundary]`, new files aka overflow
+    // (max 1024 always scanned)
     let bigram_boundary = bigram_overlay
         .map(|o| o.base_file_count())
         .unwrap_or(files.len());
@@ -2105,16 +1450,11 @@ pub(crate) fn grep_search<'a>(
     }
 
     if files_to_search.is_empty() {
-        return GrepResult {
-            total_files,
-            filtered_file_count,
-            next_file_offset: 0,
-            ..Default::default()
-        };
+        return GrepResult::empty(total_files, filtered_file_count);
     }
 
     // `PlainTextMatcher` is used by the grep-searcher engine for line detection.
-    // `PlainTextSink` / `RegexSink` handle highlight extraction independently.
+    // `PlainTextSink` / `RegexSink` handle highlight extraction independently via ripgrep create
     let plain_matcher = PlainTextMatcher {
         needle: &finder_pattern,
         case_insensitive,
@@ -2205,380 +1545,4 @@ fn strip_file_path_constraint_if_present<'a>(
         .collect();
 
     Some(filtered)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::bigram_filter::BigramIndexBuilder;
-    use crate::file_picker::{FilePicker, FilePickerOptions};
-    use std::io::Write;
-    use std::sync::atomic::AtomicBool;
-
-    #[test]
-    fn test_unescaped_newline_detection() {
-        // Single \n → multiline
-        assert!(has_unescaped_newline_escape("foo\\nbar"));
-        // \\n → escaped backslash + literal n, NOT multiline
-        // (this is what the user types when grepping Rust source with `\\nvim`)
-        assert!(!has_unescaped_newline_escape("foo\\\\nvim-data"));
-        // Real-world: source file has literal \\AppData\\Local\\nvim-data
-        // (double backslash in the file, so user types double backslash)
-        assert!(!has_unescaped_newline_escape(
-            r#"format!("{}\\AppData\\Local\\nvim-data","#
-        ));
-        // No \n at all
-        assert!(!has_unescaped_newline_escape("hello world"));
-        // \\\\n → even number of backslashes before n → NOT multiline
-        assert!(!has_unescaped_newline_escape("foo\\\\\\\\nbar"));
-        // \\\n → 3 backslashes: first two pair up, third + n = \n → multiline
-        assert!(has_unescaped_newline_escape("foo\\\\\\nbar"));
-    }
-
-    #[test]
-    fn test_replace_unescaped_newline() {
-        // \n → real newline
-        assert_eq!(replace_unescaped_newline_escapes("foo\\nbar"), "foo\nbar");
-        // \\n → preserved as-is
-        assert_eq!(
-            replace_unescaped_newline_escapes("foo\\\\nvim"),
-            "foo\\\\nvim"
-        );
-    }
-
-    #[test]
-    fn test_fuzzy_typo_scoring() {
-        // Mirror the config from fuzzy_grep_search
-        let needle = "schema";
-        let max_typos = (needle.len() / 3).min(2); // 2
-        let config = neo_frizbee::Config {
-            max_typos: Some(max_typos as u16),
-            sort: false,
-            scoring: neo_frizbee::Scoring {
-                exact_match_bonus: 100,
-                ..neo_frizbee::Scoring::default()
-            },
-            ..Default::default()
-        };
-        let min_matched = needle.len().saturating_sub(1).max(1); // 5
-        let max_match_span = needle.len() + 4; // 10
-
-        // Helper: check if a match would pass our post-filters
-        let passes = |n: &str, h: &str| -> bool {
-            let Some(mut mi) = neo_frizbee::match_list_indices(n, &[h], &config)
-                .into_iter()
-                .next()
-            else {
-                return false;
-            };
-            // upstream returns indices in reverse order, sort ascending
-            mi.indices.sort_unstable();
-            if mi.indices.len() < min_matched {
-                return false;
-            }
-            if let (Some(&first), Some(&last)) = (mi.indices.first(), mi.indices.last()) {
-                let span = last - first + 1;
-                if span > max_match_span {
-                    return false;
-                }
-                let density = (mi.indices.len() * 100) / span;
-                if density < 70 {
-                    return false;
-                }
-            }
-            true
-        };
-
-        // Exact match: must pass
-        assert!(passes("schema", "schema"));
-        // Exact in longer line: must pass
-        assert!(passes("schema", "  schema: String,"));
-        // In identifier: must pass
-        assert!(passes("schema", "pub fn validate_schema() {}"));
-        // Transposition: must pass
-        assert!(passes("shcema", "schema"));
-        // Partial "ema" only line: must NOT pass
-        assert!(!passes("schema", "it has ema in it"));
-        // Completely unrelated: must NOT pass
-        assert!(!passes("schema", "hello world foo bar"));
-    }
-
-    #[test]
-    fn test_multi_grep_search() {
-        use crate::file_picker::{FilePicker, FilePickerOptions};
-        use std::io::Write;
-
-        let dir = tempfile::tempdir().unwrap();
-
-        // File 1: has "GrepMode" and "GrepMatch"
-        {
-            let mut f = std::fs::File::create(dir.path().join("grep.rs")).unwrap();
-            writeln!(f, "pub enum GrepMode {{").unwrap();
-            writeln!(f, "    PlainText,").unwrap();
-            writeln!(f, "    Regex,").unwrap();
-            writeln!(f, "}}").unwrap();
-            writeln!(f, "pub struct GrepMatch {{").unwrap();
-            writeln!(f, "    pub line_number: u64,").unwrap();
-            writeln!(f, "}}").unwrap();
-        }
-
-        // File 2: has "PlainTextMatcher" only
-        {
-            let mut f = std::fs::File::create(dir.path().join("matcher.rs")).unwrap();
-            writeln!(f, "struct PlainTextMatcher {{").unwrap();
-            writeln!(f, "    needle: Vec<u8>,").unwrap();
-            writeln!(f, "}}").unwrap();
-        }
-
-        // File 3: no matches
-        {
-            let mut f = std::fs::File::create(dir.path().join("other.rs")).unwrap();
-            writeln!(f, "fn main() {{").unwrap();
-            writeln!(f, "    println!(\"hello\");").unwrap();
-            writeln!(f, "}}").unwrap();
-        }
-
-        let mut picker = FilePicker::new(FilePickerOptions {
-            base_path: dir.path().to_str().unwrap().into(),
-            watch: false,
-            ..Default::default()
-        })
-        .unwrap();
-        picker.collect_files().unwrap();
-
-        let files = picker.get_files();
-        let arena = picker.arena_base_ptr();
-
-        let options = super::GrepSearchOptions {
-            max_file_size: MAX_FFFILE_SIZE,
-            max_matches_per_file: 0,
-            smart_case: true,
-            file_offset: 0,
-            page_limit: 100,
-            mode: super::GrepMode::PlainText,
-            time_budget_ms: 0,
-            before_context: 0,
-            after_context: 0,
-            classify_definitions: false,
-            trim_whitespace: false,
-            abort_signal: None,
-        };
-        let no_cancel = AtomicBool::new(false);
-
-        // Test with 3 patterns
-        let result = super::multi_grep_search(
-            files,
-            &["GrepMode", "GrepMatch", "PlainTextMatcher"],
-            &[],
-            &options,
-            picker.cache_budget(),
-            None,
-            None,
-            &no_cancel,
-            dir.path(),
-            arena,
-            arena,
-        );
-
-        assert!(
-            result.matches.len() >= 3,
-            "Expected at least 3 matches, got {}",
-            result.matches.len()
-        );
-
-        let has_grep_mode = result
-            .matches
-            .iter()
-            .any(|m| m.line_content.contains("GrepMode"));
-        let has_grep_match = result
-            .matches
-            .iter()
-            .any(|m| m.line_content.contains("GrepMatch"));
-        let has_plain_text_matcher = result
-            .matches
-            .iter()
-            .any(|m| m.line_content.contains("PlainTextMatcher"));
-
-        assert!(has_grep_mode, "Should find GrepMode");
-        assert!(has_grep_match, "Should find GrepMatch");
-        assert!(has_plain_text_matcher, "Should find PlainTextMatcher");
-
-        assert_eq!(result.files.len(), 2, "Should match exactly 2 files");
-
-        // Test with single pattern
-        let result2 = super::multi_grep_search(
-            files,
-            &["PlainTextMatcher"],
-            &[],
-            &options,
-            picker.cache_budget(),
-            None,
-            None,
-            &no_cancel,
-            dir.path(),
-            arena,
-            arena,
-        );
-        assert_eq!(
-            result2.matches.len(),
-            1,
-            "Single pattern should find 1 match"
-        );
-
-        // Test with empty patterns
-        let result3 = super::multi_grep_search(
-            files,
-            &[],
-            &[],
-            &options,
-            picker.cache_budget(),
-            None,
-            None,
-            &no_cancel,
-            dir.path(),
-            arena,
-            arena,
-        );
-        assert_eq!(
-            result3.matches.len(),
-            0,
-            "Empty patterns should find nothing"
-        );
-    }
-
-    /// Regression test for issue #407: Live grep returns duplicate results
-    /// when the bigram candidate bitset has trailing bits set beyond
-    /// `base_file_count`. The bitset is rounded up to a multiple of 64 bits
-    /// so any trailing bit that happens to be set (e.g. from overlay data)
-    /// would previously map to an overflow file index, which was then also
-    /// unconditionally appended by the overflow loop, producing duplicates.
-    #[test]
-    fn test_grep_no_duplicates_with_overflow_trailing_bits() {
-        let dir = tempfile::tempdir().unwrap();
-        // Match the picker's internal dunce-canonicalize so paths passed to
-        // on_create_or_modify resolve back to the same base_path on Windows.
-        let base = crate::path_utils::canonicalize(dir.path()).unwrap();
-
-        // Five base files: only three contain the pattern "unicorn".
-        // We need some files WITHOUT the pattern so the bigrams for
-        // "unicorn" aren't treated as ubiquitous (≥90% of files) and
-        // dropped from the index during compress().
-        let base_contents: &[(&str, &str)] = &[
-            ("a.txt", "hello unicorn world"),
-            ("b.txt", "another unicorn line"),
-            ("c.txt", "one more unicorn here"),
-            ("d.txt", "nothing special in here"),
-            ("e.txt", "just some random content"),
-        ];
-        for (name, content) in base_contents {
-            let mut f = std::fs::File::create(base.join(name)).unwrap();
-            writeln!(f, "{}", content).unwrap();
-        }
-
-        let mut picker = FilePicker::new(FilePickerOptions {
-            base_path: base.to_str().unwrap().into(),
-            watch: false,
-            ..Default::default()
-        })
-        .unwrap();
-        picker.collect_files().unwrap();
-        assert_eq!(picker.get_files().len(), 5);
-
-        // Manually build a bigram index over the 5 base files.
-        let base_count = 5usize;
-        let consec_builder = BigramIndexBuilder::new(base_count);
-        let skip_builder = BigramIndexBuilder::new(base_count);
-        for (i, (_, content)) in base_contents.iter().enumerate() {
-            consec_builder.add_file_content(&skip_builder, i, content.as_bytes());
-        }
-        let mut index = consec_builder.compress(Some(0));
-        index.set_skip_index(skip_builder.compress(Some(0)));
-        picker.set_bigram_index(index);
-
-        // Add three overflow files (new after the bigram index was built),
-        // all containing "unicorn".
-        for name in ["f.txt", "g.txt", "h.txt"] {
-            let path = base.join(name);
-            let mut f = std::fs::File::create(&path).unwrap();
-            writeln!(f, "overflow unicorn entry").unwrap();
-            drop(f);
-            picker.handle_create_or_modify(&path);
-        }
-        assert_eq!(picker.get_files().len(), 8);
-
-        // Inject a trailing bit into the overlay at a file index that
-        // corresponds to an overflow file (i.e. >= base_file_count=5 but
-        // < bitset_word_size=64). Without the fix, the bigram-candidate
-        // merge would set this bit in the bitset, and the bitset loop would
-        // push files[6] while the overflow loop also appends files[5..]
-        // which includes files[6], producing a duplicate.
-        let overflow_rel = "g.txt"; // middle overflow file
-        let overflow_abs = picker
-            .get_files()
-            .iter()
-            .position(|f| f.relative_path(&picker) == overflow_rel)
-            .expect("overflow file should be present");
-        assert!(overflow_abs >= base_count);
-        assert!(
-            overflow_abs < 64,
-            "index must fit in the single bitset word"
-        );
-
-        if let Some(overlay) = picker.bigram_overlay() {
-            overlay
-                .write()
-                .modify_file(overflow_abs, b"overflow unicorn entry");
-        }
-
-        // Run a grep for "unicorn": six files match
-        // (a, b, c in base + f, g, h in overflow).
-        let query = super::parse_grep_query("unicorn");
-        let options = super::GrepSearchOptions {
-            max_file_size: MAX_FFFILE_SIZE,
-            max_matches_per_file: 0,
-            smart_case: true,
-            file_offset: 0,
-            page_limit: 100,
-            mode: super::GrepMode::PlainText,
-            time_budget_ms: 0,
-            before_context: 0,
-            after_context: 0,
-            classify_definitions: false,
-            trim_whitespace: false,
-            abort_signal: Some(std::sync::Arc::new(AtomicBool::new(false))),
-        };
-        let result = picker.grep(&query, &options);
-
-        // Collect the matched relative paths via the returned files list.
-        let mut paths: Vec<String> = result
-            .files
-            .iter()
-            .map(|f| f.relative_path(&picker))
-            .collect();
-        paths.sort();
-
-        // Every file (base + overflow) should match exactly once.
-        let mut dedup = paths.clone();
-        dedup.dedup();
-        assert_eq!(
-            dedup, paths,
-            "grep must not return duplicate results (issue #407): {:?}",
-            paths
-        );
-        assert_eq!(
-            paths,
-            vec!["a.txt", "b.txt", "c.txt", "f.txt", "g.txt", "h.txt"],
-        );
-
-        // And the match count must equal the number of files (one line per
-        // file). A duplicate entry in files_to_search would double-count
-        // matches for the duplicated file.
-        assert_eq!(
-            result.matches.len(),
-            6,
-            "expected exactly one match per file, got {}",
-            result.matches.len()
-        );
-    }
 }
