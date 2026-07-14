@@ -199,16 +199,78 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
     })
   end
 
-  -- 9. Query match
+  -- 9. Query matches
   if ctx.query and ctx.query ~= '' then
-    local match_start, match_end = string.find(line_content, ctx.query, 1, true)
-    if match_start and match_end then
+    local matched_hl = ctx.config.hl.matched or 'IncSearch'
+    local line_lower = line_content:lower()
+    local matched_ranges = {}
+    local token_count = 0
+
+    local function add_range(start_col, end_col)
+      if #matched_ranges >= 16 then return end
+
+      table.insert(matched_ranges, { start_col, end_col })
+    end
+
+    local function add_subsequence_ranges(token)
+      local token_lower = token:lower()
+      local line_pos = 1
+      local token_ranges = {}
+
+      for i = 1, #token_lower do
+        local ch = token_lower:sub(i, i)
+        local match_start = line_lower:find(ch, line_pos, true)
+        if not match_start then return end
+
+        table.insert(token_ranges, { match_start - 1, match_start })
+        line_pos = match_start + 1
+      end
+
+      for _, range in ipairs(token_ranges) do
+        add_range(range[1], range[2])
+        if #matched_ranges >= 16 then return end
+      end
+    end
+
+    for token in ctx.query:gmatch('%S+') do
+      token_count = token_count + 1
+      if token_count > 8 or #matched_ranges >= 16 then break end
+
+      if #token >= 2 then
+        local token_lower = token:lower()
+        local match_start, match_end = line_lower:find(token_lower, 1, true)
+
+        if match_start and match_end then
+          add_range(match_start - 1, match_end)
+        else
+          add_subsequence_ranges(token)
+        end
+      end
+    end
+
+    table.sort(matched_ranges, function(a, b)
+      if a[1] == b[1] then return a[2] < b[2] end
+      return a[1] < b[1]
+    end)
+
+    local merged = {}
+    -- merge adjacent matches
+    for _, range in ipairs(matched_ranges) do
+      local last = merged[#merged]
+      if last and range[1] <= last[2] then
+        last[2] = math.max(last[2], range[2])
+      else
+        table.insert(merged, range)
+      end
+    end
+
+    for _, range in ipairs(merged) do
       vim.api.nvim_buf_set_extmark(
         buf,
         ns_id,
         line_idx - 1,
-        match_start - 1,
-        { end_col = match_end, hl_group = ctx.config.hl.matched or 'IncSearch' }
+        range[1],
+        { end_col = range[2], hl_group = matched_hl, priority = 200 }
       )
     end
   end
