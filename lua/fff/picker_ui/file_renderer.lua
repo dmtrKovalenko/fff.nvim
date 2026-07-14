@@ -202,6 +202,19 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   -- 9. Query matches
   if ctx.query and ctx.query ~= '' then
     local matched_hl = ctx.config.hl.matched or 'IncSearch'
+    local fuzzy_highlighting = ctx.config.file_picker and ctx.config.file_picker.fuzzy_query_highlighting
+
+    if not fuzzy_highlighting then
+      local match_start, match_end = string.find(line_content, ctx.query, 1, true)
+      if match_start and match_end then
+        vim.api.nvim_buf_set_extmark(buf, ns_id, line_idx - 1, match_start - 1, {
+          end_col = match_end,
+          hl_group = matched_hl,
+        })
+      end
+      return
+    end
+
     local line_lower = line_content:lower()
     local matched_ranges = {}
     local token_count = 0

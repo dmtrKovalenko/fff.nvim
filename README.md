@@ -339,6 +339,9 @@ require('fff').setup({
   git = {
     status_text_color = false, -- true to color filenames by git status
   },
+  file_picker = {
+    fuzzy_query_highlighting = false, -- true to highlight fuzzy query matches in file picker results
+  },
   select = {
     -- Return winid to open the chosen file in, or nil to open in the original window
     select_window = function(current_buf, action) --[[ default impl ]] end,

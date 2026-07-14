@@ -414,6 +414,7 @@ local function init()
     -- find_files settings
     file_picker = {
       current_file_label = '(current)',
+      fuzzy_query_highlighting = false,
     },
     -- grep settings
     grep = {
