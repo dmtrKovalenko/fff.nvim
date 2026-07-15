@@ -34,6 +34,7 @@ local M = {}
 --- @field preview_scroll_down string
 --- @field toggle_debug string
 --- @field cycle_grep_modes string
+--- @field insert_newline_escape string
 --- @field cycle_previous_query string
 --- @field cycle_forward_query string
 --- @field grep_jump_to_next_file string|string[]
@@ -276,6 +277,9 @@ local function init()
       toggle_debug = '<F2>',
       -- grep mode: cycle between plain text, regex, and fuzzy search
       cycle_grep_modes = '<S-Tab>',
+      -- grep mode only: insert a literal `\n` to search across lines
+      -- (requires a terminal with extended-key support to distinguish from <CR>)
+      insert_newline_escape = '<C-CR>',
       -- grep mode only: jump cursor to first item of next/prev file group
       grep_jump_to_next_file = { '<C-A-n>', '<A-Down>' },
       grep_jump_to_prev_file = { '<C-A-p>', '<A-Up>' },

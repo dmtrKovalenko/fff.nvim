@@ -27,6 +27,10 @@ name = "glob_bench"
 harness = false
 required-features = ["zlob"]
 
+[[bench]]
+name = "grep_bench"
+harness = false
+
 [features]
 # `ripgrep` is the pure-Rust walker/glob backend and is on by default so
 # consumers build without a Zig toolchain. CI/release opt into zlob via

@@ -32,12 +32,12 @@
 
 use crate::FFFStringStorage;
 use crate::background_watcher::BackgroundWatcher;
-use crate::bigram_filter::{BigramFilter, BigramOverlay};
 use crate::constants::{MAX_OVERFLOW_FILES, PATH_BUF_SIZE};
 use crate::error::Error;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
 use crate::grep::{GrepResult, GrepSearchOptions, grep_search, multi_grep_search};
+use crate::index::{BigramFilter, BigramOverlay};
 use crate::query_tracker::QueryTracker;
 use crate::scan::{ScanConfig, ScanJob, ScanSignals};
 use crate::score::{fuzzy_match_and_score_files, fuzzy_match_byte_offsets_for_page};

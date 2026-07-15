@@ -5,11 +5,11 @@ use rayon::prelude::*;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::grep::{
-    GrepMatch, GrepSearchOptions, char_indices_to_byte_offsets, classify_definition,
+use super::sink::{
+    char_indices_to_byte_offsets, classify_definition, strip_line_terminators,
     truncate_display_bytes,
 };
-use super::utils::{GrepResult, strip_line_terminators};
+use super::types::{GrepMatch, GrepResult, GrepSearchOptions};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fuzzy_grep_search<'a>(

@@ -1,38 +1,41 @@
-use super::grep::*;
+use super::grep::replace_newline_escapes;
+use super::*;
 
-use crate::bigram_filter::BigramIndexBuilder;
 use crate::file_picker::{FilePicker, FilePickerOptions};
+use crate::index::BigramIndexBuilder;
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
 
 #[test]
-fn test_unescaped_newline_detection() {
-    // Single \n → multiline
-    assert!(has_unescaped_newline_escape("foo\\nbar"));
+fn test_replace_newline_escapes() {
+    // Single \n → multiline: replaced with a real newline at byte 3
+    assert_eq!(
+        replace_newline_escapes("foo\\nbar"),
+        Some(("foo\nbar".to_string(), 3))
+    );
     // \\n → escaped backslash + literal n, NOT multiline
     // (this is what the user types when grepping Rust source with `\\nvim`)
-    assert!(!has_unescaped_newline_escape("foo\\\\nvim-data"));
+    assert_eq!(replace_newline_escapes("foo\\\\nvim-data"), None);
     // Real-world: source file has literal \\AppData\\Local\\nvim-data
     // (double backslash in the file, so user types double backslash)
-    assert!(!has_unescaped_newline_escape(
-        r#"format!("{}\\AppData\\Local\\nvim-data","#
-    ));
-    // No \n at all
-    assert!(!has_unescaped_newline_escape("hello world"));
-    // \\\\n → even number of backslashes before n → NOT multiline
-    assert!(!has_unescaped_newline_escape("foo\\\\\\\\nbar"));
-    // \\\n → 3 backslashes: first two pair up, third + n = \n → multiline
-    assert!(has_unescaped_newline_escape("foo\\\\\\nbar"));
-}
-
-#[test]
-fn test_replace_unescaped_newline() {
-    // \n → real newline
-    assert_eq!(replace_unescaped_newline_escapes("foo\\nbar"), "foo\nbar");
-    // \\n → preserved as-is
     assert_eq!(
-        replace_unescaped_newline_escapes("foo\\\\nvim"),
-        "foo\\\\nvim"
+        replace_newline_escapes(r#"format!("{}\\AppData\\Local\\nvim-data","#),
+        None
+    );
+    // No \n at all
+    assert_eq!(replace_newline_escapes("hello world"), None);
+    // \\\\n → even number of backslashes before n → NOT multiline
+    assert_eq!(replace_newline_escapes("foo\\\\\\\\nbar"), None);
+    // \\\n → 3 backslashes: first two pair up, third + n = \n → multiline,
+    // newline lands after "foo" + 2 kept backslashes = byte 5
+    assert_eq!(
+        replace_newline_escapes("foo\\\\\\nbar"),
+        Some(("foo\\\\\nbar".to_string(), 5))
+    );
+    // Position is for the FIRST newline when there are several
+    assert_eq!(
+        replace_newline_escapes("a\\nb\\nc"),
+        Some(("a\nb\nc".to_string(), 1))
     );
 }
 
@@ -234,6 +237,94 @@ fn test_multi_grep_search() {
         0,
         "Empty patterns should find nothing"
     );
+}
+
+/// E2E: multiline grep (`\n` in query) and escaped-backslash literals (`\\n`)
+/// through the full picker.grep pipeline, in both PlainText and Regex modes.
+#[test]
+fn test_grep_multiline_and_escaped_newline_e2e() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = crate::path_utils::canonicalize(dir.path()).unwrap();
+
+    // Content spanning two lines: "hello unicorn\nrainbow world"
+    {
+        let mut f = std::fs::File::create(base.join("multi.txt")).unwrap();
+        writeln!(f, "hello unicorn").unwrap();
+        writeln!(f, "rainbow world").unwrap();
+    }
+    // Content with a literal double backslash before "nvim": `C:\\Users\\nvim-data`
+    {
+        let mut f = std::fs::File::create(base.join("winpath.rs")).unwrap();
+        writeln!(f, "let p = \"C:\\\\Users\\\\nvim-data\";").unwrap();
+    }
+    {
+        let mut f = std::fs::File::create(base.join("noise.txt")).unwrap();
+        writeln!(f, "nothing interesting here").unwrap();
+    }
+
+    let mut picker = FilePicker::new(FilePickerOptions {
+        base_path: base.to_str().unwrap().into(),
+        watch: false,
+        ..Default::default()
+    })
+    .unwrap();
+    picker.collect_files().unwrap();
+
+    let options = crate::GrepSearchOptions {
+        page_limit: 100,
+        max_matches_per_file: 0,
+        ..Default::default()
+    };
+
+    // 1. PlainText + `\n`: needle becomes a real newline, match spans two lines
+    let query = super::parse_grep_query("unicorn\\nrainbow");
+    let result = picker.grep(&query, &options);
+    assert_eq!(
+        result.files.len(),
+        1,
+        "multiline plaintext should match multi.txt"
+    );
+    assert_eq!(result.files[0].relative_path(&picker), "multi.txt");
+    let m = &result.matches[0];
+    assert_eq!(m.line_content, "hello unicorn");
+    // Auto after-context: the rest of the matched span is returned
+    assert_eq!(m.context_after, vec!["rainbow world"]);
+    // First needle segment highlighted as the line suffix
+    assert_eq!(m.match_byte_offsets.as_slice(), &[(6, 13)]);
+    assert_eq!(m.col, 6);
+
+    // 2. PlainText + `\\n`: literal backslash + n, must NOT be mangled to newline
+    let query = super::parse_grep_query("\\\\nvim-data");
+    let result = picker.grep(&query, &options);
+    assert_eq!(
+        result.files.len(),
+        1,
+        "escaped backslash should match winpath.rs literally"
+    );
+    assert_eq!(result.files[0].relative_path(&picker), "winpath.rs");
+    assert!(result.matches[0].line_content.contains("\\\\nvim-data"));
+    assert!(result.matches[0].context_after.is_empty());
+
+    // 3. Regex + `\n`: goes through the MultiLine searcher strategy
+    let regex_options = super::GrepSearchOptions {
+        mode: super::GrepMode::Regex,
+        ..options.clone()
+    };
+    let query = super::parse_grep_query("unicorn\\nrainbow");
+    let result = picker.grep(&query, &regex_options);
+    assert!(result.regex_fallback_error.is_none());
+    assert_eq!(
+        result.files.len(),
+        1,
+        "multiline regex should match multi.txt"
+    );
+    assert_eq!(result.files[0].relative_path(&picker), "multi.txt");
+    let m = &result.matches[0];
+    // Blob is normalized: single-line content + remaining lines as context
+    assert_eq!(m.line_content, "hello unicorn");
+    assert_eq!(m.context_after, vec!["rainbow world"]);
+    // Highlight clamped to the visible first line
+    assert_eq!(m.match_byte_offsets.as_slice(), &[(6, 13)]);
 }
 
 /// Regression test for issue #407: Live grep returns duplicate results

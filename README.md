@@ -317,6 +317,7 @@ require('fff').setup({
     preview_scroll_down = '<C-d>',
     toggle_debug = '<F2>',
     cycle_grep_modes = '<S-Tab>',
+    insert_newline_escape = '<C-CR>',
     -- grep mode only: jump cursor to first match of next/prev file group
     grep_jump_to_next_file = { '<C-A-n>', '<A-Down>' },
     grep_jump_to_prev_file = { '<C-A-p>', '<A-Up>' },

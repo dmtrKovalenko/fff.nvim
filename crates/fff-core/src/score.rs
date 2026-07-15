@@ -1,6 +1,6 @@
 use crate::{
-    constraints::apply_constraints,
     git::is_modified_status,
+    index::constraints::apply_constraints,
     path_utils::calculate_distance_penalty,
     simd_path::{ArenaPtr, MAX_PATH_CHUNKS},
     sort_buffer::{sort_by_key_with_buffer, sort_with_buffer},

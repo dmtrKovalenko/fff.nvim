@@ -390,6 +390,16 @@ function M.setup_keymaps()
   set_keymap({ 'i', 'n' }, keymaps.send_to_quickfix, P.send_to_quickfix, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.cycle_grep_modes, P.cycle_grep_modes, input_opts)
 
+  if keymaps.insert_newline_escape then
+    -- Inserts the literal 2-char `\n` sequence which the grep engine
+    -- interprets as a multiline search boundary
+    local newline_escape_opts = vim.tbl_extend('force', input_opts, { expr = true, replace_keycodes = false })
+    set_keymap('i', keymaps.insert_newline_escape, function()
+      if S.mode ~= 'grep' then return '' end
+      return '\\n'
+    end, newline_escape_opts)
+  end
+
   local input_mouse_opts = vim.tbl_extend('force', input_opts, { expr = true, replace_keycodes = true })
   set_keymap(
     { 'i', 'n' },

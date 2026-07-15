@@ -6,9 +6,9 @@ use tracing::{error, info};
 
 use crate::FileSync;
 use crate::background_watcher::BackgroundWatcher;
-use crate::bigram_filter::{build_bigram_index, sniff_binary_for_non_indexable};
 use crate::error::Error;
 use crate::file_picker::FFFMode;
+use crate::index::{build_bigram_index, sniff_binary_for_non_indexable};
 use crate::parallelism::BACKGROUND_THREAD_POOL;
 use crate::shared::{SharedFilePicker, SharedFrecency};
 use crate::types::ContentCacheBudget;

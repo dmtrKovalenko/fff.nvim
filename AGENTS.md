@@ -31,6 +31,13 @@ When doing code make sure to REDUCE SIZE OF COMMENTS. This is very important. Ev
 - Do not make public structs if something can be private
 
 
+## Style guide
+
+- NO MODULES COMMENTS
+- NO TOP FILE COMMENTS
+- NO COMMENT LONGER THAN 2 LINES UNLESS ASKED EXPLICITLY
+- UTILITY FUNCTIONS GO INTO THE END OF FILE
+
 ## Architecture
 
 Everything that is performance critical happens in rust world, everything that is neovim specific happens in the lua code.

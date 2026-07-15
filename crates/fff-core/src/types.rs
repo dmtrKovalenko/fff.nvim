@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 #[cfg(not(target_os = "windows"))]
 use crate::constants::{FRESH_MMAP_THRESHOLD, MMAP_THRESHOLD};
 use crate::constants::{MAX_CACHED_CONTENT_BYTES, MAX_FFFILE_SIZE, PATH_BUF_SIZE};
-use crate::constraints::Constrainable;
+use crate::index::constraints::Constrainable;
 use crate::query_tracker::QueryMatchEntry;
 use crate::simd_path::ArenaPtr;
 use fff_query_parser::{FFFQuery, FuzzyQuery, Location};

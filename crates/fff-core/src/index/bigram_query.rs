@@ -1,4 +1,4 @@
-use crate::bigram_filter::BigramFilter;
+use crate::index::bigram_filter::BigramFilter;
 use regex_syntax::hir::{Class, Hir, HirKind};
 use smallvec::SmallVec;
 use std::borrow::Cow;
@@ -677,7 +677,7 @@ fn simplify_or(children: Vec<BigramQuery>) -> BigramQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bigram_filter::BigramIndexBuilder;
+    use crate::index::bigram_filter::BigramIndexBuilder;
 
     /// Build a tiny index from the given file contents for testing.
     fn build_test_index(files: &[&[u8]]) -> BigramFilter {
