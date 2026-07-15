@@ -831,6 +831,7 @@ impl ScoringContext<'_> {
 pub struct SearchResult<'a> {
     pub items: Vec<&'a FileItem>,
     pub scores: Vec<Score>,
+    pub match_byte_offsets: Vec<smallvec::SmallVec<[(u32, u32); 4]>>,
     pub total_matched: usize,
     pub total_files: usize,
     pub location: Option<Location>,

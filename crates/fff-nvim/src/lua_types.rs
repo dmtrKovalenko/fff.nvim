@@ -109,6 +109,19 @@ fn score_into_lua(score: &Score, lua: &Lua) -> LuaResult<LuaValue> {
     Ok(LuaValue::Table(table))
 }
 
+fn set_match_ranges(lua: &Lua, item: &LuaTable, ranges: &[(u32, u32)]) -> LuaResult<()> {
+    let ranges_table = lua.create_table()?;
+
+    for (i, &(start, end)) in ranges.iter().enumerate() {
+        let range = lua.create_table()?;
+        range.set(1, start)?;
+        range.set(2, end)?;
+        ranges_table.set(i + 1, range)?;
+    }
+
+    item.set("match_ranges", ranges_table)
+}
+
 fn location_into_lua(location: &Location, lua: &Lua) -> LuaResult<LuaValue> {
     let table = lua.create_table()?;
     match location {
@@ -134,7 +147,13 @@ impl IntoLua for SearchResultLua<'_> {
         // Convert items
         let items_table = lua.create_table()?;
         for (i, item) in self.inner.items.iter().enumerate() {
-            items_table.set(i + 1, file_item_into_lua(item, lua, self.picker)?)?;
+            let lua_item = file_item_into_lua(item, lua, self.picker)?;
+            if let LuaValue::Table(item_table) = &lua_item
+                && let Some(ranges) = self.inner.match_byte_offsets.get(i)
+            {
+                set_match_ranges(lua, item_table, ranges.as_slice())?;
+            }
+            items_table.set(i + 1, lua_item)?;
         }
         table.set("items", items_table)?;
 
@@ -246,15 +265,7 @@ impl IntoLua for GrepResultLua<'_> {
             item.set("is_binary_content", is_binary_content)?;
             item.set("line_content", m.line_content.as_str())?;
 
-            // Match byte ranges within line_content
-            let ranges = lua.create_table()?;
-            for (j, &(start, end)) in m.match_byte_offsets.iter().enumerate() {
-                let range = lua.create_table()?;
-                range.set(1, start)?;
-                range.set(2, end)?;
-                ranges.set(j + 1, range)?;
-            }
-            item.set("match_ranges", ranges)?;
+            set_match_ranges(lua, &item, m.match_byte_offsets.as_slice())?;
 
             // Fuzzy match score (only set in fuzzy grep mode, nil otherwise)
             if let Some(score) = m.fuzzy_score {

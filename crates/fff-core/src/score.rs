@@ -6,9 +6,10 @@ use crate::{
     sort_buffer::{sort_by_key_with_buffer, sort_with_buffer},
     types::{DirItem, FileItem, Score, ScoringContext},
 };
-use fff_query_parser::FuzzyQuery;
+use fff_query_parser::{FFFQuery, FuzzyQuery};
 use neo_frizbee::Scoring;
 use rayon::prelude::*;
+use smallvec::SmallVec;
 use std::{borrow::Cow, path::MAIN_SEPARATOR};
 
 enum FileItems<'a> {
@@ -166,6 +167,128 @@ pub(crate) fn fuzzy_match_and_score_files<'a>(
     };
 
     sort_and_paginate(results, context)
+}
+
+pub(crate) fn fuzzy_match_byte_offsets_for_page<'q>(
+    query: &'q FFFQuery<'q>,
+    items: &[&FileItem],
+    max_typos: u16,
+    base_arena: ArenaPtr,
+    overflow_arena: ArenaPtr,
+) -> Vec<SmallVec<[(u32, u32); 4]>> {
+    let parts: Vec<&str> = match &query.fuzzy_query {
+        FuzzyQuery::Text(text) if text.len() >= 2 => vec![*text],
+        FuzzyQuery::Parts(parts) => parts.iter().copied().filter(|p| p.len() >= 2).collect(),
+        _ => Vec::new(),
+    };
+
+    let mut ranges_by_item = vec![SmallVec::new(); items.len()];
+    if parts.is_empty() || items.is_empty() {
+        return ranges_by_item;
+    }
+
+    let paths: Vec<String> = items
+        .iter()
+        .map(|item| {
+            let arena = if item.is_overflow() {
+                overflow_arena
+            } else {
+                base_arena
+            };
+            let mut path = String::with_capacity(item.relative_path_len());
+            item.write_relative_path_from_arena(arena, &mut path);
+            path
+        })
+        .collect();
+
+    let has_uppercase = parts
+        .iter()
+        .any(|part| part.chars().any(|ch| ch.is_uppercase()));
+    let config = neo_frizbee::Config {
+        max_typos: Some(max_typos),
+        sort: false,
+        scoring: Scoring {
+            capitalization_bonus: if has_uppercase { 8 } else { 0 },
+            matching_case_bonus: if has_uppercase { 4 } else { 0 },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    for (idx, part) in parts.iter().copied().enumerate() {
+        let mut part_config = config;
+        if idx > 0 {
+            part_config.max_typos = config.max_typos.map(|t| t.min(part.len() as u16));
+        }
+
+        let mut matcher = neo_frizbee::Matcher::new(part, &part_config);
+        for mut matched in matcher.match_list_indices(&paths) {
+            let item_idx = matched.index as usize;
+            let Some(path) = paths.get(item_idx) else {
+                continue;
+            };
+
+            matched.indices.sort_unstable();
+            ranges_by_item[item_idx].extend(char_indices_to_byte_offsets(path, &matched.indices));
+        }
+    }
+
+    for ranges in &mut ranges_by_item {
+        *ranges = merge_byte_offsets(std::mem::take(ranges));
+    }
+
+    ranges_by_item
+}
+
+fn char_indices_to_byte_offsets(line: &str, char_indices: &[usize]) -> SmallVec<[(u32, u32); 4]> {
+    let char_byte_ranges: Vec<(usize, usize)> = line
+        .char_indices()
+        .map(|(byte_pos, ch)| (byte_pos, byte_pos + ch.len_utf8()))
+        .collect();
+    let mut result: SmallVec<[(u32, u32); 4]> = SmallVec::with_capacity(char_indices.len());
+
+    for &char_idx in char_indices {
+        let Some(&(start, end)) = char_byte_ranges.get(char_idx) else {
+            continue;
+        };
+
+        if let Some(last) = result.last_mut()
+            && last.1 == start as u32
+        {
+            last.1 = end as u32;
+            continue;
+        }
+
+        result.push((start as u32, end as u32));
+    }
+
+    result
+}
+
+fn merge_byte_offsets(mut ranges: SmallVec<[(u32, u32); 4]>) -> SmallVec<[(u32, u32); 4]> {
+    if ranges.len() <= 1 {
+        return ranges;
+    }
+
+    ranges.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut merged: SmallVec<[(u32, u32); 4]> = SmallVec::with_capacity(ranges.len());
+
+    for (start, end) in ranges {
+        if end <= start {
+            continue;
+        }
+
+        if let Some(last) = merged.last_mut()
+            && start <= last.1
+        {
+            last.1 = last.1.max(end);
+            continue;
+        }
+
+        merged.push((start, end));
+    }
+
+    merged
 }
 
 /// Resolve a DirItem's chunked path into frizbee's pointer buffer.

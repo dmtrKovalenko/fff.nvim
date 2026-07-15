@@ -40,7 +40,7 @@ use crate::git::GitStatusCache;
 use crate::grep::{GrepResult, GrepSearchOptions, grep_search, multi_grep_search};
 use crate::query_tracker::QueryTracker;
 use crate::scan::{ScanConfig, ScanJob, ScanSignals};
-use crate::score::fuzzy_match_and_score_files;
+use crate::score::{fuzzy_match_and_score_files, fuzzy_match_byte_offsets_for_page};
 use crate::shared::{SharedFilePicker, SharedFrecency};
 use crate::simd_path::ArenaPtr;
 use crate::stable_vec::StableVec;
@@ -994,6 +994,8 @@ impl FilePicker {
             base_arena,
             overflow_arena,
         );
+        let match_byte_offsets =
+            fuzzy_match_byte_offsets_for_page(query, &items, max_typos, base_arena, overflow_arena);
 
         info!(
             ?query,
@@ -1007,6 +1009,7 @@ impl FilePicker {
         SearchResult {
             items,
             scores,
+            match_byte_offsets,
             total_matched,
             total_files,
             location,

@@ -14,6 +14,7 @@ local M = {}
 --- @field access_frecency_score number Access-based frecency score
 --- @field modification_frecency_score number Modification-based frecency score
 --- @field git_status string|nil Git status string (e.g. 'modified', 'untracked') if file is in git repo
+--- @field match_ranges number[][]|nil Byte ranges for fuzzy query matches
 
 --- Render a file item line
 --- @param item FileItem File item from Rust
@@ -215,76 +216,51 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
       return
     end
 
-    local line_lower = line_content:lower()
-    local matched_ranges = {}
-    local token_count = 0
+    local ranges = item.match_ranges
+    if not ranges or #ranges == 0 then return end
 
-    local function add_range(start_col, end_col)
-      if #matched_ranges >= 16 then return end
+    local rel_path = item.relative_path or ''
+    if type(rel_path) ~= 'string' then rel_path = tostring(rel_path) end
 
-      table.insert(matched_ranges, { start_col, end_col })
+    local original_dir_path = ''
+    local parent_dir = vim.fn.fnamemodify(rel_path, ':h')
+    if parent_dir ~= '.' and parent_dir ~= '' then original_dir_path = parent_dir end
+
+    local filename_rel_start = math.max(0, #rel_path - #filename)
+    local filename_rel_end = filename_rel_start + #filename
+    local filename_line_start = icon and (#icon + 1) or 0
+    local dir_line_start = filename_line_start + #filename + 1
+    local segments = { { filename_rel_start, filename_rel_end, filename_line_start } }
+
+    if original_dir_path ~= '' and dir_path == original_dir_path then
+      segments[#segments + 1] = { 0, #original_dir_path, dir_line_start }
     end
 
-    local function add_subsequence_ranges(token)
-      local token_lower = token:lower()
-      local line_pos = 1
-      local token_ranges = {}
+    local function apply_segment(raw_start, raw_end, segment)
+      local source_start, source_end, target_start = segment[1], segment[2], segment[3]
+      local start_col = math.max(raw_start, source_start)
+      local end_col = math.min(raw_end, source_end)
+      if end_col <= start_col then return end
 
-      for i = 1, #token_lower do
-        local ch = token_lower:sub(i, i)
-        local match_start = line_lower:find(ch, line_pos, true)
-        if not match_start then return end
-
-        table.insert(token_ranges, { match_start - 1, match_start })
-        line_pos = match_start + 1
-      end
-
-      for _, range in ipairs(token_ranges) do
-        add_range(range[1], range[2])
-        if #matched_ranges >= 16 then return end
+      local hl_start = target_start + (start_col - source_start)
+      local hl_end = target_start + (end_col - source_start)
+      if hl_start < #line_content and hl_end <= #line_content then
+        vim.api.nvim_buf_set_extmark(buf, ns_id, line_idx - 1, hl_start, {
+          end_col = hl_end,
+          hl_group = matched_hl,
+          priority = 200,
+        })
       end
     end
 
-    for token in ctx.query:gmatch('%S+') do
-      token_count = token_count + 1
-      if token_count > 8 or #matched_ranges >= 16 then break end
-
-      if #token >= 2 then
-        local token_lower = token:lower()
-        local match_start, match_end = line_lower:find(token_lower, 1, true)
-
-        if match_start and match_end then
-          add_range(match_start - 1, match_end)
-        else
-          add_subsequence_ranges(token)
+    for _, range in ipairs(ranges) do
+      local raw_start = range[1] or 0
+      local raw_end = range[2] or 0
+      if raw_end > raw_start then
+        for _, segment in ipairs(segments) do
+          apply_segment(raw_start, raw_end, segment)
         end
       end
-    end
-
-    table.sort(matched_ranges, function(a, b)
-      if a[1] == b[1] then return a[2] < b[2] end
-      return a[1] < b[1]
-    end)
-
-    local merged = {}
-    -- merge adjacent matches
-    for _, range in ipairs(matched_ranges) do
-      local last = merged[#merged]
-      if last and range[1] <= last[2] then
-        last[2] = math.max(last[2], range[2])
-      else
-        table.insert(merged, range)
-      end
-    end
-
-    for _, range in ipairs(merged) do
-      vim.api.nvim_buf_set_extmark(
-        buf,
-        ns_id,
-        line_idx - 1,
-        range[1],
-        { end_col = range[2], hl_group = matched_hl, priority = 200 }
-      )
     end
   end
 end

@@ -322,6 +322,7 @@ pub fn fuzzy_search_files(
                         match_type: "path",
                         ..Default::default()
                     }],
+                    match_byte_offsets: vec![Default::default()],
                     total_matched: 1,
                     total_files: results.total_files,
                     location: parsed_query.location,
