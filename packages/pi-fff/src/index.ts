@@ -285,6 +285,10 @@ export default function fffExtension(pi: ExtensionAPI) {
   // deadlock at the native layer (issue #403).
   let finderPromise: Promise<FileFinder> | null = null;
   let activeCwd = process.cwd();
+  // Bumped on every session_start / session_shutdown so an async warmup
+  // started for a previous session can detect that it's stale and bail out
+  // before touching `finder` / notifying a destroyed UI.
+  let lifecycleId = 0;
 
   // Mode resolution: flag > env > default
   let currentMode: FffMode =
@@ -355,10 +359,13 @@ export default function fffExtension(pi: ExtensionAPI) {
       if (!result.ok)
         throw new Error(`Failed to create FFF file finder: ${result.error}`);
 
-      finder = result.value;
+      const created = result.value;
+      finder = created;
       finderCwd = cwd;
-      await finder.waitForScan(15000);
-      return finder;
+      await created.waitForScan(15000);
+      // Return the local handle: a shutdown during warmup may null/replace
+      // `finder`, but the caller still needs the instance they were promised.
+      return created;
     })().finally(() => {
       finderPromise = null;
     });
@@ -471,6 +478,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     try {
       activeCwd = ctx.cwd;
+      const sessionLifecycleId = ++lifecycleId;
 
       // Restore persisted mode from session entries. This handles session
       // resume after process restart where env vars are lost, and ensures
@@ -496,7 +504,20 @@ export default function fffExtension(pi: ExtensionAPI) {
       }
 
       registerAutocompleteProvider(ctx);
-      await ensureFinder(activeCwd);
+
+      // Warm the finder in the background — Pi /new and /resume must not
+      // wait on the initial scan. Subsequent tool calls / mention lookups
+      // share the same in-flight promise via ensureFinder().
+      setTimeout(() => {
+        if (sessionLifecycleId !== lifecycleId) return;
+        ensureFinder(activeCwd).catch((e: unknown) => {
+          if (sessionLifecycleId !== lifecycleId) return;
+          ctx.ui.notify(
+            `FFF init failed: ${e instanceof Error ? e.message : String(e)}`,
+            "error",
+          );
+        });
+      }, 0);
     } catch (e: unknown) {
       ctx.ui.notify(
         `FFF init failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -506,6 +527,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    lifecycleId++;
     destroyFinder();
   });
 

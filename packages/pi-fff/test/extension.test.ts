@@ -118,6 +118,10 @@ async function start(mode?: string) {
   const sessionStart = setup.events.get("session_start");
   expect(sessionStart).toBeDefined();
   await sessionStart?.({ reason: "startup" }, ctx);
+  // session_start now schedules the finder warmup via setTimeout(0); flush
+  // the queue so tests can observe FileFinder.create / waitForScan calls.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   return { ...setup, ctx };
 }
