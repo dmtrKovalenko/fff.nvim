@@ -29,7 +29,61 @@
 use std::ffi::c_char;
 use std::ptr;
 
-use crate::ffi_types::{FffFileItem, FffGrepMatch, FffGrepResult, FffMatchRange, FffSearchResult};
+use crate::ffi_types::{
+    FffFileItem, FffGrepMatch, FffGrepResult, FffMatchRange, FffResult, FffSearchResult,
+};
+
+// ── FffResult ────────────────────────────────────────────────────────────────
+
+/// Returns whether the operation completed successfully. Returns `false` if `result` is null.
+///
+/// ## Safety
+/// `result` must be a valid `FffResult` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_result_get_success(result: *const FffResult) -> bool {
+    if result.is_null() {
+        return false;
+    }
+    unsafe { (*result).success }
+}
+
+/// Returns the operation error message, or null when there is no error or `result` is null.
+///
+/// Do not free the returned pointer. It remains valid until `fff_free_result` is called.
+///
+/// ## Safety
+/// `result` must be a valid `FffResult` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_result_get_error(result: *const FffResult) -> *const c_char {
+    if result.is_null() {
+        return ptr::null();
+    }
+    unsafe { (*result).error }
+}
+
+/// Returns the result payload handle, or null if `result` is null.
+///
+/// ## Safety
+/// `result` must be a valid `FffResult` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_result_get_handle(result: *const FffResult) -> *mut std::ffi::c_void {
+    if result.is_null() {
+        return ptr::null_mut();
+    }
+    unsafe { (*result).handle }
+}
+
+/// Returns the result integer payload. Returns `0` if `result` is null.
+///
+/// ## Safety
+/// `result` must be a valid `FffResult` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fff_result_get_int_value(result: *const FffResult) -> i64 {
+    if result.is_null() {
+        return 0;
+    }
+    unsafe { (*result).int_value }
+}
 
 // ── FffFileItem ──────────────────────────────────────────────────────────────
 
@@ -801,7 +855,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn null_result_returns_zero_or_null() {
+        let null: *const FffResult = ptr::null();
+        unsafe {
+            assert!(!fff_result_get_success(null));
+            assert!(fff_result_get_error(null).is_null());
+            assert!(fff_result_get_handle(null).is_null());
+            assert_eq!(fff_result_get_int_value(null), 0);
+        }
+    }
+
     // ── data correctness tests ────────────────────────────────────────────────
+
+    #[test]
+    fn result_getters_return_correct_values() {
+        let error = CString::new("failed").unwrap();
+        let handle = 0x1234usize as *mut std::ffi::c_void;
+        let result = FffResult {
+            success: false,
+            error: error.as_ptr() as *mut std::ffi::c_char,
+            handle,
+            int_value: -7,
+        };
+        let p = &result as *const FffResult;
+        unsafe {
+            assert!(!fff_result_get_success(p));
+            assert_eq!(
+                std::ffi::CStr::from_ptr(fff_result_get_error(p)),
+                error.as_c_str()
+            );
+            assert_eq!(fff_result_get_handle(p), handle);
+            assert_eq!(fff_result_get_int_value(p), -7);
+        }
+    }
 
     #[test]
     fn file_item_getters_return_correct_values() {

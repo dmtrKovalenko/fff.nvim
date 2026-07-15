@@ -961,6 +961,40 @@ const struct FffScore *fff_mixed_search_result_get_score(const struct FffMixedSe
                                                          uint32_t index);
 
 /**
+ * Returns whether the operation completed successfully. Returns `false` if `result` is null.
+ *
+ * ## Safety
+ * `result` must be a valid `FffResult` pointer or null.
+ */
+bool fff_result_get_success(const struct FffResult *result);
+
+/**
+ * Returns the operation error message, or null when there is no error or `result` is null.
+ *
+ * Do not free the returned pointer. It remains valid until `fff_free_result` is called.
+ *
+ * ## Safety
+ * `result` must be a valid `FffResult` pointer or null.
+ */
+const char *fff_result_get_error(const struct FffResult *result);
+
+/**
+ * Returns the result payload handle, or null if `result` is null.
+ *
+ * ## Safety
+ * `result` must be a valid `FffResult` pointer or null.
+ */
+void *fff_result_get_handle(const struct FffResult *result);
+
+/**
+ * Returns the result integer payload. Returns `0` if `result` is null.
+ *
+ * ## Safety
+ * `result` must be a valid `FffResult` pointer or null.
+ */
+int64_t fff_result_get_int_value(const struct FffResult *result);
+
+/**
  * Returns the relative path of a file item (e.g. `"src/main.rs"`).
  *
  * Returns null if `item` is null. The returned pointer is valid for the
