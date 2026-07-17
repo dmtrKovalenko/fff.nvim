@@ -262,7 +262,7 @@ print_setup_instructions() {
         found_any=true
         success "[Codex] detected"
         echo ""
-        echo "codex mcp add fff -- fff-mcp"
+        echo "codex mcp add fff -- \"${binary_path}\""
         echo ""
     fi
 

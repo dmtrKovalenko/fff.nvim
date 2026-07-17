@@ -48,6 +48,31 @@ brew upgrade fff-mcp   # after new stable releases
 
 Formula lives in [`Formula/fff-mcp.rb`](./Formula/fff-mcp.rb) in this repo and is **auto-bumped on every stable release** (see `bump-homebrew-formula` in [`.github/workflows/release.yaml`](./.github/workflows/release.yaml)). Installs the prebuilt `fff-mcp` binary from [GitHub releases](https://github.com/dmtrKovalenko/fff.nvim/releases).
 
+### Codex setup
+
+Register the installed binary using its absolute path, since Codex desktop sessions may not inherit your interactive shell's `PATH`.
+
+Homebrew:
+
+```bash
+codex mcp add fff -- "$(brew --prefix)/bin/fff-mcp"
+```
+
+One-line installer:
+
+```bash
+codex mcp add fff -- "$HOME/.local/bin/fff-mcp"
+```
+
+This creates an entry in `~/.codex/config.toml` similar to:
+
+```toml
+[mcp_servers.fff]
+command = "/opt/homebrew/bin/fff-mcp"
+```
+
+Use the actual installed path for your system, then restart Codex or start a new task so it loads the server.
+
 Once the server is connected, ask the agent to "use fff" and it picks up the `ffgrep`, `fffind`, and `fff-multi-grep` tools.
 
 ### Recommended agent prompt

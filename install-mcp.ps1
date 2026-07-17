@@ -209,7 +209,7 @@ function Show-SetupInstructions {
     if (Get-Command codex -ErrorAction SilentlyContinue) {
         $foundAny = $true
         Write-Success "[Codex] detected"
-        Write-Host "codex mcp add fff -- fff-mcp"
+        Write-Host "codex mcp add fff -- `"$BinaryPath`""
         Write-Host ""
     }
 
