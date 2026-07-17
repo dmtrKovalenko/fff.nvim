@@ -152,9 +152,13 @@ https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 ```lua
 {
   'dmtrKovalenko/fff.nvim',
+  version = 'v0.10.0',
   build = function()
-    -- downloads a prebuilt binary or falls back to cargo build
-    require("fff.download").download_or_build_binary()
+    -- Downloads a prebuilt binary or falls back to `cargo build --release`.
+    -- Pass the same value you set as `version` above to guarantee the binary
+    -- matches the pinned Lua code. Omit to derive the tag from the checked-out
+    -- commit.
+    require("fff.download").download_or_build_binary({ version = 'v0.10.0' })
   end,
   -- for nixos:
   -- build = "nix run .#release",
