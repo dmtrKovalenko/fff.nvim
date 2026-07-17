@@ -232,11 +232,23 @@ function M.build_binary(callback)
   end)
 end
 
-function M.download_or_build_binary()
+--- opts.version pins the GitHub release tag (accepts "0.10.0" or "v0.10.0").
+--- When omitted the tag is derived from the checked-out git ref.
+---@param opts? { version?: string, proxy?: string, extra_curl_args?: string[], timeout_ms?: integer }
+function M.download_or_build_binary(opts)
+  opts = opts or {}
+  local ensure_opts = { force = true, proxy = opts.proxy, extra_curl_args = opts.extra_curl_args }
+  if type(opts.version) == 'string' and opts.version ~= '' then
+    local v = opts.version
+    -- Stable release tags are `v<semver>`; nightly/dev per-sha tags are unprefixed.
+    if v:match('^%d+%.%d+%.%d+$') then v = 'v' .. v end
+    ensure_opts.version = v
+  end
+
   local done = false
   local fatal_error = nil
 
-  M.ensure_downloaded({ force = true }, function(download_success, download_error)
+  M.ensure_downloaded(ensure_opts, function(download_success, download_error)
     if download_success then
       done = true
       return
@@ -267,7 +279,7 @@ function M.download_or_build_binary()
   -- and if Neovim exits before the final rename(tmp → libfff_nvim.{dylib,so,dll})
   -- executes, the binary is never written to disk.  vim.wait pumps the event
   -- loop so all vim.system / vim.schedule callbacks can fire.
-  local timeout_ms = 1000 * 60 * 2 -- 2 minutes
+  local timeout_ms = opts.timeout_ms or (1000 * 60 * 2) -- default: 2 minutes
   local ok, wait_err = vim.wait(timeout_ms, function() return done end, 100)
   if not ok and wait_err == -2 then error('fff.nvim: download_or_build_binary timed out') end
 
