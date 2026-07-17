@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  isOutsideWorkspaceRelativePath,
   resolveAuxRoot,
   rootCovers,
   routePathConstraint,
@@ -27,6 +28,14 @@ describe("routePathConstraint", () => {
     const route = routePathConstraint("/tmp", cwd);
     expect(route).toEqual({ root: "/tmp", suffix: "" });
   });
+
+  if (process.platform === "win32") {
+    test("treats a cross-volume relative result as outside the workspace", () => {
+      const rel = path.win32.relative("D:\\workspace", "C:\\target");
+      expect(rel).toBe("C:\\target");
+      expect(isOutsideWorkspaceRelativePath(rel)).toBe(true);
+    });
+  }
 
   test("splits glob suffix from existing dir prefix", () => {
     const route = routePathConstraint("/tmp/**/*.ts", cwd);

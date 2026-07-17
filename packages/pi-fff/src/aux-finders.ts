@@ -128,6 +128,14 @@ export function resolveAuxRoot(
   return null;
 }
 
+export function isOutsideWorkspaceRelativePath(relativePath: string): boolean {
+  return (
+    path.isAbsolute(relativePath) ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${path.sep}`)
+  );
+}
+
 // Decide whether a `path` parameter should route to the workspace finder or
 // to an aux finder. Accepts absolute paths, `~`-prefixed paths, and relative
 // paths escaping the workspace (`../other-project`); everything is resolved
@@ -147,7 +155,7 @@ export function routePathConstraint(
     candidate = path.resolve(cwd, candidate);
   }
   const rel = path.relative(cwd, candidate);
-  if (rel !== ".." && !rel.startsWith(`..${path.sep}`)) return null;
+  if (!isOutsideWorkspaceRelativePath(rel)) return null;
   return resolveAuxRoot(candidate);
 }
 
