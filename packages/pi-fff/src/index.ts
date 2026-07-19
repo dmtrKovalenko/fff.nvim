@@ -6,11 +6,16 @@
  */
 
 import nodePath from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionAPI,
+  keyHint,
+} from "@earendil-works/pi-coding-agent";
 import {
   type AutocompleteItem,
   type AutocompleteProvider,
+  type Component,
   Text,
+  truncateToWidth,
 } from "@earendil-works/pi-tui";
 import type {
   FileFinderApi,
@@ -35,6 +40,7 @@ const DEFAULT_GREP_LIMIT = 20;
 const DEFAULT_FIND_LIMIT = 30;
 const GREP_MAX_LINE_LENGTH = 500;
 const MENTION_MAX_RESULTS = 20;
+const COLLAPSED_TOOL_OUTPUT_LINES = 5;
 
 type FffMode = "tools-and-ui" | "tools-only" | "override";
 
@@ -573,30 +579,28 @@ export default function fffExtension(pi: ExtensionAPI) {
     options: { expanded?: boolean },
     theme: any,
     context: any,
-    maxLines = 15,
   ) => {
     const text =
-      (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      (context.lastComponent as CollapsibleToolOutput | undefined) ??
+      new CollapsibleToolOutput();
     const output =
       result.content?.find((c) => c.type === "text")?.text?.trim() ?? "";
     if (!output) {
       text.setText(theme.fg("muted", "No output"));
+      text.setCollapsed(undefined, "");
       return text;
     }
 
-    const lines = output.split("\n");
-    const displayLines = lines.slice(
-      0,
-      options.expanded ? lines.length : maxLines,
+    text.setText(
+      output
+        .split("\n")
+        .map((line: string) => theme.fg("toolOutput", line))
+        .join("\n"),
     );
-    let content = `\n${displayLines.map((line: string) => theme.fg("toolOutput", line)).join("\n")}`;
-    if (lines.length > displayLines.length) {
-      content += theme.fg(
-        "muted",
-        `\n... (${lines.length - displayLines.length} more lines)`,
-      );
-    }
-    text.setText(content);
+    text.setCollapsed(
+      options.expanded ? undefined : COLLAPSED_TOOL_OUTPUT_LINES,
+      theme.fg("muted", `... (${keyHint("app.tools.expand", "to expand")})`),
+    );
     return text;
   };
 
@@ -783,7 +787,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     },
 
     renderResult(result, options, theme, context) {
-      return renderTextResult(result, options, theme, context, 15);
+      return renderTextResult(result, options, theme, context);
     },
   });
 
@@ -933,7 +937,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     },
 
     renderResult(result, options, theme, context) {
-      return renderTextResult(result, options, theme, context, 20);
+      return renderTextResult(result, options, theme, context);
     },
   });
 
@@ -1033,7 +1037,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       },
 
       renderResult(result, options, theme, context) {
-        return renderTextResult(result, options, theme, context, 15);
+        return renderTextResult(result, options, theme, context);
       },
     });
   } // end if (enableMultiGrep)
@@ -1128,4 +1132,33 @@ export default function fffExtension(pi: ExtensionAPI) {
       ctx.ui.notify("FFF rescan triggered", "info");
     },
   });
+}
+
+class CollapsibleToolOutput implements Component {
+  private readonly text = new Text("", 0, 0);
+  private maxLines: number | undefined;
+  private overflowHint = "";
+
+  setText(value: string): void {
+    this.text.setText(value);
+  }
+
+  setCollapsed(maxLines: number | undefined, overflowHint: string): void {
+    this.maxLines = maxLines;
+    this.overflowHint = overflowHint;
+  }
+
+  render(width: number): string[] {
+    const lines = this.text.render(width);
+    if (this.maxLines === undefined || lines.length <= this.maxLines) return lines;
+
+    return [
+      ...lines.slice(0, Math.max(0, this.maxLines - 1)),
+      truncateToWidth(this.overflowHint, width),
+    ];
+  }
+
+  invalidate(): void {
+    this.text.invalidate();
+  }
 }
