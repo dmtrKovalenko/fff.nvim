@@ -9,6 +9,14 @@ the Rust backend, binary downloader, file search, live grep, frecency index, and
 release pipeline. This plugin adds the picker workflows that are useful day to
 day but do not need to live in the backend project.
 
+## Usage demo
+
+Tracked-file fuzzy search, Git-status diff preview and multi-select, quickfix,
+and the fullscreen buffer picker are shown below. Click the preview for the
+MP4 version.
+
+[![fff-plus.nvim picker usage demo](./assets/fff-plus-usage.gif)](./assets/fff-plus-usage.mp4)
+
 ## Installation
 
 Install upstream `fff.nvim` first, then install `fff-plus.nvim`.
