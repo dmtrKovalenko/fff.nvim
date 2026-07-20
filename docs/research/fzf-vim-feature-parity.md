@@ -6,6 +6,13 @@ The local side is the combined product: upstream
 [`dmtrKovalenko/fff` at `073698c`](https://github.com/dmtrKovalenko/fff/tree/073698c8e7dad9f6106d23ef588f5ebc7f98b326)
 plus this `fff-plus.nvim` checkout.
 
+> Implementation update: [issue #6](https://github.com/vinitkumar/fff-plus.nvim/issues/6)
+> resolves the audit's extension-picker gaps
+> for fuzzy matching, long-list scrolling, tracked/status Git separation,
+> multi-select and quickfix, paste actions, fullscreen commands, existing-window
+> buffer jumps, and Git diff previews. The command table below records the
+> pre-implementation baseline that motivated that work.
+
 ## Target resolution
 
 The request says “fzf.nvim”, but the intended target in this repository is
@@ -116,9 +123,9 @@ The largest parity gaps are not more file search. They are:
 4. **Extension surface:** arbitrary/custom picker sources, sinks/actions, preview
    helpers, and insert-mode completion.
 
-The existing `:GFiles` compatibility alias should also be corrected or clearly
-documented: its current behavior matches fzf.vim's `:GFiles?`, while fzf.vim's
-`:GFiles` means tracked files from `git ls-files`.
+[Issue #6](https://github.com/vinitkumar/fff-plus.nvim/issues/6) corrects the
+`:GFiles` compatibility alias to use tracked files from `git ls-files` and adds
+explicit Git-files and Git-status APIs.
 
 ## Sources
 

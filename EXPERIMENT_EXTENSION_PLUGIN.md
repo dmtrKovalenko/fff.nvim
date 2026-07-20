@@ -22,14 +22,16 @@ separate Neovim plugin that depends on upstream `fff.nvim`.
   },
   keys = {
     { '<leader>b', function() require('fff_plus').buffers() end, desc = 'FFF+ buffers' },
-    { '<leader>g', function() require('fff_plus').git_files() end, desc = 'FFF+ git files' },
+    { '<leader>g', function() require('fff_plus').tracked_files() end, desc = 'FFF+ tracked files' },
+    { '<leader>s', function() require('fff_plus').git_status() end, desc = 'FFF+ git status' },
     { '<leader>c', function() require('fff_plus').colors() end, desc = 'FFF+ colors' },
   },
 }
 ```
 
 The extension owns `require('fff_plus')`, `:FFFPlusBuffers`,
-`:FFFPlusColors`, and `:FFFPlusGFiles`. It can optionally provide compatibility
+`:FFFPlusColors`, `:FFFPlusGitFiles`, and `:FFFPlusGitStatus`. It retains
+`:FFFPlusGFiles` for compatibility and can optionally provide fzf.vim-style
 commands with `legacy_commands = true`.
 
 ## Pros
@@ -66,6 +68,7 @@ This branch adds a separate extension namespace:
 - `lua/fff_plus/pickers/buffers.lua`
 - `lua/fff_plus/pickers/colors.lua`
 - `lua/fff_plus/pickers/git_files.lua`
+- `lua/fff_plus/pickers/tracked_files.lua`
 - `lua/fff_plus/git_utils.lua`
 - `plugin/fff_plus.lua`
 
