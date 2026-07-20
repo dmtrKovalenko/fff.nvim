@@ -273,6 +273,14 @@ function M.render_list()
   local view = viewport.calculate(#items, M.state.cursor, win_height, prompt_position)
   local empty_lines_needed = view.padding
   local cursor_line = view.cursor_line
+  local first_index = view.reverse and view.last or view.first
+  local last_index = view.reverse and view.first or view.last
+  local index_step = view.reverse and -1 or 1
+
+  local function visible_line(item_index)
+    local offset = view.reverse and (view.last - item_index) or (item_index - view.first)
+    return empty_lines_needed + offset + 1
+  end
 
   local lines = {}
 
@@ -284,7 +292,7 @@ function M.render_list()
   end
 
   -- Format each git file line
-  for item_index = view.first, view.last do
+  for item_index = first_index, last_index, index_step do
     local item = items[item_index]
     local border_char = git_utils.get_border_char(item.git_status)
     local line = ''
@@ -315,9 +323,9 @@ function M.render_list()
     vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, M.state.config.hl.cursor, cursor_line - 1, 0, -1)
 
     -- Apply git status highlights for each visible item
-    for item_index = view.first, view.last do
+    for item_index = first_index, last_index, index_step do
       local item = items[item_index]
-      local line_idx = empty_lines_needed + item_index - view.first + 1
+      local line_idx = visible_line(item_index)
       local is_cursor_line = line_idx == cursor_line
 
       local border_hl = is_cursor_line and git_utils.get_border_highlight_selected(item.git_status)
@@ -375,12 +383,16 @@ function M.filter_results()
   M.state.cursor = 1
 end
 
-local function render_git_diff(item)
-  if M.state.source ~= 'status' or item.git_status == 'untracked' then return false end
+function M.get_git_diff(item)
+  if M.state.source ~= 'status' or item.git_status == 'untracked' then return nil end
 
   local git_root = M.get_git_root()
-  if not git_root then return false end
-  local diff = git_source.diff(git_root, item.relative_path)
+  if not git_root then return nil end
+  return git_source.diff(git_root, item.relative_path)
+end
+
+local function render_git_diff(item)
+  local diff = M.get_git_diff(item)
   if not diff then return false end
 
   local lines = vim.split(diff, '\n', { plain = true, trimempty = true })
@@ -462,7 +474,7 @@ function M.move_up()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  M.state.cursor = math.max(M.state.cursor - 1, 1)
+  M.state.cursor = viewport.move(M.state.cursor, #M.state.filtered_items, 'up', get_prompt_position())
   M.render_list()
   M.update_preview()
 end
@@ -471,7 +483,7 @@ function M.move_down()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
+  M.state.cursor = viewport.move(M.state.cursor, #M.state.filtered_items, 'down', get_prompt_position())
   M.render_list()
   M.update_preview()
 end
@@ -698,13 +710,7 @@ function M.open(opts)
     return
   end
 
-  -- Set initial cursor position
-  local prompt_position = get_prompt_position()
-  if prompt_position == 'bottom' then
-    M.state.cursor = #M.state.filtered_items > 0 and #M.state.filtered_items or 1
-  else
-    M.state.cursor = 1
-  end
+  M.state.cursor = 1
 
   M.render_list()
   M.update_preview()

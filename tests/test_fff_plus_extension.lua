@@ -95,17 +95,23 @@ local function test_viewport_calculation()
   print('Testing picker viewport...')
   local viewport = require('fff_plus.viewport')
 
-  local first_page = viewport.calculate(3, 3, 5, 'bottom')
+  local first_page = viewport.calculate(3, 1, 5, 'bottom')
   assert(first_page.first == 1 and first_page.last == 3)
   assert(first_page.padding == 2 and first_page.cursor_line == 5)
+  assert(first_page.reverse == true, 'bottom prompt should render best matches nearest the prompt')
 
   local scrolled = viewport.calculate(20, 12, 5, 'bottom')
   assert(scrolled.first == 8 and scrolled.last == 12)
-  assert(scrolled.padding == 0 and scrolled.cursor_line == 5)
+  assert(scrolled.padding == 0 and scrolled.cursor_line == 1)
 
   local top = viewport.calculate(20, 7, 5, 'top')
   assert(top.first == 3 and top.last == 7)
   assert(top.padding == 0 and top.cursor_line == 5)
+
+  assert(viewport.move(1, 20, 'up', 'bottom') == 2)
+  assert(viewport.move(2, 20, 'down', 'bottom') == 1)
+  assert(viewport.move(2, 20, 'up', 'top') == 1)
+  assert(viewport.move(2, 20, 'down', 'top') == 3)
   print('✓ picker viewport keeps the logical cursor visible')
 end
 
@@ -172,7 +178,59 @@ local function test_picker_selection()
 
   local fallback = selection.collect(items, {}, items[3], function(item) return item.path end)
   assert(#fallback == 1 and fallback[1].path == 'c.lua', 'current item should be used with no selection')
+
+  local current_buf = vim.api.nvim_get_current_buf()
+  vim.api.nvim_buf_set_lines(current_buf, 0, -1, false, { 'anchor' })
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  selection.put({ { path = 'a.lua' }, { path = 'b.lua' } }, function(item) return item.path end)
+  local pasted = vim.api.nvim_buf_get_lines(current_buf, 0, -1, false)
+  assert(pasted[2] == 'a.lua' and pasted[3] == 'b.lua', 'paste should insert selected paths')
   print('✓ picker selection preserves item order and current-item fallback')
+end
+
+local function test_picker_actions()
+  print('Testing picker actions...')
+  local buffers = require('fff_plus.pickers.buffers')
+  local bufnr = vim.api.nvim_get_current_buf()
+  local buffer_item = {
+    bufnr = bufnr,
+    line = 1,
+    display_name = 'current buffer',
+    path = vim.api.nvim_buf_get_name(bufnr),
+  }
+
+  buffers.state.active = true
+  buffers.state.items = { buffer_item }
+  buffers.state.filtered_items = { buffer_item }
+  buffers.state.cursor = 1
+  buffers.state.selected = { [bufnr] = true }
+  buffers.state.config = { preview = { enabled = false }, jump_to_existing = true }
+  assert(buffers.find_existing_window(bufnr) == vim.api.nvim_get_current_win())
+
+  local original_buffer_close = buffers.close
+  buffers.close = function() buffers.state.active = false end
+  buffers.send_to_quickfix()
+  buffers.close = original_buffer_close
+  local buffer_qf = vim.fn.getqflist({ title = 1, items = 1 })
+  assert(buffer_qf.title == 'FFF+ Buffers' and #buffer_qf.items == 1)
+  vim.cmd('cclose')
+
+  local git_files = require('fff_plus.pickers.git_files')
+  local git_source = require('fff_plus.git_source')
+  local original_root = git_files.get_git_root
+  local original_diff = git_source.diff
+  git_files.get_git_root = function() return '/repo' end
+  git_source.diff = function(root, path)
+    assert(root == '/repo' and path == 'README.md')
+    return 'diff --git a/README.md b/README.md'
+  end
+  git_files.state.source = 'status'
+  assert(git_files.get_git_diff({ relative_path = 'README.md', git_status = 'modified' }))
+  git_files.state.source = 'tracked'
+  assert(git_files.get_git_diff({ relative_path = 'README.md', git_status = 'clean' }) == nil)
+  git_files.get_git_root = original_root
+  git_source.diff = original_diff
+  print('✓ picker actions populate quickfix, jump windows, and select diff previews')
 end
 
 local function test_commands_register()
@@ -192,6 +250,21 @@ local function test_commands_register()
   assert(commands.FFFPlusColors.bang, 'FFFPlusColors should support fullscreen bang')
   assert(commands.FFFPlusGitFiles.bang, 'FFFPlusGitFiles should support fullscreen bang')
   assert(commands.FFFPlusGitStatus.bang, 'FFFPlusGitStatus should support fullscreen bang')
+
+  require('fff_plus').setup({ legacy_commands = true })
+  local plus = require('fff_plus')
+  local original_open = plus.open
+  local opened
+  plus.open = function(name, opts)
+    opened = { name = name, opts = opts or {} }
+    return true
+  end
+
+  vim.cmd('GFiles')
+  assert(opened.name == 'git_files' and opened.opts.source == 'tracked', ':GFiles should dispatch tracked files')
+  vim.cmd('FFFPlusGitStatus!')
+  assert(opened.name == 'git_files' and opened.opts.fullscreen == true, 'bang should propagate fullscreen')
+  plus.open = original_open
   print('✓ fff_plus commands register correctly')
 end
 
@@ -206,6 +279,7 @@ local function run_tests()
     test_picker_layout,
     test_git_sources,
     test_picker_selection,
+    test_picker_actions,
     test_commands_register,
   }
 

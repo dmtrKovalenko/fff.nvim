@@ -68,7 +68,6 @@ This branch adds a separate extension namespace:
 - `lua/fff_plus/pickers/buffers.lua`
 - `lua/fff_plus/pickers/colors.lua`
 - `lua/fff_plus/pickers/git_files.lua`
-- `lua/fff_plus/pickers/tracked_files.lua`
 - `lua/fff_plus/git_utils.lua`
 - `plugin/fff_plus.lua`
 

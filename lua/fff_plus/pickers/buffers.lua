@@ -408,12 +408,7 @@ function M.update_results()
   M.state.items = M.get_buffer_items()
   M.state.filtered_items = M.filter_buffers(M.state.items, M.state.query)
 
-  local prompt_position = get_prompt_position()
-  if prompt_position == 'bottom' then
-    M.state.cursor = #M.state.filtered_items > 0 and #M.state.filtered_items or 1
-  else
-    M.state.cursor = 1
-  end
+  M.state.cursor = 1
 
   M.render_list()
   M.update_preview()
@@ -430,6 +425,14 @@ function M.render_list()
   local view = viewport.calculate(#items, M.state.cursor, win_height, prompt_position)
   local empty_lines_needed = view.padding
   local cursor_line = view.cursor_line
+  local first_index = view.reverse and view.last or view.first
+  local last_index = view.reverse and view.first or view.last
+  local index_step = view.reverse and -1 or 1
+
+  local function visible_line(item_index)
+    local offset = view.reverse and (view.last - item_index) or (item_index - view.first)
+    return empty_lines_needed + offset + 1
+  end
 
   local lines = {}
 
@@ -441,7 +444,7 @@ function M.render_list()
   end
 
   -- Format each buffer line
-  for item_index = view.first, view.last do
+  for item_index = first_index, last_index, index_step do
     local item = items[item_index]
     local icon, icon_hl = icons.get_icon(item.name, item.extension, false)
 
@@ -472,9 +475,9 @@ function M.render_list()
     vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, M.state.config.hl.cursor, cursor_line - 1, 0, -1)
 
     -- Add highlights for each visible item
-    for item_index = view.first, view.last do
+    for item_index = first_index, last_index, index_step do
       local item = items[item_index]
-      local line_idx = empty_lines_needed + item_index - view.first + 1
+      local line_idx = visible_line(item_index)
       local is_cursor_line = line_idx == cursor_line
 
       -- Highlight buffer number
@@ -616,7 +619,7 @@ function M.move_up()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  M.state.cursor = math.max(M.state.cursor - 1, 1)
+  M.state.cursor = viewport.move(M.state.cursor, #M.state.filtered_items, 'up', get_prompt_position())
   M.render_list()
   M.update_preview()
 end
@@ -625,7 +628,7 @@ function M.move_down()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
+  M.state.cursor = viewport.move(M.state.cursor, #M.state.filtered_items, 'down', get_prompt_position())
   M.render_list()
   M.update_preview()
 end
@@ -686,6 +689,14 @@ function M.paste_selection()
   selection.put(items, function(item) return item.path ~= '' and item.path or item.display_name end)
 end
 
+function M.find_existing_window(bufnr)
+  if not (M.state.config and M.state.config.jump_to_existing) then return nil end
+  for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
+    if vim.api.nvim_win_is_valid(win) then return win end
+  end
+  return nil
+end
+
 function M.select(action)
   if not M.state.active then return end
 
@@ -697,15 +708,14 @@ function M.select(action)
 
   action = action or 'edit'
   local bufnr = item.bufnr
-  local config = M.state.config
 
   vim.cmd('stopinsert')
   M.close()
 
   if action == 'edit' then
-    local windows = config.jump_to_existing and vim.fn.win_findbuf(bufnr) or {}
-    if #windows > 0 and vim.api.nvim_win_is_valid(windows[1]) then
-      vim.api.nvim_set_current_win(windows[1])
+    local existing_win = M.find_existing_window(bufnr)
+    if existing_win then
+      vim.api.nvim_set_current_win(existing_win)
     else
       vim.cmd('buffer ' .. bufnr)
     end
@@ -818,13 +828,7 @@ function M.open(opts)
     return
   end
 
-  -- Set initial cursor position
-  local prompt_position = get_prompt_position()
-  if prompt_position == 'bottom' then
-    M.state.cursor = #M.state.filtered_items > 0 and #M.state.filtered_items or 1
-  else
-    M.state.cursor = 1
-  end
+  M.state.cursor = 1
 
   M.render_list()
   M.update_preview()

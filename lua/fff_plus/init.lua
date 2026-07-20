@@ -4,7 +4,6 @@ local registry = {
   buffers = 'fff_plus.pickers.buffers',
   colors = 'fff_plus.pickers.colors',
   git_files = 'fff_plus.pickers.git_files',
-  tracked_files = 'fff_plus.pickers.tracked_files',
 }
 
 local default_config = {
@@ -72,7 +71,10 @@ function M.git_files(opts) return M.open('git_files', opts) end
 
 function M.git_status(opts) return M.open('git_files', opts) end
 
-function M.tracked_files(opts) return M.open('tracked_files', opts) end
+function M.tracked_files(opts)
+  opts = vim.tbl_deep_extend('force', { source = 'tracked', title = 'Git Files' }, opts or {})
+  return M.open('git_files', opts)
+end
 
 function M.register_commands()
   create_command(
