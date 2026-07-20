@@ -6,6 +6,7 @@ local M = {}
 local conf = require('fff.conf')
 local preview = require('fff.file_picker.preview')
 local git_utils = require('fff_plus.git_utils')
+local git_source = require('fff_plus.git_source')
 local matcher = require('fff_plus.matcher')
 local viewport = require('fff_plus.viewport')
 
@@ -25,78 +26,39 @@ function M.get_git_root()
   return result:gsub('\n', '')
 end
 
---- Get git status files from git status output
+local function format_git_file(git_root, relative_path, git_status, old_path)
+  local name = vim.fn.fnamemodify(relative_path, ':t')
+  return {
+    name = name,
+    path = git_root .. '/' .. relative_path,
+    relative_path = relative_path,
+    old_path = old_path,
+    directory = vim.fn.fnamemodify(relative_path, ':h'),
+    extension = vim.fn.fnamemodify(name, ':e'),
+    git_status = git_status,
+    is_dir = false,
+  }
+end
+
+--- Get Git status files from porcelain output
 --- @param git_root string Git root directory
 --- @return table List of git files with status
 function M.get_git_status_files(git_root)
-  local handle = io.popen('git -C ' .. vim.fn.shellescape(git_root) .. ' status -s 2>/dev/null')
-  if not handle then return {} end
-
   local files = {}
-  local seen = {}
-
-  for line in handle:lines() do
-    if line:len() >= 3 then
-      -- Git status format: XY filename
-      -- X = index status, Y = worktree status
-      local index_status = line:sub(1, 1)
-      local worktree_status = line:sub(2, 2)
-      local filepath = line:sub(4)
-
-      -- Handle renamed files: R  old -> new
-      if index_status == 'R' or worktree_status == 'R' then
-        local arrow_pos = filepath:find(' %-> ')
-        if arrow_pos then
-          filepath = filepath:sub(arrow_pos + 4) -- Get the new filename
-        end
-      end
-
-      -- Skip duplicates
-      if not seen[filepath] then
-        seen[filepath] = true
-
-        -- Parse git status code (XY format)
-        -- X = staged (index), Y = unstaged (worktree)
-        local git_status = 'unknown'
-
-        if index_status == '?' and worktree_status == '?' then
-          git_status = 'untracked'
-        elseif index_status == '!' and worktree_status == '!' then
-          git_status = 'ignored'
-        elseif index_status == 'A' then
-          git_status = 'staged_new'
-        elseif index_status == 'M' then
-          git_status = 'staged_modified'
-        elseif index_status == 'D' then
-          git_status = 'staged_deleted'
-        elseif index_status == 'R' then
-          git_status = 'renamed'
-        elseif worktree_status == 'M' then
-          git_status = 'modified'
-        elseif worktree_status == 'D' then
-          git_status = 'deleted'
-        elseif worktree_status == 'A' then
-          git_status = 'untracked' -- Added in worktree only (like untracked)
-        end
-
-        local full_path = git_root .. '/' .. filepath
-        local name = vim.fn.fnamemodify(filepath, ':t')
-        local directory = vim.fn.fnamemodify(filepath, ':h')
-
-        table.insert(files, {
-          name = name,
-          path = full_path,
-          relative_path = filepath,
-          directory = directory,
-          extension = vim.fn.fnamemodify(name, ':e'),
-          git_status = git_status,
-          is_dir = false,
-        })
-      end
-    end
+  for _, entry in ipairs(git_source.status(git_root)) do
+    table.insert(files, format_git_file(git_root, entry.relative_path, entry.git_status, entry.old_path))
   end
+  return files
+end
 
-  handle:close()
+--- Get files tracked by Git
+--- @param git_root string Git root directory
+--- @return table List of tracked files
+function M.get_tracked_files(git_root)
+  local files = {}
+  for _, relative_path in ipairs(git_source.tracked(git_root)) do
+    table.insert(files, format_git_file(git_root, relative_path, 'clean'))
+  end
   return files
 end
 
@@ -119,6 +81,7 @@ M.state = {
   config = nil,
   ns_id = nil,
   last_preview_file = nil,
+  source = 'status',
 }
 
 local function get_prompt_position()
@@ -385,7 +348,11 @@ function M.update_results()
     return
   end
 
-  M.state.items = M.get_git_status_files(git_root)
+  if M.state.source == 'tracked' then
+    M.state.items = M.get_tracked_files(git_root)
+  else
+    M.state.items = M.get_git_status_files(git_root)
+  end
   M.filter_results()
   M.render_list()
   M.update_status()
@@ -573,6 +540,7 @@ function M.close()
   M.state.query = ''
   M.state.ns_id = nil
   M.state.last_preview_file = nil
+  M.state.source = 'status'
 
   pcall(vim.api.nvim_del_augroup_by_name, 'fff_plus_git_files_picker_focus')
 end
@@ -617,6 +585,9 @@ end
 function M.open(opts)
   if M.state.active then return end
 
+  opts = opts or {}
+  local source = opts.source or 'status'
+
   local git_root = M.get_git_root()
   if not git_root then
     vim.notify('Not in a git repository', vim.log.levels.WARN)
@@ -624,15 +595,20 @@ function M.open(opts)
   end
 
   local config = conf.get()
-  local merged_config = vim.tbl_deep_extend('force', config or {}, opts or {})
+  local merged_config = vim.tbl_deep_extend('force', config or {}, opts)
 
-  if merged_config.title == nil then merged_config.title = 'Git Files' end
+  if merged_config.title == nil then merged_config.title = source == 'tracked' and 'Git Files' or 'Git Status' end
   if merged_config.prompt == nil then merged_config.prompt = '🦆 ' end
 
   M.state.config = merged_config
+  M.state.source = source
   M.state.active = true
 
-  M.state.items = M.get_git_status_files(git_root)
+  if source == 'tracked' then
+    M.state.items = M.get_tracked_files(git_root)
+  else
+    M.state.items = M.get_git_status_files(git_root)
+  end
   M.state.filtered_items = M.state.items
 
   if not M.create_ui() then

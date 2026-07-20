@@ -109,6 +109,26 @@ local function test_viewport_calculation()
   print('✓ picker viewport keeps the logical cursor visible')
 end
 
+local function test_git_sources()
+  print('Testing Git sources...')
+  local git_source = require('fff_plus.git_source')
+
+  local tracked = git_source.parse_tracked('README.md\0lua/file with spaces.lua\0')
+  assert(#tracked == 2, 'tracked parser should preserve every NUL-delimited path')
+  assert(tracked[2] == 'lua/file with spaces.lua', 'tracked parser should preserve spaces')
+
+  local status =
+    git_source.parse_status(' M lua/modified file.lua\0R  lua/new name.lua\0lua/old name.lua\0?? lua/untracked.lua\0')
+  assert(#status == 3, 'status parser should return modified, renamed, and untracked files')
+  assert(status[1].git_status == 'modified')
+  assert(status[1].relative_path == 'lua/modified file.lua')
+  assert(status[2].git_status == 'renamed')
+  assert(status[2].relative_path == 'lua/new name.lua')
+  assert(status[2].old_path == 'lua/old name.lua')
+  assert(status[3].git_status == 'untracked')
+  print('✓ Git sources preserve paths and rename records')
+end
+
 local function test_commands_register()
   print('Testing fff_plus commands register...')
   require('fff_plus').setup()
@@ -116,6 +136,10 @@ local function test_commands_register()
   assert(vim.fn.exists(':FFFPlusBuffers') == 2, 'FFFPlusBuffers command should exist')
   assert(vim.fn.exists(':FFFPlusColors') == 2, 'FFFPlusColors command should exist')
   assert(vim.fn.exists(':FFFPlusGFiles') == 2, 'FFFPlusGFiles command should exist')
+  assert(vim.fn.exists(':FFFPlusGitFiles') == 2, 'FFFPlusGitFiles command should exist')
+  assert(vim.fn.exists(':FFFPlusGitStatus') == 2, 'FFFPlusGitStatus command should exist')
+  assert(type(require('fff_plus').tracked_files) == 'function', 'tracked_files API should exist')
+  assert(type(require('fff_plus').git_status) == 'function', 'git_status API should exist')
   print('✓ fff_plus commands register correctly')
 end
 
@@ -127,6 +151,7 @@ local function run_tests()
     test_picker_modules_load,
     test_fuzzy_matcher,
     test_viewport_calculation,
+    test_git_sources,
     test_commands_register,
   }
 

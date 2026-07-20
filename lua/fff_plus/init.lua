@@ -4,6 +4,7 @@ local registry = {
   buffers = 'fff_plus.pickers.buffers',
   colors = 'fff_plus.pickers.colors',
   git_files = 'fff_plus.pickers.git_files',
+  tracked_files = 'fff_plus.pickers.tracked_files',
 }
 
 local default_config = {
@@ -69,6 +70,10 @@ function M.colors(opts) return M.open('colors', opts) end
 
 function M.git_files(opts) return M.open('git_files', opts) end
 
+function M.git_status(opts) return M.open('git_files', opts) end
+
+function M.tracked_files(opts) return M.open('tracked_files', opts) end
+
 function M.register_commands()
   create_command(
     'FFFPlusBuffers',
@@ -95,7 +100,17 @@ function M.register_commands()
 
   create_command('FFFPlusGFiles', function() M.git_files() end, {
     bang = true,
-    desc = 'Browse git status files with fff-plus.nvim',
+    desc = 'Browse Git status files with fff-plus.nvim (compatibility name)',
+  })
+
+  create_command('FFFPlusGitFiles', function() M.tracked_files() end, {
+    bang = true,
+    desc = 'Browse files tracked by Git with fff-plus.nvim',
+  })
+
+  create_command('FFFPlusGitStatus', function() M.git_status() end, {
+    bang = true,
+    desc = 'Browse Git status files with fff-plus.nvim',
   })
 
   if not M.config.legacy_commands then return end
@@ -123,9 +138,9 @@ function M.register_commands()
     desc = 'Browse and switch colorschemes with fff-plus.nvim',
   })
 
-  create_command('GFiles', function() M.git_files() end, {
+  create_command('GFiles', function() M.tracked_files() end, {
     bang = true,
-    desc = 'Browse git status files with fff-plus.nvim',
+    desc = 'Browse files tracked by Git with fff-plus.nvim',
   })
 end
 
