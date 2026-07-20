@@ -56,6 +56,59 @@ local function test_picker_modules_load()
   print('✓ fff_plus picker modules load correctly')
 end
 
+local function test_fuzzy_matcher()
+  print('Testing fuzzy matcher...')
+  local matcher = require('fff_plus.matcher')
+
+  assert(matcher.score('buffer_test_module.lua', 'btm'), 'subsequence queries should match')
+  assert(matcher.score('buffer.lua', 'buf') > matcher.score('big_utility_file.lua', 'buf'))
+
+  local items = {
+    { name = 'big_utility_file.lua' },
+    { name = 'buffer.lua' },
+    { name = 'buffers.lua' },
+  }
+  local matches = matcher.filter(items, 'buf', function(item) return item.name end)
+
+  assert(#matches == 3, 'all fuzzy matches should be returned')
+  assert(matches[1].name == 'buffer.lua', 'stronger and shorter matches should rank first')
+
+  local buffers = require('fff_plus.pickers.buffers')
+  local buffer_matches = buffers.filter_buffers({ { display_name = 'buffer_test_module.lua' } }, 'btm')
+  assert(#buffer_matches == 1, 'buffer picker should use fuzzy subsequence matching')
+
+  local colors = require('fff_plus.pickers.colors')
+  local color_matches = colors.filter_colorschemes({ { name = 'tokyonight-moon' } }, 'tnm')
+  assert(#color_matches == 1, 'colors picker should use fuzzy subsequence matching')
+
+  local git_files = require('fff_plus.pickers.git_files')
+  git_files.state.active = true
+  git_files.state.items = { { relative_path = 'lua/fff_plus/matcher.lua' } }
+  git_files.state.query = 'fpm'
+  git_files.filter_results()
+  assert(#git_files.state.filtered_items == 1, 'Git picker should use fuzzy subsequence matching')
+  git_files.state.active = false
+  print('✓ fuzzy matcher ranks subsequence matches')
+end
+
+local function test_viewport_calculation()
+  print('Testing picker viewport...')
+  local viewport = require('fff_plus.viewport')
+
+  local first_page = viewport.calculate(3, 3, 5, 'bottom')
+  assert(first_page.first == 1 and first_page.last == 3)
+  assert(first_page.padding == 2 and first_page.cursor_line == 5)
+
+  local scrolled = viewport.calculate(20, 12, 5, 'bottom')
+  assert(scrolled.first == 8 and scrolled.last == 12)
+  assert(scrolled.padding == 0 and scrolled.cursor_line == 5)
+
+  local top = viewport.calculate(20, 7, 5, 'top')
+  assert(top.first == 3 and top.last == 7)
+  assert(top.padding == 0 and top.cursor_line == 5)
+  print('✓ picker viewport keeps the logical cursor visible')
+end
+
 local function test_commands_register()
   print('Testing fff_plus commands register...')
   require('fff_plus').setup()
@@ -72,6 +125,8 @@ local function run_tests()
   local tests = {
     test_extension_module_loads,
     test_picker_modules_load,
+    test_fuzzy_matcher,
+    test_viewport_calculation,
     test_commands_register,
   }
 

@@ -6,6 +6,8 @@ local M = {}
 local conf = require('fff.conf')
 local preview = require('fff.file_picker.preview')
 local git_utils = require('fff_plus.git_utils')
+local matcher = require('fff_plus.matcher')
+local viewport = require('fff_plus.viewport')
 
 -- Initialize preview module with config (required before using preview functions)
 local preview_config = conf.get().preview
@@ -305,21 +307,10 @@ function M.render_list()
   local items = M.state.filtered_items
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
   local win_width = vim.api.nvim_win_get_width(M.state.list_win)
-  local display_count = math.min(#items, win_height)
   local prompt_position = get_prompt_position()
-
-  local empty_lines_needed = 0
-  local cursor_line = 0
-
-  if #items > 0 then
-    if prompt_position == 'bottom' then
-      empty_lines_needed = win_height - display_count
-      cursor_line = empty_lines_needed + M.state.cursor
-    else
-      cursor_line = M.state.cursor
-    end
-    cursor_line = math.max(1, math.min(cursor_line, win_height))
-  end
+  local view = viewport.calculate(#items, M.state.cursor, win_height, prompt_position)
+  local empty_lines_needed = view.padding
+  local cursor_line = view.cursor_line
 
   local lines = {}
 
@@ -331,8 +322,8 @@ function M.render_list()
   end
 
   -- Format each git file line
-  for i = 1, display_count do
-    local item = items[i]
+  for item_index = view.first, view.last do
+    local item = items[item_index]
     local border_char = git_utils.get_border_char(item.git_status)
     local line = ''
 
@@ -362,9 +353,9 @@ function M.render_list()
     vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, M.state.config.hl.cursor, cursor_line - 1, 0, -1)
 
     -- Apply git status highlights for each visible item
-    for i = 1, display_count do
-      local item = items[i]
-      local line_idx = empty_lines_needed + i
+    for item_index = view.first, view.last do
+      local item = items[item_index]
+      local line_idx = empty_lines_needed + item_index - view.first + 1
       local is_cursor_line = line_idx == cursor_line
 
       local border_hl = is_cursor_line and git_utils.get_border_highlight_selected(item.git_status)
@@ -403,16 +394,11 @@ end
 function M.filter_results()
   if not M.state.active then return end
 
-  local query = M.state.query:lower()
-
-  if query == '' then
-    M.state.filtered_items = M.state.items
-  else
-    M.state.filtered_items = {}
-    for _, item in ipairs(M.state.items) do
-      if item.relative_path:lower():find(query, 1, true) then table.insert(M.state.filtered_items, item) end
-    end
-  end
+  M.state.filtered_items = matcher.filter(
+    M.state.items,
+    M.state.query,
+    function(item) return item.relative_path or '' end
+  )
 
   M.state.cursor = 1
 end

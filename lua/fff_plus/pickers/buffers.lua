@@ -7,6 +7,8 @@ local conf = require('fff.conf')
 local preview = require('fff.file_picker.preview')
 local icons = require('fff.file_picker.icons')
 local utils = require('fff.utils')
+local matcher = require('fff_plus.matcher')
+local viewport = require('fff_plus.viewport')
 
 --- Buffer access tracking (similar to g:fzf#vim#buffers in fzf.vim)
 --- Stores buffer number -> access timestamp
@@ -135,22 +137,12 @@ function M.get_buffer_items()
   return items
 end
 
---- Filter buffers by query (simple fuzzy match)
+--- Filter and rank buffers by fuzzy query
 --- @param items table List of buffer items
 --- @param query string Search query
 --- @return table Filtered list of buffer items
 function M.filter_buffers(items, query)
-  if not query or query == '' then return items end
-
-  local filtered = {}
-  local query_lower = query:lower()
-
-  for _, item in ipairs(items) do
-    local match_target = (item.display_name or ''):lower()
-    if match_target:find(query_lower, 1, true) then table.insert(filtered, item) end
-  end
-
-  return filtered
+  return matcher.filter(items, query, function(item) return item.display_name or '' end)
 end
 
 -- ============================================================================
@@ -431,21 +423,10 @@ function M.render_list()
   local items = M.state.filtered_items
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
   local win_width = vim.api.nvim_win_get_width(M.state.list_win)
-  local display_count = math.min(#items, win_height)
   local prompt_position = get_prompt_position()
-
-  local empty_lines_needed = 0
-  local cursor_line = 0
-
-  if #items > 0 then
-    if prompt_position == 'bottom' then
-      empty_lines_needed = win_height - display_count
-      cursor_line = empty_lines_needed + M.state.cursor
-    else
-      cursor_line = M.state.cursor
-    end
-    cursor_line = math.max(1, math.min(cursor_line, win_height))
-  end
+  local view = viewport.calculate(#items, M.state.cursor, win_height, prompt_position)
+  local empty_lines_needed = view.padding
+  local cursor_line = view.cursor_line
 
   local lines = {}
 
@@ -457,8 +438,8 @@ function M.render_list()
   end
 
   -- Format each buffer line
-  for i = 1, display_count do
-    local item = items[i]
+  for item_index = view.first, view.last do
+    local item = items[item_index]
     local icon, icon_hl = icons.get_icon(item.name, item.extension, false)
 
     -- Build the line: [bufnr] status icon name flags path
@@ -488,9 +469,9 @@ function M.render_list()
     vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, M.state.config.hl.cursor, cursor_line - 1, 0, -1)
 
     -- Add highlights for each visible item
-    for i = 1, display_count do
-      local item = items[i]
-      local line_idx = empty_lines_needed + i
+    for item_index = view.first, view.last do
+      local item = items[item_index]
+      local line_idx = empty_lines_needed + item_index - view.first + 1
       local is_cursor_line = line_idx == cursor_line
 
       -- Highlight buffer number
