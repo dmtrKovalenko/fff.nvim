@@ -40,18 +40,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ff-labs/fff-bun": "*",
     "@ff-labs/fff-node": "*"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
-    "@ff-labs/fff-bun": "*",
     "@sinclair/typebox": "*"
-  },
-  "peerDependenciesMeta": {
-    "@ff-labs/fff-bun": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

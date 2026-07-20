@@ -10,10 +10,6 @@
     "packages/fff-bun": {
       "name": "@ff-labs/fff-bun",
       "version": "0.1.37",
-      "bin": {
-        "fff-demo": "./examples/search.ts",
-        "fff-grep": "./examples/grep.ts",
-      },
       "devDependencies": {
         "@types/bun": "^1.3.8",
         "typescript": "^5.0.0",
@@ -54,6 +50,7 @@
       "name": "@ff-labs/pi-fff",
       "version": "0.6.0",
       "dependencies": {
+        "@ff-labs/fff-bun": "*",
         "@ff-labs/fff-node": "*",
       },
       "devDependencies": {
@@ -63,12 +60,8 @@
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
         "@earendil-works/pi-tui": "*",
-        "@ff-labs/fff-bun": "*",
         "@sinclair/typebox": "*",
       },
-      "optionalPeers": [
-        "@ff-labs/fff-bun",
-      ],
     },
   },
   "packages": {
