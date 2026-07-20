@@ -26,7 +26,8 @@
   "os": [
     "darwin",
     "linux",
-    "win32"
+    "win32",
+    "android"
   ],
   "cpu": [
     "x64",
@@ -67,7 +68,8 @@
     "@ff-labs/fff-bin-linux-x64-musl": "0.0.0",
     "@ff-labs/fff-bin-linux-arm64-musl": "0.0.0",
     "@ff-labs/fff-bin-win32-x64": "0.0.0",
-    "@ff-labs/fff-bin-win32-arm64": "0.0.0"
+    "@ff-labs/fff-bin-win32-arm64": "0.0.0",
+    "@ff-labs/fff-bin-android-arm64": "0.0.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0",

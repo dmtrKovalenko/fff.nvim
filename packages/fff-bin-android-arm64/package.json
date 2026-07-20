@@ -1,0 +1,18 @@
+{
+  "name": "@ff-labs/fff-bin-android-arm64",
+  "version": "0.0.0",
+  "description": "fff native binary for Android ARM64 (Termux)",
+  "os": ["android"],
+  "cpu": ["arm64"],
+  "main": "libfff_c.so",
+  "files": ["libfff_c.so"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmtrKovalenko/fff.git",
+    "directory": "packages/fff-bin-android-arm64"
+  }
+}

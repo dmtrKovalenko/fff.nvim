@@ -14,6 +14,8 @@ export function getTriple(): string {
   let osName: string;
   if (platform === "darwin") {
     osName = "apple-darwin";
+  } else if (platform === "android") {
+    osName = "linux-android";
   } else if (platform === "linux") {
     osName = detectLinuxLibc();
   } else if (platform === "win32") {
@@ -107,6 +109,7 @@ const TRIPLE_TO_NPM_PACKAGE: Record<string, string> = {
   "aarch64-unknown-linux-musl": "@ff-labs/fff-bin-linux-arm64-musl",
   "x86_64-pc-windows-msvc": "@ff-labs/fff-bin-win32-x64",
   "aarch64-pc-windows-msvc": "@ff-labs/fff-bin-win32-arm64",
+  "aarch64-linux-android": "@ff-labs/fff-bin-android-arm64",
 };
 
 /**
