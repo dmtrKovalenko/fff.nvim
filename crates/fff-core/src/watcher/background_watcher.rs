@@ -361,21 +361,16 @@ fn handle_debounced_events(
         }
 
         // When macOS FSEvents (or other backends) overflow their event buffer, the kernel
-        // drops individual events and emits a rescan flag telling us to re-scan the subtree
+        // drops individual events and emits a rescan flag telling us to re-scan the subtree.
+        // We must always schedule a rescan: skipping (even for a small path list) leaves the
+        // index inconsistent because the backend told us events were lost. Additionally on
+        // Linux an inotify Q_OVERFLOW arrives with no paths at all, which would previously
+        // hit a vacuous `all()` and be silently dropped.
         if debounced_event.event.need_rescan() {
-            if debounced_event.event.paths.len() < 16 // this should be usually one event
-                && debounced_event
-                    .paths
-                    .iter()
-                    // but we are smart enough and not falling into the paths
-                    .all(|p| !p.is_dir() && !filter.is_ignored(p))
-            {
-                break;
-            }
-
             warn!(
-                "Received rescan event for paths {:?}, triggering full rescan",
-                debounced_event.event.paths
+                paths = ?debounced_event.event.paths,
+                info = ?debounced_event.event.info(),
+                "Filesystem events were lost; scheduling full rescan",
             );
             need_full_rescan = true;
             break;
@@ -436,6 +431,7 @@ fn handle_debounced_events(
 
             if is_folder_removal {
                 dirs_to_remove.push(path.to_path_buf());
+                affected_paths_count += 1;
             } else if is_removed {
                 // best effort but doesn't require a stat and generally correct
                 let maybe_directory = !matches!(
@@ -444,6 +440,7 @@ fn handle_debounced_events(
                 );
 
                 paths_to_remove.push((path.as_path(), maybe_directory));
+                affected_paths_count += 1;
             } else if is_dir {
                 if !is_ignored {
                     new_dirs_to_watch.push(path.to_path_buf());
@@ -451,15 +448,18 @@ fn handle_debounced_events(
             } else if !is_ignored {
                 // For additions/modifications, still filter gitignored files.
                 paths_to_add_or_modify.push(path.as_path());
+                affected_paths_count += 1;
             }
         }
 
-        affected_paths_count += debounced_event.event.paths.len();
+        // Guard against pathological batches that would balloon the index. Only actionable
+        // paths (non-ignored, non-.git, non-directory-only) count — high-rate churn under
+        // an ignored subtree (e.g. `target/`) must NOT force a full rescan.
         if affected_paths_count > MAX_OVERFLOW_FILES {
             warn!(
                 ?affected_paths_count,
                 max = MAX_OVERFLOW_FILES,
-                "Too many affected paths in a single batch, triggering full rescan",
+                "Too many actionable paths in a single batch, triggering full rescan",
             );
 
             need_full_rescan = true;
@@ -879,7 +879,7 @@ mod tests {
     use crate::file_picker::{FilePicker, FilePickerOptions};
     use crate::watch::{WatchEvent, WatchOptions};
     use notify::Event;
-    use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind};
+    use notify::event::{CreateKind, DataChange, Flag, ModifyKind, RemoveKind};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
@@ -945,6 +945,199 @@ mod tests {
         assert_eq!(received.len(), 1);
         assert_eq!(received[0].path, path);
         assert_eq!(received[0].kind, WatchEventKind::Modified);
+    }
+
+    fn init_repo_picker_with_ignored_target(
+        base: &Path,
+    ) -> (SharedFilePicker, SharedFrecency, PathBuf) {
+        std::fs::write(base.join(".gitignore"), "/target\n").unwrap();
+        git2::Repository::init(base).unwrap();
+        let target = base.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let shared_picker = SharedFilePicker::default();
+        let shared_frecency = SharedFrecency::noop();
+        let mut picker = FilePicker::new(FilePickerOptions {
+            base_path: base.to_string_lossy().into_owned(),
+            watch: false,
+            ..Default::default()
+        })
+        .unwrap();
+        picker.collect_files().unwrap();
+        shared_picker.rebase_watches(base);
+        *shared_picker.write().unwrap() = Some(picker);
+
+        (shared_picker, shared_frecency, target)
+    }
+
+    #[test]
+    fn ignored_batch_does_not_trigger_full_rescan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = crate::path_utils::canonicalize(tmp.path()).unwrap();
+        let (shared_picker, shared_frecency, target) = init_repo_picker_with_ignored_target(&base);
+
+        let (sender, receiver) = mpsc::channel::<Vec<WatchEvent>>();
+        shared_picker
+            .watch_registry()
+            .subscribe(
+                &base,
+                "**",
+                WatchOptions::default(),
+                Box::new(move |_, events| {
+                    let _ = sender.send(events.to_vec());
+                }),
+            )
+            .unwrap();
+
+        // 2000 create events under ignored `target/`. Previously each counted
+        // toward MAX_OVERFLOW_FILES = 1024 and forced a Rescan dispatch.
+        let now = Instant::now();
+        let events: Vec<DebouncedEvent> = (0..2000)
+            .map(|i| {
+                let p = target.join(format!("f{i}.rs"));
+                std::fs::write(&p, "x").unwrap();
+                DebouncedEvent::new(
+                    Event::new(EventKind::Create(CreateKind::File)).add_path(p),
+                    now,
+                )
+            })
+            .collect();
+
+        handle_debounced_events(
+            FFFMode::Neovim,
+            events,
+            &base,
+            &Some(base.clone()),
+            &shared_picker,
+            &shared_frecency,
+            &GitStatusWorker::new(),
+        );
+
+        // No subscriber events at all — the batch is entirely ignored.
+        let got = receiver.recv_timeout(Duration::from_millis(200));
+        assert!(
+            got.is_err(),
+            "ignored batch must not dispatch any events (got {:?})",
+            got
+        );
+    }
+
+    #[test]
+    fn rescan_flag_still_triggers_rescan_when_batch_is_small() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = crate::path_utils::canonicalize(tmp.path()).unwrap();
+        let existing = base.join("existing.rs");
+        std::fs::write(&existing, "x").unwrap();
+
+        let shared_picker = SharedFilePicker::default();
+        let shared_frecency = SharedFrecency::noop();
+        let mut picker = FilePicker::new(FilePickerOptions {
+            base_path: base.to_string_lossy().into_owned(),
+            watch: false,
+            ..Default::default()
+        })
+        .unwrap();
+        picker.collect_files().unwrap();
+        shared_picker.rebase_watches(&base);
+        *shared_picker.write().unwrap() = Some(picker);
+
+        let (sender, receiver) = mpsc::channel::<Vec<WatchEvent>>();
+        shared_picker
+            .watch_registry()
+            .subscribe(
+                &base,
+                "**",
+                WatchOptions::default(),
+                Box::new(move |_, events| {
+                    let _ = sender.send(events.to_vec());
+                }),
+            )
+            .unwrap();
+
+        // A rescan marker on a single non-ignored, non-dir path used to be
+        // silently swallowed (the < 16 bypass). It must always trigger a
+        // full rescan now.
+        let now = Instant::now();
+        let events = vec![DebouncedEvent::new(
+            Event::new(EventKind::Other)
+                .add_path(existing.clone())
+                .set_flag(Flag::Rescan),
+            now,
+        )];
+
+        handle_debounced_events(
+            FFFMode::Neovim,
+            events,
+            &base,
+            &None,
+            &shared_picker,
+            &shared_frecency,
+            &GitStatusWorker::new(),
+        );
+
+        let received = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(
+            received.iter().any(|e| e.kind == WatchEventKind::Rescan),
+            "Flag::Rescan must dispatch a Rescan event, got {:?}",
+            received
+        );
+    }
+
+    #[test]
+    fn empty_path_rescan_flag_triggers_rescan() {
+        // Linux inotify Q_OVERFLOW arrives as EventKind::Other + Flag::Rescan
+        // with no paths. Previously `all()` was vacuously true and the marker
+        // was silently dropped.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = crate::path_utils::canonicalize(tmp.path()).unwrap();
+
+        let shared_picker = SharedFilePicker::default();
+        let shared_frecency = SharedFrecency::noop();
+        let mut picker = FilePicker::new(FilePickerOptions {
+            base_path: base.to_string_lossy().into_owned(),
+            watch: false,
+            ..Default::default()
+        })
+        .unwrap();
+        picker.collect_files().unwrap();
+        shared_picker.rebase_watches(&base);
+        *shared_picker.write().unwrap() = Some(picker);
+
+        let (sender, receiver) = mpsc::channel::<Vec<WatchEvent>>();
+        shared_picker
+            .watch_registry()
+            .subscribe(
+                &base,
+                "**",
+                WatchOptions::default(),
+                Box::new(move |_, events| {
+                    let _ = sender.send(events.to_vec());
+                }),
+            )
+            .unwrap();
+
+        let now = Instant::now();
+        let events = vec![DebouncedEvent::new(
+            Event::new(EventKind::Other).set_flag(Flag::Rescan),
+            now,
+        )];
+
+        handle_debounced_events(
+            FFFMode::Neovim,
+            events,
+            &base,
+            &None,
+            &shared_picker,
+            &shared_frecency,
+            &GitStatusWorker::new(),
+        );
+
+        let received = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(
+            received.iter().any(|e| e.kind == WatchEventKind::Rescan),
+            "empty-path Flag::Rescan must dispatch a Rescan event, got {:?}",
+            received
+        );
     }
 
     #[test]
