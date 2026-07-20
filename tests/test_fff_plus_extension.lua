@@ -129,6 +129,27 @@ local function test_git_sources()
   print('✓ Git sources preserve paths and rename records')
 end
 
+local function test_picker_selection()
+  print('Testing picker selection...')
+  local selection = require('fff_plus.selection')
+  local selected = {}
+
+  assert(selection.toggle(selected, 'b.lua') == true)
+  assert(selected['b.lua'] == true, 'toggle should select a new key')
+  assert(selection.toggle(selected, 'b.lua') == false)
+  assert(selected['b.lua'] == nil, 'toggle should clear an existing key')
+
+  selected['b.lua'] = true
+  selected['a.lua'] = true
+  local items = { { path = 'a.lua' }, { path = 'b.lua' }, { path = 'c.lua' } }
+  local chosen = selection.collect(items, selected, items[3], function(item) return item.path end)
+  assert(#chosen == 2 and chosen[1].path == 'a.lua' and chosen[2].path == 'b.lua')
+
+  local fallback = selection.collect(items, {}, items[3], function(item) return item.path end)
+  assert(#fallback == 1 and fallback[1].path == 'c.lua', 'current item should be used with no selection')
+  print('✓ picker selection preserves item order and current-item fallback')
+end
+
 local function test_commands_register()
   print('Testing fff_plus commands register...')
   require('fff_plus').setup()
@@ -152,6 +173,7 @@ local function run_tests()
     test_fuzzy_matcher,
     test_viewport_calculation,
     test_git_sources,
+    test_picker_selection,
     test_commands_register,
   }
 

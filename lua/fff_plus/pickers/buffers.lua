@@ -8,6 +8,7 @@ local preview = require('fff.file_picker.preview')
 local icons = require('fff.file_picker.icons')
 local utils = require('fff.utils')
 local matcher = require('fff_plus.matcher')
+local selection = require('fff_plus.selection')
 local viewport = require('fff_plus.viewport')
 
 --- Buffer access tracking (similar to g:fzf#vim#buffers in fzf.vim)
@@ -164,6 +165,8 @@ M.state = {
   config = nil,
   ns_id = nil,
   last_preview_file = nil,
+  selected = {},
+  origin_win = nil,
 }
 
 local function get_prompt_position()
@@ -373,6 +376,10 @@ function M.setup_keymaps()
     vim.keymap.set('i', keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
   end
 
+  vim.keymap.set('i', keymaps.toggle_select or '<Tab>', M.toggle_selection, input_opts)
+  vim.keymap.set('i', keymaps.send_to_quickfix or '<C-q>', M.send_to_quickfix, input_opts)
+  vim.keymap.set('i', keymaps.paste or '<A-CR>', M.paste_selection, input_opts)
+
   -- Delete buffer with <C-d>
   vim.keymap.set('i', '<C-d>', M.delete_buffer, input_opts)
 
@@ -527,8 +534,14 @@ function M.render_list()
         end
       end
 
+      if M.state.selected[item.bufnr] then
+        vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
+          sign_text = '▊',
+          sign_hl_group = 'Visual',
+          priority = 1100,
+        })
       -- Sign for current buffer indicator
-      if item.current and not is_cursor_line then
+      elseif item.current and not is_cursor_line then
         vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
           sign_text = '▎',
           sign_hl_group = 'Conditional',
@@ -633,6 +646,50 @@ function M.scroll_preview_down()
   preview.scroll(math.floor(win_height / 2))
 end
 
+local function current_item()
+  if #M.state.filtered_items == 0 or M.state.cursor > #M.state.filtered_items then return nil end
+  return M.state.filtered_items[M.state.cursor]
+end
+
+local function chosen_items()
+  return selection.collect(M.state.items, M.state.selected, current_item(), function(item) return item.bufnr end)
+end
+
+function M.toggle_selection()
+  local item = current_item()
+  if not item then return end
+  selection.toggle(M.state.selected, item.bufnr)
+  M.render_list()
+end
+
+function M.send_to_quickfix()
+  local items = chosen_items()
+  if #items == 0 then return end
+
+  local quickfix = {}
+  for _, item in ipairs(items) do
+    table.insert(quickfix, {
+      bufnr = item.bufnr,
+      lnum = math.max(item.line or 1, 1),
+      col = 1,
+      text = item.display_name,
+    })
+  end
+
+  M.close()
+  vim.fn.setqflist({}, ' ', { title = 'FFF+ Buffers', items = quickfix })
+  vim.cmd('copen')
+end
+
+function M.paste_selection()
+  local items = chosen_items()
+  if #items == 0 then return end
+  local origin_win = M.state.origin_win
+  M.close()
+  if origin_win and vim.api.nvim_win_is_valid(origin_win) then vim.api.nvim_set_current_win(origin_win) end
+  selection.put(items, function(item) return item.path ~= '' and item.path or item.display_name end)
+end
+
 function M.select(action)
   if not M.state.active then return end
 
@@ -644,12 +701,18 @@ function M.select(action)
 
   action = action or 'edit'
   local bufnr = item.bufnr
+  local config = M.state.config
 
   vim.cmd('stopinsert')
   M.close()
 
   if action == 'edit' then
-    vim.cmd('buffer ' .. bufnr)
+    local windows = config.jump_to_existing and vim.fn.win_findbuf(bufnr) or {}
+    if #windows > 0 and vim.api.nvim_win_is_valid(windows[1]) then
+      vim.api.nvim_set_current_win(windows[1])
+    else
+      vim.cmd('buffer ' .. bufnr)
+    end
   elseif action == 'split' then
     vim.cmd('sbuffer ' .. bufnr)
   elseif action == 'vsplit' then
@@ -726,6 +789,8 @@ function M.close()
   M.state.query = ''
   M.state.ns_id = nil
   M.state.last_preview_file = nil
+  M.state.selected = {}
+  M.state.origin_win = nil
 
   pcall(vim.api.nvim_del_augroup_by_name, 'fff_plus_buffer_picker_focus')
 end
@@ -734,6 +799,8 @@ end
 --- @param opts? table Optional configuration to override defaults
 function M.open(opts)
   if M.state.active then return end
+
+  M.state.origin_win = vim.api.nvim_get_current_win()
 
   local config = conf.get()
   local merged_config = vim.tbl_deep_extend('force', config or {}, opts or {})
