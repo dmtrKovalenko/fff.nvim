@@ -5,6 +5,9 @@ local M = {}
 
 local conf = require('fff.conf')
 local utils = require('fff.utils')
+local layout = require('fff_plus.layout')
+local matcher = require('fff_plus.matcher')
+local viewport = require('fff_plus.viewport')
 
 --- State for tracking original colorscheme
 M.original_colorscheme = nil
@@ -91,22 +94,12 @@ function M.get_colorscheme_items()
   return items
 end
 
---- Filter colorschemes by query (simple fuzzy match)
+--- Filter and rank colorschemes by fuzzy query
 --- @param items table List of colorscheme items
 --- @param query string Search query
 --- @return table Filtered list of colorscheme items
 function M.filter_colorschemes(items, query)
-  if not query or query == '' then return items end
-
-  local filtered = {}
-  local query_lower = query:lower()
-
-  for _, item in ipairs(items) do
-    local match_target = (item.name or ''):lower()
-    if match_target:find(query_lower, 1, true) then table.insert(filtered, item) end
-  end
-
-  return filtered
+  return matcher.filter(items, query, function(item) return item.name or '' end)
 end
 
 -- ============================================================================
@@ -140,15 +133,9 @@ function M.create_ui()
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
-
-  -- Calculate dimensions
-  local width_ratio = config.layout.width or 0.8
-  local height_ratio = config.layout.height or 0.8
-  if type(width_ratio) == 'function' then width_ratio = width_ratio(terminal_width, terminal_height) end
-  if type(height_ratio) == 'function' then height_ratio = height_ratio(terminal_width, terminal_height) end
-
-  local width = math.floor(terminal_width * width_ratio)
-  local height = math.floor(terminal_height * height_ratio)
+  local frame = layout.frame(terminal_width, terminal_height, config.layout or {}, config.fullscreen)
+  local width = frame.width
+  local height = frame.height
 
   -- For colors picker, use a smaller window that fits content nicely
   local num_items = #M.state.items
@@ -157,12 +144,22 @@ function M.create_ui()
     max_name_width = math.max(max_name_width, #item.name)
   end
 
-  -- Size window to fit content (like fzf.vim)
-  local list_width = math.min(math.max(max_name_width + 10, 30), width)
-  local list_height = math.min(num_items + 2, height - 4)
-
-  local col = math.floor((terminal_width - list_width) / 2)
-  local row = math.floor((terminal_height - list_height - 4) / 2)
+  local list_width
+  local list_height
+  local col
+  local row
+  if config.fullscreen then
+    list_width = width
+    list_height = math.max(1, height - 4)
+    col = frame.col
+    row = frame.row
+  else
+    -- Size window to fit content (like fzf.vim)
+    list_width = math.min(math.max(max_name_width + 10, 30), width)
+    list_height = math.max(1, math.min(num_items + 2, height - 4))
+    col = math.floor((terminal_width - list_width) / 2)
+    row = math.floor((terminal_height - list_height - 4) / 2)
+  end
 
   local prompt_position = get_prompt_position()
 
@@ -184,7 +181,7 @@ function M.create_ui()
     border = prompt_position == 'bottom' and { '┌', '─', '┐', '│', '', '', '', '│' }
       or { '├', '─', '┤', '│', '┘', '─', '└', '│' },
     style = 'minimal',
-    title = prompt_position == 'bottom' and ' Colors ' or nil,
+    title = prompt_position == 'bottom' and ' ' .. (config.title or 'Colors') .. ' ' or nil,
     title_pos = prompt_position == 'bottom' and 'left' or nil,
   })
 
@@ -199,7 +196,7 @@ function M.create_ui()
     border = prompt_position == 'bottom' and { '├', '─', '┤', '│', '┘', '─', '└', '│' }
       or { '┌', '─', '┐', '│', '', '', '', '│' },
     style = 'minimal',
-    title = prompt_position == 'top' and ' Colors ' or nil,
+    title = prompt_position == 'top' and ' ' .. (config.title or 'Colors') .. ' ' or nil,
     title_pos = prompt_position == 'top' and 'left' or nil,
   })
 
@@ -314,12 +311,7 @@ function M.update_results()
   -- Filter colorschemes
   M.state.filtered_items = M.filter_colorschemes(M.state.items, M.state.query)
 
-  local prompt_position = get_prompt_position()
-  if prompt_position == 'bottom' then
-    M.state.cursor = #M.state.filtered_items > 0 and #M.state.filtered_items or 1
-  else
-    M.state.cursor = 1
-  end
+  M.state.cursor = 1
 
   M.render_list()
   M.update_status()
@@ -332,20 +324,17 @@ function M.render_list()
   local items = M.state.filtered_items
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
   local win_width = vim.api.nvim_win_get_width(M.state.list_win)
-  local display_count = math.min(#items, win_height)
   local prompt_position = get_prompt_position()
+  local view = viewport.calculate(#items, M.state.cursor, win_height, prompt_position)
+  local empty_lines_needed = view.padding
+  local cursor_line = view.cursor_line
+  local first_index = view.reverse and view.last or view.first
+  local last_index = view.reverse and view.first or view.last
+  local index_step = view.reverse and -1 or 1
 
-  local empty_lines_needed = 0
-  local cursor_line = 0
-
-  if #items > 0 then
-    if prompt_position == 'bottom' then
-      empty_lines_needed = win_height - display_count
-      cursor_line = empty_lines_needed + M.state.cursor
-    else
-      cursor_line = M.state.cursor
-    end
-    cursor_line = math.max(1, math.min(cursor_line, win_height))
+  local function visible_line(item_index)
+    local offset = view.reverse and (view.last - item_index) or (item_index - view.first)
+    return empty_lines_needed + offset + 1
   end
 
   local lines = {}
@@ -358,8 +347,8 @@ function M.render_list()
   end
 
   -- Format each colorscheme line
-  for i = 1, display_count do
-    local item = items[i]
+  for item_index = first_index, last_index, index_step do
+    local item = items[item_index]
     local indicator = item.current and '* ' or '  '
     local line = indicator .. item.name
 
@@ -383,9 +372,9 @@ function M.render_list()
     vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, M.state.config.hl.cursor, cursor_line - 1, 0, -1)
 
     -- Add highlights for each visible item
-    for i = 1, display_count do
-      local item = items[i]
-      local line_idx = empty_lines_needed + i
+    for item_index = first_index, last_index, index_step do
+      local item = items[item_index]
+      local line_idx = visible_line(item_index)
       local is_cursor_line = line_idx == cursor_line
 
       -- Highlight current colorscheme indicator
@@ -439,7 +428,7 @@ function M.move_up()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  M.state.cursor = math.max(M.state.cursor - 1, 1)
+  M.state.cursor = viewport.move(M.state.cursor, #M.state.filtered_items, 'up', get_prompt_position())
   M.render_list()
   M.preview_colorscheme()
 end
@@ -448,7 +437,7 @@ function M.move_down()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
+  M.state.cursor = viewport.move(M.state.cursor, #M.state.filtered_items, 'down', get_prompt_position())
   M.render_list()
   M.preview_colorscheme()
 end
@@ -540,13 +529,7 @@ function M.open(opts)
     return
   end
 
-  -- Set initial cursor position
-  local prompt_position = get_prompt_position()
-  if prompt_position == 'bottom' then
-    M.state.cursor = #M.state.filtered_items > 0 and #M.state.filtered_items or 1
-  else
-    M.state.cursor = 1
-  end
+  M.state.cursor = 1
 
   M.render_list()
   M.update_status()

@@ -69,6 +69,13 @@ function M.colors(opts) return M.open('colors', opts) end
 
 function M.git_files(opts) return M.open('git_files', opts) end
 
+function M.git_status(opts) return M.open('git_files', opts) end
+
+function M.tracked_files(opts)
+  opts = vim.tbl_deep_extend('force', { source = 'tracked', title = 'Git Files' }, opts or {})
+  return M.open('git_files', opts)
+end
+
 function M.register_commands()
   create_command(
     'FFFPlusBuffers',
@@ -76,26 +83,38 @@ function M.register_commands()
       M.buffers({
         title = 'Buffers',
         prompt = opts.args ~= '' and opts.args or nil,
+        fullscreen = opts.bang,
       })
     end,
     {
       nargs = '?',
+      bang = true,
       desc = 'Browse and switch between open buffers with fff-plus.nvim',
     }
   )
 
   create_command('FFFPlusColors', function(opts)
     M.colors({
-      bang = opts.bang,
+      fullscreen = opts.bang,
     })
   end, {
     bang = true,
     desc = 'Browse and switch colorschemes with fff-plus.nvim',
   })
 
-  create_command('FFFPlusGFiles', function() M.git_files() end, {
+  create_command('FFFPlusGFiles', function(opts) M.git_files({ fullscreen = opts.bang }) end, {
     bang = true,
-    desc = 'Browse git status files with fff-plus.nvim',
+    desc = 'Browse Git status files with fff-plus.nvim (compatibility name)',
+  })
+
+  create_command('FFFPlusGitFiles', function(opts) M.tracked_files({ fullscreen = opts.bang }) end, {
+    bang = true,
+    desc = 'Browse files tracked by Git with fff-plus.nvim',
+  })
+
+  create_command('FFFPlusGitStatus', function(opts) M.git_status({ fullscreen = opts.bang }) end, {
+    bang = true,
+    desc = 'Browse Git status files with fff-plus.nvim',
   })
 
   if not M.config.legacy_commands then return end
@@ -106,26 +125,28 @@ function M.register_commands()
       M.buffers({
         title = 'Buffers',
         prompt = opts.args ~= '' and opts.args or nil,
+        fullscreen = opts.bang,
       })
     end,
     {
       nargs = '?',
+      bang = true,
       desc = 'Browse and switch between open buffers with fff-plus.nvim',
     }
   )
 
   create_command('Colors', function(opts)
     M.colors({
-      bang = opts.bang,
+      fullscreen = opts.bang,
     })
   end, {
     bang = true,
     desc = 'Browse and switch colorschemes with fff-plus.nvim',
   })
 
-  create_command('GFiles', function() M.git_files() end, {
+  create_command('GFiles', function(opts) M.tracked_files({ fullscreen = opts.bang }) end, {
     bang = true,
-    desc = 'Browse git status files with fff-plus.nvim',
+    desc = 'Browse files tracked by Git with fff-plus.nvim',
   })
 end
 

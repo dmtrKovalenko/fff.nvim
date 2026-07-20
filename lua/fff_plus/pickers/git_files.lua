@@ -6,6 +6,11 @@ local M = {}
 local conf = require('fff.conf')
 local preview = require('fff.file_picker.preview')
 local git_utils = require('fff_plus.git_utils')
+local git_source = require('fff_plus.git_source')
+local layout = require('fff_plus.layout')
+local matcher = require('fff_plus.matcher')
+local selection = require('fff_plus.selection')
+local viewport = require('fff_plus.viewport')
 
 -- Initialize preview module with config (required before using preview functions)
 local preview_config = conf.get().preview
@@ -23,78 +28,39 @@ function M.get_git_root()
   return result:gsub('\n', '')
 end
 
---- Get git status files from git status output
+local function format_git_file(git_root, relative_path, git_status, old_path)
+  local name = vim.fn.fnamemodify(relative_path, ':t')
+  return {
+    name = name,
+    path = git_root .. '/' .. relative_path,
+    relative_path = relative_path,
+    old_path = old_path,
+    directory = vim.fn.fnamemodify(relative_path, ':h'),
+    extension = vim.fn.fnamemodify(name, ':e'),
+    git_status = git_status,
+    is_dir = false,
+  }
+end
+
+--- Get Git status files from porcelain output
 --- @param git_root string Git root directory
 --- @return table List of git files with status
 function M.get_git_status_files(git_root)
-  local handle = io.popen('git -C ' .. vim.fn.shellescape(git_root) .. ' status -s 2>/dev/null')
-  if not handle then return {} end
-
   local files = {}
-  local seen = {}
-
-  for line in handle:lines() do
-    if line:len() >= 3 then
-      -- Git status format: XY filename
-      -- X = index status, Y = worktree status
-      local index_status = line:sub(1, 1)
-      local worktree_status = line:sub(2, 2)
-      local filepath = line:sub(4)
-
-      -- Handle renamed files: R  old -> new
-      if index_status == 'R' or worktree_status == 'R' then
-        local arrow_pos = filepath:find(' %-> ')
-        if arrow_pos then
-          filepath = filepath:sub(arrow_pos + 4) -- Get the new filename
-        end
-      end
-
-      -- Skip duplicates
-      if not seen[filepath] then
-        seen[filepath] = true
-
-        -- Parse git status code (XY format)
-        -- X = staged (index), Y = unstaged (worktree)
-        local git_status = 'unknown'
-
-        if index_status == '?' and worktree_status == '?' then
-          git_status = 'untracked'
-        elseif index_status == '!' and worktree_status == '!' then
-          git_status = 'ignored'
-        elseif index_status == 'A' then
-          git_status = 'staged_new'
-        elseif index_status == 'M' then
-          git_status = 'staged_modified'
-        elseif index_status == 'D' then
-          git_status = 'staged_deleted'
-        elseif index_status == 'R' then
-          git_status = 'renamed'
-        elseif worktree_status == 'M' then
-          git_status = 'modified'
-        elseif worktree_status == 'D' then
-          git_status = 'deleted'
-        elseif worktree_status == 'A' then
-          git_status = 'untracked' -- Added in worktree only (like untracked)
-        end
-
-        local full_path = git_root .. '/' .. filepath
-        local name = vim.fn.fnamemodify(filepath, ':t')
-        local directory = vim.fn.fnamemodify(filepath, ':h')
-
-        table.insert(files, {
-          name = name,
-          path = full_path,
-          relative_path = filepath,
-          directory = directory,
-          extension = vim.fn.fnamemodify(name, ':e'),
-          git_status = git_status,
-          is_dir = false,
-        })
-      end
-    end
+  for _, entry in ipairs(git_source.status(git_root)) do
+    table.insert(files, format_git_file(git_root, entry.relative_path, entry.git_status, entry.old_path))
   end
+  return files
+end
 
-  handle:close()
+--- Get files tracked by Git
+--- @param git_root string Git root directory
+--- @return table List of tracked files
+function M.get_tracked_files(git_root)
+  local files = {}
+  for _, relative_path in ipairs(git_source.tracked(git_root)) do
+    table.insert(files, format_git_file(git_root, relative_path, 'clean'))
+  end
   return files
 end
 
@@ -117,6 +83,9 @@ M.state = {
   config = nil,
   ns_id = nil,
   last_preview_file = nil,
+  source = 'status',
+  selected = {},
+  origin_win = nil,
 }
 
 local function get_prompt_position()
@@ -140,16 +109,11 @@ function M.create_ui()
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
 
-  -- Calculate dimensions
-  local width_ratio = config.layout.width or 0.8
-  local height_ratio = config.layout.height or 0.8
-  if type(width_ratio) == 'function' then width_ratio = width_ratio(terminal_width, terminal_height) end
-  if type(height_ratio) == 'function' then height_ratio = height_ratio(terminal_width, terminal_height) end
-
-  local width = math.floor(terminal_width * width_ratio)
-  local height = math.floor(terminal_height * height_ratio)
-  local col = math.floor((terminal_width - width) / 2)
-  local row = math.floor((terminal_height - height) / 2)
+  local frame = layout.frame(terminal_width, terminal_height, config.layout or {}, config.fullscreen)
+  local width = frame.width
+  local height = frame.height
+  local col = frame.col
+  local row = frame.row
 
   local prompt_position = get_prompt_position()
 
@@ -186,7 +150,7 @@ function M.create_ui()
     border = prompt_position == 'bottom' and { '┌', '─', '┐', '│', '', '', '', '│' }
       or { '├', '─', '┤', '│', '┘', '─', '└', '│' },
     style = 'minimal',
-    title = prompt_position == 'bottom' and ' Git Files ' or nil,
+    title = prompt_position == 'bottom' and ' ' .. (config.title or 'Git Files') .. ' ' or nil,
     title_pos = prompt_position == 'bottom' and 'left' or nil,
   })
 
@@ -216,7 +180,7 @@ function M.create_ui()
     border = prompt_position == 'bottom' and { '├', '─', '┤', '│', '┘', '─', '└', '│' }
       or { '┌', '─', '┐', '│', '', '', '', '│' },
     style = 'minimal',
-    title = prompt_position == 'top' and ' Git Files ' or nil,
+    title = prompt_position == 'top' and ' ' .. (config.title or 'Git Files') .. ' ' or nil,
     title_pos = prompt_position == 'top' and 'left' or nil,
   })
 
@@ -305,20 +269,17 @@ function M.render_list()
   local items = M.state.filtered_items
   local win_height = vim.api.nvim_win_get_height(M.state.list_win)
   local win_width = vim.api.nvim_win_get_width(M.state.list_win)
-  local display_count = math.min(#items, win_height)
   local prompt_position = get_prompt_position()
+  local view = viewport.calculate(#items, M.state.cursor, win_height, prompt_position)
+  local empty_lines_needed = view.padding
+  local cursor_line = view.cursor_line
+  local first_index = view.reverse and view.last or view.first
+  local last_index = view.reverse and view.first or view.last
+  local index_step = view.reverse and -1 or 1
 
-  local empty_lines_needed = 0
-  local cursor_line = 0
-
-  if #items > 0 then
-    if prompt_position == 'bottom' then
-      empty_lines_needed = win_height - display_count
-      cursor_line = empty_lines_needed + M.state.cursor
-    else
-      cursor_line = M.state.cursor
-    end
-    cursor_line = math.max(1, math.min(cursor_line, win_height))
+  local function visible_line(item_index)
+    local offset = view.reverse and (view.last - item_index) or (item_index - view.first)
+    return empty_lines_needed + offset + 1
   end
 
   local lines = {}
@@ -331,8 +292,8 @@ function M.render_list()
   end
 
   -- Format each git file line
-  for i = 1, display_count do
-    local item = items[i]
+  for item_index = first_index, last_index, index_step do
+    local item = items[item_index]
     local border_char = git_utils.get_border_char(item.git_status)
     local line = ''
 
@@ -362,16 +323,22 @@ function M.render_list()
     vim.api.nvim_buf_add_highlight(M.state.list_buf, M.state.ns_id, M.state.config.hl.cursor, cursor_line - 1, 0, -1)
 
     -- Apply git status highlights for each visible item
-    for i = 1, display_count do
-      local item = items[i]
-      local line_idx = empty_lines_needed + i
+    for item_index = first_index, last_index, index_step do
+      local item = items[item_index]
+      local line_idx = visible_line(item_index)
       local is_cursor_line = line_idx == cursor_line
 
       local border_hl = is_cursor_line and git_utils.get_border_highlight_selected(item.git_status)
         or git_utils.get_border_highlight(item.git_status)
 
+      if M.state.selected[item.relative_path] then
+        vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
+          sign_text = '▊',
+          sign_hl_group = 'Visual',
+          priority = 1100,
+        })
       -- Add sign for git status
-      if git_utils.should_show_border(item.git_status) then
+      elseif git_utils.should_show_border(item.git_status) then
         vim.api.nvim_buf_set_extmark(M.state.list_buf, M.state.ns_id, line_idx - 1, 0, {
           sign_text = git_utils.get_border_char(item.git_status),
           sign_hl_group = border_hl,
@@ -394,7 +361,11 @@ function M.update_results()
     return
   end
 
-  M.state.items = M.get_git_status_files(git_root)
+  if M.state.source == 'tracked' then
+    M.state.items = M.get_tracked_files(git_root)
+  else
+    M.state.items = M.get_git_status_files(git_root)
+  end
   M.filter_results()
   M.render_list()
   M.update_status()
@@ -403,18 +374,35 @@ end
 function M.filter_results()
   if not M.state.active then return end
 
-  local query = M.state.query:lower()
-
-  if query == '' then
-    M.state.filtered_items = M.state.items
-  else
-    M.state.filtered_items = {}
-    for _, item in ipairs(M.state.items) do
-      if item.relative_path:lower():find(query, 1, true) then table.insert(M.state.filtered_items, item) end
-    end
-  end
+  M.state.filtered_items = matcher.filter(
+    M.state.items,
+    M.state.query,
+    function(item) return item.relative_path or '' end
+  )
 
   M.state.cursor = 1
+end
+
+function M.get_git_diff(item)
+  if M.state.source ~= 'status' or item.git_status == 'untracked' then return nil end
+
+  local git_root = M.get_git_root()
+  if not git_root then return nil end
+  return git_source.diff(git_root, item.relative_path)
+end
+
+local function render_git_diff(item)
+  local diff = M.get_git_diff(item)
+  if not diff then return false end
+
+  local lines = vim.split(diff, '\n', { plain = true, trimempty = true })
+  if #lines == 0 then return false end
+
+  vim.api.nvim_buf_set_option(M.state.preview_buf, 'modifiable', true)
+  vim.api.nvim_buf_set_lines(M.state.preview_buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_option(M.state.preview_buf, 'filetype', 'diff')
+  vim.api.nvim_buf_set_option(M.state.preview_buf, 'modifiable', false)
+  return true
 end
 
 function M.update_preview()
@@ -448,6 +436,7 @@ function M.update_preview()
   })
 
   preview.set_preview_window(M.state.preview_win)
+  if render_git_diff(item) then return end
   preview.preview(item.path, M.state.preview_buf)
 end
 
@@ -485,7 +474,7 @@ function M.move_up()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  M.state.cursor = math.max(M.state.cursor - 1, 1)
+  M.state.cursor = viewport.move(M.state.cursor, #M.state.filtered_items, 'up', get_prompt_position())
   M.render_list()
   M.update_preview()
 end
@@ -494,7 +483,7 @@ function M.move_down()
   if not M.state.active then return end
   if #M.state.filtered_items == 0 then return end
 
-  M.state.cursor = math.min(M.state.cursor + 1, #M.state.filtered_items)
+  M.state.cursor = viewport.move(M.state.cursor, #M.state.filtered_items, 'down', get_prompt_position())
   M.render_list()
   M.update_preview()
 end
@@ -509,6 +498,55 @@ function M.scroll_preview_down()
   if not M.state.active or not M.state.preview_win then return end
   local win_height = vim.api.nvim_win_get_height(M.state.preview_win)
   preview.scroll(math.floor(win_height / 2))
+end
+
+local function current_item()
+  if #M.state.filtered_items == 0 or M.state.cursor > #M.state.filtered_items then return nil end
+  return M.state.filtered_items[M.state.cursor]
+end
+
+local function chosen_items()
+  return selection.collect(
+    M.state.items,
+    M.state.selected,
+    current_item(),
+    function(item) return item.relative_path end
+  )
+end
+
+function M.toggle_selection()
+  local item = current_item()
+  if not item then return end
+  selection.toggle(M.state.selected, item.relative_path)
+  M.render_list()
+end
+
+function M.send_to_quickfix()
+  local items = chosen_items()
+  if #items == 0 then return end
+
+  local quickfix = {}
+  for _, item in ipairs(items) do
+    table.insert(quickfix, {
+      filename = item.path,
+      lnum = 1,
+      col = 1,
+      text = item.relative_path,
+    })
+  end
+
+  M.close()
+  vim.fn.setqflist({}, ' ', { title = 'FFF+ Git Files', items = quickfix })
+  vim.cmd('copen')
+end
+
+function M.paste_selection()
+  local items = chosen_items()
+  if #items == 0 then return end
+  local origin_win = M.state.origin_win
+  M.close()
+  if origin_win and vim.api.nvim_win_is_valid(origin_win) then vim.api.nvim_set_current_win(origin_win) end
+  selection.put(items, function(item) return item.relative_path end)
 end
 
 function M.select(action)
@@ -587,6 +625,9 @@ function M.close()
   M.state.query = ''
   M.state.ns_id = nil
   M.state.last_preview_file = nil
+  M.state.source = 'status'
+  M.state.selected = {}
+  M.state.origin_win = nil
 
   pcall(vim.api.nvim_del_augroup_by_name, 'fff_plus_git_files_picker_focus')
 end
@@ -618,6 +659,10 @@ function M.setup_keymaps()
     vim.keymap.set('i', keymaps.preview_scroll_down, M.scroll_preview_down, input_opts)
   end
 
+  vim.keymap.set('i', keymaps.toggle_select or '<Tab>', M.toggle_selection, input_opts)
+  vim.keymap.set('i', keymaps.send_to_quickfix or '<C-q>', M.send_to_quickfix, input_opts)
+  vim.keymap.set('i', keymaps.paste or '<A-CR>', M.paste_selection, input_opts)
+
   -- Handle input changes using buf_attach
   vim.api.nvim_buf_attach(M.state.input_buf, false, {
     on_lines = function()
@@ -631,6 +676,11 @@ end
 function M.open(opts)
   if M.state.active then return end
 
+  M.state.origin_win = vim.api.nvim_get_current_win()
+
+  opts = opts or {}
+  local source = opts.source or 'status'
+
   local git_root = M.get_git_root()
   if not git_root then
     vim.notify('Not in a git repository', vim.log.levels.WARN)
@@ -638,15 +688,20 @@ function M.open(opts)
   end
 
   local config = conf.get()
-  local merged_config = vim.tbl_deep_extend('force', config or {}, opts or {})
+  local merged_config = vim.tbl_deep_extend('force', config or {}, opts)
 
-  if merged_config.title == nil then merged_config.title = 'Git Files' end
+  if merged_config.title == nil then merged_config.title = source == 'tracked' and 'Git Files' or 'Git Status' end
   if merged_config.prompt == nil then merged_config.prompt = '🦆 ' end
 
   M.state.config = merged_config
+  M.state.source = source
   M.state.active = true
 
-  M.state.items = M.get_git_status_files(git_root)
+  if source == 'tracked' then
+    M.state.items = M.get_tracked_files(git_root)
+  else
+    M.state.items = M.get_git_status_files(git_root)
+  end
   M.state.filtered_items = M.state.items
 
   if not M.create_ui() then
@@ -655,13 +710,7 @@ function M.open(opts)
     return
   end
 
-  -- Set initial cursor position
-  local prompt_position = get_prompt_position()
-  if prompt_position == 'bottom' then
-    M.state.cursor = #M.state.filtered_items > 0 and #M.state.filtered_items or 1
-  else
-    M.state.cursor = 1
-  end
+  M.state.cursor = 1
 
   M.render_list()
   M.update_preview()
