@@ -109,6 +109,20 @@ local function test_viewport_calculation()
   print('✓ picker viewport keeps the logical cursor visible')
 end
 
+local function test_picker_layout()
+  print('Testing picker layout...')
+  local layout = require('fff_plus.layout')
+
+  local floating = layout.frame(120, 40, { width = 0.8, height = 0.8 }, false)
+  assert(floating.width == 96 and floating.height == 32)
+  assert(floating.col == 12 and floating.row == 4)
+
+  local fullscreen = layout.frame(120, 40, {}, true)
+  assert(fullscreen.width == 116 and fullscreen.height == 36)
+  assert(fullscreen.col == 1 and fullscreen.row == 0)
+  print('✓ picker layout resolves floating and fullscreen frames')
+end
+
 local function test_git_sources()
   print('Testing Git sources...')
   local git_source = require('fff_plus.git_source')
@@ -126,6 +140,17 @@ local function test_git_sources()
   assert(status[2].relative_path == 'lua/new name.lua')
   assert(status[2].old_path == 'lua/old name.lua')
   assert(status[3].git_status == 'untracked')
+
+  local original_run = git_source.run
+  local captured
+  git_source.run = function(_, args)
+    captured = args
+    return 'diff --git a/file b/file\n'
+  end
+  local diff = git_source.diff('/repo', 'lua/file with spaces.lua')
+  git_source.run = original_run
+  assert(diff:find('diff %-%-git'), 'Git diff should return command output')
+  assert(captured[1] == 'diff' and captured[#captured] == 'lua/file with spaces.lua')
   print('✓ Git sources preserve paths and rename records')
 end
 
@@ -161,6 +186,12 @@ local function test_commands_register()
   assert(vim.fn.exists(':FFFPlusGitStatus') == 2, 'FFFPlusGitStatus command should exist')
   assert(type(require('fff_plus').tracked_files) == 'function', 'tracked_files API should exist')
   assert(type(require('fff_plus').git_status) == 'function', 'git_status API should exist')
+
+  local commands = vim.api.nvim_get_commands({ builtin = false })
+  assert(commands.FFFPlusBuffers.bang, 'FFFPlusBuffers should support fullscreen bang')
+  assert(commands.FFFPlusColors.bang, 'FFFPlusColors should support fullscreen bang')
+  assert(commands.FFFPlusGitFiles.bang, 'FFFPlusGitFiles should support fullscreen bang')
+  assert(commands.FFFPlusGitStatus.bang, 'FFFPlusGitStatus should support fullscreen bang')
   print('✓ fff_plus commands register correctly')
 end
 
@@ -172,6 +203,7 @@ local function run_tests()
     test_picker_modules_load,
     test_fuzzy_matcher,
     test_viewport_calculation,
+    test_picker_layout,
     test_git_sources,
     test_picker_selection,
     test_commands_register,

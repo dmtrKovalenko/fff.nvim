@@ -7,6 +7,7 @@ local conf = require('fff.conf')
 local preview = require('fff.file_picker.preview')
 local icons = require('fff.file_picker.icons')
 local utils = require('fff.utils')
+local layout = require('fff_plus.layout')
 local matcher = require('fff_plus.matcher')
 local selection = require('fff_plus.selection')
 local viewport = require('fff_plus.viewport')
@@ -190,16 +191,11 @@ function M.create_ui()
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
 
-  -- Calculate dimensions
-  local width_ratio = config.layout.width or 0.8
-  local height_ratio = config.layout.height or 0.8
-  if type(width_ratio) == 'function' then width_ratio = width_ratio(terminal_width, terminal_height) end
-  if type(height_ratio) == 'function' then height_ratio = height_ratio(terminal_width, terminal_height) end
-
-  local width = math.floor(terminal_width * width_ratio)
-  local height = math.floor(terminal_height * height_ratio)
-  local col = math.floor((terminal_width - width) / 2)
-  local row = math.floor((terminal_height - height) / 2)
+  local frame = layout.frame(terminal_width, terminal_height, config.layout or {}, config.fullscreen)
+  local width = frame.width
+  local height = frame.height
+  local col = frame.col
+  local row = frame.row
 
   local prompt_position = get_prompt_position()
 
@@ -236,7 +232,7 @@ function M.create_ui()
     border = prompt_position == 'bottom' and { '┌', '─', '┐', '│', '', '', '', '│' }
       or { '├', '─', '┤', '│', '┘', '─', '└', '│' },
     style = 'minimal',
-    title = prompt_position == 'bottom' and ' Buffers ' or nil,
+    title = prompt_position == 'bottom' and ' ' .. (config.title or 'Buffers') .. ' ' or nil,
     title_pos = prompt_position == 'bottom' and 'left' or nil,
   })
 
@@ -266,7 +262,7 @@ function M.create_ui()
     border = prompt_position == 'bottom' and { '├', '─', '┤', '│', '┘', '─', '└', '│' }
       or { '┌', '─', '┐', '│', '', '', '', '│' },
     style = 'minimal',
-    title = prompt_position == 'top' and ' Buffers ' or nil,
+    title = prompt_position == 'top' and ' ' .. (config.title or 'Buffers') .. ' ' or nil,
     title_pos = prompt_position == 'top' and 'left' or nil,
   })
 

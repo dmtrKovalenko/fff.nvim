@@ -86,4 +86,10 @@ function M.status(git_root)
   return M.parse_status(output)
 end
 
+function M.diff(git_root, relative_path)
+  local output = M.run(git_root, { 'diff', '--no-ext-diff', 'HEAD', '--', relative_path })
+  if not output or output == '' then return nil end
+  return output
+end
+
 return M

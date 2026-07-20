@@ -5,6 +5,7 @@ local M = {}
 
 local conf = require('fff.conf')
 local utils = require('fff.utils')
+local layout = require('fff_plus.layout')
 local matcher = require('fff_plus.matcher')
 local viewport = require('fff_plus.viewport')
 
@@ -132,15 +133,9 @@ function M.create_ui()
 
   local terminal_width = vim.o.columns
   local terminal_height = vim.o.lines
-
-  -- Calculate dimensions
-  local width_ratio = config.layout.width or 0.8
-  local height_ratio = config.layout.height or 0.8
-  if type(width_ratio) == 'function' then width_ratio = width_ratio(terminal_width, terminal_height) end
-  if type(height_ratio) == 'function' then height_ratio = height_ratio(terminal_width, terminal_height) end
-
-  local width = math.floor(terminal_width * width_ratio)
-  local height = math.floor(terminal_height * height_ratio)
+  local frame = layout.frame(terminal_width, terminal_height, config.layout or {}, config.fullscreen)
+  local width = frame.width
+  local height = frame.height
 
   -- For colors picker, use a smaller window that fits content nicely
   local num_items = #M.state.items
@@ -149,12 +144,22 @@ function M.create_ui()
     max_name_width = math.max(max_name_width, #item.name)
   end
 
-  -- Size window to fit content (like fzf.vim)
-  local list_width = math.min(math.max(max_name_width + 10, 30), width)
-  local list_height = math.min(num_items + 2, height - 4)
-
-  local col = math.floor((terminal_width - list_width) / 2)
-  local row = math.floor((terminal_height - list_height - 4) / 2)
+  local list_width
+  local list_height
+  local col
+  local row
+  if config.fullscreen then
+    list_width = width
+    list_height = math.max(1, height - 4)
+    col = frame.col
+    row = frame.row
+  else
+    -- Size window to fit content (like fzf.vim)
+    list_width = math.min(math.max(max_name_width + 10, 30), width)
+    list_height = math.max(1, math.min(num_items + 2, height - 4))
+    col = math.floor((terminal_width - list_width) / 2)
+    row = math.floor((terminal_height - list_height - 4) / 2)
+  end
 
   local prompt_position = get_prompt_position()
 
@@ -176,7 +181,7 @@ function M.create_ui()
     border = prompt_position == 'bottom' and { '┌', '─', '┐', '│', '', '', '', '│' }
       or { '├', '─', '┤', '│', '┘', '─', '└', '│' },
     style = 'minimal',
-    title = prompt_position == 'bottom' and ' Colors ' or nil,
+    title = prompt_position == 'bottom' and ' ' .. (config.title or 'Colors') .. ' ' or nil,
     title_pos = prompt_position == 'bottom' and 'left' or nil,
   })
 
@@ -191,7 +196,7 @@ function M.create_ui()
     border = prompt_position == 'bottom' and { '├', '─', '┤', '│', '┘', '─', '└', '│' }
       or { '┌', '─', '┐', '│', '', '', '', '│' },
     style = 'minimal',
-    title = prompt_position == 'top' and ' Colors ' or nil,
+    title = prompt_position == 'top' and ' ' .. (config.title or 'Colors') .. ' ' or nil,
     title_pos = prompt_position == 'top' and 'left' or nil,
   })
 

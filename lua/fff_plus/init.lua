@@ -81,34 +81,36 @@ function M.register_commands()
       M.buffers({
         title = 'Buffers',
         prompt = opts.args ~= '' and opts.args or nil,
+        fullscreen = opts.bang,
       })
     end,
     {
       nargs = '?',
+      bang = true,
       desc = 'Browse and switch between open buffers with fff-plus.nvim',
     }
   )
 
   create_command('FFFPlusColors', function(opts)
     M.colors({
-      bang = opts.bang,
+      fullscreen = opts.bang,
     })
   end, {
     bang = true,
     desc = 'Browse and switch colorschemes with fff-plus.nvim',
   })
 
-  create_command('FFFPlusGFiles', function() M.git_files() end, {
+  create_command('FFFPlusGFiles', function(opts) M.git_files({ fullscreen = opts.bang }) end, {
     bang = true,
     desc = 'Browse Git status files with fff-plus.nvim (compatibility name)',
   })
 
-  create_command('FFFPlusGitFiles', function() M.tracked_files() end, {
+  create_command('FFFPlusGitFiles', function(opts) M.tracked_files({ fullscreen = opts.bang }) end, {
     bang = true,
     desc = 'Browse files tracked by Git with fff-plus.nvim',
   })
 
-  create_command('FFFPlusGitStatus', function() M.git_status() end, {
+  create_command('FFFPlusGitStatus', function(opts) M.git_status({ fullscreen = opts.bang }) end, {
     bang = true,
     desc = 'Browse Git status files with fff-plus.nvim',
   })
@@ -121,24 +123,26 @@ function M.register_commands()
       M.buffers({
         title = 'Buffers',
         prompt = opts.args ~= '' and opts.args or nil,
+        fullscreen = opts.bang,
       })
     end,
     {
       nargs = '?',
+      bang = true,
       desc = 'Browse and switch between open buffers with fff-plus.nvim',
     }
   )
 
   create_command('Colors', function(opts)
     M.colors({
-      bang = opts.bang,
+      fullscreen = opts.bang,
     })
   end, {
     bang = true,
     desc = 'Browse and switch colorschemes with fff-plus.nvim',
   })
 
-  create_command('GFiles', function() M.tracked_files() end, {
+  create_command('GFiles', function(opts) M.tracked_files({ fullscreen = opts.bang }) end, {
     bang = true,
     desc = 'Browse files tracked by Git with fff-plus.nvim',
   })
