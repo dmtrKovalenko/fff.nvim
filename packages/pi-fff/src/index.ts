@@ -724,7 +724,10 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       // automatic fuzzy fallback allows to broad the queries and find different cases
       if (result.items.length === 0 && !params.cursor && mode !== "regex") {
-        const fuzzy = picker.grep(pattern, {
+        // Preserve the original path/exclude constraints — broadening only the
+        // pattern-match, not the scope. Otherwise the fallback can leak matches
+        // from excluded directories or files outside the requested path.
+        const fuzzy = picker.grep(query, {
           mode: "fuzzy",
           smartCase,
           maxMatchesPerFile: Math.min(effectiveLimit, 50),
