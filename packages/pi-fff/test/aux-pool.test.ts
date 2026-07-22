@@ -8,6 +8,7 @@ interface MockFinder {
 }
 
 const created: MockFinder[] = [];
+const createOptions: Record<string, unknown>[] = [];
 
 function createMockFinder(basePath: string): MockFinder {
   const finder: MockFinder = {
@@ -24,10 +25,13 @@ function createMockFinder(basePath: string): MockFinder {
 
 const finderModule = {
   FileFinder: {
-    create: (options: { basePath: string }) => ({
-      ok: true,
-      value: createMockFinder(options.basePath),
-    }),
+    create: (options: Record<string, unknown>) => {
+      createOptions.push(options);
+      return {
+        ok: true,
+        value: createMockFinder(options.basePath as string),
+      };
+    },
   },
 };
 
@@ -38,6 +42,7 @@ const { AuxFinderPool } = await import("../src/aux-finders");
 
 function makePool() {
   created.length = 0;
+  createOptions.length = 0;
   return new AuxFinderPool({ enableFsRootScanning: false });
 }
 
@@ -85,5 +90,18 @@ describe("AuxFinderPool covering reuse", () => {
     const other = await pool.acquire("/a/b");
     expect(other.root).toBe("/a/b");
     expect(created.length).toBe(2);
+  });
+
+  // Regression for #700: aux finders must not reopen the main frecency/history
+  // LMDB envs, or heed fails with "environment already open in this program".
+  test("aux finders are created without frecency/history db paths", async () => {
+    const pool = makePool();
+    await pool.acquire("/a/b/c");
+    await pool.acquire("/x/y");
+    expect(createOptions.length).toBe(2);
+    for (const opts of createOptions) {
+      expect(opts.frecencyDbPath).toBeUndefined();
+      expect(opts.historyDbPath).toBeUndefined();
+    }
   });
 });

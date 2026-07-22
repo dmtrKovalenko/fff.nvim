@@ -344,8 +344,6 @@ export default function fffExtension(pi: ExtensionAPI) {
   }
 
   let auxPool = new AuxFinderPool({
-    frecencyDbPath,
-    historyDbPath,
     enableFsRootScanning,
   });
 

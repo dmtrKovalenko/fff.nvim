@@ -14,8 +14,6 @@ interface AuxPicker {
 }
 
 export interface AuxOpts {
-  frecencyDbPath?: string;
-  historyDbPath?: string;
   enableFsRootScanning: boolean;
 }
 
@@ -69,10 +67,11 @@ export class AuxFinderPool {
     }
 
     const { FileFinder } = await loadSdk();
+    // LMDB env can only be opened once per process; the main finder already
+    // owns the frecency/history DBs. Aux finders are transient and run without
+    // persistent scoring — see issue #700.
     const result = FileFinder.create({
       basePath: maybeRoot,
-      frecencyDbPath: this.opts.frecencyDbPath,
-      historyDbPath: this.opts.historyDbPath,
       aiMode: true,
       enableHomeDirScanning: true,
       enableFsRootScanning: this.opts.enableFsRootScanning,
