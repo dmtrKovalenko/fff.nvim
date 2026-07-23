@@ -1,11 +1,5 @@
-//! Compare three glob-matching strategies for `match_glob_pattern` in constraints.rs:
-//!
-//! 1. Current: `zlob_match_paths` -> collect `as_ptr()` into AHashSet, filter paths
-//!    by pointer to recover indices.
-//! 2. Free fn: `zlob_match_paths_indices` (added in zlob 1.4) — indices direct from C.
-//! 3. Compiled: `ZlobPattern::compile` + `match_indices` — same indices path, but with
-//!    a precompiled pattern (reusable). For one-shot it should match (2); the win
-//!    appears if the pattern is reused (chunked / repeated calls).
+//! Compare three glob-matching strategies for `match_glob_pattern` in constraints.rs
+//! need to make sure that my zlob changes are not affecting fff's internal globbing
 use ahash::AHashSet;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use zlob::{ZlobFlags, ZlobPattern, zlob_match_paths, zlob_match_paths_indices};
