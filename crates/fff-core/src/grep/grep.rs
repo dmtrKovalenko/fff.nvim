@@ -201,6 +201,75 @@ pub(crate) fn grep_search<'a>(
     arena: crate::simd_path::ArenaPtr,
     overflow_arena: crate::simd_path::ArenaPtr,
 ) -> GrepResult<'a> {
+    let result = grep_search_parsed(
+        files,
+        query,
+        options,
+        budget,
+        bigram_index,
+        bigram_overlay,
+        abort_signal,
+        base_path,
+        arena,
+        overflow_arena,
+    );
+
+    // Constraint parsing can swallow tokens the user meant literally (e.g. `!=`
+    // becoming an exclusion). If the constrained search scanned everything and
+    // found nothing, retry the whole raw query as literal text. This also holds
+    // for later pages: an empty full scan at offset 0 stays empty at any offset,
+    // so paging offsets consistently index the literal search's file list.
+    let full_scan_empty = result.matches.is_empty() && result.next_file_offset == 0;
+    if !full_scan_empty || query.constraints.is_empty() || abort_signal.load(Ordering::Relaxed) {
+        return result;
+    }
+
+    let raw = query.raw_query.trim();
+    if raw.is_empty() {
+        return result;
+    }
+
+    let literal_query = FFFQuery {
+        raw_query: query.raw_query,
+        constraints: Vec::new(),
+        fuzzy_query: fff_query_parser::FuzzyQuery::Text(raw),
+        location: None,
+    };
+
+    let mut fallback = grep_search_parsed(
+        files,
+        &literal_query,
+        options,
+        budget,
+        bigram_index,
+        bigram_overlay,
+        abort_signal,
+        base_path,
+        arena,
+        overflow_arena,
+    );
+
+    if fallback.matches.is_empty() {
+        result
+    } else {
+        fallback.literal_fallback = true;
+        fallback
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn grep_search_parsed<'a>(
+    files: &'a [FileItem],
+    query: &FFFQuery<'_>,
+    options: &GrepSearchOptions,
+    budget: &ContentCacheBudget,
+    bigram_index: Option<&BigramFilter>,
+    bigram_overlay: Option<&BigramOverlay>,
+    abort_signal: &AtomicBool,
+    base_path: &Path,
+    arena: crate::simd_path::ArenaPtr,
+    overflow_arena: crate::simd_path::ArenaPtr,
+) -> GrepResult<'a> {
     let total_files = files.live_count();
     let constraints_from_query = &query.constraints[..];
 
@@ -622,5 +691,6 @@ where
         filtered_file_count: ctx.filtered_file_count,
         next_file_offset,
         regex_fallback_error: None,
+        literal_fallback: false,
     }
 }

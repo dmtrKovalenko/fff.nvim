@@ -364,8 +364,11 @@ fn parse_negation<'a, C: ParserConfig>(token: &'a str, config: &C) -> Option<Con
         return Some(Constraint::Not(Box::new(inner_constraint)));
     }
 
-    // If it's not a special constraint, treat it as negated text
-    // For backward compatibility with !test syntax
+    // Negated text (!test) requires ≥3 inner chars with at least one alphanumeric,
+    // so operators like `!=`, `!==`, `!!` stay literal search text.
+    if inner_token.len() < 3 || !inner_token.chars().any(|c| c.is_alphanumeric()) {
+        return None;
+    }
     Some(Constraint::Not(Box::new(Constraint::Text(inner_token))))
 }
 
@@ -610,6 +613,38 @@ mod tests {
             }
             _ => panic!("Expected Not constraint"),
         }
+    }
+
+    #[test]
+    fn test_negation_operators_stay_literal() {
+        let parser = QueryParser::new(GrepConfig);
+        // Operator-like tokens must not become exclusion constraints
+        for query in [
+            "Ordering::Acquire) != delivery.epoch",
+            "a !== b",
+            "x !! y",
+            "foo !~ bar",
+        ] {
+            let result = parser.parse(query);
+            assert!(
+                result.constraints.is_empty(),
+                "{query:?} produced constraints {:?}",
+                result.constraints
+            );
+            assert_eq!(result.grep_text(), query, "grep text must equal raw query");
+        }
+    }
+
+    #[test]
+    fn test_negation_short_text_stays_literal() {
+        let parser = QueryParser::new(FileSearchConfig);
+        // Inner text < 3 chars is not a Not constraint
+        let result = parser.parse("!ab foo");
+        assert!(result.constraints.is_empty());
+        // Inner text >= 3 chars still is
+        let result = parser.parse("!abc foo");
+        assert_eq!(result.constraints.len(), 1);
+        assert!(matches!(&result.constraints[0], Constraint::Not(_)));
     }
 
     #[test]
