@@ -482,7 +482,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # we have to make sure that pushing a commit on this workflow triggers the CI for nightly neovim
       - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GUSTAV_PAT || github.token }}
 
       - name: Install Lua
         uses: leafo/gh-actions-lua@v12
@@ -621,8 +624,6 @@ jobs:
         run: make bump-install-mcp-sh VERSION="${{ steps.version.outputs.version }}" BINARIES_DIR=./binaries
 
       - name: Commit formula + installer bump to main
-        # Uses the default GITHUB_TOKEN configured by actions/checkout above.
-        # Requires github-actions[bot] in the main branch-protection bypass list.
         if: steps.version.outputs.is_release == 'true' && github.repository_owner == 'dmtrKovalenko'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
