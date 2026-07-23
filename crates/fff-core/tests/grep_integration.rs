@@ -1835,3 +1835,64 @@ fn plain_text_smart_case_finds_uppercase_content_with_lowercase_query() {
         "lowercase query should case-insensitively match 'VFIO-KVM'"
     );
 }
+
+/// Bug pinning: `!=` was parsed as a Not("=") exclusion constraint, dropping it
+/// from the needle. Operator tokens must stay literal search text.
+#[test]
+fn plain_text_not_equals_operator_is_literal() {
+    let tmp = TempDir::new().unwrap();
+    let picker = create_picker(
+        tmp.path(),
+        &[(
+            "watch.rs",
+            "if delivery.sub.epoch.load(Ordering::Acquire) != delivery.epoch {\n",
+        )],
+    );
+
+    let parsed = parse_grep_query("Ordering::Acquire) != delivery.epoch");
+    let result = picker.grep(&parsed, &plain_opts());
+
+    assert_eq!(
+        result.matches.len(),
+        1,
+        "operator `!=` must match literally"
+    );
+    assert!(!result.literal_fallback, "no fallback should be needed");
+    assert!(result.matches[0].line_content.contains("!= delivery.epoch"));
+}
+
+#[test]
+fn literal_fallback_when_constraints_find_nothing() {
+    let tmp = TempDir::new().unwrap();
+    let picker = create_picker(tmp.path(), &[("a.txt", "foo !bar_baz qux\n")]);
+
+    // `!bar_baz` becomes Not(Text) so the constrained needle is "foo qux" → no
+    // match; the search must retry the raw query as literal text.
+    let parsed = parse_grep_query("foo !bar_baz qux");
+    let result = picker.grep(&parsed, &plain_opts());
+
+    assert_eq!(result.matches.len(), 1);
+    assert!(
+        result.literal_fallback,
+        "literal fallback should be flagged"
+    );
+    assert!(result.matches[0].line_content.contains("!bar_baz"));
+}
+
+#[test]
+fn literal_fallback_not_triggered_when_constraints_match() {
+    let tmp = TempDir::new().unwrap();
+    let picker = create_picker(
+        tmp.path(),
+        &[
+            ("src/lib.rs", "needle here\n"),
+            ("test/lib.rs", "needle here\n"),
+        ],
+    );
+
+    let parsed = parse_grep_query("needle !test");
+    let result = picker.grep(&parsed, &plain_opts());
+
+    assert_eq!(result.matches.len(), 1, "exclusion should still apply");
+    assert!(!result.literal_fallback);
+}

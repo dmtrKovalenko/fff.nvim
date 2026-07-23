@@ -152,6 +152,9 @@ pub struct GrepResult<'a> {
     /// literal matching and this field contains the compilation error message.
     /// The UI can display this to inform the user their regex was invalid.
     pub regex_fallback_error: Option<String>,
+    /// Set to `true` if the constrained query found nothing and the results come from
+    /// retrying the whole raw query as literal text (ignored all the inferred constraints)
+    pub literal_fallback: bool,
 }
 
 impl<'a> GrepResult<'a> {
@@ -234,6 +237,7 @@ impl<'a> GrepResult<'a> {
             filtered_file_count,
             next_file_offset,
             regex_fallback_error: None,
+            literal_fallback: false,
         }
     }
 }

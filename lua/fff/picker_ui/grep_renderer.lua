@@ -9,8 +9,6 @@ local fuzzy = require('fff.fuzzy')
 local file_renderer = require('fff.picker_ui.file_renderer')
 local tresitter_highlight = require('fff.treesitter_hl')
 
--- ===== Search Bridge =====
-
 ---@class fff.grep.SearchResult
 ---@field items table[] Array of grep match items
 ---@field total_matched number Total matches found in this call

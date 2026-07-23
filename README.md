@@ -425,7 +425,7 @@ Both find and grep accept these tokens to refine a query:
 
 - `git:modified`. One of `modified`, `staged`, `deleted`, `renamed`, `untracked`, `ignored`.
 - `test/`. Any deeply nested children of `test/`.
-- `!something`, `!test/`, `!git:modified`. Exclusion.
+- `!something`, `!test/`, `!git:modified`. Exclusion. Text exclusions need at least 3 alphanumeric-containing characters, so operators like `!=` or `!==` work.
 - `./**/*.{rs,lua}`. Any valid glob, powered by [zlob](https://github.com/dmtrKovalenko/zlob).
 
 Grep-only:
