@@ -722,7 +722,15 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       // automatic fuzzy fallback allows to broad the queries and find different cases
       if (result.items.length === 0 && !params.cursor && mode !== "regex") {
-        const fuzzy = picker.grep(pattern, {
+        // When the caller pinned a specific file (path has an extension), the
+        // fuzzy fallback broadens across the whole picker — the file may just
+        // be misnamed. For directory constraints (or no path), we keep the
+        // constrained query so the fallback does not leak matches from
+        // excluded / out-of-scope directories.
+        const lastSeg = params.path?.split(/[\\/]/).pop() ?? "";
+        const pathTargetsFile = /\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(lastSeg);
+        const fuzzyQuery = pathTargetsFile ? pattern : query;
+        const fuzzy = picker.grep(fuzzyQuery, {
           mode: "fuzzy",
           smartCase,
           maxMatchesPerFile: Math.min(effectiveLimit, 50),
