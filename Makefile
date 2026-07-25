@@ -259,6 +259,9 @@ set-npm-version:
 				pkg.optionalDependencies[dep] = '$(VERSION)'; \
 			} \
 		} \
+		for (const dep of ['@ff-labs/fff-bun', '@ff-labs/fff-node']) { \
+			if (pkg.dependencies?.[dep]) pkg.dependencies[dep] = '$(VERSION)'; \
+		} \
 		fs.writeFileSync('$(PKG)/package.json', JSON.stringify(pkg, null, 2) + '\n'); \
 	"
 	@echo "Set $(PKG) to $(VERSION)"
