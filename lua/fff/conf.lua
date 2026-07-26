@@ -9,7 +9,7 @@ local M = {}
 --- @field min_list_height number
 --- @field show_scrollbar boolean
 --- @field path_shorten_strategy string
---- @field border? 'single'|'double'|'rounded'|'solid'|'shadow'|'none' Border preset; falls back to `vim.o.winborder` when nil
+--- @field border? 'single'|'double'|'rounded'|'solid'|'shadow'|'none'|table<string[],string[]> Border preset; falls back to `vim.o.winborder` when nil
 
 --- @class FffPreviewConfig
 --- @field enabled boolean
