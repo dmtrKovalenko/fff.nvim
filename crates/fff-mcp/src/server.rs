@@ -1,9 +1,11 @@
 use crate::cursor::CursorStore;
 use crate::output::{GrepFormatter, OutputMode, file_suffix};
+use crate::{ExposedTool, build_instructions};
 use fff::grep::{GrepMode, GrepSearchOptions, has_regex_metacharacters};
 use fff::types::{FileItem, PaginationArgs};
 use fff::{FuzzySearchOptions, QueryParser, SharedFilePicker};
 use fff_query_parser::AiGrepConfig;
+use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{ServerHandler, schemars, tool, tool_handler, tool_router};
@@ -175,6 +177,8 @@ pub struct FffServer {
     update_notice_sent: Arc<AtomicBool>,
     last_activity: Arc<AtomicU64>,
     scan_ready: Arc<AtomicBool>,
+    tool_router: ToolRouter<Self>,
+    instructions: Arc<str>,
 }
 
 fn now_secs() -> u64 {
@@ -185,13 +189,25 @@ fn now_secs() -> u64 {
 }
 
 impl FffServer {
-    pub fn new(picker: SharedFilePicker) -> Self {
+    pub fn new(picker: SharedFilePicker, exposed_tools: &[ExposedTool]) -> Self {
+        let mut router = Self::tool_router();
+        for tool in [
+            ExposedTool::FindFiles,
+            ExposedTool::Grep,
+            ExposedTool::MultiGrep,
+        ] {
+            if !exposed_tools.contains(&tool) {
+                router.remove_route(tool.tool_name());
+            }
+        }
         Self {
             picker,
             cursor_store: Arc::new(Mutex::new(CursorStore::new())),
             update_notice_sent: Arc::new(AtomicBool::new(false)),
             last_activity: Arc::new(AtomicU64::new(now_secs())),
             scan_ready: Arc::new(AtomicBool::new(false)),
+            tool_router: router,
+            instructions: Arc::from(build_instructions(exposed_tools)),
         }
     }
 
@@ -692,14 +708,14 @@ impl FffServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for FffServer {
     fn get_info(&self) -> ServerInfo {
         let notice = crate::update_check::get_update_notice();
         let instructions = if notice.is_empty() {
-            crate::MCP_INSTRUCTIONS.to_string()
+            self.instructions.to_string()
         } else {
-            format!("{}{}", crate::MCP_INSTRUCTIONS, notice)
+            format!("{}{}", self.instructions, notice)
         };
 
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
@@ -764,5 +780,41 @@ mod tests {
         let via_pattern: FindFilesParams =
             serde_json::from_str(r#"{"pattern":"foo"}"#).expect("pattern alias");
         assert_eq!(via_pattern.query, "foo");
+    }
+
+    fn tool_names_for(exposed: &[ExposedTool]) -> Vec<String> {
+        let server = FffServer::new(SharedFilePicker::default(), exposed);
+        let mut names: Vec<String> = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn router_defaults_to_all_three_tools() {
+        assert_eq!(
+            tool_names_for(&ExposedTool::all()),
+            vec!["find_files", "grep", "multi_grep"]
+        );
+    }
+
+    #[test]
+    fn router_exposes_only_find_files_when_requested() {
+        assert_eq!(
+            tool_names_for(&[ExposedTool::FindFiles]),
+            vec!["find_files"]
+        );
+    }
+
+    #[test]
+    fn router_exposes_only_grep_pair_when_multi_grep_dropped() {
+        assert_eq!(
+            tool_names_for(&[ExposedTool::Grep, ExposedTool::MultiGrep]),
+            vec!["grep", "multi_grep"]
+        );
     }
 }
