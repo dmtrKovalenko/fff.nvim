@@ -29,6 +29,9 @@ local function get_border_chars(config)
   if border == nil or border == '' then border = vim.o.winborder end
   if border == nil or border == '' then border = 'single' end
 
+  if type(border) == 'table' then
+    if #border == 2 and type(border[1]) == 'table' and type(border[2]) == 'table' then return border[1], border[2] end
+  end
   if BORDER_PRESETS[border] then return BORDER_PRESETS[border], T_JUNCTION_PRESETS[border] end
   return BORDER_PRESETS.single, T_JUNCTION_PRESETS.single
 end
