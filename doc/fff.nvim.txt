@@ -1,5 +1,5 @@
 *fff.nvim.txt*
-                             For Neovim >= 0.10.0    Last change: 2026 July 24
+                             For Neovim >= 0.10.0    Last change: 2026 July 28
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -199,6 +199,11 @@ Defaults are sensible. Override only what you care about.
         -- Border style for the picker windows. Leave unset (nil) to follow the
         -- global `vim.o.winborder`; set it to override fff's borders independently.
         border = nil, -- 'single' | 'double' | 'rounded' | 'solid' | 'shadow' | 'none'
+        -- border = {
+        --   { ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ' },
+        --   { ' ', ' ', ' ', ' ', ' ', ' ' },
+        -- },
+    
         flex = { size = 130, wrap = 'top' },
         min_list_height = 10, --  do not display anything except the list below this threshold
         show_scrollbar = true,
