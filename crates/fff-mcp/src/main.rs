@@ -17,18 +17,16 @@ use server::FffServer;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-pub use instructions::build_instructions;
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, ValueEnum)]
 #[value(rename_all = "snake_case")]
-pub enum ExposedTool {
+pub(crate) enum ExposedTool {
     FindFiles,
     Grep,
     MultiGrep,
 }
 
 impl ExposedTool {
-    pub fn tool_name(self) -> &'static str {
+    pub(crate) fn tool_name(self) -> &'static str {
         match self {
             ExposedTool::FindFiles => "find_files",
             ExposedTool::Grep => "grep",
@@ -36,13 +34,11 @@ impl ExposedTool {
         }
     }
 
-    pub fn all() -> [ExposedTool; 3] {
-        [
-            ExposedTool::FindFiles,
-            ExposedTool::Grep,
-            ExposedTool::MultiGrep,
-        ]
-    }
+    pub(crate) const ALL: [ExposedTool; 3] = [
+        ExposedTool::FindFiles,
+        ExposedTool::Grep,
+        ExposedTool::MultiGrep,
+    ];
 }
 
 /// FFF MCP Server -- a high performance & accuracy file finder for AI code assistants.
@@ -119,14 +115,8 @@ pub(crate) struct Args {
     )]
     idle_timeout_secs: u64,
 
-    /// Comma-separated list of tools to expose. Defaults to all three.
-    /// Unknown names cause startup to fail with the list of valid values.
-    #[arg(
-        long = "tools",
-        value_enum,
-        value_delimiter = ',',
-        num_args = 1..,
-    )]
+    /// Tools to expose (comma-separated). Defaults to all.
+    #[arg(long = "tools", value_enum, value_delimiter = ',', num_args = 1..)]
     tools: Option<Vec<ExposedTool>>,
 }
 
@@ -256,7 +246,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             v.dedup();
             v
         })
-        .unwrap_or_else(|| ExposedTool::all().to_vec());
+        .unwrap_or_else(|| ExposedTool::ALL.to_vec());
 
     // Create and start the MCP server
     let server = FffServer::new(shared_picker.clone(), &exposed_tools);

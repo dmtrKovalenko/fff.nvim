@@ -1,6 +1,7 @@
 use crate::cursor::CursorStore;
 use crate::output::{GrepFormatter, OutputMode, file_suffix};
-use crate::{ExposedTool, build_instructions};
+use crate::ExposedTool;
+use crate::instructions::build_instructions;
 use fff::grep::{GrepMode, GrepSearchOptions, has_regex_metacharacters};
 use fff::types::{FileItem, PaginationArgs};
 use fff::{FuzzySearchOptions, QueryParser, SharedFilePicker};
@@ -191,11 +192,7 @@ fn now_secs() -> u64 {
 impl FffServer {
     pub fn new(picker: SharedFilePicker, exposed_tools: &[ExposedTool]) -> Self {
         let mut router = Self::tool_router();
-        for tool in [
-            ExposedTool::FindFiles,
-            ExposedTool::Grep,
-            ExposedTool::MultiGrep,
-        ] {
+        for tool in ExposedTool::ALL {
             if !exposed_tools.contains(&tool) {
                 router.remove_route(tool.tool_name());
             }
@@ -797,7 +794,7 @@ mod tests {
     #[test]
     fn router_defaults_to_all_three_tools() {
         assert_eq!(
-            tool_names_for(&ExposedTool::all()),
+            tool_names_for(&ExposedTool::ALL),
             vec!["find_files", "grep", "multi_grep"]
         );
     }

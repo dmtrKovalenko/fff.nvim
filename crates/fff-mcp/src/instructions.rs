@@ -1,6 +1,6 @@
 use crate::ExposedTool;
 
-pub fn build_instructions(tools: &[ExposedTool]) -> String {
+pub(crate) fn build_instructions(tools: &[ExposedTool]) -> String {
     let has_find = tools.contains(&ExposedTool::FindFiles);
     let has_grep = tools.contains(&ExposedTool::Grep);
     let has_multi = tools.contains(&ExposedTool::MultiGrep);
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn default_all_tools_mentions_all_three() {
-        let s = build_instructions(&ExposedTool::all());
+        let s = build_instructions(&ExposedTool::ALL);
         assert!(s.contains("**find_files**"));
         assert!(s.contains("**grep**"));
         assert!(s.contains("**multi_grep**"));
