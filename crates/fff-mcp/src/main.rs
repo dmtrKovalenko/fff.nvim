@@ -154,6 +154,30 @@ pub(crate) struct Args {
     #[arg(long = "follow-symlinks")]
     follow_symlinks: bool,
 
+    /// Allow indexing the user's home directory. FFF refuses to init in `~`
+    /// unless this is set. Also settable via FFF_ENABLE_HOME_SCAN=1.
+    #[arg(
+        long = "enable-home-scan",
+        env = "FFF_ENABLE_HOME_SCAN",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    enable_home_scan: bool,
+
+    /// Allow indexing the filesystem root, off by default for the same reason.
+    /// Also settable via FFF_ENABLE_ROOT_SCAN=1.
+    #[arg(
+        long = "enable-root-scan",
+        env = "FFF_ENABLE_ROOT_SCAN",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    enable_root_scan: bool,
+
     /// Run a health check and print diagnostic information, then exit.
     #[arg(long = "healthcheck")]
     pub(crate) healthcheck: bool,
@@ -276,7 +300,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .max_cached_files
                 .map(fff::ContentCacheBudget::new_for_repo),
             follow_symlinks: args.follow_symlinks,
-            ..Default::default()
+            enable_home_dir_scanning: args.enable_home_scan,
+            enable_fs_root_scanning: args.enable_root_scan,
         },
     )
     .map_err(|e| format!("Failed to init file picker: {}", e))?;
