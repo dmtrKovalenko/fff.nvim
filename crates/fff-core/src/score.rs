@@ -760,9 +760,27 @@ fn match_and_score_in_arena<'a>(
                     main_needle.eq_ignore_ascii_case(fname_buf.as_bytes())
                 });
 
+            // Exact stem match: needle equals the filename's stem (bytes before
+            // the last dot). Ranks between fuzzy_filename and exact_filename so
+            // e.g. `lsp` prefers `lsp.lua` over `lsp/typos_lsp.lua`.
+            let is_exact_stem = !is_exact_filename
+                && is_filename_match
+                && (main_needle_len as usize + 2) <= fname_len
+                && {
+                    file.write_file_name_from_arena(arena, &mut fname_buf);
+                    let bytes = fname_buf.as_bytes();
+                    let n = main_needle_len as usize;
+                    bytes.len() > n + 1
+                        && bytes[n] == b'.'
+                        && !bytes[n + 1..].contains(&b'.')
+                        && main_needle.eq_ignore_ascii_case(&bytes[..n])
+                };
+
             let mut has_special_filename_bonus = false;
             let filename_bonus = if is_exact_filename {
                 base_score / 5 * 2 // 40% bonus for exact filename match
+            } else if is_exact_stem {
+                base_score * 30 / 100 // 30% bonus for exact filename stem match
             } else if is_filename_match {
                 // 16% bonus for fuzzy filename match that landed in the filename region.
                 // For fallback matches (where the path match landed in a directory segment),
@@ -868,9 +886,11 @@ fn match_and_score_in_arena<'a>(
                 distance_penalty,
                 combo_match_boost,
                 path_alignment_bonus,
-                exact_match: is_exact_filename || path_match.exact,
+                exact_match: is_exact_filename || is_exact_stem || path_match.exact,
                 match_type: if is_exact_filename {
                     "exact_filename"
+                } else if is_exact_stem {
+                    "exact_stem"
                 } else if is_filename_match {
                     "fuzzy_filename"
                 } else if path_match.exact {
@@ -1391,6 +1411,24 @@ mod filename_bonus_tests {
             results[1].1.match_type, "exact_filename",
             "file.rs should not get exact_filename"
         );
+    }
+
+    /// Regression: query that exactly matches the filename stem (name minus
+    /// extension) should rank clearly above files that just contain the query
+    /// as a fuzzy filename substring. https://github.com/dmtrKovalenko/fff/issues/722
+    #[test]
+    fn test_exact_stem_beats_fuzzy_filename() {
+        let (files, arena) = make_files(&["lsp/typos_lsp.lua", "lsp.lua"]);
+
+        let results = search(&files, "lsp", arena);
+
+        assert!(results.len() >= 2);
+        assert_eq!(
+            results[0].0, "lsp.lua",
+            "lsp.lua (exact filename stem) should rank above typos_lsp.lua"
+        );
+        assert_eq!(results[0].1.match_type, "exact_stem");
+        assert!(results[0].1.filename_bonus > results[1].1.filename_bonus);
     }
 
     #[test]
