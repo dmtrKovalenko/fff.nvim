@@ -9,6 +9,9 @@ Typo-resistant path and content search, frecency-ranked file access, a backgroun
 Powers file search in [opencode](http://github.com/anomalyco/opencode/), [nushell](https://github.com/nushell/nushell), and many more amazing projects!
 
 Originally started as [Neovim plugin](#neovim-plugin) people loved, but it turned out that plenty of AI harnesses and code editors need the same thing: accurate, fast file search as a library. That is what fff is.
+<p>
+<a href="https://trendshift.io/repositories/26711?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-26711" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/26711" alt="dmtrKovalenko%2Ffff | Trendshift" width="250" height="55"/></a>
+</p>
 
 ---
 
