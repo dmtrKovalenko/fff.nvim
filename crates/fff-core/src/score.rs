@@ -753,28 +753,37 @@ fn match_and_score_in_arena<'a>(
 
             let is_filename_match = end_col_filename_match || simd_filename_match.is_some();
             let fname_len = file.path.byte_len as usize - file.path.filename_offset as usize;
+            let needle_len = main_needle_len as usize;
 
-            let is_exact_filename = simd_filename_match.is_some_and(|m| m.exact)
-                || (end_col_filename_match && main_needle_len as usize == fname_len && {
-                    file.write_file_name_from_arena(arena, &mut fname_buf);
-                    main_needle.eq_ignore_ascii_case(fname_buf.as_bytes())
-                });
-
-            // Exact stem match: needle equals the filename's stem (bytes before
-            // the last dot). Ranks between fuzzy_filename and exact_filename so
-            // e.g. `lsp` prefers `lsp.lua` over `lsp/typos_lsp.lua`.
-            let is_exact_stem = !is_exact_filename
-                && is_filename_match
-                && (main_needle_len as usize + 2) <= fname_len
-                && {
+            // Length-gated exact-filename / exact-stem detection: both variants
+            // are mutually exclusive by length (exact needs n == fname_len, stem
+            // needs n + 2 <= fname_len), so the arena read happens at most once
+            // and is skipped when neither is plausible. Reuses `fname_buf` to
+            // avoid a per-file allocation.
+            let (is_exact_filename, is_exact_stem) = if !is_filename_match {
+                (false, false)
+            } else if simd_filename_match.is_some_and(|m| m.exact) {
+                (true, false)
+            } else {
+                let could_be_exact = end_col_filename_match && needle_len == fname_len;
+                let could_be_stem = needle_len + 2 <= fname_len;
+                if !could_be_exact && !could_be_stem {
+                    (false, false)
+                } else {
                     file.write_file_name_from_arena(arena, &mut fname_buf);
                     let bytes = fname_buf.as_bytes();
-                    let n = main_needle_len as usize;
-                    bytes.len() > n + 1
-                        && bytes[n] == b'.'
-                        && !bytes[n + 1..].contains(&b'.')
-                        && main_needle.eq_ignore_ascii_case(&bytes[..n])
-                };
+                    if could_be_exact {
+                        (main_needle.eq_ignore_ascii_case(bytes), false)
+                    } else if bytes[needle_len] == b'.'
+                        && !bytes[needle_len + 1..].contains(&b'.')
+                        && main_needle.eq_ignore_ascii_case(&bytes[..needle_len])
+                    {
+                        (false, true)
+                    } else {
+                        (false, false)
+                    }
+                }
+            };
 
             let mut has_special_filename_bonus = false;
             let filename_bonus = if is_exact_filename {
