@@ -244,8 +244,14 @@ describe("fff-node watch", { concurrency: 1 }, () => {
       const created = FileFinder.create({ basePath: dir });
       if (!created.ok) throw new Error(created.error);
       const finder = created.value;
-      await finder.waitForScan(10_000);
-      const sub = finder.watch("**/*.txt", () => {});
+      const wait = await finder.waitForScan(10_000);
+      if (!wait.ok || !wait.value) throw new Error("waitForScan failed");
+      const deadline = Date.now() + 2_000;
+      let sub = finder.watch("**/*.txt", () => {});
+      while (!sub.ok && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+        sub = finder.watch("**/*.txt", () => {});
+      }
       if (!sub.ok) throw new Error(sub.error);
       await new Promise((r) => setTimeout(r, 300));
       sub.value();
