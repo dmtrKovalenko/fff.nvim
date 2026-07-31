@@ -1,10 +1,8 @@
-//! Filesystem traversal backed by zlob's native parallel walker.
-//! Active when the `zlob` feature is enabled (requires the Zig toolchain).
-
 use crate::file_picker::is_known_binary_extension_basename;
 use crate::ignore::IGNORED_DIRS;
 use crate::types::FileItem;
 use crate::walk::{WalkIgnoreRules, WalkOutput};
+use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -48,12 +46,25 @@ pub(crate) fn walk_collect_files(
         tracing::warn!(?e, "zlob extra_ignore rejected; walking without it");
     }
 
-    let pairs = parking_lot::Mutex::new(Vec::<(FileItem, String)>::new());
+    let pairs = Mutex::new(Vec::new());
+    let dirs = Mutex::new(Vec::new());
 
     let outcome = match builder.run(|entry| {
         if !entry.is_file() {
+            // `.git` and ignored dirs are pruned by zlob itself (GITIGNORE
+            // flag); empty rel path is the walk root, covered separately.
+            if entry.is_dir() {
+                let rel_bytes = entry.relative_path_bytes();
+                if !rel_bytes.is_empty() {
+                    let mut rel = String::from_utf8_lossy(rel_bytes).into_owned();
+                    rel.push('/');
+                    dirs.lock().push(rel);
+                }
+            }
+
             return WalkState::Continue;
         }
+
         let rel_bytes = entry.relative_path_bytes();
 
         // `basename()` returns `&str` for files only.
@@ -106,6 +117,7 @@ pub(crate) fn walk_collect_files(
 
     Ok(WalkOutput {
         pairs,
+        dirs: dirs.into_inner(),
         ignore_rules,
     })
 }

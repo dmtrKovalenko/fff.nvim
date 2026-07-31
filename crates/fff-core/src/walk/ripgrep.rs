@@ -35,8 +35,10 @@ pub(crate) fn walk_collect_files(
     let walker = walk_builder.build_parallel();
 
     let pairs = parking_lot::Mutex::new(Vec::<(FileItem, String)>::new());
+    let dirs = parking_lot::Mutex::new(Vec::<String>::new());
     walker.run(|| {
         let pairs = &pairs;
+        let dirs = &dirs;
         let counter = Arc::clone(synced_files_count);
         let base_path = base_path.to_path_buf();
 
@@ -60,6 +62,16 @@ pub(crate) fn walk_collect_files(
 
                 pairs.lock().push((file_item, rel_path));
                 counter.fetch_add(1, Ordering::Relaxed);
+            } else if entry.depth() > 0 && entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                let path = entry.path();
+                if !is_git_file(path)
+                    && let Ok(rel) = path.strip_prefix(&base_path)
+                {
+                    let mut rel = crate::path_utils::to_canonical_slashes(&rel.to_string_lossy())
+                        .into_owned();
+                    rel.push('/');
+                    dirs.lock().push(rel);
+                }
             }
             ignore::WalkState::Continue
         })
@@ -67,6 +79,7 @@ pub(crate) fn walk_collect_files(
 
     Ok(WalkOutput {
         pairs: pairs.into_inner(),
+        dirs: dirs.into_inner(),
         ignore_rules: None,
     })
 }

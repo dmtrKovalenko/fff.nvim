@@ -469,6 +469,90 @@ fn burst_file_creation_in_new_directory() {
     }
 }
 
+/// bug pinning #725: a directory that already exists but is EMPTY at
+/// initial scan time is absent from `sync_data.dirs` and missing watch events
+#[test]
+fn file_created_in_preexisting_empty_directory() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+
+    // `commands/` is empty during the initial scan — only `init.lua` is indexed.
+    fs::create_dir_all(base.join("commands")).unwrap();
+    fs::write(base.join("init.lua"), "-- init\n").unwrap();
+
+    let (shared_picker, _frecency) = make_watched_picker(&base);
+    wait_ready(&shared_picker);
+
+    // Now write a file into the directory that was empty at scan time.
+    fs::write(
+        base.join("commands/review.md"),
+        "# Review\nEMPTY_DIR_REVIEW_TOKEN\n",
+    )
+    .unwrap();
+
+    let elapsed = poll_until(
+        &shared_picker,
+        WATCHER_TIMEOUT,
+        "file commands/review.md created in a pre-existing empty directory",
+        |picker| {
+            picker
+                .get_files()
+                .iter()
+                .any(|f| f.relative_path(picker).contains("review.md"))
+        },
+    );
+    eprintln!(
+        "  File in pre-existing empty directory detected in {:.0}ms",
+        elapsed.as_secs_f64() * 1000.0
+    );
+}
+
+/// Same as above but with a nested chain of empty directories under an
+/// indexed one: every level of the empty subtree must be watched.
+#[test]
+fn file_created_in_nested_preexisting_empty_directories() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+
+    // `src/` is indexed (has a file); `src/plugins/extra/` is an empty chain.
+    fs::create_dir_all(base.join("src/plugins/extra")).unwrap();
+    fs::write(base.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    git_init_and_commit(&base);
+
+    let (shared_picker, _frecency) = make_watched_picker(&base);
+    wait_ready(&shared_picker);
+
+    fs::write(
+        base.join("src/plugins/extra/loader.rs"),
+        "pub fn load() {}\nconst TOKEN: &str = \"NESTED_EMPTY_DIR_TOKEN\";\n",
+    )
+    .unwrap();
+
+    let elapsed = poll_until(
+        &shared_picker,
+        WATCHER_TIMEOUT,
+        "file src/plugins/extra/loader.rs created in nested empty directories",
+        |picker| {
+            picker
+                .get_files()
+                .iter()
+                .any(|f| f.relative_path(picker).contains("loader.rs"))
+        },
+    );
+    eprintln!(
+        "  File in nested empty directories detected in {:.0}ms",
+        elapsed.as_secs_f64() * 1000.0
+    );
+
+    poll_until(
+        &shared_picker,
+        WATCHER_TIMEOUT,
+        "grep finds NESTED_EMPTY_DIR_TOKEN",
+        |picker| grep_plain_count(picker, "NESTED_EMPTY_DIR_TOKEN") >= 1,
+    );
+}
+
 /// Verify that gitignored directories created at runtime are NOT watched
 /// and their files do NOT appear in the index.
 #[test]

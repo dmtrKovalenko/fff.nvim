@@ -108,48 +108,57 @@ impl BackgroundWatcher {
             .name("fff-watcher-own".into())
             .spawn(move || {
                 let _g = owner_span.enter();
-                while let Ok(dir) = watch_rx.recv() {
-                    // if the picker is dropped we do need to exit the loop
-                    let Some(strong_picker) = owner_weak_picker.upgrade() else {
-                        break;
-                    };
-
-                    // Only inotify (Linux) has no kernel-level recursion, so
-                    // it's the only platform that needs a per-subdir watch to
-                    // be registered at runtime. macOS FSEvents and Windows
-                    // ReadDirectoryChangesW are already watching recursively
-                    // from the base path (see `create_debouncer`), and
-                    // registering a second overlapping stream there produces
-                    // duplicate/out-of-order events.
-                    #[cfg(target_os = "linux")]
-                    {
-                        // Register the new directory with the debouncer, then
-                        // drop the mutex BEFORE doing picker-side work — see
-                        // the comment on `BackgroundWatcher::stop` for the
-                        // lock-ordering rationale.
-                        let mut guard = owner_debouncer.lock();
-                        let Some(debouncer) = guard.as_mut() else {
-                            break;
+                // Local work queue: enumerating a dir can surface subdirs
+                // unknown to the index (empty at scan time) that also need
+                // watches; we must not self-send on `watch_tx` or `recv()`
+                // would never disconnect on stop.
+                let mut queue = std::collections::VecDeque::new();
+                'recv: while let Ok(dir) = watch_rx.recv() {
+                    queue.push_back(dir);
+                    while let Some(dir) = queue.pop_front() {
+                        // if the picker is dropped we do need to exit the loop
+                        let Some(strong_picker) = owner_weak_picker.upgrade() else {
+                            break 'recv;
                         };
 
-                        if let Err(e) = debouncer.watch(&dir, RecursiveMode::NonRecursive) {
-                            warn!(
-                                ?e,
-                                dir = %dir.display(),
-                                "Failed to init watcher for new directory"
-                            );
+                        // Only inotify (Linux) has no kernel-level recursion, so
+                        // it's the only platform that needs a per-subdir watch to
+                        // be registered at runtime. macOS FSEvents and Windows
+                        // ReadDirectoryChangesW are already watching recursively
+                        // from the base path (see `create_debouncer`), and
+                        // registering a second overlapping stream there produces
+                        // duplicate/out-of-order events.
+                        #[cfg(target_os = "linux")]
+                        {
+                            // Register the new directory with the debouncer, then
+                            // drop the mutex BEFORE doing picker-side work — see
+                            // the comment on `BackgroundWatcher::stop` for the
+                            // lock-ordering rationale.
+                            let mut guard = owner_debouncer.lock();
+                            let Some(debouncer) = guard.as_mut() else {
+                                break 'recv;
+                            };
+
+                            if let Err(e) = debouncer.watch(&dir, RecursiveMode::NonRecursive) {
+                                warn!(
+                                    ?e,
+                                    dir = %dir.display(),
+                                    "Failed to init watcher for new directory"
+                                );
+                            }
                         }
+
+                        let unindexed_subdirs = track_files_from_new_directories(
+                            &dir,
+                            &strong_picker,
+                            &owner_git_workdir,
+                            &owner_git_worker,
+                        );
+                        queue.extend(unindexed_subdirs);
+
+                        // Transient strong ref drops here, back
+                        // to weak-only before the next `recv()`.
                     }
-
-                    track_files_from_new_directories(
-                        &dir,
-                        &strong_picker,
-                        &owner_git_workdir,
-                        &owner_git_worker,
-                    );
-
-                    // Transient strong ref drops here, back
-                    // to weak-only before the next `recv()`.
                 }
 
                 tracing::info!("Background watcher is stopped");
@@ -671,15 +680,17 @@ fn handle_debounced_events(
 }
 
 /// After registering a watch on a newly created directory, list its
-/// immediate children and add any files to the picker.
+/// immediate children and add any files to the picker. Returns subdirs
+/// unknown to the index (empty at scan time or freshly moved in) so the
+/// caller can register watches for them too.
 fn track_files_from_new_directories(
     dir: &Path,
     shared_picker: &SharedFilePicker,
     git_workdir: &Option<PathBuf>,
     git_status_worker: &Arc<GitStatusWorker>,
-) {
+) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+        return Vec::new();
     };
 
     let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
@@ -689,34 +700,49 @@ fn track_files_from_new_directories(
             .map(|p| (p.base_path().to_path_buf(), p.ignore_rules()))
     }) {
         Some(pair) => pair,
-        None => return,
+        None => return Vec::new(),
     };
 
     let filter = IgnoreFilter::new(&base_path, walker_rules, repo.as_ref());
     let mut files_to_add = Vec::new();
+    let mut subdirs = Vec::new();
 
     for entry in entries.flatten() {
-        if entry.file_type().is_ok_and(|ft| ft.is_file()) {
-            let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if file_type.is_file() {
             // file_type() already ruled out directories — only ignore rules left
             if !filter.is_ignored(&path) {
                 files_to_add.push(path);
             }
+        } else if file_type.is_dir() && !is_git_file(&path) && !filter.is_ignored(&path) {
+            subdirs.push(path);
         }
     }
 
+    // Indexed dirs already have watches (initial setup / post-scan
+    // resubscribe); only recurse into dirs the index doesn't know about.
+    if !subdirs.is_empty()
+        && let Ok(guard) = shared_picker.read()
+        && let Some(picker) = guard.as_ref()
+    {
+        subdirs.retain(|d| !picker.has_indexed_dir(d));
+    }
+
     if files_to_add.is_empty() {
-        return;
+        return subdirs;
     }
 
     let mut indexed_files = Vec::with_capacity(files_to_add.len());
     {
         let Ok(mut guard) = shared_picker.write() else {
-            return;
+            return subdirs;
         };
 
         let Some(ref mut picker) = *guard else {
-            return;
+            return subdirs;
         };
 
         for path in &files_to_add {
@@ -750,6 +776,8 @@ fn track_files_from_new_directories(
         added,
         dir.display(),
     );
+
+    subdirs
 }
 
 struct IgnoreFilter<'a> {

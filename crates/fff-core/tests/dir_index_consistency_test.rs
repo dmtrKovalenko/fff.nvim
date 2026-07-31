@@ -254,3 +254,48 @@ fn recreated_directory_reappears_in_dir_search() {
         search_dirs(&picker, "phoenix")
     );
 }
+
+/// Regression for #725: a dir that is EMPTY at scan time must be indexed —
+/// searchable in dir search and watched so later file creations are seen.
+#[test]
+fn empty_directory_at_scan_is_searchable_and_watched() {
+    let tmp = TempDir::new().unwrap();
+    let base = fff_search::path_utils::canonicalize(tmp.path()).unwrap();
+    fs::create_dir_all(base.join("commands")).unwrap();
+    fs::write(base.join("keep.rs"), "x").unwrap();
+
+    let (picker, _frecency) = make_watched_picker(&base);
+
+    assert!(
+        search_dirs(&picker, "commands")
+            .iter()
+            .any(|d| d.starts_with("commands")),
+        "empty dir must be searchable right after the scan, got: {:?}",
+        search_dirs(&picker, "commands")
+    );
+
+    // The empty dir must reuse its scan-built DirItem when a file lands in it
+    // and the watcher must have registered a watch on it (the #725 repro).
+    fs::write(base.join("commands/review.md"), "# review").unwrap();
+    assert!(
+        wait_until(
+            || {
+                let guard = picker.read().unwrap();
+                let p = guard.as_ref().unwrap();
+                p.get_file_by_path(base.join("commands/review.md"))
+                    .is_some()
+            },
+            Duration::from_secs(10)
+        ),
+        "file created in a scan-time-empty dir must be indexed"
+    );
+
+    let guard = picker.read().unwrap();
+    let p = guard.as_ref().unwrap();
+    let commands_dirs = p
+        .get_dirs()
+        .iter()
+        .filter(|d| d.relative_path(p).starts_with("commands"))
+        .count();
+    assert_eq!(commands_dirs, 1, "no duplicate DirItem for the empty dir");
+}

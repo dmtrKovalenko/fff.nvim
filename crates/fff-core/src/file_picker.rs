@@ -45,6 +45,7 @@ use crate::types::{
     ContentCacheBudget, DirItem, DirSearchResult, FileItem, MixedItemRef, MixedSearchResult,
     PaginationArgs, Score, ScoringContext, SearchResult,
 };
+use crate::walk::WalkOutput;
 use crate::watch::BackgroundWatcher;
 use fff_query_parser::FFFQuery;
 use git2::{Repository, Status};
@@ -726,6 +727,19 @@ impl FilePicker {
     /// Get the directory table (sorted by path).
     pub fn get_dirs(&self) -> &[DirItem] {
         &self.sync_data.dirs
+    }
+
+    /// Whether the absolute `path` is a directory known to the index
+    /// (including dirs that were empty at scan time).
+    pub(crate) fn has_indexed_dir(&self, path: &Path) -> bool {
+        let Ok(rel) = path.strip_prefix(&self.base_path) else {
+            return false;
+        };
+        let mut rel = crate::path_utils::to_canonical_slashes(&rel.to_string_lossy()).into_owned();
+        if !rel.is_empty() && !rel.ends_with('/') {
+            rel.push('/');
+        }
+        self.sync_data.find_dir_index(&rel).is_some()
     }
 
     /// Actual heap bytes used: (chunked_path_store, 0, 0).
@@ -2020,30 +2034,40 @@ impl FileSync {
         let is_git_repo = git_workdir.is_some();
         let bg_threads = BACKGROUND_THREAD_POOL.current_num_threads();
 
-        let mut walk_output = crate::walk::walk_collect_files(
+        let WalkOutput {
+            dirs: mut walked_dirs,
+            mut pairs,
+            ignore_rules,
+        } = crate::walk::walk_collect_files(
             base_path,
             is_git_repo,
             follow_symlinks,
             bg_threads,
             synced_files_count,
         )?;
-        let ignore_rules = walk_output.ignore_rules.take().map(Arc::new);
-        let mut pairs = walk_output.pairs;
+        let ignore_rules = ignore_rules.map(Arc::new);
 
-        // Sort by (dir_part, filename). This groups files by their directory
-        // into contiguous runs so the linear dir-extraction pass below can
-        // dedupe by comparing only against the previous dir.
+        // Sort files by (dir_part, filename) — grouping them into contiguous
+        // per-dir runs — and the walked dirs by the same '/'-terminated form,
+        // so the build pass below can merge both in a single sweep.
         BACKGROUND_THREAD_POOL.install(|| {
-            pairs.par_sort_unstable_by(|(a, path_a), (b, path_b)| {
-                // SAFETY: `filename_offset` is always at a character boundary
-                let (a_dir, a_file) = path_a.split_at(a.path.filename_offset as usize);
-                let (b_dir, b_file) = path_b.split_at(b.path.filename_offset as usize);
-                a_dir.cmp(b_dir).then_with(|| a_file.cmp(b_file))
-            });
+            rayon::join(
+                || {
+                    pairs.par_sort_unstable_by(|(a, path_a), (b, path_b)| {
+                        // SAFETY: `filename_offset` is always at a character boundary
+                        let (a_dir, a_file) = path_a.split_at(a.path.filename_offset as usize);
+                        let (b_dir, b_file) = path_b.split_at(b.path.filename_offset as usize);
+                        a_dir.cmp(b_dir).then_with(|| a_file.cmp(b_file))
+                    });
+                },
+                || walked_dirs.par_sort_unstable(),
+            );
         });
+        walked_dirs.dedup();
 
         let mut builder = crate::simd_path::ChunkedPathStoreBuilder::new(pairs.len());
-        let dirs = populates_dirs_files_chunked_storage(&mut pairs, &mut builder);
+        let dirs = populates_dirs_files_chunked_storage(&mut pairs, &walked_dirs, &mut builder);
+        drop(walked_dirs);
 
         let mut files: Vec<FileItem> = pairs.into_iter().map(|(file, _)| file).collect();
         let chunked_paths = builder.finish();
@@ -2164,12 +2188,17 @@ pub(crate) fn warmup_mmaps(
 }
 
 /// This does both thing (yes sorry all the OOP morons)
-/// in one go: populates files chunked storage and creates new directories
+/// in one go: populates files chunked storage and builds the dir table from
+/// `walked_dirs` (every dir the walker visited: sorted, '/'-terminated,
+/// deduped), merging file parents in a single lockstep sweep so dirs with no
+/// files (empty subtrees, pure ancestors) are indexed and searchable too.
 fn populates_dirs_files_chunked_storage<'a>(
     pairs: &'a mut [(FileItem, String)],
+    walked_dirs: &[String],
     chunk_storage: &mut crate::simd_path::ChunkedPathStoreBuilder,
 ) -> Vec<DirItem> {
-    let mut dirs: Vec<DirItem> = Vec::new();
+    let mut dirs: Vec<DirItem> = Vec::with_capacity(walked_dirs.len() + 1);
+    let mut dir_iter = walked_dirs.iter().peekable();
 
     let mut prev_dir: &'a str = "";
     let mut prev_dir_valid = false;
@@ -2180,20 +2209,22 @@ fn populates_dirs_files_chunked_storage<'a>(
         let dir_part: &'a str = &rel[..file.path.filename_offset as usize];
 
         if !prev_dir_valid || prev_dir != dir_part {
-            let dir_string = chunk_storage.add_dir_immediate(dir_part);
+            // Flush walked dirs up to and including this file's parent,
+            // keeping the table sorted for the find_dir_index binary search.
+            let mut matched = false;
+            while let Some(dir) = dir_iter.peek()
+                && dir.as_str() <= dir_part
+            {
+                matched = dir.as_str() == dir_part;
+                push_dir_item(&mut dirs, chunk_storage, dir);
+                dir_iter.next();
+            }
 
-            // Compute last-segment offset: for "src/components/" -> 4 (points to "components/")
-            let last_seg = if dir_part.is_empty() {
-                0
-            } else {
-                let trimmed = dir_part.trim_end_matches(std::path::is_separator);
-                trimmed
-                    .rfind(std::path::is_separator)
-                    .map(|i| i + 1)
-                    .unwrap_or(0) as u16
-            };
-
-            dirs.push(DirItem::new(dir_string, last_seg));
+            // Root-level files ("" dir part) and parents the walker reported
+            // with a non-dir kind (e.g. followed symlinks) aren't in the list.
+            if !matched {
+                push_dir_item(&mut dirs, chunk_storage, dir_part);
+            }
             current_dir_idx = (dirs.len() - 1) as u32;
 
             prev_dir = dir_part;
@@ -2204,7 +2235,32 @@ fn populates_dirs_files_chunked_storage<'a>(
         file.parent_dir_index = current_dir_idx;
     }
 
+    for dir in dir_iter {
+        push_dir_item(&mut dirs, chunk_storage, dir);
+    }
+
     dirs
+}
+
+fn push_dir_item(
+    dirs: &mut Vec<DirItem>,
+    chunk_storage: &mut crate::simd_path::ChunkedPathStoreBuilder,
+    dir_part: &str,
+) {
+    let dir_string = chunk_storage.add_dir_immediate(dir_part);
+
+    // Compute last-segment offset: for "src/components/" -> 4 (points to "components/")
+    let last_seg = if dir_part.is_empty() {
+        0
+    } else {
+        let trimmed = dir_part.trim_end_matches(std::path::is_separator);
+        trimmed
+            .rfind(std::path::is_separator)
+            .map(|i| i + 1)
+            .unwrap_or(0) as u16
+    };
+
+    dirs.push(DirItem::new(dir_string, last_seg));
 }
 
 /// Fast extension-based binary detection. Avoids opening files during scan.
@@ -2341,13 +2397,9 @@ mod tests {
     use super::*;
 
     /// The watcher must watch every ancestor directory up to `base_path`,
-    /// not just the immediate parents of indexed files. Intermediate dirs
-    /// that contain only subdirectories (no direct files) are NOT in
-    /// `sync_data.dirs` — yet they must still appear in `extract_watch_dirs`
-    /// so Create events on new subdirectories below them fire.
-    ///
-    /// Correctness regression guard for any refactor that replaces the
-    /// ancestor walk with a direct `sync_data.dirs` iteration.
+    /// not just the immediate parents of indexed files. The dir table is
+    /// built from the walker's visited dirs, so pure ancestors (dirs that
+    /// contain only subdirectories) must be present and emitted exactly once.
     #[test]
     fn extract_watch_dirs_includes_pure_ancestor_dirs() {
         let dir = tempfile::tempdir().unwrap();
@@ -2361,17 +2413,6 @@ mod tests {
         //   base/src/components/button.txt    (src/components has a file)
         //   base/src/routes/home.txt          (src/routes has a file)
         //   base/lib/deep/nested/util.txt     (lib and lib/deep have no files)
-        //
-        // `sync_data.dirs` will only contain:
-        //   src/components/
-        //   src/routes/
-        //   lib/deep/nested/
-        //
-        // But the watcher also needs:
-        //   src/       (pure ancestor — no direct files)
-        //   lib/       (pure ancestor)
-        //   lib/deep/  (pure ancestor)
-        // otherwise new siblings like `src/NewDir/x.txt` are missed.
         for rel in [
             "src/components/button.txt",
             "src/routes/home.txt",
@@ -2427,6 +2468,97 @@ mod tests {
             !watch_set.contains(base),
             "base path must not be in watch dirs (covered by the top-level watch call)",
         );
+    }
+
+    /// Regression guard for #725: dirs that are EMPTY at scan time are merged
+    /// into `sync_data.dirs` so they are searchable and get an inotify watch;
+    /// files created in them later must be detected.
+    #[test]
+    fn for_each_dir_includes_empty_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_buf = crate::path_utils::canonicalize(dir.path()).unwrap();
+        let base = base_buf.as_path();
+
+        // Tree:
+        //   base/init.lua                  (file directly under base)
+        //   base/commands/                 (empty at scan — the #725 repro)
+        //   base/src/main.rs               (src is indexed)
+        //   base/src/plugins/extra/        (empty chain under an indexed dir)
+        std::fs::create_dir_all(base.join("commands")).unwrap();
+        std::fs::create_dir_all(base.join("src/plugins/extra")).unwrap();
+        std::fs::write(base.join("init.lua"), b"x").unwrap();
+        std::fs::write(base.join("src/main.rs"), b"x").unwrap();
+
+        let mut picker = FilePicker::new(FilePickerOptions {
+            base_path: base.to_str().unwrap().into(),
+            watch: false,
+            ..Default::default()
+        })
+        .unwrap();
+        picker.collect_files().unwrap();
+
+        let mut watch_dirs: Vec<PathBuf> = Vec::new();
+        picker.for_each_dir(|p| {
+            watch_dirs.push(p.to_path_buf());
+            std::ops::ControlFlow::Continue(())
+        });
+        let watch_set: std::collections::HashSet<PathBuf> = watch_dirs.iter().cloned().collect();
+
+        for rel in ["commands", "src/plugins", "src/plugins/extra", "src"] {
+            assert!(
+                watch_set.contains(&base.join(rel)),
+                "expected {rel} in watch dirs, got {watch_set:?}",
+            );
+        }
+
+        // Dirs covered by indexed files must not be duplicated.
+        assert_eq!(
+            watch_dirs.len(),
+            watch_set.len(),
+            "duplicate watch dir emitted: {watch_dirs:?}",
+        );
+    }
+
+    #[test]
+    fn dir_table_merges_walked_dirs_with_file_parents() {
+        let mut pairs: Vec<(FileItem, String)> = ["src/main.rs", "src/deep/lib.rs", "root.txt"]
+            .iter()
+            .map(|p| {
+                let (item, rel) = FileItem::new(PathBuf::from(p), Path::new(""), None);
+                (item, rel)
+            })
+            .collect();
+        pairs.sort_by(|(a, pa), (b, pb)| {
+            pa[..a.path.filename_offset as usize]
+                .cmp(&pb[..b.path.filename_offset as usize])
+                .then_with(|| pa.cmp(pb))
+        });
+
+        // Sorted '/'-terminated walker output: file parents + an empty dir +
+        // a sibling sharing a prefix with a file parent.
+        let walked: Vec<String> = ["empty/", "src/", "src/deep/", "src/deeper/"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut builder = crate::simd_path::ChunkedPathStoreBuilder::new(pairs.len());
+        let dirs = populates_dirs_files_chunked_storage(&mut pairs, &walked, &mut builder);
+        let store = builder.finish();
+        let arena = store.as_arena_ptr();
+
+        let table: Vec<String> = dirs.iter().map(|d| d.relative_path(arena)).collect();
+        // Sorted: "" (root files) first, all walked dirs present exactly once.
+        assert_eq!(table, ["", "empty/", "src/", "src/deep/", "src/deeper/"]);
+
+        // Every file's parent_dir_index points at its own dir entry.
+        for (file, _) in &pairs {
+            let dir = &dirs[file.parent_dir_index as usize];
+            let rel = file.relative_path(arena);
+            assert!(
+                rel.starts_with(&dir.relative_path(arena)),
+                "file {rel} must live under its parent dir",
+            );
+        }
     }
 
     #[test]
