@@ -773,7 +773,7 @@ fn read_truth_status(base: &Path) -> BTreeMap<String, Status> {
 
     let mut out = BTreeMap::new();
     for entry in statuses.iter() {
-        if let Some(p) = entry.path() {
+        if let Ok(p) = entry.path() {
             // git2 returns forward-slash paths; accept as-is.
             out.insert(p.to_string(), entry.status());
         }
@@ -1258,7 +1258,7 @@ fn get_baseline_status_from_git(base: &Path) -> Vec<Live> {
         Err(_) => return out,
     };
     for entry in statuses.iter() {
-        if let Some(p) = entry.path() {
+        if let Ok(p) = entry.path() {
             let abs = base.join(p);
             // Must be a real file *right now* — ignore stale WT_DELETED rows.
             if abs.is_file() {
