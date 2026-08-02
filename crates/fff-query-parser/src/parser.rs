@@ -50,6 +50,17 @@ impl<C: ParserConfig> QueryParser<C> {
     }
 
     pub fn parse<'a>(&self, query: &'a str) -> FFFQuery<'a> {
+        self.parse_inner(query, true)
+    }
+
+    /// Parse a query supplied as an independent set of search constraints.
+    /// Unlike ordinary single-token search, a lone path or filename remains a
+    /// constraint instead of being promoted to fuzzy text.
+    pub fn parse_constraints<'a>(&self, query: &'a str) -> FFFQuery<'a> {
+        self.parse_inner(query, false)
+    }
+
+    fn parse_inner<'a>(&self, query: &'a str, demote_lone_constraints: bool) -> FFFQuery<'a> {
         let raw_query = query;
         let config: &C = &self.config;
         let mut constraints = ConstraintVec::new();
@@ -79,12 +90,12 @@ impl<C: ParserConfig> QueryParser<C> {
 
                 // for grep we don't want to treat a part of path like pathname
                 let treat_as_text = matches!(constraint, Constraint::PathSegment(_))
+                    && demote_lone_constraints
                     && config.treat_lone_path_as_text();
+                let file_path_as_text =
+                    matches!(constraint, Constraint::FilePath(_)) && demote_lone_constraints;
 
-                if !matches!(constraint, Constraint::FilePath(_))
-                    && !has_location_suffix
-                    && !treat_as_text
-                {
+                if !file_path_as_text && !has_location_suffix && !treat_as_text {
                     constraints.push(constraint);
                     return FFFQuery {
                         raw_query,

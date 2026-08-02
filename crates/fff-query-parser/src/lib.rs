@@ -85,6 +85,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_constraints_keeps_lone_path_and_filename_filters() {
+        let parser = QueryParser::new(AiGrepConfig);
+
+        let path = parser.parse_constraints("scope-a/");
+        assert!(matches!(
+            path.constraints.as_slice(),
+            [Constraint::PathSegment("scope-a")]
+        ));
+        assert_eq!(path.fuzzy_query, FuzzyQuery::Empty);
+
+        let file = parser.parse_constraints("scope-a/one.txt");
+        assert!(matches!(
+            file.constraints.as_slice(),
+            [Constraint::FilePath("scope-a/one.txt")]
+        ));
+        assert_eq!(file.fuzzy_query, FuzzyQuery::Empty);
+
+        let ordinary = parser.parse("scope-a/");
+        assert!(ordinary.constraints.is_empty());
+        assert_eq!(ordinary.fuzzy_query, FuzzyQuery::Text("scope-a/"));
+    }
+
+    #[test]
     fn test_simple_text() {
         let parser = QueryParser::default();
         let result = parser.parse("hello world");

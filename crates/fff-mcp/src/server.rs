@@ -1,4 +1,4 @@
-use crate::cursor::CursorStore;
+use crate::cursor::{CursorStore, MatchKey, MultiGrepCursor, PendingMatch};
 use crate::output::{GrepFormatter, OutputMode, file_suffix};
 use fff::grep::{GrepMode, GrepSearchOptions, has_regex_metacharacters};
 use fff::types::{FileItem, PaginationArgs};
@@ -69,6 +69,25 @@ fn make_grep_options(
         },
         auto_expand,
     )
+}
+
+fn file_index_for<'a>(files: &mut Vec<&'a FileItem>, file: &'a FileItem) -> usize {
+    if let Some(index) = files
+        .iter()
+        .position(|candidate| std::ptr::eq(*candidate, file))
+    {
+        index
+    } else {
+        files.push(file);
+        files.len() - 1
+    }
+}
+
+fn append_multi_grep_cursor(text: &mut String, cursors: &mut CursorStore, cursor: MultiGrepCursor) {
+    if cursor.has_more() {
+        let cursor_id = cursors.store_multi_grep(cursor);
+        text.push_str(&format!("\ncursor: {cursor_id}"));
+    }
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -594,100 +613,174 @@ impl FffServer {
         let context = params.context.map(|v| v.round() as usize);
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
-        let file_offset = params
-            .cursor
-            .as_deref()
-            .and_then(|id| self.cursor_store.lock().ok()?.get(id))
-            .unwrap_or(0);
+        let (multi_cursor, file_offset) = {
+            let cursors = self.lock_cursors()?;
+            let multi_cursor = params
+                .cursor
+                .as_deref()
+                .and_then(|id| cursors.get_multi_grep(id));
+            let file_offset = params
+                .cursor
+                .as_deref()
+                .and_then(|id| cursors.get(id))
+                .unwrap_or(0);
+            (multi_cursor, file_offset)
+        };
+        let is_multi_cursor = multi_cursor.is_some();
+        let (patterns, constraint_query) = match multi_cursor.as_ref() {
+            Some(cursor) => (cursor.patterns.clone(), cursor.constraints.clone()),
+            None => (params.patterns, params.constraints.unwrap_or_default()),
+        };
 
         let (options, auto_expand) =
             make_grep_options(output_mode, GrepMode::PlainText, file_offset, context);
 
         let ctx_lines = options.before_context;
-        let constraint_query = params.constraints.as_deref().unwrap_or("");
         let guard = self.picker.read().map_err(|e| {
             ErrorData::internal_error(format!("Failed to acquire picker lock: {e}"), None)
         })?;
         let picker = guard
             .as_ref()
             .ok_or_else(|| ErrorData::internal_error("File picker not initialized", None))?;
-        let patterns_refs: Vec<&str> = params.patterns.iter().map(|s| s.as_str()).collect();
 
         let parser = fff_query_parser::QueryParser::new(fff_query_parser::AiGrepConfig);
-        let parsed_constraints = parser.parse(constraint_query);
-        let constraints = parsed_constraints.constraints.as_slice();
+        if !is_multi_cursor {
+            let parsed_constraints = parser.parse_constraints(&constraint_query);
+            let constraints = parsed_constraints.constraints.as_slice();
+            let patterns_refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
+            let result = picker.multi_grep(&patterns_refs, constraints, &options);
 
-        let result = picker.multi_grep(&patterns_refs, constraints, &options);
-        let file_refs: Vec<&FileItem> = result.files.to_vec();
+            if !result.matches.is_empty() || file_offset > 0 {
+                if result.matches.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "0 matches.".to_string(),
+                    )]));
+                }
 
-        if result.matches.is_empty() && file_offset == 0 {
-            // Fallback: try individual patterns with plain grep
-            let (fallback_options, _) =
-                make_grep_options(output_mode, GrepMode::PlainText, 0, context);
+                let file_refs: Vec<&FileItem> = result.files.to_vec();
+                let mut cs = self.lock_cursors()?;
+                let text = &GrepFormatter {
+                    matches: &result.matches,
+                    files: &file_refs,
+                    total_matched: result.matches.len(),
+                    next_file_offset: result.next_file_offset,
+                    output_mode,
+                    max_results,
+                    show_context: ctx_lines > 0,
+                    auto_expand_defs: auto_expand,
+                    picker,
+                }
+                .format(&mut cs);
+                return Ok(CallToolResult::success(vec![Content::text(text)]));
+            }
+        }
 
-            let fallback_options = GrepSearchOptions {
-                time_budget_ms: 3000,
-                before_context: 0,
-                ..fallback_options
+        let mut cursor = multi_cursor
+            .unwrap_or_else(|| MultiGrepCursor::new(patterns.clone(), constraint_query.clone()));
+        let (fallback_options, _) = make_grep_options(output_mode, GrepMode::PlainText, 0, context);
+        let fallback_options = GrepSearchOptions {
+            time_budget_ms: 3000,
+            before_context: 0,
+            page_limit: max_results,
+            ..fallback_options
+        };
+        let fallback_patterns = cursor.patterns.clone();
+        let mut fallback_matches = Vec::new();
+        let mut fallback_files: Vec<&FileItem> = Vec::new();
+
+        for pending in std::mem::take(&mut cursor.pending) {
+            let Some(file) = picker
+                .get_files()
+                .iter()
+                .find(|file| file.relative_path(picker) == pending.file_path)
+            else {
+                continue;
             };
+            let mut match_data = pending.match_data;
+            match_data.file_index = file_index_for(&mut fallback_files, file);
+            fallback_matches.push(match_data);
+        }
 
-            for pat in &params.patterns {
-                let full_query: Cow<str> = if !constraint_query.is_empty() {
-                    Cow::Owned(format!("{} {}", constraint_query, pat))
+        while fallback_matches.len() <= max_results {
+            let mut advanced = false;
+            for (pattern_index, pat) in fallback_patterns.iter().enumerate() {
+                if fallback_matches.len() > max_results {
+                    break;
+                }
+                let Some(file_offset) = cursor.next_offsets[pattern_index] else {
+                    continue;
+                };
+                advanced = true;
+
+                let full_query: Cow<str> = if !cursor.constraints.is_empty() {
+                    Cow::Owned(format!("{} {}", cursor.constraints, pat))
                 } else {
                     Cow::Borrowed(pat)
                 };
-
                 let parsed = parser.parse(&full_query);
-                let fb_result = picker.grep(&parsed, &fallback_options);
+                let mut options = fallback_options.clone();
+                options.file_offset = file_offset;
+                let result = picker.grep(&parsed, &options);
+                cursor.next_offsets[pattern_index] =
+                    (result.next_file_offset > 0).then_some(result.next_file_offset);
 
-                if !fb_result.matches.is_empty() {
-                    let fb_file_refs: Vec<&FileItem> = fb_result.files.to_vec();
-                    let mut cs = self.lock_cursors()?;
-                    let text = &GrepFormatter {
-                        matches: &fb_result.matches,
-                        files: &fb_file_refs,
-                        total_matched: fb_result.matches.len(),
-                        next_file_offset: fb_result.next_file_offset,
-                        output_mode,
-                        max_results,
-                        show_context: false,
-                        auto_expand_defs: auto_expand,
-                        picker,
+                for mut match_data in result.matches {
+                    let file = result.files[match_data.file_index];
+                    let file_path = file.relative_path(picker).to_string();
+                    if output_mode == OutputMode::FilesWithMatches
+                        && !cursor.remember_file(file_path.clone())
+                    {
+                        continue;
                     }
-                    .format(&mut cs);
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
-                        "0 multi-pattern matches. Plain grep fallback for \"{}\":\n{}",
-                        pat, text
-                    ))]));
+                    let key =
+                        MatchKey::new(file_path, match_data.line_number, match_data.byte_offset);
+                    if !cursor.remember_match(key) {
+                        continue;
+                    }
+                    match_data.file_index = file_index_for(&mut fallback_files, file);
+                    fallback_matches.push(match_data);
                 }
             }
 
-            return Ok(CallToolResult::success(vec![Content::text(
-                "0 matches.".to_string(),
-            )]));
+            let has_offsets = cursor.next_offsets.iter().any(Option::is_some);
+            if !advanced || !has_offsets || fallback_matches.len() > max_results {
+                break;
+            }
         }
 
-        if result.matches.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "0 matches.".to_string(),
-            )]));
+        if fallback_matches.is_empty() {
+            let mut text = "0 matches.".to_string();
+            let mut cs = self.lock_cursors()?;
+            append_multi_grep_cursor(&mut text, &mut cs, cursor);
+            return Ok(CallToolResult::success(vec![Content::text(text)]));
         }
+
+        cursor.pending = fallback_matches
+            .iter()
+            .skip(max_results)
+            .map(|match_data| PendingMatch {
+                file_path: fallback_files[match_data.file_index]
+                    .relative_path(picker)
+                    .to_string(),
+                match_data: match_data.clone(),
+            })
+            .collect();
 
         let mut cs = self.lock_cursors()?;
-        let text = &GrepFormatter {
-            matches: &result.matches,
-            files: &file_refs,
-            total_matched: result.matches.len(),
-            next_file_offset: result.next_file_offset,
+        let text = GrepFormatter {
+            matches: &fallback_matches,
+            files: &fallback_files,
+            total_matched: fallback_matches.len(),
+            next_file_offset: 0,
             output_mode,
             max_results,
-            show_context: ctx_lines > 0,
+            show_context: false,
             auto_expand_defs: auto_expand,
             picker,
         }
         .format(&mut cs);
-
+        let mut text = format!("0 multi-pattern matches. Plain grep fallback:\n{text}");
+        append_multi_grep_cursor(&mut text, &mut cs, cursor);
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 }
@@ -711,6 +804,47 @@ impl ServerHandler for FffServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::atomic::Ordering;
+    use tempfile::TempDir;
+
+    fn test_server(tmp: &TempDir, files: &[(&str, &str)]) -> FffServer {
+        for (relative_path, contents) in files {
+            let path = tmp.path().join(relative_path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create fixture directory");
+            }
+            fs::write(path, contents).expect("write fixture file");
+        }
+
+        let mut picker = fff::FilePicker::new(fff::FilePickerOptions {
+            base_path: tmp.path().to_string_lossy().into_owned(),
+            watch: false,
+            ..Default::default()
+        })
+        .expect("create file picker");
+        picker.collect_files().expect("collect fixture files");
+
+        let shared_picker = SharedFilePicker::default();
+        *shared_picker.write().expect("acquire picker lock") = Some(picker);
+        let server = FffServer::new(shared_picker);
+        server.scan_ready.store(true, Ordering::Relaxed);
+        server
+    }
+
+    fn response_text(result: CallToolResult) -> String {
+        serde_json::to_string(&result).expect("serialize MCP response")
+    }
+
+    fn cursor_id(text: &str) -> String {
+        text.split("cursor: ")
+            .nth(1)
+            .expect("response cursor")
+            .split('"')
+            .next()
+            .expect("cursor id")
+            .to_string()
+    }
 
     #[test]
     fn normalize_max_results_none_uses_default() {
@@ -764,5 +898,140 @@ mod tests {
         let via_pattern: FindFilesParams =
             serde_json::from_str(r#"{"pattern":"foo"}"#).expect("pattern alias");
         assert_eq!(via_pattern.query, "foo");
+    }
+
+    #[test]
+    fn multi_grep_preserves_positive_constraints_and_or_results() {
+        let tmp = TempDir::new().expect("create fixture directory");
+        let server = test_server(
+            &tmp,
+            &[
+                ("scope-a/one.txt", "alpha\n"),
+                ("scope-a/two.txt", "beta\n"),
+                ("scope-a/three.rs", "alpha\n"),
+                ("scope-b/three.txt", "alpha\n"),
+                ("scope-b/four.rs", "alpha\n"),
+            ],
+        );
+        let cases = [
+            (
+                vec!["alpha"],
+                Some("scope-a/"),
+                vec!["scope-a/one.txt", "scope-a/three.rs"],
+                vec!["scope-b/three.txt", "scope-b/four.rs"],
+            ),
+            (
+                vec!["alpha"],
+                Some("scope-a/*.txt"),
+                vec!["scope-a/one.txt"],
+                vec!["scope-a/three.rs", "scope-b/three.txt"],
+            ),
+            (
+                vec!["alpha"],
+                Some("scope-a/one.txt"),
+                vec!["scope-a/one.txt"],
+                vec!["scope-a/two.txt", "scope-a/three.rs"],
+            ),
+            (
+                vec!["alpha"],
+                Some("!scope-b/"),
+                vec!["scope-a/one.txt", "scope-a/three.rs"],
+                vec!["scope-b/three.txt", "scope-b/four.rs"],
+            ),
+            (
+                vec!["alpha", "missing"],
+                Some("scope-a/"),
+                vec!["scope-a/one.txt", "scope-a/three.rs"],
+                vec!["scope-a/two.txt", "scope-b/three.txt"],
+            ),
+            (
+                vec!["alpha", "beta", "missing"],
+                Some("scope-a/"),
+                vec!["scope-a/one.txt", "scope-a/two.txt", "scope-a/three.rs"],
+                vec!["scope-b/three.txt", "scope-b/four.rs"],
+            ),
+        ];
+
+        for (patterns, constraints, expected, excluded) in cases {
+            let text = response_text(
+                server
+                    .multi_grep_inner(MultiGrepParams {
+                        patterns: patterns.into_iter().map(str::to_string).collect(),
+                        constraints: constraints.map(str::to_string),
+                        max_results: None,
+                        cursor: None,
+                        output_mode: None,
+                        context: None,
+                    })
+                    .expect("multi_grep response"),
+            );
+            for path in expected {
+                assert!(text.contains(path), "missing {path} in {text}");
+            }
+            for path in excluded {
+                assert!(!text.contains(path), "unexpected {path} in {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn multi_grep_fallback_returns_union_and_continues() {
+        let tmp = TempDir::new().expect("create fixture directory");
+        let server = test_server(
+            &tmp,
+            &[("one.txt", "alpha only\n"), ("two.txt", "beta only\n")],
+        );
+        let params = |patterns: &[&str], cursor, max_results| MultiGrepParams {
+            patterns: patterns.iter().map(ToString::to_string).collect(),
+            constraints: None,
+            max_results,
+            cursor,
+            output_mode: None,
+            context: None,
+        };
+
+        let full = response_text(
+            server
+                .multi_grep_inner(params(
+                    &["*.txt alpha", "*.txt beta", "*.txt missing"],
+                    None,
+                    None,
+                ))
+                .expect("fallback response"),
+        );
+        assert!(full.contains("one.txt"));
+        assert!(full.contains("two.txt"));
+
+        let one_match = response_text(
+            server
+                .multi_grep_inner(params(&["*.txt alpha", "*.txt missing"], None, None))
+                .expect("single fallback match response"),
+        );
+        assert!(one_match.contains("one.txt"));
+        assert!(!one_match.contains("two.txt"));
+
+        let first = response_text(
+            server
+                .multi_grep_inner(params(
+                    &["*.txt alpha", "*.txt beta", "*.txt missing"],
+                    None,
+                    Some(1.0),
+                ))
+                .expect("first fallback page"),
+        );
+        let cursor = cursor_id(&first);
+        let second = response_text(
+            server
+                .multi_grep_inner(params(
+                    &["*.txt alpha", "*.txt beta", "*.txt missing"],
+                    Some(cursor),
+                    Some(1.0),
+                ))
+                .expect("second fallback page"),
+        );
+        assert!(first.contains("one.txt"));
+        assert!(!first.contains("two.txt"));
+        assert!(second.contains("two.txt"));
+        assert!(!second.contains("cursor: "));
     }
 }
