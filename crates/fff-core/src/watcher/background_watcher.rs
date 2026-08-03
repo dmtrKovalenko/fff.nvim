@@ -10,6 +10,7 @@ use notify::event::{AccessKind, AccessMode};
 use notify::{Config, EventKind, EventKindMask, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, DebouncedEvent, NoCache, new_debouncer_opt};
 use parking_lot::Mutex;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -89,7 +90,8 @@ impl BackgroundWatcher {
         let owner_git_workdir = git_workdir.clone();
         let owner_git_worker = Arc::clone(&git_status_worker);
 
-        let debouncer = Self::create_debouncer(
+        let policy_watch_dirs = policy_watch_directories(&shared_picker);
+        let (debouncer, mut successful_policy_watch_dirs) = Self::create_debouncer(
             base_path,
             git_workdir,
             shared_picker,
@@ -98,6 +100,7 @@ impl BackgroundWatcher {
             use_recursive,
             watch_tx_for_debouncer,
             git_status_worker,
+            &policy_watch_dirs,
         )?;
 
         info!("Background file watcher initialized successfully");
@@ -123,14 +126,8 @@ impl BackgroundWatcher {
                     // from the base path (see `create_debouncer`), and
                     // registering a second overlapping stream there produces
                     // duplicate/out-of-order events.
-                    let watch_path = match &request {
-                        #[cfg(target_os = "linux")]
-                        WatchRequest::Directory(path) => Some(path),
-                        #[cfg(not(target_os = "linux"))]
-                        WatchRequest::Directory(_) => None,
-                        WatchRequest::PolicySourceDirectory(path) => Some(path),
-                    };
-                    if let Some(dir) = watch_path {
+                    #[cfg(target_os = "linux")]
+                    if let WatchRequest::Directory(dir) = &request {
                         // Register the new directory with the debouncer, then
                         // drop the mutex BEFORE doing picker-side work — see
                         // the comment on `BackgroundWatcher::stop` for the
@@ -145,6 +142,25 @@ impl BackgroundWatcher {
                                 ?e,
                                 dir = %dir.display(),
                                 "Failed to init watcher for new directory"
+                            );
+                        }
+                    }
+
+                    if let WatchRequest::PolicySourceDirectory(dir) = &request {
+                        let mut guard = owner_debouncer.lock();
+                        let Some(debouncer) = guard.as_mut() else {
+                            break;
+                        };
+
+                        if let Err(error) = try_register_policy_watch(
+                            &mut successful_policy_watch_dirs,
+                            dir,
+                            |path| debouncer.watch(path, RecursiveMode::NonRecursive),
+                        ) {
+                            warn!(
+                                ?error,
+                                path = %dir.display(),
+                                "Failed to watch ignore policy source directory"
                             );
                         }
                     }
@@ -183,7 +199,8 @@ impl BackgroundWatcher {
         use_recursive: bool,
         watch_tx: mpsc::Sender<WatchRequest>,
         git_status_worker: Arc<GitStatusWorker>,
-    ) -> Result<Debouncer, Error> {
+        policy_watch_dirs: &[PathBuf],
+    ) -> Result<(Debouncer, HashSet<PathBuf>), Error> {
         let config = Config::default()
             .with_follow_symlinks(false)
             // only the actual modification events, ignore the open syscals that we can generate by
@@ -294,9 +311,10 @@ impl BackgroundWatcher {
         // to observe changes that affect git status (staging, unstaging,
         // committing, branch switches, merges, etc)
         watch_git_status_paths(&mut debouncer, git_workdir.as_ref());
-        watch_policy_source_dirs(&mut debouncer, &shared_picker_for_watching);
+        let successful_policy_watch_dirs =
+            watch_policy_source_dirs(&mut debouncer, policy_watch_dirs);
 
-        Ok(debouncer)
+        Ok((debouncer, successful_policy_watch_dirs))
     }
 
     /// Signal the watcher to shut down without blocking on its worker
@@ -321,6 +339,9 @@ impl BackgroundWatcher {
     }
 
     pub(crate) fn request_watch_policy_source_dir(&self, dir: PathBuf) -> bool {
+        let Some(dir) = closest_existing_directory(&dir) else {
+            return false;
+        };
         match self.watch_tx.as_ref() {
             Some(tx) => tx.send(WatchRequest::PolicySourceDirectory(dir)).is_ok(),
             None => false,
@@ -405,10 +426,16 @@ fn handle_debounced_events(
 
         tracing::debug!(event = ?debounced_event.event, "Processing FS event");
         for path in &debounced_event.event.paths {
+            // A missing policy source is watched through its nearest existing
+            // ancestor, so creating the next path component must rebuild the
+            // policy and move the watch closer to the eventual file.
+            let affects_policy = policy_sources
+                .iter()
+                .any(|source| source == path || source.starts_with(path));
             if matches!(
                 path.file_name().and_then(|f| f.to_str()),
                 Some(".ignore") | Some(".gitignore")
-            ) || policy_sources.iter().any(|source| source == path)
+            ) || affects_policy
             {
                 info!(
                     "Detected change in ignore definition file: {}",
@@ -896,19 +923,67 @@ fn watch_git_status_paths(debouncer: &mut Debouncer, git_workdir: Option<&PathBu
     }
 }
 
-fn watch_policy_source_dirs(debouncer: &mut Debouncer, picker: &SharedFilePicker) {
+fn policy_watch_directories(picker: &SharedFilePicker) -> Vec<PathBuf> {
     let Some(sources) = picker
         .read()
         .ok()
         .and_then(|guard| guard.as_ref().map(|picker| picker.policy_sources()))
     else {
-        return;
+        return Vec::new();
     };
-    for dir in sources.iter().filter_map(|source| source.parent()) {
-        if let Err(error) = debouncer.watch(dir, RecursiveMode::NonRecursive) {
+
+    policy_watch_directories_from_sources(&sources)
+}
+
+fn policy_watch_directories_from_sources(sources: &[PathBuf]) -> Vec<PathBuf> {
+    let mut directories = sources
+        .iter()
+        .filter_map(|source| source.parent())
+        .filter_map(closest_existing_directory)
+        .collect::<Vec<_>>();
+    directories.sort_unstable();
+    directories.dedup();
+    directories
+}
+
+fn closest_existing_directory(path: &Path) -> Option<PathBuf> {
+    // notify rejects missing directories; watching the nearest ancestor keeps
+    // future source creation observable without retrying a slow failed watch
+    // ahead of every new-directory injection on the owner FIFO.
+    path.ancestors()
+        .find(|candidate| candidate.is_dir())
+        .map(Path::to_path_buf)
+}
+
+fn try_register_policy_watch<E>(
+    successful: &mut HashSet<PathBuf>,
+    dir: &Path,
+    watch: impl FnOnce(&Path) -> Result<(), E>,
+) -> Result<bool, E> {
+    if successful.contains(dir) {
+        return Ok(false);
+    }
+
+    // A failed native watch is not coverage. Keep it retryable so a transient
+    // permission/resource failure cannot silently freeze ignore policy state.
+    watch(dir)?;
+    successful.insert(dir.to_path_buf());
+    Ok(true)
+}
+
+fn watch_policy_source_dirs(
+    debouncer: &mut Debouncer,
+    directories: &[PathBuf],
+) -> HashSet<PathBuf> {
+    let mut successful = HashSet::new();
+    for dir in directories {
+        if let Err(error) = try_register_policy_watch(&mut successful, dir, |path| {
+            debouncer.watch(path, RecursiveMode::NonRecursive)
+        }) {
             warn!(?error, path = %dir.display(), "Failed to watch ignore policy source directory");
         }
     }
+    successful
 }
 
 #[cfg(test)]
@@ -1023,6 +1098,106 @@ mod tests {
         std::fs::write(&global, "*.log\n").unwrap();
         let events = vec![DebouncedEvent::new(
             Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content))).add_path(global),
+            Instant::now(),
+        )];
+        handle_debounced_events(
+            FFFMode::Neovim,
+            events,
+            &base,
+            &Some(base.clone()),
+            &shared_picker,
+            &shared_frecency,
+            &GitStatusWorker::new(),
+        );
+
+        let delivered = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].kind, WatchEventKind::Rescan);
+        assert_eq!(delivered[0].path, base);
+    }
+
+    #[test]
+    fn missing_policy_parents_share_the_nearest_existing_watch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config");
+        std::fs::create_dir(&config).unwrap();
+        let sources = vec![
+            config.join("git/ignore"),
+            config.join("git/config"),
+            config.join("other/missing"),
+        ];
+
+        assert_eq!(
+            policy_watch_directories_from_sources(&sources),
+            vec![config]
+        );
+    }
+
+    #[test]
+    fn failed_policy_watch_remains_retryable_until_success() {
+        let dir = PathBuf::from("/policy");
+        let mut successful = HashSet::new();
+        let mut attempts = 0;
+
+        let failed = try_register_policy_watch(&mut successful, &dir, |_| {
+            attempts += 1;
+            Err("transient failure")
+        });
+        assert_eq!(failed, Err("transient failure"));
+        assert!(successful.is_empty());
+
+        let retried = try_register_policy_watch(&mut successful, &dir, |_| {
+            attempts += 1;
+            Ok::<_, &str>(())
+        });
+        assert_eq!(retried, Ok(true));
+        assert_eq!(attempts, 2);
+
+        let deduplicated = try_register_policy_watch(&mut successful, &dir, |_| {
+            attempts += 1;
+            Ok::<_, &str>(())
+        });
+        assert_eq!(deduplicated, Ok(false));
+        assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn policy_source_ancestor_creation_broadcasts_rescan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = crate::path_utils::canonicalize(tmp.path()).unwrap();
+        let repo = git2::Repository::init(&base).unwrap();
+        let global = base.join("future/config/git/ignore");
+        repo.config()
+            .unwrap()
+            .set_str("core.excludesFile", global.to_str().unwrap())
+            .unwrap();
+
+        let shared_picker = SharedFilePicker::default();
+        let shared_frecency = SharedFrecency::noop();
+        let mut picker = FilePicker::new(FilePickerOptions {
+            base_path: base.to_string_lossy().into_owned(),
+            watch: false,
+            ..Default::default()
+        })
+        .unwrap();
+        picker.collect_files().unwrap();
+        shared_picker.rebase_watches(&base);
+        *shared_picker.write().unwrap() = Some(picker);
+
+        let (sender, receiver) = mpsc::channel::<Vec<WatchEvent>>();
+        shared_picker
+            .watch_registry()
+            .subscribe(
+                &base,
+                "**",
+                WatchOptions::default(),
+                Box::new(move |_, events| sender.send(events.to_vec()).unwrap()),
+            )
+            .unwrap();
+
+        let created_ancestor = base.join("future");
+        let events = vec![DebouncedEvent::new(
+            Event::new(EventKind::Create(CreateKind::Folder)).add_path(created_ancestor),
             Instant::now(),
         )];
         handle_debounced_events(
