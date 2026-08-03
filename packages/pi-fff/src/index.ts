@@ -641,10 +641,10 @@ export default function fffExtension(pi: ExtensionAPI) {
     description: `Grep file contents. Smart-case, auto-detects regex vs literal, git-aware. Results are ranked by frecency (most-accessed files first); matches within a file stay in source order. Default limit ${DEFAULT_GREP_LIMIT}.`,
     promptSnippet: "Grep contents",
     promptGuidelines: [
-      "Prefer bare identifiers as patterns. Literal queries are most efficient.",
-      "Use path for include ('src/', '*.ts') and exclude for noise ('test/,*.min.js').",
-      "caseSensitive: true when you need exact case (smart-case otherwise).",
-      "After 1-2 greps, read the top match instead of more greps.",
+      `${toolNames.grep}: prefer bare identifiers as patterns. Literal queries are most efficient.`,
+      `${toolNames.grep}: use path for include ('src/', '*.ts') and exclude for noise ('test/,*.min.js').`,
+      `${toolNames.grep}: caseSensitive: true when you need exact case (smart-case otherwise).`,
+      `${toolNames.grep}: after 1-2 greps, read the top match instead of more greps.`,
     ],
     parameters: grepSchema,
 
@@ -828,12 +828,12 @@ export default function fffExtension(pi: ExtensionAPI) {
     description: `Fuzzy path search and glob search. Matches against the whole repo-relative path, not just the filename. Frecency-ranked, git-aware. Multi-word = narrower (AND). Default limit ${DEFAULT_FIND_LIMIT}.`,
     promptSnippet: "Find files by path or glob",
     promptGuidelines: [
-      "Matches the WHOLE path, not just the filename — `profile` hits `chrome/browser/profiles/x.cc` too.",
-      "Keep queries to 1-2 terms; extra words narrow.",
-      "Use for paths, not content. Use grep for content.",
-      "For exact path matches use a glob in `path` — e.g. path: '**/profile.h' for exact filename, or path: 'src/**/profile.h' scoped to a subtree. Bare patterns are fuzzy.",
-      "To list everything inside a directory, pass path: 'dir/**' with an empty or wildcard pattern instead of using pattern alone.",
-      "Use exclude: 'test/,*.min.js' to cut noise in large repos.",
+      `${toolNames.find}: matches the WHOLE path, not just the filename — \`profile\` hits \`chrome/browser/profiles/x.cc\` too.`,
+      `${toolNames.find}: keep queries to 1-2 terms; extra words narrow.`,
+      `${toolNames.find}: use for paths, not content. Use ${toolNames.grep} for content.`,
+      `${toolNames.find}: for exact path matches use a glob in \`path\` — e.g. path: '**/profile.h' for exact filename, or path: 'src/**/profile.h' scoped to a subtree. Bare patterns are fuzzy.`,
+      `${toolNames.find}: to list everything inside a directory, pass path: 'dir/**' with an empty or wildcard pattern instead of using pattern alone.`,
+      `${toolNames.find}: use exclude: 'test/,*.min.js' to cut noise in large repos.`,
     ],
     parameters: findSchema,
 
@@ -974,9 +974,9 @@ export default function fffExtension(pi: ExtensionAPI) {
         "Search file contents for ANY of multiple literal patterns (OR, SIMD Aho-Corasick). Faster than regex alternation.",
       promptSnippet: "Multi-pattern OR content search",
       promptGuidelines: [
-        "Use when searching for several identifiers at once.",
-        "Include all naming-convention variants (snake/camel/Pascal).",
-        "Patterns are literal. Use constraints for file filters.",
+        `${toolNames.multiGrep}: use when searching for several identifiers at once.`,
+        `${toolNames.multiGrep}: include all naming-convention variants (snake/camel/Pascal).`,
+        `${toolNames.multiGrep}: patterns are literal. Use constraints for file filters.`,
       ],
       parameters: multiGrepSchema,
 
