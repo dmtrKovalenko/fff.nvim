@@ -395,4 +395,11 @@ fn rescubscribe_watcher_post_scan(shared_picker: &SharedFilePicker) {
         watcher.request_watch_dir(dir.to_path_buf());
         std::ops::ControlFlow::Continue(())
     });
+    for dir in picker
+        .policy_sources()
+        .iter()
+        .filter_map(|source| source.parent())
+    {
+        watcher.request_watch_policy_source_dir(dir.to_path_buf());
+    }
 }

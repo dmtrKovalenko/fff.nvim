@@ -20,6 +20,7 @@ pub(crate) fn walk_collect_files(
     threads: usize,
     synced_files_count: &Arc<AtomicUsize>,
 ) -> crate::Result<WalkOutput> {
+    let policy = crate::ignore::GitIgnorePolicy::discover(base_path);
     // gitignore on; skip hidden on non-git roots (so `~/` doesn't recurse into
     // ~/.cache, ~/.config, etc.); optionally follow symlinks.
     let mut flags = WalkFlags::GITIGNORE;
@@ -37,6 +38,13 @@ pub(crate) fn walk_collect_files(
         .threads(threads)
         // Bulk-fetch the only metadata FileItem needs; zlob never stats more.
         .metadata(WalkMetadata::SIZE | WalkMetadata::MTIME);
+
+    let base_patterns = policy.patterns().collect::<Vec<_>>();
+    if !base_patterns.is_empty() {
+        builder
+            .base_ignore(&base_patterns)
+            .map_err(|e| crate::Error::WalkFailed(format!("base ignore: {e:?}")))?;
+    }
 
     if !is_git_repo
         && !IGNORED_DIRS.is_empty()
@@ -107,5 +115,6 @@ pub(crate) fn walk_collect_files(
     Ok(WalkOutput {
         pairs,
         ignore_rules,
+        policy_sources: policy.sources,
     })
 }

@@ -22,8 +22,13 @@ type Debouncer = notify_debouncer_full::Debouncer<notify::RecommendedWatcher, No
 /// are fully joined before `stop()` / `Drop` returns.
 pub struct BackgroundWatcher {
     debouncer: Arc<Mutex<Option<Debouncer>>>,
-    watch_tx: Option<mpsc::Sender<PathBuf>>,
+    watch_tx: Option<mpsc::Sender<WatchRequest>>,
     owner_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+enum WatchRequest {
+    Directory(PathBuf),
+    PolicySourceDirectory(PathBuf),
 }
 
 const DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(50);
@@ -77,7 +82,7 @@ impl BackgroundWatcher {
         // spare watcher (configurable by the user, usually 100k - 1m)
         let use_recursive = cfg!(any(target_os = "macos", target_os = "windows"));
 
-        let (watch_tx, watch_rx) = mpsc::channel::<PathBuf>();
+        let (watch_tx, watch_rx) = mpsc::channel::<WatchRequest>();
         let watch_tx_for_debouncer = watch_tx.clone();
 
         let owner_weak_picker = shared_picker.weaken();
@@ -98,9 +103,6 @@ impl BackgroundWatcher {
         info!("Background file watcher initialized successfully");
 
         let debouncer = Arc::new(Mutex::new(Some(debouncer)));
-        // Only the Linux per-dir-watch branch needs this clone; on other
-        // platforms the owner thread never touches the debouncer.
-        #[cfg(target_os = "linux")]
         let owner_debouncer = Arc::clone(&debouncer);
 
         let owner_span = trace_span.clone();
@@ -108,7 +110,7 @@ impl BackgroundWatcher {
             .name("fff-watcher-own".into())
             .spawn(move || {
                 let _g = owner_span.enter();
-                while let Ok(dir) = watch_rx.recv() {
+                while let Ok(request) = watch_rx.recv() {
                     // if the picker is dropped we do need to exit the loop
                     let Some(strong_picker) = owner_weak_picker.upgrade() else {
                         break;
@@ -121,8 +123,14 @@ impl BackgroundWatcher {
                     // from the base path (see `create_debouncer`), and
                     // registering a second overlapping stream there produces
                     // duplicate/out-of-order events.
-                    #[cfg(target_os = "linux")]
-                    {
+                    let watch_path = match &request {
+                        #[cfg(target_os = "linux")]
+                        WatchRequest::Directory(path) => Some(path),
+                        #[cfg(not(target_os = "linux"))]
+                        WatchRequest::Directory(_) => None,
+                        WatchRequest::PolicySourceDirectory(path) => Some(path),
+                    };
+                    if let Some(dir) = watch_path {
                         // Register the new directory with the debouncer, then
                         // drop the mutex BEFORE doing picker-side work — see
                         // the comment on `BackgroundWatcher::stop` for the
@@ -132,7 +140,7 @@ impl BackgroundWatcher {
                             break;
                         };
 
-                        if let Err(e) = debouncer.watch(&dir, RecursiveMode::NonRecursive) {
+                        if let Err(e) = debouncer.watch(dir, RecursiveMode::NonRecursive) {
                             warn!(
                                 ?e,
                                 dir = %dir.display(),
@@ -141,12 +149,14 @@ impl BackgroundWatcher {
                         }
                     }
 
-                    track_files_from_new_directories(
-                        &dir,
-                        &strong_picker,
-                        &owner_git_workdir,
-                        &owner_git_worker,
-                    );
+                    if let WatchRequest::Directory(dir) = request {
+                        track_files_from_new_directories(
+                            &dir,
+                            &strong_picker,
+                            &owner_git_workdir,
+                            &owner_git_worker,
+                        );
+                    }
 
                     // Transient strong ref drops here, back
                     // to weak-only before the next `recv()`.
@@ -171,7 +181,7 @@ impl BackgroundWatcher {
         shared_frecency: SharedFrecency,
         mode: FFFMode,
         use_recursive: bool,
-        watch_tx: mpsc::Sender<PathBuf>,
+        watch_tx: mpsc::Sender<WatchRequest>,
         git_status_worker: Arc<GitStatusWorker>,
     ) -> Result<Debouncer, Error> {
         let config = Config::default()
@@ -206,7 +216,7 @@ impl BackgroundWatcher {
 
                         // every new directory created has to be reflected in the picker state
                         for dir in new_dirs {
-                            if let Err(e) = watch_tx.send(dir) {
+                            if let Err(e) = watch_tx.send(WatchRequest::Directory(dir)) {
                                 error!(?e, "Failed to send directory update error");
                             }
                         }
@@ -284,6 +294,7 @@ impl BackgroundWatcher {
         // to observe changes that affect git status (staging, unstaging,
         // committing, branch switches, merges, etc)
         watch_git_status_paths(&mut debouncer, git_workdir.as_ref());
+        watch_policy_source_dirs(&mut debouncer, &shared_picker_for_watching);
 
         Ok(debouncer)
     }
@@ -304,7 +315,14 @@ impl BackgroundWatcher {
 
     pub(crate) fn request_watch_dir(&self, dir: PathBuf) -> bool {
         match self.watch_tx.as_ref() {
-            Some(tx) => tx.send(dir).is_ok(),
+            Some(tx) => tx.send(WatchRequest::Directory(dir)).is_ok(),
+            None => false,
+        }
+    }
+
+    pub(crate) fn request_watch_policy_source_dir(&self, dir: PathBuf) -> bool {
+        match self.watch_tx.as_ref() {
+            Some(tx) => tx.send(WatchRequest::PolicySourceDirectory(dir)).is_ok(),
             None => false,
         }
     }
@@ -330,10 +348,14 @@ fn handle_debounced_events(
     let repo = git_workdir.as_ref().and_then(|p| Repository::open(p).ok());
     // Prefer the walker's own ignore rules (zlob); grab a cheap Arc clone once
     // per batch so we don't hold the picker lock during filtering.
-    let walker_rules = shared_picker
+    let (walker_rules, policy_sources) = shared_picker
         .read()
         .ok()
-        .and_then(|g| g.as_ref().and_then(|p| p.ignore_rules()));
+        .and_then(|g| {
+            g.as_ref()
+                .map(|picker| (picker.ignore_rules(), picker.policy_sources()))
+        })
+        .unwrap_or_default();
     let filter = IgnoreFilter::new(base_path, walker_rules, repo.as_ref());
     let mut need_full_rescan = false;
     let mut need_full_git_rescan = false;
@@ -386,7 +408,8 @@ fn handle_debounced_events(
             if matches!(
                 path.file_name().and_then(|f| f.to_str()),
                 Some(".ignore") | Some(".gitignore")
-            ) {
+            ) || policy_sources.iter().any(|source| source == path)
+            {
                 info!(
                     "Detected change in ignore definition file: {}",
                     path.display()
@@ -873,6 +896,21 @@ fn watch_git_status_paths(debouncer: &mut Debouncer, git_workdir: Option<&PathBu
     }
 }
 
+fn watch_policy_source_dirs(debouncer: &mut Debouncer, picker: &SharedFilePicker) {
+    let Some(sources) = picker
+        .read()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|picker| picker.policy_sources()))
+    else {
+        return;
+    };
+    for dir in sources.iter().filter_map(|source| source.parent()) {
+        if let Err(error) = debouncer.watch(dir, RecursiveMode::NonRecursive) {
+            warn!(?error, path = %dir.display(), "Failed to watch ignore policy source directory");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -945,6 +983,62 @@ mod tests {
         assert_eq!(received.len(), 1);
         assert_eq!(received[0].path, path);
         assert_eq!(received[0].kind, WatchEventKind::Modified);
+    }
+
+    #[test]
+    fn policy_source_change_broadcasts_rescan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = crate::path_utils::canonicalize(tmp.path()).unwrap();
+        let repo = git2::Repository::init(&base).unwrap();
+        let global = base.join("global-ignore");
+        std::fs::write(&global, "*.tmp\n").unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("core.excludesFile", global.to_str().unwrap())
+            .unwrap();
+
+        let shared_picker = SharedFilePicker::default();
+        let shared_frecency = SharedFrecency::noop();
+        let mut picker = FilePicker::new(FilePickerOptions {
+            base_path: base.to_string_lossy().into_owned(),
+            watch: false,
+            ..Default::default()
+        })
+        .unwrap();
+        picker.collect_files().unwrap();
+        shared_picker.rebase_watches(&base);
+        *shared_picker.write().unwrap() = Some(picker);
+
+        let (sender, receiver) = mpsc::channel::<Vec<WatchEvent>>();
+        shared_picker
+            .watch_registry()
+            .subscribe(
+                &base,
+                "**",
+                WatchOptions::default(),
+                Box::new(move |_, events| sender.send(events.to_vec()).unwrap()),
+            )
+            .unwrap();
+
+        std::fs::write(&global, "*.log\n").unwrap();
+        let events = vec![DebouncedEvent::new(
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content))).add_path(global),
+            Instant::now(),
+        )];
+        handle_debounced_events(
+            FFFMode::Neovim,
+            events,
+            &base,
+            &Some(base.clone()),
+            &shared_picker,
+            &shared_frecency,
+            &GitStatusWorker::new(),
+        );
+
+        let delivered = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].kind, WatchEventKind::Rescan);
+        assert_eq!(delivered[0].path, base);
     }
 
     #[test]

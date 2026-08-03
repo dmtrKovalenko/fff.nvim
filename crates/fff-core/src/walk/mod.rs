@@ -21,6 +21,7 @@ pub(crate) use ripgrep::walk_collect_files;
 pub(crate) struct WalkOutput {
     pub(crate) pairs: Vec<(FileItem, String)>,
     pub(crate) ignore_rules: Option<WalkIgnoreRules>,
+    pub(crate) policy_sources: Vec<std::path::PathBuf>,
 }
 
 pub(crate) struct WalkIgnoreRules {
@@ -142,5 +143,70 @@ mod tests {
         assert!(rules.is_ignored(Path::new("target/")));
         assert!(rules.is_ignored(Path::new("debug.log")));
         assert!(!rules.is_ignored(Path::new("Cargo.toml")));
+    }
+
+    #[test]
+    fn nested_negation_prevents_directory_pruning() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".gitignore"), "*\n!*.*\n!/**/\n").unwrap();
+        fs::create_dir_all(root.join("sub1/sub2")).unwrap();
+        fs::write(root.join("top.rs"), "").unwrap();
+        fs::write(root.join("sub1/mid.rs"), "").unwrap();
+        fs::write(root.join("sub1/sub2/deep.rs"), "").unwrap();
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let out = walk_collect_files(root, true, false, 1, &counter).unwrap();
+        let names: Vec<_> = out.pairs.into_iter().map(|(_, rel)| rel).collect();
+
+        assert!(names.contains(&"top.rs".to_string()), "got {names:?}");
+        assert!(names.contains(&"sub1/mid.rs".to_string()), "got {names:?}");
+        assert!(
+            names.contains(&"sub1/sub2/deep.rs".to_string()),
+            "got {names:?}"
+        );
+    }
+
+    #[cfg(feature = "zlob")]
+    #[test]
+    fn git_exclude_layers_follow_git_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let repo = git2::Repository::init(root).unwrap();
+        let global = root.join("global-ignore");
+        fs::write(&global, "*.tmp\n*.info\n").unwrap();
+        fs::create_dir_all(repo.commondir().join("info")).unwrap();
+        fs::write(repo.commondir().join("info/exclude"), "!info-keep.tmp\n").unwrap();
+        fs::write(root.join(".gitignore"), "!root-keep.info\n").unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("core.excludesFile", global.to_str().unwrap())
+            .unwrap();
+        for path in [
+            "drop.tmp",
+            "info-keep.tmp",
+            "drop.info",
+            "root-keep.info",
+            "visible.md",
+        ] {
+            fs::write(root.join(path), "").unwrap();
+        }
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let out = walk_collect_files(root, true, false, 1, &counter).unwrap();
+        let names: Vec<_> = out.pairs.into_iter().map(|(_, rel)| rel).collect();
+
+        assert!(!names.contains(&"drop.tmp".to_string()), "got {names:?}");
+        assert!(
+            names.contains(&"info-keep.tmp".to_string()),
+            "got {names:?}"
+        );
+        assert!(!names.contains(&"drop.info".to_string()), "got {names:?}");
+        assert!(
+            names.contains(&"root-keep.info".to_string()),
+            "got {names:?}"
+        );
+        assert!(names.contains(&"visible.md".to_string()), "got {names:?}");
     }
 }

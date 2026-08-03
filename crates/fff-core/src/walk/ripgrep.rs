@@ -17,16 +17,25 @@ pub(crate) fn walk_collect_files(
     threads: usize,
     synced_files_count: &Arc<AtomicUsize>,
 ) -> crate::Result<WalkOutput> {
+    let policy = crate::ignore::GitIgnorePolicy::discover(base_path);
     let mut walk_builder = WalkBuilder::new(base_path);
     walk_builder
         // this is a very important guard for the user opening ~/ or other root non-git dir
         .hidden(!is_git_repo)
         .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
+        // User and repository-wide excludes enter through GitIgnorePolicy so
+        // scan and watcher rebuild from one precedence-ordered source list.
+        .git_exclude(false)
+        .git_global(false)
         .ignore(true)
         .follow_links(follow_symlinks)
         .threads(threads);
+
+    for path in &policy.ignore_files {
+        if let Some(error) = walk_builder.add_ignore(path) {
+            tracing::warn!(?error, path = %path.display(), "Failed to load Git ignore policy source");
+        }
+    }
 
     if !is_git_repo && let Some(overrides) = non_git_repo_overrides(base_path) {
         walk_builder.overrides(overrides);
@@ -68,5 +77,6 @@ pub(crate) fn walk_collect_files(
     Ok(WalkOutput {
         pairs: pairs.into_inner(),
         ignore_rules: None,
+        policy_sources: policy.sources,
     })
 }
