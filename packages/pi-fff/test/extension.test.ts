@@ -48,6 +48,10 @@ const finderModule = {
 mock.module("@ff-labs/fff-node", () => finderModule);
 mock.module("@ff-labs/fff-bun", () => finderModule);
 
+mock.module("@earendil-works/pi-coding-agent", () => ({
+  keyHint: (_keybinding: string, description: string) => `Ctrl+O ${description}`,
+}));
+
 mock.module("@earendil-works/pi-tui", () => ({
   Text: class Text {
     text: string;
@@ -57,7 +61,20 @@ mock.module("@earendil-works/pi-tui", () => ({
     setText(text: string) {
       this.text = text;
     }
+    render(width: number) {
+      return this.text
+        .split("\n")
+        .flatMap((line) =>
+          line.length === 0
+            ? [""]
+            : Array.from({ length: Math.ceil(line.length / width) }, (_, index) =>
+                line.slice(index * width, (index + 1) * width),
+              ),
+        );
+    }
+    invalidate() {}
   },
+  truncateToWidth: (text: string, width: number) => text.slice(0, width),
 }));
 
 const schema = (type: string) => (options?: unknown) => ({ type, options });
@@ -85,6 +102,7 @@ type EventHandler = (...args: any[]) => unknown;
 function createPi(mode?: string) {
   const events = new Map<string, EventHandler>();
   const commands = new Map<string, any>();
+  const tools = new Map<string, any>();
 
   const pi = {
     getFlag: mock((name: string) => (name === "fff-mode" ? mode : undefined)),
@@ -95,11 +113,13 @@ function createPi(mode?: string) {
       commands.set(name, command);
     }),
     registerFlag: mock(() => undefined),
-    registerTool: mock(() => undefined),
+    registerTool: mock((tool: any) => {
+      tools.set(tool.name, tool);
+    }),
     appendEntry: mock(() => undefined),
   };
 
-  return { pi, events, commands };
+  return { pi, events, commands, tools };
 }
 
 function createContext() {
@@ -144,6 +164,40 @@ beforeEach(() => {
   finders = [];
   mixedSearchImpl = undefined;
   delete process.env.PI_FFF_MODE;
+});
+
+describe("pi-fff tool output rendering", () => {
+  test("caps collapsed output at five rendered lines and expands with Ctrl+O", async () => {
+    const { tools } = await start("override");
+    const grep = tools.get("grep");
+    const theme = { fg: (_color: string, text: string) => text };
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: `${"a".repeat(90)}\n${"b".repeat(90)}\n${"c".repeat(90)}`,
+        },
+      ],
+    };
+
+    const collapsed = grep.renderResult(result, { expanded: false }, theme, {
+      lastComponent: undefined,
+    });
+    expect(collapsed.render(40)).toEqual([
+      "a".repeat(40),
+      "a".repeat(40),
+      "a".repeat(10),
+      "b".repeat(40),
+      "... (Ctrl+O to expand)",
+    ]);
+
+    const expanded = grep.renderResult(result, { expanded: true }, theme, {
+      lastComponent: collapsed,
+    });
+    expect(expanded).toBe(collapsed);
+    expect(expanded.render(40)).toHaveLength(9);
+    expect(expanded.render(40)).not.toContain("... (Ctrl+O to expand)");
+  });
 });
 
 describe("pi-fff autocomplete registration", () => {
