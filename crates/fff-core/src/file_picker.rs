@@ -124,6 +124,7 @@ pub(crate) struct FileSync {
     /// Ignore rules the walker assembled (zlob backend only). Shared with the
     /// background watcher so filesystem events can be filtered without libgit2.
     pub(crate) ignore_rules: Option<Arc<crate::walk::WalkIgnoreRules>>,
+    pub(crate) policy_sources: Arc<Vec<PathBuf>>,
 }
 
 impl FileSync {
@@ -142,6 +143,7 @@ impl FileSync {
             bigram_overlay: None,
             chunked_paths: None,
             ignore_rules: None,
+            policy_sources: Arc::new(Vec::new()),
         }
     }
 
@@ -634,6 +636,10 @@ impl FilePicker {
     /// files were present.
     pub(crate) fn ignore_rules(&self) -> Option<Arc<crate::walk::WalkIgnoreRules>> {
         self.sync_data.ignore_rules.clone()
+    }
+
+    pub(crate) fn policy_sources(&self) -> Arc<Vec<PathBuf>> {
+        Arc::clone(&self.sync_data.policy_sources)
     }
 
     pub fn has_mmap_cache(&self) -> bool {
@@ -2028,6 +2034,7 @@ impl FileSync {
             synced_files_count,
         )?;
         let ignore_rules = walk_output.ignore_rules.take().map(Arc::new);
+        let policy_sources = Arc::new(walk_output.policy_sources);
         let mut pairs = walk_output.pairs;
 
         // Sort by (dir_part, filename). This groups files by their directory
@@ -2131,6 +2138,7 @@ impl FileSync {
             bigram_overlay: None,
             chunked_paths: Some(Arc::new(chunked_paths)),
             ignore_rules,
+            policy_sources,
         })
     }
 }
