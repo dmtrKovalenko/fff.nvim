@@ -1,17 +1,22 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 type MockFinder = {
   isDestroyed: boolean;
   waitForScan: ReturnType<typeof mock>;
   mixedSearch: ReturnType<typeof mock>;
+  grep: ReturnType<typeof mock>;
   destroy: ReturnType<typeof mock>;
 };
 
 const createCalls: unknown[] = [];
 let finders: MockFinder[] = [];
 let mixedSearchImpl: ((query: string, options: unknown) => unknown) | undefined;
+let grepMatchRoot: string | undefined;
 
-function createMockFinder(): MockFinder {
+function createMockFinder(basePath: string): MockFinder {
   return {
     isDestroyed: false,
     waitForScan: mock(async () => undefined),
@@ -28,6 +33,20 @@ function createMockFinder(): MockFinder {
         },
       };
     }),
+    grep: mock(() => {
+      const items =
+        basePath === grepMatchRoot
+          ? [
+              {
+                relativePath: "target.ts",
+                fileName: "target.ts",
+                lineContent: "issue711Token",
+                lineNumber: 1,
+              },
+            ]
+          : [];
+      return { ok: true, value: { items } };
+    }),
     destroy: mock(function (this: MockFinder) {
       this.isDestroyed = true;
     }),
@@ -38,7 +57,7 @@ const finderModule = {
   FileFinder: {
     create: mock((options: unknown) => {
       createCalls.push(options);
-      const finder = createMockFinder();
+      const finder = createMockFinder((options as { basePath: string }).basePath);
       finders.push(finder);
       return { ok: true, value: finder };
     }),
@@ -85,6 +104,7 @@ type EventHandler = (...args: any[]) => unknown;
 function createPi(mode?: string) {
   const events = new Map<string, EventHandler>();
   const commands = new Map<string, any>();
+  const tools = new Map<string, any>();
 
   const pi = {
     getFlag: mock((name: string) => (name === "fff-mode" ? mode : undefined)),
@@ -95,11 +115,13 @@ function createPi(mode?: string) {
       commands.set(name, command);
     }),
     registerFlag: mock(() => undefined),
-    registerTool: mock(() => undefined),
+    registerTool: mock((tool: any) => {
+      tools.set(tool.name, tool);
+    }),
     appendEntry: mock(() => undefined),
   };
 
-  return { pi, events, commands };
+  return { pi, events, commands, tools };
 }
 
 function createContext() {
@@ -143,6 +165,7 @@ beforeEach(() => {
   createCalls.length = 0;
   finders = [];
   mixedSearchImpl = undefined;
+  grepMatchRoot = undefined;
   delete process.env.PI_FFF_MODE;
 });
 
@@ -320,5 +343,34 @@ describe("pi-fff autocomplete registration", () => {
     expect(shouldTrigger).toBe(false);
     expect(current.applyCompletion).toHaveBeenCalledTimes(1);
     expect(current.shouldTriggerFileCompletion).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pi-fff external paths", () => {
+  test("uses an exact finder for an explicit external file", async () => {
+    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "fff-711-"));
+    const broadRoot = path.join(fixture, ".pi");
+    const targetDir = path.join(broadRoot, "node_modules", "pkg");
+    const targetPath = path.join(targetDir, "target.ts");
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(targetPath, "issue711Token\n");
+
+    try {
+      grepMatchRoot = targetDir;
+      const { tools } = await start();
+      const grep = tools.get("ffgrep");
+      await grep.execute("warmup", { pattern: "warmup", path: broadRoot });
+      const result = await grep.execute("repro", {
+        pattern: "issue711Token",
+        path: targetPath,
+      });
+
+      expect(result.content[0].text).toContain("target.ts");
+      expect(
+        createCalls.map((call) => (call as { basePath: string }).basePath),
+      ).toContain(targetDir);
+    } finally {
+      fs.rmSync(fixture, { recursive: true, force: true });
+    }
   });
 });

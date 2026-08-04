@@ -5,7 +5,6 @@
  * @-mention autocomplete suggestions to the interactive editor.
  */
 
-import nodePath from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   type AutocompleteItem,
@@ -404,15 +403,14 @@ export default function fffExtension(pi: ExtensionAPI) {
   ): Promise<{ finder: FileFinderApi; query: string; root: string } | null> {
     const route = routePathConstraint(pathParam, activeCwd);
     if (!route) return null;
-    const aux = await auxPool.acquire(route.root);
-    // A broader covering picker may have been reused; rebase the suffix so the
-    // constraint stays relative to the picker's actual root.
-    const rebase = nodePath
-      .relative(aux.root, route.root)
-      .replaceAll(nodePath.sep, "/");
-    const suffix = [rebase, route.suffix].filter(Boolean).join("/");
-    const query = buildQuery(suffix || undefined, pattern, exclude, aux.root);
-    return { finder: aux.finder, query, root: aux.root };
+    const aux = await auxPool.acquire(route.root, { exact: true });
+    const query = buildQuery(
+      route.suffix || undefined,
+      pattern,
+      exclude,
+      route.root,
+    );
+    return { finder: aux.finder, query, root: route.root };
   }
 
   async function getMentionItems(
