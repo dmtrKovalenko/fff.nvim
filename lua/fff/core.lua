@@ -3,6 +3,9 @@ if not fuzzy then error('Failed to load fff.fuzzy module. Ensure the Rust backen
 
 local M = {}
 
+-- forward declaration; defined with the other utilities at end of file
+local fs_scanning_refusal
+
 ---@class fff.core.State
 local state = {
   ---@type boolean
@@ -111,6 +114,15 @@ M.change_indexing_directory = function(new_path)
 
   local fff_rust = M.ensure_initialized()
   local config = require('fff.conf').get()
+
+  -- Same guard as ensure_initialized: refuse root/home in Lua before the
+  -- FFI reindex, which segfaults on some targets instead of erroring (#745).
+  local refusal = fs_scanning_refusal(vim.tbl_extend('force', config, { base_path = expanded_path }))
+  if refusal then
+    vim.notify('FFF: ' .. refusal, vim.log.levels.WARN)
+    return false
+  end
+
   local ok, err = pcall(fff_rust.restart_index_in_path, expanded_path, {
     follow_symlinks = config.follow_symlinks,
     enable_fs_root_scanning = config.enable_fs_root_scanning,
@@ -128,9 +140,22 @@ end
 
 M.ensure_initialized = function()
   if state.initialized then return fuzzy end
-  state.initialized = true
 
   local config = require('fff.conf').get()
+
+  -- Mirror the Rust refusal (file_picker.rs:862) in Lua. On some
+  -- cross-compiled targets (aarch64 CI builds, see #745) the FFI call
+  -- segfaults instead of returning the error cleanly, and a SIGSEGV can't
+  -- be caught by the pcall around init_file_picker below — it kills the
+  -- whole neovim process. Refuse here before crossing into Rust.
+  local refusal = fs_scanning_refusal(config)
+  if refusal then
+    state.initialized = true
+    vim.notify('FFF: ' .. refusal, vim.log.levels.WARN)
+    return fuzzy
+  end
+
+  state.initialized = true
   if config.logging.enabled then
     local log_success, log_error =
       pcall(fuzzy.init_tracing, config.logging.log_file, config.logging.log_level, config.logging.retain_runs)
@@ -171,6 +196,29 @@ M.ensure_initialized = function()
   })
 
   return fuzzy
+end
+
+--- Returns a refusal message if `config.base_path` is a filesystem root or the
+--- home directory and the matching scan flag is disabled; `nil` otherwise.
+--- @param config table
+--- @return string?
+function fs_scanning_refusal(config)
+  local path = vim.fn.fnamemodify(vim.fn.expand(config.base_path), ':p'):gsub('/+$', '')
+
+  -- Filesystem root: `/` collapses to empty after stripping the trailing
+  -- slash (Windows drive roots like `C:` keep a colon).
+  if not config.enable_fs_root_scanning and (path == '' or path:match('^%a:$')) then
+    return 'Refusing to index filesystem root. Set enable_fs_root_scanning = true to override.'
+  end
+
+  if not config.enable_home_dir_scanning then
+    local home = (vim.fn.expand('$HOME') or ''):gsub('/+$', '')
+    if home ~= '' and path == home then
+      return 'Refusing to index home directory. Set enable_home_dir_scanning = true to override.'
+    end
+  end
+
+  return nil
 end
 
 return M
