@@ -36,11 +36,7 @@ const DEFAULT_FIND_LIMIT = 30;
 const GREP_MAX_LINE_LENGTH = 500;
 const MENTION_MAX_RESULTS = 20;
 
-// Native grep is synchronous, so an AbortSignal cannot interrupt a search
-// already in flight. Bound wall-clock time instead: over a broad root (e.g.
-// $HOME) an unbounded grep can scan for tens of minutes. 0 would mean
-// unlimited; the engine returns partial results plus a nextCursor on timeout.
-// Issue #746.
+// If we exceed 10 seconds for indexed grep - something is definetely off
 const GREP_TIME_BUDGET_MS = 10_000;
 
 type FffMode = "tools-and-ui" | "tools-only" | "override";
@@ -728,10 +724,8 @@ export default function fffExtension(pi: ExtensionAPI) {
       let result = grepResult.value;
       let fuzzyNotice: string | null = null;
 
-      // automatic fuzzy fallback allows to broad the queries and find different cases.
-      // Skip it when the exact pass left a nextCursor: it did not exhaust the
-      // corpus (broad root / time budget hit), so a full fuzzy re-traversal would
-      // just repeat the expensive walk. Issue #746.
+      // if we hit the timeout do not run the fuzzy fallback
+      // cause it will only consumer more time 
       if (
         result.items.length === 0 &&
         !result.nextCursor &&
