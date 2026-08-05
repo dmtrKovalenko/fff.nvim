@@ -36,7 +36,7 @@ const DEFAULT_FIND_LIMIT = 30;
 const GREP_MAX_LINE_LENGTH = 500;
 const MENTION_MAX_RESULTS = 20;
 
-// If we exceed 10 seconds for indexed grep - something is definetely off
+// If we exceed 10 seconds for indexed grep - something is definitely off
 const GREP_TIME_BUDGET_MS = 10_000;
 
 type FffMode = "tools-and-ui" | "tools-only" | "override";
