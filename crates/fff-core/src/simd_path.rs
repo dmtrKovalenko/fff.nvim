@@ -415,13 +415,25 @@ mod tests {
 
     #[test]
     fn test_chunked_string_full_path() {
-        let (store, strings, _files) = build_test_store(&["src/components/Button.tsx"]);
+        let (store, strings, _files) = build_test_store(&[
+            "src/components/Button.tsx",
+            "src/components/Button.test.tsx",
+        ]);
         let arena = store.as_arena_ptr();
         let cs = &strings[0];
 
         let mut buf = [0u8; 512];
         assert_eq!(cs.read_to_buf(arena, &mut buf), "src/components/Button.tsx");
         assert_eq!(cs.byte_len, 25);
+        assert_eq!(cs.filename_offset, 15);
+
+        let cs = &strings[1];
+        let mut buf = [0u8; 512];
+        assert_eq!(
+            cs.read_to_buf(arena, &mut buf),
+            "src/components/Button.test.tsx"
+        );
+        assert_eq!(cs.byte_len, 30);
         assert_eq!(cs.filename_offset, 15);
     }
 

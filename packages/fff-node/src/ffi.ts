@@ -246,11 +246,7 @@ function readResultEnvelope(
   paramsValue: unknown[],
 ): { rawPtr: JsExternal; struct: FffResultRaw } | Result<never> {
   loadLibrary();
-  const { rawPtr, struct: structData } = callRaw(
-    funcName,
-    paramsType,
-    paramsValue,
-  );
+  const { rawPtr, struct: structData } = callRaw(funcName, paramsType, paramsValue);
 
   if (structData.success === 0) {
     const errorStr = readCString(structData.error);
@@ -328,8 +324,7 @@ function callJsonResult<T>(
   if (isNullPointer(handlePtr)) return { ok: true, value: undefined as T };
   const jsonStr = readCString(handlePtr);
   freeString(handlePtr);
-  if (jsonStr === null || jsonStr === "")
-    return { ok: true, value: undefined as T };
+  if (jsonStr === null || jsonStr === "") return { ok: true, value: undefined as T };
   try {
     return { ok: true, value: snakeToCamel(JSON.parse(jsonStr)) as T };
   } catch {
@@ -849,16 +844,10 @@ function readGrepMatchFromRaw(raw: FffGrepMatchRaw): GrepMatch {
     match.fuzzyScore = raw.fuzzy_score;
   }
   if (raw.context_before_count > 0) {
-    match.contextBefore = readCStringArray(
-      raw.context_before,
-      raw.context_before_count,
-    );
+    match.contextBefore = readCStringArray(raw.context_before, raw.context_before_count);
   }
   if (raw.context_after_count > 0) {
-    match.contextAfter = readCStringArray(
-      raw.context_after,
-      raw.context_after_count,
-    );
+    match.contextAfter = readCStringArray(raw.context_after, raw.context_after_count);
   }
   if (raw.is_definition !== 0) {
     match.isDefinition = true;
@@ -927,8 +916,7 @@ function parseGrepResult(rawPtr: JsExternal): Result<GrepResult> {
     totalFilesSearched: gr.total_files_searched,
     totalFiles: gr.total_files,
     filteredFileCount: gr.filtered_file_count,
-    nextCursor:
-      gr.next_file_offset > 0 ? createGrepCursor(gr.next_file_offset) : null,
+    nextCursor: gr.next_file_offset > 0 ? createGrepCursor(gr.next_file_offset) : null,
   };
   if (regexFallbackError) {
     grepResult.regexFallbackError = regexFallbackError;
@@ -1280,14 +1268,7 @@ export function ffiGlob(
       DataType.U32, // page_index
       DataType.U32, // page_size
     ],
-    paramsValue: [
-      handle,
-      pattern,
-      currentFile,
-      maxThreads,
-      pageIndex,
-      pageSize,
-    ],
+    paramsValue: [handle, pattern, currentFile, maxThreads, pageIndex, pageSize],
     freeResultMemory: false,
   }) as JsExternal;
 
@@ -1319,14 +1300,7 @@ export function ffiSearchDirectories(
       DataType.U32, // page_index
       DataType.U32, // page_size
     ],
-    paramsValue: [
-      handle,
-      query,
-      currentFile ?? "",
-      maxThreads,
-      pageIndex,
-      pageSize,
-    ],
+    paramsValue: [handle, query, currentFile ?? "", maxThreads, pageIndex, pageSize],
     freeResultMemory: false,
   }) as JsExternal;
 
@@ -1545,11 +1519,7 @@ export function ffiGetScanProgress(handle: NativeHandle): Result<{
   isWarmupComplete: boolean;
 }> {
   loadLibrary();
-  const res = readResultEnvelope(
-    "fff_get_scan_progress",
-    [DataType.External],
-    [handle],
-  );
+  const res = readResultEnvelope("fff_get_scan_progress", [DataType.External], [handle]);
   if ("ok" in res) return res;
 
   const handlePtr = res.struct.handle;
@@ -1584,10 +1554,7 @@ export function ffiGetScanProgress(handle: NativeHandle): Result<{
 /**
  * Wait for a tree scan to complete.
  */
-export function ffiWaitForScan(
-  handle: NativeHandle,
-  timeoutMs: number,
-): Result<boolean> {
+export function ffiWaitForScan(handle: NativeHandle, timeoutMs: number): Result<boolean> {
   return callBoolResult(
     "fff_wait_for_scan",
     [DataType.External, DataType.U64],
@@ -1598,10 +1565,7 @@ export function ffiWaitForScan(
 /**
  * Restart index in new path.
  */
-export function ffiRestartIndex(
-  handle: NativeHandle,
-  newPath: string,
-): Result<void> {
+export function ffiRestartIndex(handle: NativeHandle, newPath: string): Result<void> {
   return callVoidResult(
     "fff_restart_index",
     [DataType.External, DataType.String],
@@ -1772,8 +1736,7 @@ function ensureWatchTrampoline(): JsExternal {
 // fff watcher uses a single cross-boundary FFI callback to deliver all events which we then manually
 // mapping to the user's javascript functions
 function ensureWatchCallbackRegistered(handle: NativeHandle): Result<void> {
-  if (watchInstances.has(handle as unknown))
-    return { ok: true, value: undefined };
+  if (watchInstances.has(handle as unknown)) return { ok: true, value: undefined };
   const trampoline = ensureWatchTrampoline();
   const registered = callVoidResult(
     "fff_set_watch_callback",
@@ -1785,11 +1748,7 @@ function ensureWatchCallbackRegistered(handle: NativeHandle): Result<void> {
 }
 
 function releaseWatchTrampolineIfIdle(): void {
-  if (
-    watchHandlers.size > 0 ||
-    watchInstances.size > 0 ||
-    watchTrampoline === null
-  )
+  if (watchHandlers.size > 0 || watchInstances.size > 0 || watchTrampoline === null)
     return;
   freePointer({
     paramsType: [WATCH_TRAMPOLINE_TYPE],
@@ -1835,10 +1794,7 @@ export function ffiWatch(
  * this returns the callback can never run again (a late native tail batch
  * misses the map lookup and is dropped).
  */
-export function ffiUnwatch(
-  handle: NativeHandle,
-  watchId: number,
-): Result<boolean> {
+export function ffiUnwatch(handle: NativeHandle, watchId: number): Result<boolean> {
   const result = callBoolResult(
     "fff_unwatch",
     [DataType.External, DataType.U64],

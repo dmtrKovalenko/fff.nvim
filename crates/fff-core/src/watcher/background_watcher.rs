@@ -2,6 +2,7 @@ use crate::constants::MAX_OVERFLOW_FILES;
 use crate::error::Error;
 use crate::file_picker::FFFMode;
 use crate::git_status_worker::GitStatusWorker;
+use crate::rescan_stats::RescanReason;
 use crate::shared::{SharedFilePicker, SharedFrecency};
 use crate::sort_buffer::sort_with_buffer;
 use crate::watch::{RawWatchEvent, WatchEventKind};
@@ -324,7 +325,7 @@ impl Drop for BackgroundWatcher {
 }
 
 #[tracing::instrument(name = "fs_events", skip(events, shared_picker, shared_frecency, git_status_worker), level = Level::DEBUG)]
-fn handle_debounced_events(
+pub(crate) fn handle_debounced_events(
     mode: FFFMode,
     events: Vec<DebouncedEvent>,
     base_path: &Path,
@@ -342,8 +343,8 @@ fn handle_debounced_events(
         .ok()
         .and_then(|g| g.as_ref().and_then(|p| p.ignore_rules()));
     let filter = IgnoreFilter::new(base_path, walker_rules, repo.as_ref());
-    let mut need_full_rescan = false;
     let mut need_full_git_rescan = false;
+    let mut batch_overflow_attempted = false;
     let mut paths_to_remove = Vec::new();
     let mut dirs_to_remove: Vec<PathBuf> = Vec::new();
     let mut paths_to_add_or_modify = Vec::new();
@@ -352,6 +353,21 @@ fn handle_debounced_events(
 
     let watch_registry = shared_picker.watch_registry();
     let need_events_propagation = watch_registry.is_active();
+
+    let try_trigger_full_rescan = |reason: RescanReason| -> bool {
+        match shared_picker.trigger_full_rescan_with_reason(shared_frecency, reason) {
+            Ok(true) => {
+                warn!(%reason, "Triggering full rescan");
+                watch_registry.dispatch_rescan(base_path);
+                true
+            }
+            Ok(false) => false,
+            Err(e) => {
+                error!(%reason, "Failed to trigger full rescan: {:?}", e);
+                false
+            }
+        }
+    };
 
     for debounced_event in &events {
         // It is very important to not react to the access errors because we inevitably
@@ -370,22 +386,19 @@ fn handle_debounced_events(
         // When macOS FSEvents (or other backends) overflow their event buffer, the kernel
         // drops individual events and emits a rescan flag telling us to re-scan the subtree
         if debounced_event.event.need_rescan() {
-            if debounced_event.event.paths.len() < 16 // this should be usually one event
+            let small_and_known = debounced_event.event.paths.len() < 16 // this should be usually one event
                 && debounced_event
                     .paths
                     .iter()
                     // but we are smart enough and not falling into the paths
-                    .all(|p| !p.is_dir() && !filter.is_ignored(p))
-            {
-                break;
+                    .all(|p| !p.is_dir() && !filter.is_ignored(p));
+
+            if !small_and_known && try_trigger_full_rescan(RescanReason::KernelEventLoss) {
+                return Vec::new();
             }
 
-            warn!(
-                "Received rescan event for paths {:?}, triggering full rescan",
-                debounced_event.event.paths
-            );
-            need_full_rescan = true;
-            break;
+            // Small batches and throttled rescans fall through: the listed
+            // paths are still applied incrementally below.
         }
 
         tracing::debug!(event = ?debounced_event.event, "Processing FS event");
@@ -394,13 +407,24 @@ fn handle_debounced_events(
                 path.file_name().and_then(|f| f.to_str()),
                 Some(".ignore") | Some(".gitignore")
             ) {
+                if path
+                    .parent()
+                    .is_some_and(|parent| filter.is_ignored(parent))
+                {
+                    continue;
+                }
+
                 info!(
                     "Detected change in ignore definition file: {}",
                     path.display()
                 );
 
-                need_full_rescan = true;
-                break;
+                if try_trigger_full_rescan(RescanReason::IgnoreFileChanged) {
+                    return Vec::new();
+                }
+
+                // Throttled: fall through so the ignore file itself stays
+                // indexed; the stale rules heal on the next admitted rescan.
             }
 
             if is_dotgit_change_affecting_status(path, &repo) {
@@ -462,29 +486,18 @@ fn handle_debounced_events(
         }
 
         affected_paths_count += debounced_event.event.paths.len();
-        if affected_paths_count > MAX_OVERFLOW_FILES {
+        if !batch_overflow_attempted && affected_paths_count > MAX_OVERFLOW_FILES * 4 {
+            batch_overflow_attempted = true;
             warn!(
                 ?affected_paths_count,
-                max = MAX_OVERFLOW_FILES,
+                max = MAX_OVERFLOW_FILES * 4,
                 "Too many affected paths in a single batch, triggering full rescan",
             );
 
-            need_full_rescan = true;
-            break;
+            if try_trigger_full_rescan(RescanReason::EventBatchOverflow) {
+                return Vec::new();
+            }
         }
-
-        if need_full_rescan {
-            break;
-        }
-    }
-
-    if need_full_rescan {
-        info!(?affected_paths_count, "Triggering full rescan");
-        watch_registry.dispatch_rescan(base_path);
-        if let Err(e) = shared_picker.trigger_full_rescan_async(shared_frecency) {
-            error!("Failed to trigger full rescan: {:?}", e);
-        }
-        return Vec::new();
     }
 
     // It's important to get the allocated sort
@@ -511,7 +524,7 @@ fn handle_debounced_events(
     }
 
     let mut files_to_update_git_status = Vec::new();
-    let mut need_full_rescan = false;
+    let mut index_update_rejected = false;
     let mut overflow_count = 0;
     let mut removed_from_dirs = Vec::new();
     let mut watch_events = ahash::AHashMap::new();
@@ -572,6 +585,13 @@ fn handle_debounced_events(
 
         files_to_update_git_status.reserve(paths_to_add_or_modify.len());
         for path in &paths_to_add_or_modify {
+            if picker.get_overflow_files().len() >= MAX_OVERFLOW_FILES
+                && picker.get_file_by_path(path).is_none()
+            {
+                index_update_rejected = true;
+                break;
+            }
+
             let existed = need_events_propagation && picker.get_file_by_path(path).is_some();
 
             if picker.handle_create_or_modify(path).is_some() {
@@ -586,7 +606,7 @@ fn handle_debounced_events(
                     watch_events.insert(path.to_path_buf(), kind);
                 }
             } else {
-                need_full_rescan = true;
+                index_update_rejected = true;
             }
         }
 
@@ -598,13 +618,22 @@ fn handle_debounced_events(
         overflow_count, "File index changes applied",
     );
 
-    if need_full_rescan || overflow_count > MAX_OVERFLOW_FILES {
-        info!("Watcher faced limit of index overflow. Triggering rescan");
-        watch_registry.dispatch_rescan(base_path);
-        if let Err(e) = shared_picker.trigger_full_rescan_async(shared_frecency) {
-            error!("Failed to trigger full rescan: {:?}", e);
-        }
-    } else if need_events_propagation {
+    let rescan_started = if index_update_rejected || overflow_count > MAX_OVERFLOW_FILES {
+        let reason = if index_update_rejected {
+            RescanReason::IndexUpdateRejected
+        } else {
+            RescanReason::OverflowCapacity
+        };
+
+        info!(%reason, "Watcher faced limit of index overflow. Triggering rescan");
+        try_trigger_full_rescan(reason)
+    } else {
+        false
+    };
+
+    // When the rescan is throttled the incrementally applied changes are
+    // still the freshest state we have — propagate them to subscribers.
+    if !rescan_started && need_events_propagation {
         watch_registry.dispatch(
             base_path,
             watch_events
@@ -664,7 +693,7 @@ fn handle_debounced_events(
 
     // do not try to update the paths if we anyway going to rescan everything from scratch
     // no repo => no consumer thread, so don't accumulate paths nobody will drain
-    if !need_full_rescan && repo.is_some() {
+    if !index_update_rejected && repo.is_some() {
         if need_full_git_rescan {
             // A full git rescan re-reads every tracked path (including ones that just
             // went clean after a commit), so it already subsumes the per-path update.

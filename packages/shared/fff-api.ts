@@ -567,16 +567,10 @@ export interface FileFinderApi {
   glob(pattern: string, options?: GlobOptions): Result<SearchResult>;
 
   /** Fuzzy directory search. */
-  directorySearch(
-    query: string,
-    options?: DirSearchOptions,
-  ): Result<DirSearchResult>;
+  directorySearch(query: string, options?: DirSearchOptions): Result<DirSearchResult>;
 
   /** Fuzzy search over files and directories interleaved by score. */
-  mixedSearch(
-    query: string,
-    options?: SearchOptions,
-  ): Result<MixedSearchResult>;
+  mixedSearch(query: string, options?: SearchOptions): Result<MixedSearchResult>;
 
   /** Content search (live grep). */
   grep(query: string, options?: GrepOptions): Result<GrepResult>;
@@ -641,10 +635,7 @@ export interface FileFinderApi {
    * Events are debounced and submitted in batches per 100-ms window at most 128 events.
    * Gitignored and other ignored files are never triggering watcher.
    */
-  watch(
-    callback: WatchBatchCallback,
-    options?: WatchOptions,
-  ): Result<WatchUnsubscribe>;
+  watch(callback: WatchBatchCallback, options?: WatchOptions): Result<WatchUnsubscribe>;
   watch(
     pattern: string,
     callback: WatchBatchCallback,

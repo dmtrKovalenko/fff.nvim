@@ -98,9 +98,7 @@ describe("routePathConstraint", () => {
     });
 
     test("returns null when .. resolves back inside the workspace", () => {
-      expect(
-        routePathConstraint("../workspace/src", workspace),
-      ).toBeNull();
+      expect(routePathConstraint("../workspace/src", workspace)).toBeNull();
     });
   });
 });

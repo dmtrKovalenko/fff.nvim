@@ -8,6 +8,8 @@ use crate::file_picker::FilePicker;
 use crate::frecency::FrecencyTracker;
 use crate::git::GitStatusCache;
 use crate::query_tracker::QueryTracker;
+use crate::rescan_stats::{RescanCounters, RescanReason, RescanStats};
+use crate::rescan_throttle::RescanThrottle;
 use crate::scan::ScanJob;
 use crate::watch::{WatchEvent, WatchId, WatchOptions, WatchRegistry};
 use git2::Repository;
@@ -77,6 +79,8 @@ pub struct SharedPickerInner {
     /// Watch subscriptions live outside the picker lock so delivery and
     /// (un)subscribing never contend with searches.
     watchers: Arc<WatchRegistry>,
+    rescans: RescanCounters,
+    rescan_throttle: RescanThrottle,
 }
 
 impl Default for SharedPickerInner {
@@ -84,6 +88,8 @@ impl Default for SharedPickerInner {
         Self {
             picker: parking_lot::RwLock::new(None),
             watchers: Arc::new(WatchRegistry::default()),
+            rescans: RescanCounters::default(),
+            rescan_throttle: RescanThrottle::default(),
         }
     }
 }
@@ -199,6 +205,39 @@ impl SharedFilePicker {
     /// Performs a safe async rescan. Guarantees only single active rescan per picker.
     /// If many rescans requested the last one guaranteed to be finished.
     pub fn trigger_full_rescan_async(&self, shared_frecency: &SharedFrecency) -> Result<(), Error> {
+        self.trigger_full_rescan_with_reason(shared_frecency, RescanReason::Explicit)
+            .map(|_| ())
+    }
+
+    /// Returns admitted and throttled rescan requests by reason.
+    /// Counters start at picker creation or the last reset.
+    pub fn rescan_stats(&self) -> RescanStats {
+        self.0.rescans.snapshot()
+    }
+
+    pub fn reset_rescan_stats(&self) {
+        self.0.rescans.reset();
+    }
+
+    /// Returns `Ok(true)` when a rescan was started (or queued behind an
+    /// active scan) and `Ok(false)` when the request was throttled — the
+    /// caller must then fall back to incremental event processing.
+    pub(crate) fn trigger_full_rescan_with_reason(
+        &self,
+        shared_frecency: &SharedFrecency,
+        reason: RescanReason,
+    ) -> Result<bool, Error> {
+        // for giant folders we have no other choice other than throttling rescans
+        // if user is running application in millions of files with a ton of rescan events
+        // we drop / throttle some of requests to avoid constant burst of IO
+        if reason == RescanReason::Explicit {
+            self.0.rescan_throttle.note_explicit_scan();
+        } else if !self.check_rescan_throttle(reason) {
+            return Ok(false);
+        }
+
+        self.0.rescans.record(reason);
+
         match ScanJob::new_rescan(self, shared_frecency)? {
             Some(job) => {
                 job.spawn();
@@ -219,7 +258,27 @@ impl SharedFilePicker {
                 }
             }
         }
-        Ok(())
+        Ok(true)
+    }
+
+    fn check_rescan_throttle(&self, reason: RescanReason) -> bool {
+        let (live_files, has_git) = self
+            .read()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .as_ref()
+                    .map(|picker| (picker.live_file_count(), picker.has_git_repo()))
+            })
+            .unwrap_or((0, false));
+
+        if self.0.rescan_throttle.admit(live_files, has_git) {
+            return true;
+        }
+
+        self.0.rescans.record_throttled(reason);
+        tracing::debug!(%reason, live_files, "Rescan throttled, skipping");
+        false
     }
 
     /// Subscribe to filesystem changes matching `pattern`.
