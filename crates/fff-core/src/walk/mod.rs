@@ -20,6 +20,8 @@ pub(crate) use ripgrep::walk_collect_files;
 
 pub(crate) struct WalkOutput {
     pub(crate) pairs: Vec<(FileItem, String)>,
+    /// Every non-ignored directory the walk visited, relative, ending with /
+    pub(crate) dirs: Vec<String>,
     pub(crate) ignore_rules: Option<WalkIgnoreRules>,
 }
 
