@@ -729,19 +729,6 @@ impl FilePicker {
         &self.sync_data.dirs
     }
 
-    /// Whether the absolute `path` is a directory known to the index
-    /// (including dirs that were empty at scan time).
-    pub(crate) fn has_indexed_dir(&self, path: &Path) -> bool {
-        let Ok(rel) = path.strip_prefix(&self.base_path) else {
-            return false;
-        };
-        let mut rel = crate::path_utils::to_canonical_slashes(&rel.to_string_lossy()).into_owned();
-        if !rel.is_empty() && !rel.ends_with('/') {
-            rel.push('/');
-        }
-        self.sync_data.find_dir_index(&rel).is_some()
-    }
-
     /// Actual heap bytes used: (chunked_path_store, 0, 0).
     /// The second element is 0 because leaked overflow stores aren't tracked.
     pub fn arena_bytes(&self) -> (usize, usize, usize) {
@@ -2047,9 +2034,7 @@ impl FileSync {
         )?;
         let ignore_rules = ignore_rules.map(Arc::new);
 
-        // Sort files by (dir_part, filename) — grouping them into contiguous
-        // per-dir runs — and the walked dirs by the same '/'-terminated form,
-        // so the build pass below can merge both in a single sweep.
+        // group walked dirs and files with a dir part to the same order
         BACKGROUND_THREAD_POOL.install(|| {
             rayon::join(
                 || {
@@ -2200,35 +2185,45 @@ fn populates_dirs_files_chunked_storage<'a>(
     let mut dirs: Vec<DirItem> = Vec::with_capacity(walked_dirs.len() + 1);
     let mut dir_iter = walked_dirs.iter().peekable();
 
+    // Root-level files sort first and their "" parent is never a walker dir.
+    if pairs
+        .first()
+        .is_some_and(|(f, _)| f.path.filename_offset == 0)
+    {
+        push_dir_item(&mut dirs, chunk_storage, "");
+    }
+
+    // Detects contiguous same-dir runs (pairs are sorted by dir) so the
+    // merge below runs once per directory, not once per file.
     let mut prev_dir: &'a str = "";
-    let mut prev_dir_valid = false;
     let mut current_dir_idx: u32 = 0;
 
     for (file, rel) in pairs.iter_mut() {
         let rel: &'a str = rel;
         let dir_part: &'a str = &rel[..file.path.filename_offset as usize];
 
-        if !prev_dir_valid || prev_dir != dir_part {
+        if prev_dir != dir_part {
             // Flush walked dirs up to and including this file's parent,
             // keeping the table sorted for the find_dir_index binary search.
-            let mut matched = false;
             while let Some(dir) = dir_iter.peek()
-                && dir.as_str() <= dir_part
+                && dir.as_str() < dir_part
             {
-                matched = dir.as_str() == dir_part;
                 push_dir_item(&mut dirs, chunk_storage, dir);
                 dir_iter.next();
             }
 
-            // Root-level files ("" dir part) and parents the walker reported
-            // with a non-dir kind (e.g. followed symlinks) aren't in the list.
-            if !matched {
-                push_dir_item(&mut dirs, chunk_storage, dir_part);
+            match dir_iter.peek() {
+                Some(dir) if dir.as_str() == dir_part => {
+                    push_dir_item(&mut dirs, chunk_storage, dir);
+                    dir_iter.next();
+                }
+                // Parents the walker reported with a non-dir kind
+                // (e.g. followed symlinks) aren't in the list.
+                _ => push_dir_item(&mut dirs, chunk_storage, dir_part),
             }
-            current_dir_idx = (dirs.len() - 1) as u32;
 
+            current_dir_idx = (dirs.len() - 1) as u32;
             prev_dir = dir_part;
-            prev_dir_valid = true;
         }
 
         file.path = chunk_storage.add_file_immediate(rel, file.path.filename_offset);

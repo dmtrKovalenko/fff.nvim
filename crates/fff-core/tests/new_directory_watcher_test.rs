@@ -8,8 +8,9 @@
 //!   3. The watcher's event handler detects the directory Create event,
 //!      collects it, and sends it to the owner thread via `watch_tx`.
 //!   4. The owner thread adds a NonRecursive watch on the new directory and
-//!      does a flat (non-recursive) read_dir to inject files that already
-//!      exist (race-window coverage).
+//!      walks its subtree (`index_new_directory`) to inject files that
+//!      already exist (race-window + burst/mv-in coverage) and to watch
+//!      nested subdirectories.
 //!   5. Files created *after* the watch is established are picked up via
 //!      normal event delivery.
 //!
@@ -550,6 +551,76 @@ fn file_created_in_nested_preexisting_empty_directories() {
         WATCHER_TIMEOUT,
         "grep finds NESTED_EMPTY_DIR_TOKEN",
         |picker| grep_plain_count(picker, "NESTED_EMPTY_DIR_TOKEN") >= 1,
+    );
+}
+
+#[test]
+fn nested_tree_created_in_one_burst_detected() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+
+    fs::write(base.join("root.txt"), "root file\n").unwrap();
+    git_init_and_commit(&base);
+
+    let (shared_picker, _frecency) = make_watched_picker(&base);
+    wait_ready(&shared_picker);
+
+    // No sleeps between levels: the watcher sees one Create for `pkg` and
+    // must index the whole subtree from it.
+    fs::create_dir_all(base.join("pkg/src/nested")).unwrap();
+    fs::write(base.join("pkg/Cargo.toml"), "[package]\n").unwrap();
+    fs::write(
+        base.join("pkg/src/lib.rs"),
+        "const TOKEN: &str = \"BURST_TREE_LIB_TOKEN\";\n",
+    )
+    .unwrap();
+    fs::write(
+        base.join("pkg/src/nested/deep.rs"),
+        "const TOKEN: &str = \"BURST_TREE_DEEP_TOKEN\";\n",
+    )
+    .unwrap();
+
+    for rel in ["pkg/Cargo.toml", "pkg/src/lib.rs", "pkg/src/nested/deep.rs"] {
+        let elapsed = poll_until(
+            &shared_picker,
+            WATCHER_TIMEOUT,
+            &format!("burst-created file {rel}"),
+            |picker| {
+                picker
+                    .get_files()
+                    .iter()
+                    .any(|f| f.relative_path(picker) == rel)
+            },
+        );
+        eprintln!(
+            "  Burst file {rel} detected in {:.0}ms",
+            elapsed.as_secs_f64() * 1000.0
+        );
+    }
+
+    // Files created later at the deepest level need the nested watches too.
+    fs::write(
+        base.join("pkg/src/nested/late.rs"),
+        "const TOKEN: &str = \"BURST_TREE_LATE_TOKEN\";\n",
+    )
+    .unwrap();
+    poll_until(
+        &shared_picker,
+        WATCHER_TIMEOUT,
+        "late file in burst-created nested dir",
+        |picker| {
+            picker
+                .get_files()
+                .iter()
+                .any(|f| f.relative_path(picker).ends_with("late.rs"))
+        },
+    );
+
+    poll_until(
+        &shared_picker,
+        WATCHER_TIMEOUT,
+        "grep finds BURST_TREE_DEEP_TOKEN",
+        |picker| grep_plain_count(picker, "BURST_TREE_DEEP_TOKEN") >= 1,
     );
 }
 
