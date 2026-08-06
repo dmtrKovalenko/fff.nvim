@@ -19,6 +19,10 @@ export interface AuxOpts {
 
 export class AuxFinderPool {
   private entries: AuxPicker[] = [];
+  // In-flight creations keyed by root. Concurrent acquire() calls for the same
+  // (or a covering) root share one finder/scan instead of each starting a full
+  // duplicate traversal — issue #746. Mirrors the main finder's finderPromise.
+  private pending = new Map<string, Promise<AuxPicker>>();
   constructor(private opts: AuxOpts) {}
 
   destroy(): void {
@@ -27,6 +31,7 @@ export class AuxFinderPool {
     }
 
     this.entries = [];
+    this.pending.clear();
   }
 
   private sweepIdle(now = Date.now()): void {
@@ -58,6 +63,25 @@ export class AuxFinderPool {
       return { finder: covering.finder, root: covering.root };
     }
 
+    // Coalesce concurrent creations for the same root so we scan once. A slow
+    // full-home scan started by one call is awaited by the others instead of
+    // each spawning its own traversal (#746).
+    const inflight = this.pending.get(maybeRoot);
+    if (inflight) {
+      const e = await inflight;
+      e.lastUsed = Date.now();
+      return { finder: e.finder, root: e.root };
+    }
+
+    const creation = this.create(maybeRoot).finally(() => {
+      this.pending.delete(maybeRoot);
+    });
+    this.pending.set(maybeRoot, creation);
+    const entry = await creation;
+    return { finder: entry.finder, root: entry.root };
+  }
+
+  private async create(root: string): Promise<AuxPicker> {
     if (this.entries.length >= MAX_AUX) {
       let oldest = this.entries[0];
       for (const e of this.entries)
@@ -71,19 +95,24 @@ export class AuxFinderPool {
     // owns the frecency/history DBs. Aux finders are transient and run without
     // persistent scoring — see issue #700.
     const result = FileFinder.create({
-      basePath: maybeRoot,
+      basePath: root,
       aiMode: true,
       enableHomeDirScanning: true,
       enableFsRootScanning: this.opts.enableFsRootScanning,
     });
     if (!result.ok)
       throw new Error(
-        `Failed to create aux file finder for ${maybeRoot}: ${result.error}`,
+        `Failed to create aux file finder for ${root}: ${result.error}`,
       );
 
     await result.value.waitForScan(SCAN_TIMEOUT_MS);
-    this.entries.push({ root: maybeRoot, finder: result.value, lastUsed: Date.now() });
-    return { finder: result.value, root: maybeRoot };
+    const entry: AuxPicker = {
+      root,
+      finder: result.value,
+      lastUsed: Date.now(),
+    };
+    this.entries.push(entry);
+    return entry;
   }
 
   size(): number {

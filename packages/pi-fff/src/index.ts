@@ -36,6 +36,9 @@ const DEFAULT_FIND_LIMIT = 30;
 const GREP_MAX_LINE_LENGTH = 500;
 const MENTION_MAX_RESULTS = 20;
 
+// If we exceed 10 seconds for indexed grep - something is definitely off
+const GREP_TIME_BUDGET_MS = 10_000;
+
 type FffMode = "tools-and-ui" | "tools-only" | "override";
 
 const VALID_MODES: FffMode[] = ["tools-and-ui", "tools-only", "override"];
@@ -713,6 +716,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         beforeContext: params.context ?? 0,
         afterContext: params.context ?? 0,
         classifyDefinitions: true,
+        timeBudgetMs: GREP_TIME_BUDGET_MS,
       });
 
       if (!grepResult.ok) throw new Error(grepResult.error);
@@ -720,8 +724,14 @@ export default function fffExtension(pi: ExtensionAPI) {
       let result = grepResult.value;
       let fuzzyNotice: string | null = null;
 
-      // automatic fuzzy fallback allows to broad the queries and find different cases
-      if (result.items.length === 0 && !params.cursor && mode !== "regex") {
+      // if we hit the timeout do not run the fuzzy fallback
+      // cause it will only consumer more time 
+      if (
+        result.items.length === 0 &&
+        !result.nextCursor &&
+        !params.cursor &&
+        mode !== "regex"
+      ) {
         // When the caller pinned a specific file (path has an extension), the
         // fuzzy fallback broadens across the whole picker — the file may just
         // be misnamed. For directory constraints (or no path), we keep the
@@ -738,6 +748,7 @@ export default function fffExtension(pi: ExtensionAPI) {
           beforeContext: 0,
           afterContext: 0,
           classifyDefinitions: true,
+          timeBudgetMs: GREP_TIME_BUDGET_MS,
         });
 
         if (fuzzy.ok && fuzzy.value.items.length > 0) {
