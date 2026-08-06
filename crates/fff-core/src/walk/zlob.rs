@@ -1,10 +1,8 @@
-//! Filesystem traversal backed by zlob's native parallel walker.
-//! Active when the `zlob` feature is enabled (requires the Zig toolchain).
-
 use crate::file_picker::is_known_binary_extension_basename;
 use crate::ignore::IGNORED_DIRS;
 use crate::types::FileItem;
 use crate::walk::{WalkIgnoreRules, WalkOutput};
+use parking_lot::Mutex;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -48,12 +46,25 @@ pub(crate) fn walk_collect_files(
         tracing::warn!(?e, "zlob extra_ignore rejected; walking without it");
     }
 
-    let pairs = parking_lot::Mutex::new(Vec::<(FileItem, String)>::new());
+    // Single lock for both collections: every entry is either a file or a
+    // dir, so this keeps one mutex acquisition per entry.
+    let collected = Mutex::new((Vec::new(), Vec::new()));
 
     let outcome = match builder.run(|entry| {
         if !entry.is_file() {
+            // unlike ripgrep walker zlob doesnt show .git files
+            if entry.is_dir() {
+                let rel_bytes = entry.relative_path_bytes();
+                if !rel_bytes.is_empty() {
+                    let mut rel = String::from_utf8_lossy(rel_bytes).into_owned();
+                    rel.push('/');
+                    collected.lock().1.push(rel);
+                }
+            }
+
             return WalkState::Continue;
         }
+
         let rel_bytes = entry.relative_path_bytes();
 
         // `basename()` returns `&str` for files only.
@@ -73,9 +84,9 @@ pub(crate) fn walk_collect_files(
         let rel_str = String::from_utf8_lossy(rel_bytes).into_owned();
         let item = FileItem::new_raw(basename_offset, size, modified, None, is_binary);
 
-        let mut guard = pairs.lock();
-        guard.push((item, rel_str));
-        let n = guard.len();
+        let mut guard = collected.lock();
+        guard.0.push((item, rel_str));
+        let n = guard.0.len();
         drop(guard);
 
         if n % PROGRESS_STEP == 0 {
@@ -93,7 +104,7 @@ pub(crate) fn walk_collect_files(
         }
     };
 
-    let pairs = pairs.into_inner();
+    let (pairs, dirs) = collected.into_inner();
     // Always report the exact final total regardless of the last step.
     synced_files_count.store(pairs.len(), Ordering::Relaxed);
 
@@ -106,6 +117,7 @@ pub(crate) fn walk_collect_files(
 
     Ok(WalkOutput {
         pairs,
+        dirs,
         ignore_rules,
     })
 }

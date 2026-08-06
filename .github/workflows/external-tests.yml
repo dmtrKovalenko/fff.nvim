@@ -18,6 +18,10 @@ env:
   # Force Node 24 for all JS-based actions to avoid the libuv
   # process_title assertion crash on Windows (known Node 20 bug).
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # e2e only needs a working binary, so skip fat LTO (same settings as the `ci`
+  # profile releases ship). Overriding release keeps artifacts in target/release.
+  CARGO_PROFILE_RELEASE_LTO: thin
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
 
 jobs:
   lua-tests:
@@ -32,7 +36,6 @@ jobs:
           - os: ubuntu-latest
           - os: macos-latest
           - os: windows-latest
-            target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
@@ -49,20 +52,13 @@ jobs:
           cache-on-failure: false
           cache-key: "v2-lua-e2e"
           rustflags: ""
-          target: ${{ matrix.target || '' }}
 
-      - name: Build Rust binary (Windows)
-        if: matrix.target
-        run: cargo build --release --target ${{ matrix.target }} -p fff-nvim --no-default-features --features zlob
-
-      - name: Copy binary to target/release (Windows)
-        if: matrix.target
+      - name: Build Rust binary
         shell: bash
-        run: |
-          cp target/${{ matrix.target }}/release/fff_nvim.dll target/release/fff_nvim.dll
+        run: make build
 
       - name: Verify Windows DLL has no unexpected dependencies
-        if: matrix.target
+        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           # Find dumpbin via vswhere (always available on GitHub Actions Windows runners)
@@ -77,10 +73,6 @@ jobs:
             Write-Error "fff_nvim.dll has unexpected dynamic dependency on zlob.dll - zlob should be statically linked"
             exit 1
           }
-
-      - name: Build Rust binary
-        if: ${{ !matrix.target }}
-        run: make build
 
       - name: Install Neovim
         uses: rhysd/action-setup-vim@v1
