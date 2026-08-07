@@ -3,28 +3,53 @@ use std::path::Path;
 /// Directories excluded when walking a non-git root. Entries are `cfg`-gated
 /// so a single iteration covers standard + platform-specific overrides.
 pub(crate) const IGNORED_DIRS: &[&str] = &[
+    // various dev tools that can be meet in the developer app
     "node_modules",
     "__pycache__",
     "venv",
     ".venv",
-    // Rust (glob-only patterns for non_git_repo_overrides; is_non_code_directory
-    // matches the "target" component separately).
     "target/debug",
     "target/release",
     "target/rust-analyzer",
     "target/criterion",
+    // Language package caches in non-git roots.
+    "go/pkg/mod",
+    ".cargo/registry",
+    ".rustup/toolchains",
+    ".gradle/caches",
+    ".m2/repository",
+    ".npm/_cacache",
+    ".pub-cache",
+    #[cfg(not(target_os = "windows"))]
+    ".local/state", // this contains tons of logs which generate too much watcher noise
     #[cfg(target_os = "macos")]
     "Library/Application Support",
     #[cfg(target_os = "macos")]
     "Library/Caches",
-    // App-group sandbox storage — used by iMessage, Photos, Notes, Calendar,
-    // Electron apps, etc. for SQLite-WAL, LevelDB, protobuf files. These are
-    // almost entirely extension-less binary files (~80k on a typical $HOME)
-    // that never need to appear in a fuzzy or grep search.
     #[cfg(target_os = "macos")]
-    "Library/Group Containers",
+    "Library/Containers", // sandboxed apps data
     #[cfg(target_os = "macos")]
-    "Library/Containers",
+    "Library/Group Containers", // random application data and networking
+    #[cfg(target_os = "macos")]
+    "Library/pnpm",
+    #[cfg(target_os = "macos")]
+    "Library/Metadata",
+    #[cfg(target_os = "macos")]
+    "Library/Developer/CoreSimulator",
+    #[cfg(target_os = "macos")]
+    "Library/Android",
+    #[cfg(target_os = "macos")]
+    "Library/Logs",
+    #[cfg(target_os = "macos")]
+    "Library/Daemon Containers",
+    #[cfg(target_os = "macos")]
+    "Library/Trial",
+    #[cfg(target_os = "macos")]
+    "Library/Preferences",
+    #[cfg(target_os = "macos")]
+    "Library/Messages",
+    #[cfg(target_os = "macos")]
+    "Library/IdentityServices",
     #[cfg(target_os = "windows")]
     "bin/Debug",
     #[cfg(target_os = "windows")]
@@ -57,6 +82,10 @@ pub(crate) fn non_git_repo_overrides(base_path: &Path) -> Option<ignore::overrid
 pub(crate) fn is_non_code_directory(path: &Path) -> bool {
     let path_str = path.as_os_str().to_str().unwrap_or("");
     IGNORED_DIRS.iter().any(|&dir| {
+        // Entries are gitignore patterns for the walkers; here they are matched
+        // as substrings, so a leading `*` wildcard has to come off first.
+        let dir = dir.strip_prefix('*').unwrap_or(dir);
+
         #[cfg(target_os = "windows")]
         let dir = dir.replace('/', std::path::MAIN_SEPARATOR_STR);
         #[cfg(target_os = "windows")]
@@ -65,4 +94,43 @@ pub(crate) fn is_non_code_directory(path: &Path) -> bool {
         #[cfg(not(target_os = "windows"))]
         path_str.contains(dir)
     })
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn home_machine_state_is_excluded_but_source_trees_are_not() {
+        // Representative machine state from a home index.
+        for rel in [
+            "Library/pnpm/store/v3/files/00/abcdef",
+            "Library/Preferences/com.apple.finder.plist",
+            "Library/Messages/prewarm.db-shm",
+            "Library/IdentityServices/TetraDB-identityservicesd.db-wal",
+            "Library/Developer/CoreSimulator/Devices/X/data/f",
+            "go/pkg/mod/github.com/x/y@v1/main.go",
+            ".cargo/registry/src/index.crates.io-1/serde-1.0/src/lib.rs",
+            "Library/Android/sdk/platforms/android-34/data/x",
+            ".local/state/nvim/fff+123+456.log",
+        ] {
+            assert!(
+                is_non_code_directory(Path::new(rel)),
+                "{rel} must not reach the index"
+            );
+        }
+
+        // Source trees under $HOME stay searchable.
+        for rel in [
+            "dev/chromium/third_party/blink/renderer/core/dom/node.cc",
+            "dev/fff.nvim/crates/fff-core/src/lib.rs",
+            "Documents/notes/todo.md",
+            "dev/myproj/pkg/mod/thing.go",
+        ] {
+            assert!(
+                !is_non_code_directory(Path::new(rel)),
+                "{rel} must stay searchable"
+            );
+        }
+    }
 }

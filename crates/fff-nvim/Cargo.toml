@@ -15,6 +15,8 @@ crate-type = ["cdylib", "rlib"]
 default = ["ripgrep"]
 ripgrep = ["fff/ripgrep", "fff-query-parser/ripgrep", "dep:ignore"]
 zlob = ["fff/zlob", "fff-query-parser/zlob", "dep:zlob"]
+# Keep full-rescan accounting in a release build; required by rescan_probe.
+rescan-stats = ["fff/rescan-stats"]
 
 [dependencies]
 # Workspace dependencies

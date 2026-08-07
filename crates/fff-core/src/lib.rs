@@ -135,6 +135,12 @@ pub use types::*;
 
 pub mod constants;
 
+/// Watcher rescan request accounting.
+pub mod rescan_stats;
+pub use rescan_stats::{RESCAN_STATS_ENABLED, RescanReason, RescanStats};
+
+mod rescan_throttle;
+
 // ==================================
 // these are public only for benchmarks, no backward compatibility guaranteed
 #[doc(hidden)]
