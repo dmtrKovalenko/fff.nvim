@@ -3,6 +3,15 @@ fn main() {
     // used by tests/fuzz_git_watcher_stress.rs
     println!("cargo::rustc-check-cfg=cfg(stress)");
 
+    // Full-rescan accounting. Debug builds get it for free; a release build has
+    // to opt in with `--features rescan-stats` (what the rescan_probe needs).
+    println!("cargo::rustc-check-cfg=cfg(rescan_stats)");
+    if std::env::var("DEBUG").is_ok_and(|debug| debug != "false")
+        || std::env::var("CARGO_FEATURE_RESCAN_STATS").is_ok()
+    {
+        println!("cargo::rustc-cfg=rescan_stats");
+    }
+
     // When the `zlob` feature is enabled (Zig-compiled C library):
     // On Windows MSVC, explicitly link the C runtime libraries.
     // Zig-compiled static libraries don't emit /DEFAULTLIB directives for the

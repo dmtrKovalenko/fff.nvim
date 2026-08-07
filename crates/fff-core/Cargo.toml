@@ -41,6 +41,9 @@ harness = false
 default = ["ripgrep"]
 # Enable C FFI exports
 ffi = []
+# Count full rescans and their causes. Always on in debug builds; enable this
+# to keep the accounting in a release build (used by the rescan_probe binary).
+rescan-stats = []
 # Enables POC definition classification for grep result matched lines
 definitions = []
 # Pure-Rust filesystem walker + glob matcher (ignore + globset crates).

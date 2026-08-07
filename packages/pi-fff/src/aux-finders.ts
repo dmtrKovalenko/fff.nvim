@@ -87,8 +87,7 @@ export class AuxFinderPool {
   private async create(root: string): Promise<AuxPicker> {
     if (this.entries.length >= MAX_AUX) {
       let oldest = this.entries[0];
-      for (const e of this.entries)
-        if (e.lastUsed < oldest.lastUsed) oldest = e;
+      for (const e of this.entries) if (e.lastUsed < oldest.lastUsed) oldest = e;
       if (!oldest.finder.isDestroyed) oldest.finder.destroy();
       this.entries = this.entries.filter((e) => e !== oldest);
     }
@@ -111,9 +110,7 @@ export class AuxFinderPool {
       enableFsRootScanning: this.opts.enableFsRootScanning,
     });
     if (!result.ok)
-      throw new Error(
-        `Failed to create aux file finder for ${root}: ${result.error}`,
-      );
+      throw new Error(`Failed to create aux file finder for ${root}: ${result.error}`);
 
     await result.value.waitForScan(SCAN_TIMEOUT_MS);
     const entry: AuxPicker = {
@@ -135,9 +132,7 @@ export class AuxFinderPool {
 // remainder usable as a fuzzy path constraint relative to that root. Glob and
 // nonexistent segments both go into the suffix: we walk up to the nearest
 // existing ancestor so partially-wrong paths still resolve to a search root.
-export function resolveAuxRoot(
-  absPath: string,
-): { root: string; suffix: string } | null {
+export function resolveAuxRoot(absPath: string): { root: string; suffix: string } | null {
   const trimmed = path.normalize(absPath.trim()).replace(/\/+$/, "") || "/";
   if (!path.isAbsolute(trimmed)) return null;
   if (trimmed === path.sep) return { root: path.sep, suffix: "" };
@@ -196,7 +191,6 @@ export function routePathConstraint(
   if (!isOutsideWorkspaceRelativePath(rel)) return null;
   return resolveAuxRoot(candidate);
 }
-
 
 export function rootCovers(root: string, target: string): boolean {
   if (root === target) return true;

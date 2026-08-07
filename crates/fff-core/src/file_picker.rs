@@ -629,6 +629,10 @@ impl FilePicker {
         &self.base_path
     }
 
+    pub fn has_git_repo(&self) -> bool {
+        self.sync_data.git_workdir.is_some()
+    }
+
     /// Ignore rules the walker assembled during the last scan (zlob backend
     /// only). The background watcher uses these to filter events without
     /// libgit2. `None` when the backend doesn't surface rules or no ignore
