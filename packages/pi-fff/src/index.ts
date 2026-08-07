@@ -23,6 +23,7 @@ import type {
 import { Type } from "@sinclair/typebox";
 import { AuxFinderPool, routePathConstraint } from "./aux-finders";
 import { buildQuery } from "./query";
+import { isHomeDir } from "./paths";
 import { loadSdk, SCAN_TIMEOUT_MS } from "./sdk";
 
 export { SCAN_TIMEOUT_MS } from "./sdk";
@@ -38,6 +39,11 @@ const MENTION_MAX_RESULTS = 20;
 
 // If we exceed 10 seconds for indexed grep - something is definitely off
 const GREP_TIME_BUDGET_MS = 10_000;
+
+const HOME_SCAN_STATUS_KEY = "fff";
+const HOME_SCAN_POLL_MS = 1_000;
+const HOME_SCAN_DISABLE_HINT =
+  "You can prevent home dir indexing with --fff-enable-home-scan=false (or FFF_ENABLE_HOME_SCAN=0).";
 
 type FffMode = "tools-and-ui" | "tools-only" | "override";
 
@@ -313,19 +319,31 @@ export default function fffExtension(pi: ExtensionAPI) {
     process.env.FFF_HISTORY_DB ??
     undefined;
 
-  // Root scanning opt-in: flag (boolean) > env ("1"/"true") > false.
-  // FFF refuses to init at / unless this is set. Home dir scanning is on by
-  // default for pi — launching pi from $HOME is a normal flow.
-  function resolveBoolOpt(flagName: string, envName: string): boolean {
+  // flag (boolean) > env ("1"/"true", or "0"/"false") > default.
+  function resolveBoolOpt(
+    flagName: string,
+    envName: string,
+    fallback = false,
+  ): boolean {
     const flag = pi.getFlag(flagName);
     if (typeof flag === "boolean") return flag;
     if (typeof flag === "string") return flag === "true" || flag === "1";
     const env = process.env[envName];
-    return env === "1" || env === "true";
+    if (env === "1" || env === "true") return true;
+    if (env === "0" || env === "false") return false;
+    return fallback;
   }
+  // Root scanning opt-in: FFF refuses to init at / unless this is set.
   const enableFsRootScanning = resolveBoolOpt(
     "fff-enable-root-scan",
     "FFF_ENABLE_ROOT_SCAN",
+  );
+  // Home dir scanning is on by default (launching pi from $HOME is a normal
+  // flow), but configurable so users with huge $HOME trees can opt out.
+  const enableHomeDirScanning = resolveBoolOpt(
+    "fff-enable-home-scan",
+    "FFF_ENABLE_HOME_SCAN",
+    true,
   );
 
   function getMode(): FffMode {
@@ -340,8 +358,27 @@ export default function fffExtension(pi: ExtensionAPI) {
     return currentMode !== "tools-only";
   }
 
+  // Set on session_start; the only handle to the UI outside an event handler.
+  // setStatus is TUI/RPC-only, hence optional.
+  let uiCtx: {
+    ui: {
+      notify: (message: string, type?: "info" | "warning" | "error") => void;
+      setStatus?: (key: string, text: string | undefined) => void;
+    };
+  } | null = null;
+  let homeScanTimer: ReturnType<typeof setInterval> | null = null;
+
+  function warnHomeDirScan(root: string): void {
+    uiCtx?.ui.notify(
+      `(fff): Your cwd (${root}) is too large. Indexing will take additional time and resources.\n${HOME_SCAN_DISABLE_HINT}`,
+      "warning",
+    );
+  }
+
   let auxPool = new AuxFinderPool({
     enableFsRootScanning,
+    enableHomeDirScanning,
+    onHomeDirScan: warnHomeDirScan,
   });
 
   // in case cwd changes we need to figure this out
@@ -364,7 +401,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         frecencyDbPath,
         historyDbPath,
         aiMode: true,
-        enableHomeDirScanning: true,
+        enableHomeDirScanning,
         enableFsRootScanning,
       });
 
@@ -382,7 +419,40 @@ export default function fffExtension(pi: ExtensionAPI) {
     return finderPromise;
   }
 
+  function stopHomeScanStatus(): void {
+    if (homeScanTimer) {
+      clearInterval(homeScanTimer);
+      homeScanTimer = null;
+    }
+    uiCtx?.ui.setStatus?.(HOME_SCAN_STATUS_KEY, undefined);
+  }
+
+  // waitForScan() resolves on timeout too, so the scan can still be running.
+  // Poll the live progress until it settles, then clear the footer.
+  function trackHomeScanStatus(): void {
+    stopHomeScanStatus();
+    if (!uiCtx?.ui.setStatus) return;
+
+    const tick = () => {
+      const progress = mainFinder?.getScanProgress?.();
+      if (!progress?.ok || !progress.value.isScanning) {
+        stopHomeScanStatus();
+        return;
+      }
+      uiCtx?.ui.setStatus?.(
+        HOME_SCAN_STATUS_KEY,
+        `Agent is indexing $HOME (${progress.value.scannedFilesCount} files), this can lead to high CPU`,
+      );
+    };
+
+    homeScanTimer = setInterval(tick, HOME_SCAN_POLL_MS);
+    // Must not hold the process open once pi is done.
+    (homeScanTimer as { unref?: () => void }).unref?.();
+    tick();
+  }
+
   function destroyFinder() {
+    stopHomeScanStatus();
     if (mainFinder && !mainFinder.isDestroyed) {
       mainFinder.destroy();
       mainFinder = null;
@@ -504,9 +574,16 @@ export default function fffExtension(pi: ExtensionAPI) {
     type: "boolean",
   });
 
+  pi.registerFlag("fff-enable-home-scan", {
+    description:
+      "Index the home dir when launched from $HOME (default true; disable with --fff-enable-home-scan=false or FFF_ENABLE_HOME_SCAN=0)",
+    type: "boolean",
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     try {
       activeCwd = ctx.cwd;
+      uiCtx = ctx as unknown as typeof uiCtx;
 
       // Restore persisted mode from session entries. This handles session
       // resume after process restart where env vars are lost, and ensures
@@ -533,6 +610,21 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       registerAutocompleteProvider(ctx);
       await ensureFinder(activeCwd);
+
+      // Warn when launched from $HOME with home scanning on: indexing a large
+      // home tree can run for a long time in the background (issue #743).
+      const atHome = enableHomeDirScanning && isHomeDir(activeCwd);
+      if (atHome) {
+        warnHomeDirScan(activeCwd);
+        ctx.ui.setStatus?.(
+          HOME_SCAN_STATUS_KEY,
+          "Agent is indexing $HOME, this can lead to high CPU",
+        );
+      }
+
+      // waitForScan() also resolves on timeout, so poll until the scan really
+      // settles before clearing the footer.
+      if (atHome) trackHomeScanStatus();
     } catch (e: unknown) {
       ctx.ui.notify(
         `FFF init failed: ${e instanceof Error ? e.message : String(e)}`,

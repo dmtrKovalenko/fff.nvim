@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { FileFinderApi } from "@ff-labs/fff-node";
+import { HOME_DIR } from "./paths";
 import { loadSdk, SCAN_TIMEOUT_MS } from "./sdk";
 
 export const MAX_AUX = 3;
@@ -15,6 +15,9 @@ interface AuxPicker {
 
 export interface AuxOpts {
   enableFsRootScanning: boolean;
+  enableHomeDirScanning?: boolean;
+  // Called before a newly spawned aux picker starts a scan that covers $HOME.
+  onHomeDirScan?: (root: string) => void;
 }
 
 export class AuxFinderPool {
@@ -89,6 +92,13 @@ export class AuxFinderPool {
       this.entries = this.entries.filter((e) => e !== oldest);
     }
 
+    const enableHomeDirScanning = this.opts.enableHomeDirScanning ?? true;
+    // A fresh picker rooted at (or above) $HOME walks the whole home tree, so
+    // the user gets told every time the agent spawns one — see issue #743.
+    if (enableHomeDirScanning && rootCovers(root, HOME_DIR)) {
+      this.opts.onHomeDirScan?.(root);
+    }
+
     const { FileFinder } = await loadSdk();
     // LMDB env can only be opened once per process; the main finder already
     // owns the frecency/history DBs. Aux finders are transient and run without
@@ -96,7 +106,7 @@ export class AuxFinderPool {
     const result = FileFinder.create({
       basePath: root,
       aiMode: true,
-      enableHomeDirScanning: true,
+      enableHomeDirScanning,
       enableFsRootScanning: this.opts.enableFsRootScanning,
     });
     if (!result.ok)
@@ -171,7 +181,7 @@ export function routePathConstraint(
   let candidate = pathConstraint.trim();
   if (!candidate) return null;
   if (candidate === "~" || candidate.startsWith("~/"))
-    candidate = path.join(os.homedir(), candidate.slice(1));
+    candidate = path.join(HOME_DIR, candidate.slice(1));
   if (!path.isAbsolute(candidate)) {
     // Plain workspace-relative constraints stay on the workspace finder.
     if (candidate !== ".." && !candidate.startsWith("../")) return null;
