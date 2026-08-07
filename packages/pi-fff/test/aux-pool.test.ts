@@ -1,4 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
+import os from "node:os";
+import path from "node:path";
 
 interface MockFinder {
   isDestroyed: boolean;
@@ -40,10 +42,10 @@ mock.module("@ff-labs/fff-bun", () => finderModule);
 
 const { AuxFinderPool } = await import("../src/aux-finders");
 
-function makePool() {
+function makePool(opts: Record<string, unknown> = {}) {
   created.length = 0;
   createOptions.length = 0;
-  return new AuxFinderPool({ enableFsRootScanning: false });
+  return new AuxFinderPool({ enableFsRootScanning: false, ...opts });
 }
 
 describe("AuxFinderPool covering reuse", () => {
@@ -90,6 +92,31 @@ describe("AuxFinderPool covering reuse", () => {
     const other = await pool.acquire("/a/b");
     expect(other.root).toBe("/a/b");
     expect(created.length).toBe(2);
+  });
+
+  // Regression for #743: the agent spawning an aux picker over $HOME must warn
+  // the user every time, not silently walk the home tree.
+  test("notifies on every aux picker that covers $HOME", async () => {
+    const onHomeDirScan = mock(() => undefined);
+    const pool = makePool({ onHomeDirScan });
+    const home = os.homedir();
+
+    await pool.acquire(home);
+    await pool.acquire(path.dirname(home));
+    expect(onHomeDirScan.mock.calls).toEqual([[home], [path.dirname(home)]]);
+
+    // Project-scoped roots below $HOME do not walk the whole home tree.
+    await pool.acquire(path.join(home, "dev", "some-project"));
+    expect(onHomeDirScan).toHaveBeenCalledTimes(2);
+  });
+
+  test("no aux notification when home scanning is disabled", async () => {
+    const onHomeDirScan = mock(() => undefined);
+    const pool = makePool({ enableHomeDirScanning: false, onHomeDirScan });
+
+    await pool.acquire(os.homedir());
+    expect(onHomeDirScan).not.toHaveBeenCalled();
+    expect(createOptions[0].enableHomeDirScanning).toBe(false);
   });
 
   // Regression for #700: aux finders must not reopen the main frecency/history

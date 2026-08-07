@@ -1,20 +1,35 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import os from "node:os";
 
 type MockFinder = {
   isDestroyed: boolean;
   waitForScan: ReturnType<typeof mock>;
   mixedSearch: ReturnType<typeof mock>;
+  getScanProgress: ReturnType<typeof mock>;
   destroy: ReturnType<typeof mock>;
 };
 
 const createCalls: unknown[] = [];
 let finders: MockFinder[] = [];
 let mixedSearchImpl: ((query: string, options: unknown) => unknown) | undefined;
+let scanProgressImpl: (() => unknown) | undefined;
 
 function createMockFinder(): MockFinder {
   return {
     isDestroyed: false,
     waitForScan: mock(async () => undefined),
+    getScanProgress: mock(() => {
+      if (scanProgressImpl) return scanProgressImpl();
+      return {
+        ok: true,
+        value: {
+          scannedFilesCount: 0,
+          isScanning: false,
+          isWatcherReady: true,
+          isWarmupComplete: true,
+        },
+      };
+    }),
     mixedSearch: mock((query: string, options: unknown) => {
       if (mixedSearchImpl) return mixedSearchImpl(query, options);
       return {
@@ -102,20 +117,21 @@ function createPi(mode?: string) {
   return { pi, events, commands };
 }
 
-function createContext() {
+function createContext(cwd = "/tmp/workspace") {
   return {
-    cwd: "/tmp/workspace",
+    cwd,
     ui: {
       addAutocompleteProvider: mock(() => undefined),
       notify: mock(() => undefined),
       setEditorComponent: mock(() => undefined),
+      setStatus: mock(() => undefined),
     },
   };
 }
 
-async function start(mode?: string) {
+async function start(mode?: string, cwd?: string) {
   const setup = createPi(mode);
-  const ctx = createContext();
+  const ctx = createContext(cwd);
   fffExtension(setup.pi as any);
 
   const sessionStart = setup.events.get("session_start");
@@ -123,6 +139,10 @@ async function start(mode?: string) {
   await sessionStart?.({ reason: "startup" }, ctx);
 
   return { ...setup, ctx };
+}
+
+async function shutdown(setup: { events: Map<string, EventHandler> }) {
+  await setup.events.get("session_shutdown")?.({}, undefined);
 }
 
 function currentProvider(
@@ -143,7 +163,71 @@ beforeEach(() => {
   createCalls.length = 0;
   finders = [];
   mixedSearchImpl = undefined;
+  scanProgressImpl = undefined;
   delete process.env.PI_FFF_MODE;
+  delete process.env.FFF_ENABLE_HOME_SCAN;
+});
+
+// Regression for #743: launching from $HOME must be visible and interruptible.
+describe("pi-fff $HOME scan warning", () => {
+  test("warns and pins a status when cwd is $HOME", async () => {
+    const setup = await start(undefined, os.homedir());
+
+    expect(setup.ctx.ui.notify).toHaveBeenCalledTimes(1);
+    const [message, level] = setup.ctx.ui.notify.mock.calls[0];
+    expect(message).toContain(os.homedir());
+    expect(level).toBe("warning");
+    expect(setup.ctx.ui.setStatus).toHaveBeenCalledWith(
+      "fff",
+      "Agent is indexing $HOME, this can lead to high CPU",
+    );
+    await shutdown(setup);
+  });
+
+  test("stays silent outside $HOME", async () => {
+    const { ctx } = await start();
+
+    expect(ctx.ui.notify).not.toHaveBeenCalled();
+    expect(ctx.ui.setStatus).not.toHaveBeenCalled();
+  });
+
+  test("clears the status once the scan settles", async () => {
+    const setup = await start(undefined, os.homedir());
+
+    expect(setup.ctx.ui.setStatus).toHaveBeenLastCalledWith("fff", undefined);
+    await shutdown(setup);
+  });
+
+  // waitForScan resolves on timeout, so a slow $HOME walk keeps the footer up.
+  test("keeps reporting live progress while the scan is still running", async () => {
+    scanProgressImpl = () => ({
+      ok: true,
+      value: {
+        scannedFilesCount: 12345,
+        isScanning: true,
+        isWatcherReady: false,
+        isWarmupComplete: false,
+      },
+    });
+    const setup = await start(undefined, os.homedir());
+
+    const [key, text] = setup.ctx.ui.setStatus.mock.calls.at(-1) as [string, string];
+    expect(key).toBe("fff");
+    expect(text).toContain("12345 files");
+
+    // session_shutdown must stop the poller and clear the footer.
+    await shutdown(setup);
+    expect(setup.ctx.ui.setStatus).toHaveBeenLastCalledWith("fff", undefined);
+  });
+
+  test("no warning when home scanning is disabled", async () => {
+    process.env.FFF_ENABLE_HOME_SCAN = "0";
+    const setup = await start(undefined, os.homedir());
+
+    expect(setup.ctx.ui.notify).not.toHaveBeenCalled();
+    expect(setup.ctx.ui.setStatus).not.toHaveBeenCalled();
+    await shutdown(setup);
+  });
 });
 
 describe("pi-fff autocomplete registration", () => {
@@ -162,6 +246,14 @@ describe("pi-fff autocomplete registration", () => {
         enableFsRootScanning: false,
       },
     ]);
+  });
+
+  test("FFF_ENABLE_HOME_SCAN=0 disables home dir scanning", async () => {
+    process.env.FFF_ENABLE_HOME_SCAN = "0";
+    await start();
+
+    const opts = createCalls[0] as { enableHomeDirScanning: boolean };
+    expect(opts.enableHomeDirScanning).toBe(false);
   });
 
   test("session_start survives hosts without addAutocompleteProvider", async () => {
