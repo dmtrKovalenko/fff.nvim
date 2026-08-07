@@ -50,7 +50,7 @@ class FileFinder(_FileFinder):
         return True
 
 
-__version__ = "0.10.1"
+__version__ = "0.10.3"
 
 __all__ = [
     "FFFException",
