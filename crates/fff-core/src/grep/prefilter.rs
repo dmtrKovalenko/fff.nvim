@@ -50,7 +50,7 @@ pub(super) fn prefilter_with_filepath_retry<'a>(
 /// Single pass prefilter that doesn't involve file reading
 /// allocates only amount of memory required for storing references of the FileItems have to be
 /// opened for grepping unaviodably, in the worst case allocates N * <word> memory if no prefilter needed
-fn prefilter_files<'a>(
+pub(super) fn prefilter_files<'a>(
     files: &'a [FileItem],
     constraints: &[Constraint<'_>],
     bigram_candidates: Option<&[u64]>,

@@ -1,5 +1,5 @@
 use super::grep::{GrepContext, perform_grep};
-use super::prefilter::prefilter_with_filepath_retry;
+use super::prefilter::prefilter_files;
 use super::sink::{SinkState, debug_assert_newline_terminator};
 use super::types::{GrepResult, GrepSearchOptions};
 use crate::index::{BigramFilter, BigramOverlay, bigram_boundary, literal_candidates};
@@ -121,7 +121,8 @@ pub(crate) fn multi_grep_search<'a>(
     let bigram_candidates = literal_candidates(bigram_index, bigram_overlay, patterns);
     let base_file_count = bigram_boundary(bigram_overlay, files.len());
 
-    let (files_to_search, filtered_file_count) = prefilter_with_filepath_retry(
+    // Constraints are separate from patterns, so a miss must not broaden the search.
+    let (files_to_search, filtered_file_count) = prefilter_files(
         files,
         constraints,
         bigram_candidates.as_deref(),

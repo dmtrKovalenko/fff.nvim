@@ -7,7 +7,6 @@ use fff_query_parser::AiGrepConfig;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{ServerHandler, schemars, tool, tool_handler, tool_router};
-use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -613,60 +612,11 @@ impl FffServer {
             .ok_or_else(|| ErrorData::internal_error("File picker not initialized", None))?;
         let patterns_refs: Vec<&str> = params.patterns.iter().map(|s| s.as_str()).collect();
 
-        let parser = fff_query_parser::QueryParser::new(fff_query_parser::AiGrepConfig);
-        let parsed_constraints = parser.parse(constraint_query);
-        let constraints = parsed_constraints.constraints.as_slice();
+        let parser = QueryParser::new(AiGrepConfig);
+        let constraints = parser.parse_constraints(constraint_query);
 
-        let result = picker.multi_grep(&patterns_refs, constraints, &options);
+        let result = picker.multi_grep(&patterns_refs, &constraints, &options);
         let file_refs: Vec<&FileItem> = result.files.to_vec();
-
-        if result.matches.is_empty() && file_offset == 0 {
-            // Fallback: try individual patterns with plain grep
-            let (fallback_options, _) =
-                make_grep_options(output_mode, GrepMode::PlainText, 0, context);
-
-            let fallback_options = GrepSearchOptions {
-                time_budget_ms: 3000,
-                before_context: 0,
-                ..fallback_options
-            };
-
-            for pat in &params.patterns {
-                let full_query: Cow<str> = if !constraint_query.is_empty() {
-                    Cow::Owned(format!("{} {}", constraint_query, pat))
-                } else {
-                    Cow::Borrowed(pat)
-                };
-
-                let parsed = parser.parse(&full_query);
-                let fb_result = picker.grep(&parsed, &fallback_options);
-
-                if !fb_result.matches.is_empty() {
-                    let fb_file_refs: Vec<&FileItem> = fb_result.files.to_vec();
-                    let mut cs = self.lock_cursors()?;
-                    let text = &GrepFormatter {
-                        matches: &fb_result.matches,
-                        files: &fb_file_refs,
-                        total_matched: fb_result.matches.len(),
-                        next_file_offset: fb_result.next_file_offset,
-                        output_mode,
-                        max_results,
-                        show_context: false,
-                        auto_expand_defs: auto_expand,
-                        picker,
-                    }
-                    .format(&mut cs);
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
-                        "0 multi-pattern matches. Plain grep fallback for \"{}\":\n{}",
-                        pat, text
-                    ))]));
-                }
-            }
-
-            return Ok(CallToolResult::success(vec![Content::text(
-                "0 matches.".to_string(),
-            )]));
-        }
 
         if result.matches.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(

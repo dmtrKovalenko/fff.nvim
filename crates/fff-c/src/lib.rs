@@ -729,19 +729,12 @@ pub unsafe extern "C" fn fff_multi_grep(
         }
     };
 
-    let is_ai = picker.mode().is_ai();
-
     // Parse constraints from the optional string (e.g. "*.rs /src/")
-    let parsed_constraints = constraints_str.map(|c| {
-        if is_ai {
-            fff::QueryParser::new(fff_query_parser::AiGrepConfig).parse(c)
-        } else {
-            fff::grep::parse_grep_query(c)
-        }
-    });
+    let parsed_constraints = constraints_str
+        .map(|c| fff::QueryParser::new(fff_query_parser::AiGrepConfig).parse_constraints(c));
 
     let constraint_refs: &[fff::Constraint<'_>] = match &parsed_constraints {
-        Some(q) => &q.constraints,
+        Some(constraints) => constraints,
         None => &[],
     };
 
