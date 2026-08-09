@@ -22,8 +22,21 @@ function detectRuntime(): "bun" | "node" {
 export function loadSdk(): Promise<{ FileFinder: FileFinderStatic }> {
   if (sdkPromise) return sdkPromise;
 
+  // Pi reloads extension modules with jiti moduleCache:false, so this module
+  // is re-executed on every /reload. Re-importing the fff-bun module graph
+  // (which top-level awaits a `type: "file"` import of the native .so) hangs
+  // forever inside the Bun-compiled pi binary. Cache the first import on
+  // globalThis so reloads reuse the resolved module instead of re-importing.
+  const g = globalThis as Record<string, unknown>;
+  if (g.__fffSdkPromiseGlobal) {
+    sdkPromise = g.__fffSdkPromiseGlobal as Promise<{ FileFinder: FileFinderStatic }>;
+    return sdkPromise;
+  }
+
   // default to node as it seems like default option
   const pkg = detectRuntime() === "bun" ? "@ff-labs/fff-bun" : "@ff-labs/fff-node";
-  sdkPromise = import(pkg) as Promise<{ FileFinder: FileFinderStatic }>;
-  return sdkPromise;
+  const p = import(pkg) as Promise<{ FileFinder: FileFinderStatic }>;
+  sdkPromise = p;
+  (globalThis as Record<string, unknown>).__fffSdkPromiseGlobal = p;
+  return p;
 }
