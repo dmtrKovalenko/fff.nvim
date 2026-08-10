@@ -612,7 +612,7 @@ jobs:
 
             Update mcp via:
             ```sh
-            curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/fff/main/install-mcp.sh | bash
             ```
 
       - name: Bump Homebrew formula (uses local checksums)

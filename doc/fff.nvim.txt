@@ -25,7 +25,8 @@ LAZY.NVIM
 
 >lua
     {
-      'dmtrKovalenko/fff.nvim',
+      'dmtrKovalenko/fff',
+      name = 'fff.nvim', -- keep existing install dir / lockfile identity
       build = function()
         -- downloads a prebuilt binary or falls back to cargo build
         require("fff.download").download_or_build_binary()
@@ -59,7 +60,9 @@ LAZY.NVIM
 VIM.PACK
 
 >lua
-    vim.pack.add({ 'https://github.com/dmtrKovalenko/fff.nvim' })
+    vim.pack.add({
+      { src = 'https://github.com/dmtrKovalenko/fff', name = 'fff.nvim' },
+    })
     
     vim.api.nvim_create_autocmd('PackChanged', {
       callback = function(ev)

@@ -3,7 +3,7 @@ local system = require('fff.utils.system')
 local fs_utils = require('fff.utils.fs')
 local fff_version = require('fff.utils.version')
 
-local GITHUB_REPO = 'dmtrKovalenko/fff.nvim'
+local GITHUB_REPO = 'dmtrKovalenko/fff'
 
 local function get_binary_dir(plugin_dir) return plugin_dir .. '/../target/release' end
 

@@ -1,6 +1,6 @@
 # @ff-labs/pi-fff
 
-A [pi](https://github.com/badlogic/pi-mono) extension that replaces the built-in `find` and `grep` tools with [FFF](https://github.com/dmtrKovalenko/fff.nvim) — a Rust-native, SIMD-accelerated file finder with built-in memory.
+A [pi](https://github.com/badlogic/pi-mono) extension that replaces the built-in `find` and `grep` tools with [FFF](https://github.com/dmtrKovalenko/fff) — a Rust-native, SIMD-accelerated file finder with built-in memory.
 
 ## What it does
 
@@ -44,20 +44,20 @@ pi install -l npm:@ff-labs/pi-fff
 **Via git:**
 
 ```bash
-pi install git:github.com/dmtrKovalenko/fff.nvim
+pi install git:github.com/dmtrKovalenko/fff
 ```
 
 Pin to a release:
 
 ```bash
-pi install git:github.com/dmtrKovalenko/fff.nvim@v0.3.0
+pi install git:github.com/dmtrKovalenko/fff@v0.3.0
 ```
 
 ### Local development / manual install
 
 ```bash
-git clone https://github.com/dmtrKovalenko/fff.nvim.git
-cd fff.nvim/packages/pi-fff
+git clone https://github.com/dmtrKovalenko/fff.git
+cd fff/packages/pi-fff
 npm install
 ```
 
@@ -65,14 +65,14 @@ Then add to your pi `settings.json`:
 
 ```json
 {
-  "extensions": ["/path/to/fff.nvim/packages/pi-fff/src/index.ts"]
+  "extensions": ["/path/to/fff/packages/pi-fff/src/index.ts"]
 }
 ```
 
 Or test directly:
 
 ```bash
-pi -e /path/to/fff.nvim/packages/pi-fff/src/index.ts
+pi -e /path/to/fff/packages/pi-fff/src/index.ts
 ```
 
 This extension registers FFF-powered tools (`fffind`, `ffgrep`, `fff-multi-grep`) alongside pi's built-in tools.

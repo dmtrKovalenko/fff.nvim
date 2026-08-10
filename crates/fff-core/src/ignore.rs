@@ -123,7 +123,7 @@ mod tests {
         // Source trees under $HOME stay searchable.
         for rel in [
             "dev/chromium/third_party/blink/renderer/core/dom/node.cc",
-            "dev/fff.nvim/crates/fff-core/src/lib.rs",
+            "dev/fff/crates/fff-core/src/lib.rs",
             "Documents/notes/todo.md",
             "dev/myproj/pkg/mod/thing.go",
         ] {

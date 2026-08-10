@@ -152,8 +152,8 @@ If prebuilt binaries aren't available for your platform:
 
 ```bash
 # Clone the repository
-git clone https://github.com/dmtrKovalenko/fff.nvim
-cd fff.nvim
+git clone https://github.com/dmtrKovalenko/fff
+cd fff
 
 # Build the C library
 cargo build --release -p fff-c
