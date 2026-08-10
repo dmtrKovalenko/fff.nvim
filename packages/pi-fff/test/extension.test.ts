@@ -49,10 +49,16 @@ function createMockFinder(): MockFinder {
   };
 }
 
+let createImpl: ((options: unknown) => unknown) | undefined;
+
 const finderModule = {
   FileFinder: {
     create: mock((options: unknown) => {
       createCalls.push(options);
+      if (createImpl) {
+        const override = createImpl(options);
+        if (override !== undefined) return override;
+      }
       const finder = createMockFinder();
       finders.push(finder);
       return { ok: true, value: finder };
@@ -163,6 +169,7 @@ beforeEach(() => {
   createCalls.length = 0;
   finders = [];
   mixedSearchImpl = undefined;
+  createImpl = undefined;
   scanProgressImpl = undefined;
   delete process.env.PI_FFF_MODE;
   delete process.env.FFF_ENABLE_HOME_SCAN;
@@ -254,6 +261,43 @@ describe("pi-fff autocomplete registration", () => {
 
     const opts = createCalls[0] as { enableHomeDirScanning: boolean };
     expect(opts.enableHomeDirScanning).toBe(false);
+  });
+
+  // In-process subagents (createAgentSession) reopen the shared LMDB env,
+  // which fails. The main finder must fall back to a transient no-DB finder
+  // instead of throwing during session_start — see #760.
+  test("falls back to a transient finder when the LMDB env is already open", async () => {
+    process.env.FFF_FRECENCY_DB = "/tmp/fff-test/frecency";
+    process.env.FFF_HISTORY_DB = "/tmp/fff-test/history";
+    let firstCall = true;
+    createImpl = () => {
+      if (firstCall) {
+        firstCall = false;
+        return {
+          ok: false,
+          error:
+            "Failed to init frecency db: Failed to open frecency database env: environment already open in this program; close it to be able to open it again with different options",
+        };
+      }
+      return undefined;
+    };
+
+    const { ctx } = await start();
+
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("FFF init failed"),
+      "error",
+    );
+    expect(createCalls).toHaveLength(2);
+    const retry = createCalls[1] as {
+      frecencyDbPath?: string;
+      historyDbPath?: string;
+    };
+    expect(retry.frecencyDbPath).toBeUndefined();
+    expect(retry.historyDbPath).toBeUndefined();
+
+    delete process.env.FFF_FRECENCY_DB;
+    delete process.env.FFF_HISTORY_DB;
   });
 
   test("session_start survives hosts without addAutocompleteProvider", async () => {

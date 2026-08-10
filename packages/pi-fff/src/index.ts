@@ -259,6 +259,13 @@ function buildAtCompletionValue(path: string): string {
   return path.includes(" ") ? `@"${path}"` : `@${path}`;
 }
 
+// heed refuses to reopen an LMDB env already open in the process, surfaced
+// through FileFinder.create() as this error string. Matched to fall back to a
+// transient (no-DB) finder for in-process subagents — see #760.
+function isEnvAlreadyOpenError(error: string): boolean {
+  return /environment already open/i.test(error);
+}
+
 function createFffMentionProvider(
   getItems: (query: string, signal: AbortSignal) => Promise<AutocompleteItem[]>,
 ): AutocompleteProvider {
@@ -396,7 +403,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       }
 
       const { FileFinder } = await loadSdk();
-      const result = FileFinder.create({
+      let result = FileFinder.create({
         basePath: cwd,
         frecencyDbPath,
         historyDbPath,
@@ -404,6 +411,21 @@ export default function fffExtension(pi: ExtensionAPI) {
         enableHomeDirScanning,
         enableFsRootScanning,
       });
+
+      // In-process subagents (createAgentSession) load this extension a second
+      // time in the same process. LMDB opens an env at most once per path per
+      // process, so the shared frecency/history DBs are already owned by the
+      // parent session's finder — reopening them fails. Fall back to a
+      // transient finder without persistent scoring, exactly like aux finders
+      // do (#700). See #760.
+      if (!result.ok && isEnvAlreadyOpenError(result.error)) {
+        result = FileFinder.create({
+          basePath: cwd,
+          aiMode: true,
+          enableHomeDirScanning,
+          enableFsRootScanning,
+        });
+      }
 
       if (!result.ok)
         throw new Error(`Failed to create FFF file finder: ${result.error}`);
