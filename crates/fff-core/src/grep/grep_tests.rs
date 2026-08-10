@@ -503,7 +503,11 @@ fn regex_fallback_keeps_file_path_scope_issue_756() {
     let raw = r"scope/target.css ^/\* |^\s*/\* ----------";
     let query = QueryParser::new(AiGrepConfig).parse(raw);
     let result = picker.grep(&query, &options);
-    let mut paths: Vec<String> = result.files.iter().map(|f| f.relative_path(&picker)).collect();
+    let mut paths: Vec<String> = result
+        .files
+        .iter()
+        .map(|f| f.relative_path(&picker))
+        .collect();
     paths.sort();
 
     assert_eq!(
