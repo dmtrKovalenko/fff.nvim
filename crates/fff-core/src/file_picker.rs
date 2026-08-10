@@ -1034,12 +1034,36 @@ impl FilePicker {
     /// The query should be parsed using [`crate::FFFQuery`] before calling
     /// this function. If a [`crate::QueryTracker`] is provided, the search will
     /// automatically look up the last selected file for this query and boost it
-    #[tracing::instrument(skip_all, name = "Fuzzy file search", fields(query = query.raw_query))]
     pub fn fuzzy_search<'q>(
         &self,
         query: &'q FFFQuery<'q>,
         query_tracker: Option<&QueryTracker>,
         options: FuzzySearchOptions<'q>,
+    ) -> SearchResult<'_> {
+        self.fuzzy_search_impl(query, query_tracker, options, false)
+    }
+
+    /// Same as [`FilePicker::fuzzy_search`], but opts into ordered fuzzy-part
+    /// matching: a multi-word query must match as one in-order subsequence
+    /// instead of each space-separated part matching independently anywhere
+    /// in the candidate.
+    pub fn fuzzy_search_ordered<'q>(
+        &self,
+        query: &'q FFFQuery<'q>,
+        query_tracker: Option<&QueryTracker>,
+        options: FuzzySearchOptions<'q>,
+        ordered_fuzzy_parts: bool,
+    ) -> SearchResult<'_> {
+        self.fuzzy_search_impl(query, query_tracker, options, ordered_fuzzy_parts)
+    }
+
+    #[tracing::instrument(skip_all, name = "Fuzzy file search", fields(query = query.raw_query))]
+    fn fuzzy_search_impl<'q>(
+        &self,
+        query: &'q FFFQuery<'q>,
+        query_tracker: Option<&QueryTracker>,
+        options: FuzzySearchOptions<'q>,
+        ordered_fuzzy_parts: bool,
     ) -> SearchResult<'_> {
         let files = self.get_files();
         let max_threads = if options.max_threads == 0 {
@@ -1108,9 +1132,16 @@ impl FilePicker {
             self.sync_data.base_count,
             base_arena,
             overflow_arena,
+            ordered_fuzzy_parts,
         );
-        let match_byte_offsets =
-            fuzzy_match_byte_offsets_for_page(query, &items, max_typos, base_arena, overflow_arena);
+        let match_byte_offsets = fuzzy_match_byte_offsets_for_page(
+            query,
+            &items,
+            max_typos,
+            base_arena,
+            overflow_arena,
+            ordered_fuzzy_parts,
+        );
 
         info!(
             ?query,
@@ -1138,6 +1169,26 @@ impl FilePicker {
         &self,
         query: &'q FFFQuery<'q>,
         options: FuzzySearchOptions<'q>,
+    ) -> DirSearchResult<'_> {
+        self.fuzzy_search_directories_impl(query, options, false)
+    }
+
+    /// Same as [`FilePicker::fuzzy_search_directories`], but opts into
+    /// ordered fuzzy-part matching (see [`FilePicker::fuzzy_search_ordered`]).
+    pub fn fuzzy_search_directories_ordered<'q>(
+        &self,
+        query: &'q FFFQuery<'q>,
+        options: FuzzySearchOptions<'q>,
+        ordered_fuzzy_parts: bool,
+    ) -> DirSearchResult<'_> {
+        self.fuzzy_search_directories_impl(query, options, ordered_fuzzy_parts)
+    }
+
+    fn fuzzy_search_directories_impl<'q>(
+        &self,
+        query: &'q FFFQuery<'q>,
+        options: FuzzySearchOptions<'q>,
+        ordered_fuzzy_parts: bool,
     ) -> DirSearchResult<'_> {
         let dirs = self.get_dirs();
         let max_threads = if options.max_threads == 0 {
@@ -1174,8 +1225,13 @@ impl FilePicker {
         let overflow_arena = self.sync_data.arena_overflow_ptr();
         let time = std::time::Instant::now();
 
-        let (items, scores, total_matched) =
-            crate::score::fuzzy_match_and_score_dirs(dirs, &context, arena, overflow_arena);
+        let (items, scores, total_matched) = crate::score::fuzzy_match_and_score_dirs(
+            dirs,
+            &context,
+            arena,
+            overflow_arena,
+            ordered_fuzzy_parts,
+        );
 
         info!(
             ?query,
@@ -1208,6 +1264,28 @@ impl FilePicker {
         query_tracker: Option<&QueryTracker>,
         options: FuzzySearchOptions<'q>,
     ) -> MixedSearchResult<'_> {
+        self.fuzzy_search_mixed_impl(query, query_tracker, options, false)
+    }
+
+    /// Same as [`FilePicker::fuzzy_search_mixed`], but opts into ordered
+    /// fuzzy-part matching (see [`FilePicker::fuzzy_search_ordered`]).
+    pub fn fuzzy_search_mixed_ordered<'q>(
+        &self,
+        query: &'q FFFQuery<'q>,
+        query_tracker: Option<&QueryTracker>,
+        options: FuzzySearchOptions<'q>,
+        ordered_fuzzy_parts: bool,
+    ) -> MixedSearchResult<'_> {
+        self.fuzzy_search_mixed_impl(query, query_tracker, options, ordered_fuzzy_parts)
+    }
+
+    fn fuzzy_search_mixed_impl<'q>(
+        &self,
+        query: &'q FFFQuery<'q>,
+        query_tracker: Option<&QueryTracker>,
+        options: FuzzySearchOptions<'q>,
+        ordered_fuzzy_parts: bool,
+    ) -> MixedSearchResult<'_> {
         let location = query.location;
         let page_offset = options.pagination.offset;
         let page_limit = if options.pagination.limit > 0 {
@@ -1229,7 +1307,7 @@ impl FilePicker {
             },
             ..options
         };
-        let dir_results = self.fuzzy_search_directories(query, dir_options);
+        let dir_results = self.fuzzy_search_directories_impl(query, dir_options, ordered_fuzzy_parts);
 
         if dirs_only {
             let total_matched = dir_results.total_matched;
@@ -1273,7 +1351,7 @@ impl FilePicker {
             },
             ..options
         };
-        let file_results = self.fuzzy_search(query, query_tracker, file_options);
+        let file_results = self.fuzzy_search_impl(query, query_tracker, file_options, ordered_fuzzy_parts);
 
         // Merge by score descending.
         let total_matched = file_results.total_matched + dir_results.total_matched;

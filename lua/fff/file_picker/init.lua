@@ -65,6 +65,7 @@ function M.search_files_paginated(query, current_file, max_threads, min_combo_co
   if min_combo_count == nil then min_combo_count = config.history and config.history.min_combo_count or 3 end
 
   local combo_boost_score_multiplier = config.history and config.history.combo_boost_score_multiplier or 100
+  local ordered_fuzzy_parts = config.file_picker and config.file_picker.ordered_fuzzy_parts or false
 
   -- Convert page_index to offset (Rust expects offset in items, not page number)
   local offset = page_index * page_size
@@ -77,7 +78,8 @@ function M.search_files_paginated(query, current_file, max_threads, min_combo_co
     combo_boost_score_multiplier,
     min_combo_count,
     offset,
-    page_size
+    page_size,
+    ordered_fuzzy_parts
   )
 
   if not ok then

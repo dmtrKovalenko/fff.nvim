@@ -256,6 +256,7 @@ pub fn fuzzy_search_files(
         min_combo_count,
         page_index,
         page_size,
+        ordered_fuzzy_parts,
     ): (
         String,
         usize,
@@ -264,6 +265,7 @@ pub fn fuzzy_search_files(
         Option<u32>,
         Option<usize>,
         Option<usize>,
+        Option<bool>,
     ),
 ) -> LuaResult<LuaValue> {
     let file_picker_guard = FILE_PICKER.read().into_lua_result()?;
@@ -290,7 +292,7 @@ pub fn fuzzy_search_files(
     );
 
     let parsed_query = FFFQuery::parse(&query, FileSearchConfig);
-    let results = picker.fuzzy_search(
+    let results = picker.fuzzy_search_ordered(
         &parsed_query,
         query_tracker_guard.as_ref(),
         FuzzySearchOptions {
@@ -304,6 +306,7 @@ pub fn fuzzy_search_files(
                 limit: page_size.unwrap_or(0),
             },
         },
+        ordered_fuzzy_parts.unwrap_or(false),
     );
 
     if results.items.is_empty() && query.contains(std::path::MAIN_SEPARATOR) {
@@ -341,12 +344,13 @@ pub fn fuzzy_search_files(
 #[allow(clippy::type_complexity)]
 pub fn fuzzy_search_directories(
     lua: &Lua,
-    (query, max_threads, current_file, page_index, page_size): (
+    (query, max_threads, current_file, page_index, page_size, ordered_fuzzy_parts): (
         String,
         usize,
         Option<String>,
         Option<usize>,
         Option<usize>,
+        Option<bool>,
     ),
 ) -> LuaResult<LuaValue> {
     let file_picker_guard = FILE_PICKER.read().into_lua_result()?;
@@ -357,7 +361,7 @@ pub fn fuzzy_search_directories(
     let parser = QueryParser::new(DirSearchConfig);
     let parsed = parser.parse(&query);
 
-    let results = picker.fuzzy_search_directories(
+    let results = picker.fuzzy_search_directories_ordered(
         &parsed,
         FuzzySearchOptions {
             max_threads,
@@ -370,6 +374,7 @@ pub fn fuzzy_search_directories(
                 limit: page_size.unwrap_or(0),
             },
         },
+        ordered_fuzzy_parts.unwrap_or(false),
     );
 
     lua_types::DirSearchResultLua::new(results, picker).into_lua(lua)
@@ -386,6 +391,7 @@ pub fn fuzzy_search_mixed(
         min_combo_count,
         page_index,
         page_size,
+        ordered_fuzzy_parts,
     ): (
         String,
         usize,
@@ -394,6 +400,7 @@ pub fn fuzzy_search_mixed(
         Option<u32>,
         Option<usize>,
         Option<usize>,
+        Option<bool>,
     ),
 ) -> LuaResult<LuaValue> {
     let file_picker_guard = FILE_PICKER.read().into_lua_result()?;
@@ -405,7 +412,7 @@ pub fn fuzzy_search_mixed(
     let parser = QueryParser::new(MixedSearchConfig);
     let parsed = parser.parse(&query);
 
-    let results = picker.fuzzy_search_mixed(
+    let results = picker.fuzzy_search_mixed_ordered(
         &parsed,
         query_tracker_guard.as_ref(),
         FuzzySearchOptions {
@@ -419,6 +426,7 @@ pub fn fuzzy_search_mixed(
                 limit: page_size.unwrap_or(0),
             },
         },
+        ordered_fuzzy_parts.unwrap_or(false),
     );
 
     lua_types::MixedSearchResultLua::new(results, picker).into_lua(lua)

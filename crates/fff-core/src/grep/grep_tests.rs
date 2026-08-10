@@ -97,6 +97,38 @@ fn test_fuzzy_typo_scoring() {
 }
 
 #[test]
+fn test_fuzzy_grep_multi_word_already_order_sensitive() {
+    // Fuzzy grep joins all fuzzy parts into one needle (`FFFQuery::grep_text`)
+    // and runs a single frizbee match, so a multi-word query already only
+    // matches lines where the words appear in typed order — independent of
+    // the file-picker's opt-in `ordered_fuzzy_parts` setting, which only
+    // changes `crates/fff-core/src/score.rs`'s per-part AND matcher. This
+    // locks down that invariant: grep's fuzzy mode needs no code change to
+    // satisfy "ordered parts", on or off.
+    let query = fff_query_parser::FFFQuery::parse("handler auth", fff_query_parser::GrepConfig);
+    let needle = query.grep_text();
+    assert_eq!(needle, "handler auth");
+
+    let config = neo_frizbee::Config {
+        max_typos: Some(0),
+        sort: false,
+        ..Default::default()
+    };
+
+    let in_order_line = "fn handler() { auth(); }";
+    let reversed_line = "fn auth() { handler(); }";
+
+    assert!(
+        !neo_frizbee::match_list_indices(&needle, &[in_order_line], &config).is_empty(),
+        "in-order line should match"
+    );
+    assert!(
+        neo_frizbee::match_list_indices(&needle, &[reversed_line], &config).is_empty(),
+        "reversed line must NOT match — grep fuzzy mode is already order-sensitive"
+    );
+}
+
+#[test]
 fn test_multi_grep_search() {
     use crate::file_picker::{FilePicker, FilePickerOptions};
     use std::io::Write;

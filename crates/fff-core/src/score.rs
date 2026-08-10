@@ -42,6 +42,26 @@ fn resolve_file_chunks(
     Some((ptrs.len(), file.path.byte_len))
 }
 
+/// Join already-length-filtered fuzzy parts into a single ordered-match
+/// needle, when there's more than one meaningful part. Concatenates without
+/// a separator: candidate paths rarely contain a literal join character
+/// (unlike grep, which matches free-form text where a literal space is
+/// common), and spending typo budget on a synthetic separator would weaken
+/// real typo tolerance for the parts themselves. Returns `None` when
+/// there's nothing to join (0 or 1 valid parts), so callers fall back to
+/// their normal single/empty-part handling — the exact same handling
+/// unordered mode already uses for these cases.
+///
+/// Callers must pass parts already filtered the same way `match_fuzzy_parts`
+/// filters `valid_parts` (`len() >= 2`), so the needle used for scoring and
+/// the needle used for highlight recomputation are always identical.
+fn join_ordered_parts(valid_parts: &[&str]) -> Option<String> {
+    if valid_parts.len() < 2 {
+        return None;
+    }
+    Some(valid_parts.concat())
+}
+
 #[inline]
 fn match_fuzzy_parts(
     fuzzy_parts: &[&str],
@@ -145,6 +165,7 @@ pub(crate) fn fuzzy_match_and_score_files<'a>(
     base_count: usize,
     base_arena: ArenaPtr,
     overflow_arena: ArenaPtr,
+    ordered_fuzzy_parts: bool,
 ) -> (Vec<&'a FileItem>, Vec<Score>, usize) {
     // Process overflow files first: newly added files (created after the
     // initial scan) live in the overflow arena and are more likely to be
@@ -153,17 +174,23 @@ pub(crate) fn fuzzy_match_and_score_files<'a>(
     // putting them first in the list makes sorting more efficient and gives
     // them tiebreaker advantage in case sorting is the same
     let results = if files.len() > base_count {
-        let mut results = match_and_score_in_arena(&files[base_count..], context, overflow_arena);
+        let mut results = match_and_score_in_arena(
+            &files[base_count..],
+            context,
+            overflow_arena,
+            ordered_fuzzy_parts,
+        );
 
         results.extend(match_and_score_in_arena(
             &files[..base_count],
             context,
             base_arena,
+            ordered_fuzzy_parts,
         ));
 
         results
     } else {
-        match_and_score_in_arena(files, context, base_arena)
+        match_and_score_in_arena(files, context, base_arena, ordered_fuzzy_parts)
     };
 
     sort_and_paginate(results, context)
@@ -175,11 +202,30 @@ pub(crate) fn fuzzy_match_byte_offsets_for_page<'q>(
     max_typos: u16,
     base_arena: ArenaPtr,
     overflow_arena: ArenaPtr,
+    ordered: bool,
 ) -> Vec<SmallVec<[(u32, u32); 4]>> {
-    let parts: Vec<&str> = match &query.fuzzy_query {
+    // Same length filter `match_fuzzy_parts` applies as `valid_parts`, so
+    // this and the scoring pass agree on which parts are "real" vs noise.
+    let valid_parts: Vec<&str> = match &query.fuzzy_query {
         FuzzyQuery::Text(text) if text.len() >= 2 => vec![*text],
         FuzzyQuery::Parts(parts) => parts.iter().copied().filter(|p| p.len() >= 2).collect(),
         _ => Vec::new(),
+    };
+
+    // Mirror the scoring pass: highlight the same single joined-needle match
+    // (via the shared `join_ordered_parts` helper) so ranges stay consistent
+    // with an ordered-mode score.
+    let joined_query;
+    let parts: Vec<&str> = if ordered {
+        match join_ordered_parts(&valid_parts) {
+            Some(joined) => {
+                joined_query = joined;
+                vec![joined_query.as_str()]
+            }
+            None => valid_parts,
+        }
+    } else {
+        valid_parts
     };
 
     let mut ranges_by_item = vec![SmallVec::new(); items.len()];
@@ -398,6 +444,7 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
     context: &ScoringContext,
     arena: ArenaPtr,
     overflow_arena: ArenaPtr,
+    ordered_fuzzy_parts: bool,
 ) -> (Vec<&'a DirItem>, Vec<Score>, usize) {
     if dirs.is_empty() {
         return (vec![], vec![], 0);
@@ -417,12 +464,32 @@ pub(crate) fn fuzzy_match_and_score_dirs<'a>(
         }
     };
 
-    let fuzzy_parts: &[&str] = match &parsed_query.fuzzy_query {
+    let raw_fuzzy_parts: &[&str] = match &parsed_query.fuzzy_query {
         FuzzyQuery::Text(t) if t.len() >= 2 => std::slice::from_ref(t),
         FuzzyQuery::Parts(parts) if !parts.is_empty() => parts.as_slice(),
         _ => {
             return score_dirs_by_frecency(&working_dirs, context);
         }
+    };
+
+    let joined_query;
+    let joined_query_ref: &str;
+    let fuzzy_parts: &[&str] = if ordered_fuzzy_parts {
+        let valid_for_join: Vec<&str> = raw_fuzzy_parts
+            .iter()
+            .copied()
+            .filter(|p| p.len() >= 2)
+            .collect();
+        match join_ordered_parts(&valid_for_join) {
+            Some(joined) => {
+                joined_query = joined;
+                joined_query_ref = joined_query.as_str();
+                std::slice::from_ref(&joined_query_ref)
+            }
+            None => raw_fuzzy_parts,
+        }
+    } else {
+        raw_fuzzy_parts
     };
 
     let valid_parts: Vec<&str> = fuzzy_parts
@@ -606,6 +673,7 @@ fn match_and_score_in_arena<'a>(
     files: &'a [FileItem],
     context: &ScoringContext,
     arena: ArenaPtr,
+    ordered_fuzzy_parts: bool,
 ) -> Vec<(&'a FileItem, Score)> {
     if files.is_empty() {
         return vec![];
@@ -624,7 +692,7 @@ fn match_and_score_in_arena<'a>(
         }
     };
 
-    let fuzzy_parts: &[&str] = match &parsed.fuzzy_query {
+    let raw_fuzzy_parts: &[&str] = match &parsed.fuzzy_query {
         FuzzyQuery::Text(t) if t.len() >= 2 => std::slice::from_ref(t),
         FuzzyQuery::Parts(parts) if !parts.is_empty() => parts.as_slice(),
         _ => {
@@ -632,7 +700,34 @@ fn match_and_score_in_arena<'a>(
         }
     };
 
-    debug_assert!(!fuzzy_parts.is_empty());
+    debug_assert!(!raw_fuzzy_parts.is_empty());
+
+    // Ordered mode: join length-filtered parts into one needle and reuse the
+    // existing single-needle match path (same as a single-token query) so
+    // multi-word queries require their parts as one in-order fuzzy
+    // subsequence. Filtering before joining (rather than after) keeps this
+    // needle identical to the one `fuzzy_match_byte_offsets_for_page` builds
+    // for highlights, via the shared `join_ordered_parts` helper.
+    let joined_query;
+    let joined_query_ref: &str;
+    let fuzzy_parts: &[&str] = if ordered_fuzzy_parts {
+        let valid_for_join: Vec<&str> = raw_fuzzy_parts
+            .iter()
+            .copied()
+            .filter(|p| p.len() >= 2)
+            .collect();
+        match join_ordered_parts(&valid_for_join) {
+            Some(joined) => {
+                joined_query = joined;
+                joined_query_ref = joined_query.as_str();
+                std::slice::from_ref(&joined_query_ref)
+            }
+            None => raw_fuzzy_parts,
+        }
+    } else {
+        raw_fuzzy_parts
+    };
+
     let has_uppercase = fuzzy_parts
         .iter()
         .any(|p| p.chars().any(|c| c.is_uppercase()));
@@ -1330,12 +1425,212 @@ mod filename_bonus_tests {
             },
         };
         let (items, scores, _) =
-            fuzzy_match_and_score_files(files, &ctx, files.len(), arena, arena);
+            fuzzy_match_and_score_files(files, &ctx, files.len(), arena, arena, false);
         items
             .iter()
             .zip(scores.iter())
             .map(|(f, s)| (f.relative_path(arena).to_string(), s.clone()))
             .collect()
+    }
+
+    /// Like `search`, but with `ordered_fuzzy_parts` enabled.
+    fn search_ordered(files: &[FileItem], query: &str, arena: ArenaPtr) -> Vec<(String, Score)> {
+        let parser = QueryParser::default();
+        let parsed = parser.parse(query);
+
+        let effective_query = match &parsed.fuzzy_query {
+            FuzzyQuery::Text(t) => *t,
+            FuzzyQuery::Parts(parts) if !parts.is_empty() => parts[0],
+            _ => query,
+        };
+        let max_typos = (effective_query.len() as u16 / 4).clamp(2, 6);
+
+        let ctx = ScoringContext {
+            query: &parsed,
+            max_threads: 1,
+            max_typos,
+            current_file: None,
+            last_same_query_match: None,
+            project_path: None,
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
+
+            pagination: PaginationArgs {
+                offset: 0,
+                limit: 100,
+            },
+        };
+        let (items, scores, _) =
+            fuzzy_match_and_score_files(files, &ctx, files.len(), arena, arena, true);
+        items
+            .iter()
+            .zip(scores.iter())
+            .map(|(f, s)| (f.relative_path(arena).to_string(), s.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn test_ordered_fuzzy_parts_off_matches_parts_unordered() {
+        // Default (off) behavior: each part is an independent AND filter,
+        // so both paths match regardless of which part appears first.
+        let (files, arena) = make_files(&["src/handler/auth.rs", "auth/src/handler.rs"]);
+
+        let results = search(&files, "handler auth", arena);
+
+        assert_eq!(
+            results.len(),
+            2,
+            "unordered mode should match both files, got {results:?}"
+        );
+    }
+
+    #[test]
+    fn test_ordered_fuzzy_parts_on_requires_typed_order() {
+        // Ordered mode: "handler auth" must appear as one in-order
+        // subsequence. "src/handler/auth.rs" has handler before auth (matches);
+        // "auth/src/handler.rs" has auth before handler (must NOT match).
+        let (files, arena) = make_files(&["src/handler/auth.rs", "auth/src/handler.rs"]);
+
+        let results = search_ordered(&files, "handler auth", arena);
+
+        assert_eq!(
+            results.len(),
+            1,
+            "ordered mode should only match the in-order path, got {results:?}"
+        );
+        assert_eq!(results[0].0, "src/handler/auth.rs");
+    }
+
+    #[test]
+    fn test_ordered_fuzzy_parts_no_literal_space_required_in_candidate() {
+        // Regression: the joined ordered-mode needle must NOT require a
+        // literal space character in the candidate. Candidate paths spell
+        // each word's letters with separators between them but never
+        // contain a space — "alp bet" joined WITH a space (`"alp bet"`)
+        // would burn typo budget on a needle character ('  ') that can
+        // never match a path, weakening real typo tolerance. Joining
+        // without a separator (`"alpbet"`) has no such cost.
+        let (files, arena) = make_files(&[
+            "a_l_p_xx_b_e_t.rs",  // "alp" then "bet", in typed order
+            "b_e_t_xx_a_l_p.rs",  // "bet" then "alp", reversed
+        ]);
+
+        let results = search_ordered(&files, "alp bet", arena);
+
+        assert_eq!(
+            results.len(),
+            1,
+            "ordered mode should only match the in-order candidate, got {results:?}"
+        );
+        assert_eq!(results[0].0, "a_l_p_xx_b_e_t.rs");
+    }
+
+    #[test]
+    fn test_ordered_fuzzy_parts_many_short_parts_still_match() {
+        // Empirically motivates joining without a separator: a space-joined
+        // needle for this query ("ab cd ef gh" -> 11 chars incl. 3 literal
+        // spaces) burns 3 of its 2-typo budget on spaces that can never
+        // match a path, and the match is dropped entirely. Joining without
+        // a separator ("abcdefgh") spends 0 budget on synthetic characters
+        // and matches cleanly.
+        let (files, arena) = make_files(&["ab_cd_ef_gh.rs"]);
+        let results = search_ordered(&files, "ab cd ef gh", arena);
+        assert!(
+            !results.is_empty(),
+            "expected a match for a clean in-order candidate, got none"
+        );
+        assert_eq!(results[0].0, "ab_cd_ef_gh.rs");
+    }
+
+    #[test]
+    fn test_ordered_fuzzy_parts_repeated_whitespace_ignored() {
+        let (files, arena) = make_files(&["src/handler/auth.rs", "auth/src/handler.rs"]);
+
+        let collapsed = search_ordered(&files, "handler auth", arena);
+        let spaced = search_ordered(&files, "handler   auth", arena);
+
+        assert_eq!(
+            collapsed.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(),
+            spaced.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(),
+            "repeated whitespace between parts must not change ordered matching"
+        );
+    }
+
+    #[test]
+    fn test_ordered_fuzzy_parts_combines_with_constraints() {
+        // Extension constraint still filters candidates before fuzzy
+        // matching runs, independent of ordered mode.
+        let (files, arena) = make_files(&[
+            "src/handler/auth.rs",
+            "src/handler/auth.lua",
+            "auth/src/handler.rs",
+        ]);
+
+        let results = search_ordered(&files, "*.rs handler auth", arena);
+
+        assert_eq!(
+            results.len(),
+            1,
+            "extension constraint + ordered fuzzy should leave one match, got {results:?}"
+        );
+        assert_eq!(results[0].0, "src/handler/auth.rs");
+    }
+
+    #[test]
+    fn test_ordered_fuzzy_parts_smart_case_bonus_preserved() {
+        // Matching case should still score higher than mismatched case under
+        // ordered mode, same as the unordered smart-case bonus.
+        let (files, arena) = make_files(&["src/AuthHandler.rs", "src/authhandler_other.rs"]);
+
+        let results = search_ordered(&files, "Auth Handler", arena);
+
+        assert!(
+            results.len() >= 2,
+            "both files should fuzzy match, got {results:?}"
+        );
+        assert_eq!(
+            results[0].0, "src/AuthHandler.rs",
+            "matching-case candidate should rank first under ordered mode"
+        );
+    }
+
+    #[test]
+    fn test_ordered_fuzzy_parts_pagination_and_highlights_agree() {
+        let (files, arena) = make_files(&["src/handler/auth.rs", "auth/src/handler.rs"]);
+
+        let parser = QueryParser::default();
+        let parsed = parser.parse("handler auth");
+        let ctx = ScoringContext {
+            query: &parsed,
+            max_threads: 1,
+            max_typos: 2,
+            current_file: None,
+            last_same_query_match: None,
+            project_path: None,
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
+            pagination: PaginationArgs {
+                offset: 0,
+                limit: 100,
+            },
+        };
+
+        let (items, _scores, total_matched) =
+            fuzzy_match_and_score_files(&files, &ctx, files.len(), arena, arena, true);
+
+        // Totals must agree with what's actually returned on the page (no
+        // separate unordered "count" path to drift out of sync).
+        assert_eq!(total_matched, 1);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].relative_path(arena), "src/handler/auth.rs");
+
+        let offsets =
+            fuzzy_match_byte_offsets_for_page(&parsed, &items, ctx.max_typos, arena, arena, true);
+        assert_eq!(offsets.len(), 1);
+        assert!(
+            !offsets[0].is_empty(),
+            "ordered-mode highlight ranges must be produced for the matched item"
+        );
     }
 
     #[test]
@@ -1575,7 +1870,8 @@ mod typo_resistance_tests {
                 limit: 100,
             },
         };
-        let (items, _, _) = fuzzy_match_and_score_files(files, &ctx, files.len(), arena, arena);
+        let (items, _, _) =
+            fuzzy_match_and_score_files(files, &ctx, files.len(), arena, arena, false);
         items.iter().map(|f| f.relative_path(arena)).collect()
     }
 
@@ -1685,7 +1981,7 @@ mod constraint_only_query_tests {
         };
 
         let (items, _scores, total_matched) =
-            fuzzy_match_and_score_files(&files, &ctx, files.len(), arena, arena);
+            fuzzy_match_and_score_files(&files, &ctx, files.len(), arena, arena, false);
 
         assert_eq!(
             total_matched, 1,
@@ -1736,7 +2032,7 @@ mod constraint_only_query_tests {
         };
 
         let (items, _scores, total_matched) =
-            fuzzy_match_and_score_files(&files, &ctx, files.len(), arena, arena);
+            fuzzy_match_and_score_files(&files, &ctx, files.len(), arena, arena, false);
 
         assert_eq!(total_matched, 1);
         assert_eq!(items[0].relative_path(arena), "a.rs");

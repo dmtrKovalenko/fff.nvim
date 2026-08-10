@@ -419,6 +419,10 @@ local function init()
     file_picker = {
       current_file_label = '(current)',
       fuzzy_query_highlighting = false,
+      -- Require space-separated fuzzy query parts (e.g. "foo bar") to match in the
+      -- order they were typed, as a single fuzzy subsequence, instead of each part
+      -- matching independently anywhere in the candidate. Off by default.
+      ordered_fuzzy_parts = false,
     },
     -- grep settings
     grep = {

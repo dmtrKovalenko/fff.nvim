@@ -150,7 +150,8 @@ function M.search(query, max_results)
   local max_threads = config.max_threads or 4
   local combo_boost_score_multiplier = config.history and config.history.combo_boost_score_multiplier or 100
   local min_combo_count = config.history and config.history.min_combo_count or 3
-  -- Args: query, max_threads, current_file, combo_boost_score_multiplier, min_combo_count, offset, page_size
+  local ordered_fuzzy_parts = config.file_picker and config.file_picker.ordered_fuzzy_parts or false
+  -- Args: query, max_threads, current_file, combo_boost_score_multiplier, min_combo_count, offset, page_size, ordered_fuzzy_parts
   local ok, search_result = pcall(
     fuzzy.fuzzy_search_files,
     query,
@@ -159,7 +160,8 @@ function M.search(query, max_results)
     combo_boost_score_multiplier,
     min_combo_count,
     0,
-    max_results
+    max_results,
+    ordered_fuzzy_parts
   )
   if ok and search_result.items then return search_result.items end
   return {}
@@ -173,6 +175,7 @@ end
 --- @field max_threads? number Worker threads (default: config.max_threads).
 --- @field combo_boost_score_multiplier? number Override history combo boost.
 --- @field min_combo_count? number Override history min_combo_count.
+--- @field ordered_fuzzy_parts? boolean Override config.file_picker.ordered_fuzzy_parts.
 --- @field cwd? string If set and different from the current indexed root, switch the index to this directory before searching. Implies waiting for the new scan unless `wait_for_index_ms = 0`.
 --- @field wait_for_index_ms? number Block up to this many ms for the index to be ready (default: 10000 when `cwd` triggers a re-index, 0 otherwise). Set to 0 to never block.
 
@@ -287,27 +290,57 @@ function M.file_search(query, opts)
     or (config.history and config.history.combo_boost_score_multiplier)
     or 100
   local min_combo = opts.min_combo_count or (config.history and config.history.min_combo_count) or 3
+  local ordered_fuzzy_parts = opts.ordered_fuzzy_parts
+  if ordered_fuzzy_parts == nil then
+    ordered_fuzzy_parts = config.file_picker and config.file_picker.ordered_fuzzy_parts or false
+  end
 
   local empty = { items = {}, scores = {}, total_matched = 0 }
   if mode == 'files' then
     local offset = page_index * page_size
-    local ok, result =
-      pcall(fuzzy.fuzzy_search_files, query, max_threads, current_file, combo_boost, min_combo, offset, page_size)
+    local ok, result = pcall(
+      fuzzy.fuzzy_search_files,
+      query,
+      max_threads,
+      current_file,
+      combo_boost,
+      min_combo,
+      offset,
+      page_size,
+      ordered_fuzzy_parts
+    )
     if not ok then
       vim.notify('FFF file_search failed: ' .. tostring(result), vim.log.levels.ERROR)
       return empty
     end
     return result
   elseif mode == 'directories' then
-    local ok, result = pcall(fuzzy.fuzzy_search_directories, query, max_threads, current_file, page_index, page_size)
+    local ok, result = pcall(
+      fuzzy.fuzzy_search_directories,
+      query,
+      max_threads,
+      current_file,
+      page_index,
+      page_size,
+      ordered_fuzzy_parts
+    )
     if not ok then
       vim.notify('FFF file_search(directories) failed: ' .. tostring(result), vim.log.levels.ERROR)
       return empty
     end
     return result
   elseif mode == 'mixed' then
-    local ok, result =
-      pcall(fuzzy.fuzzy_search_mixed, query, max_threads, current_file, combo_boost, min_combo, page_index, page_size)
+    local ok, result = pcall(
+      fuzzy.fuzzy_search_mixed,
+      query,
+      max_threads,
+      current_file,
+      combo_boost,
+      min_combo,
+      page_index,
+      page_size,
+      ordered_fuzzy_parts
+    )
     if not ok then
       vim.notify('FFF file_search(mixed) failed: ' .. tostring(result), vim.log.levels.ERROR)
       return empty

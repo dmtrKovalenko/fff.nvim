@@ -372,6 +372,7 @@ require('fff').setup({
   },
   file_picker = {
     fuzzy_query_highlighting = false, -- true to highlight fuzzy query matches in file picker results
+    ordered_fuzzy_parts = false, -- true to require space-separated query parts ("foo bar") to match in typed order
   },
   select = {
     -- Return winid to open the chosen file in, or nil to open in the original window
