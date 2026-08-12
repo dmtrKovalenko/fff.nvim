@@ -4,19 +4,26 @@
   "private": false,
   "description": "High-performance fuzzy file finder for Node.js - perfect for LLM agent tools",
   "type": "module",
-  "main": "dist/src/index.js",
-  "types": "dist/src/index.d.ts",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/src/index.js",
-      "types": "./dist/src/index.d.ts"
-    }
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:esm && npm run build:cjs && npm run build:types",
+    "build:esm": "bun build ./src/index.ts --format=esm --target=node --external ffi-rs --sourcemap=external --outdir dist",
+    "build:cjs": "bun build ./src/index.ts --format=cjs --target=node --external ffi-rs --sourcemap=external --outdir dist --entry-naming \"[name].cjs\"",
+    "build:types": "tsc -p tsconfig.build.json",
     "test": "node test/e2e.mjs && node test/watch.mjs",
     "typecheck": "tsc --noEmit"
   },

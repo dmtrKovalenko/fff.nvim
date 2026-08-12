@@ -131,6 +131,7 @@ pub(crate) struct Args {
 
     /// Disable the content index built after the initial scan.
     /// This makes grep calls slower but consumes less RAM (recommended to not turn off)
+    #[arg(long = "no-content-indexing")]
     no_content_indexing: bool,
 
     /// Explicitly enable content indexing even when `--no-warmup` is set.

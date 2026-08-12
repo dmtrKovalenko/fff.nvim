@@ -229,9 +229,19 @@ pub(crate) fn grep_search<'a>(
         return result;
     }
 
+    // Keep any explicit FilePath scope (AI mode `path/to/file.ext` prefix) so the
+    // fallback can't leak matches outside the file the user pinned. Only the
+    // swallowed operator/glob tokens are dropped. See issue #756.
+    let scoped_constraints: fff_query_parser::ConstraintVec<'_> = query
+        .constraints
+        .iter()
+        .filter(|c| matches!(c, fff_query_parser::Constraint::FilePath(_)))
+        .cloned()
+        .collect();
+
     let literal_query = FFFQuery {
         raw_query: query.raw_query,
-        constraints: Vec::new(),
+        constraints: scoped_constraints,
         fuzzy_query: fff_query_parser::FuzzyQuery::Text(raw),
         location: None,
     };
