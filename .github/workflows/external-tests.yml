@@ -208,6 +208,10 @@ jobs:
           { "name": "@ff-labs/fff-bin-linux-x64-musl", "version": "0.0.0" }
           JSON
 
+      # fff-node builds with bun; the npm `bun` package ships musl binaries
+      - name: Install bun
+        run: npm install -g bun
+
       - name: Build fff-node
         working-directory: packages/fff-node
         run: npm run build

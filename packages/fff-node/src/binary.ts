@@ -16,6 +16,9 @@ import { getLibFilename, getNpmPackageName } from "./platform.js";
  * Get the current file's directory
  */
 function getCurrentDir(): string {
+  // CJS build: import.meta.url is inlined at bundle time, __dirname is the truth
+  if (typeof __dirname !== "undefined") return __dirname;
+
   const url = import.meta.url;
 
   if (url.startsWith("file://")) {
@@ -30,7 +33,7 @@ function getCurrentDir(): string {
 function getPackageDir(): string {
   const currentDir = getCurrentDir();
   // In dev: src/ -> package root
-  // In dist: dist/src/ -> package root
+  // In dist: dist/ -> package root
   // We look for package.json to find the actual root
   let dir = currentDir;
   for (let i = 0; i < 5; i++) {
