@@ -292,6 +292,7 @@ impl FrecencyTracker {
                 );
                 return Ok(());
             }
+
             return Err(Error::DbWrite {
                 db: Self::LABEL,
                 source: e,
@@ -312,6 +313,67 @@ impl FrecencyTracker {
                 db: Self::LABEL,
                 source,
             })
+    }
+
+    pub fn copy_history(&self, from: &Path, to: &Path) -> Result<bool> {
+        if from == to {
+            return Ok(false);
+        }
+
+        let Some(source) = self.get_accesses(from)?.filter(|a| !a.is_empty()) else {
+            return Ok(false);
+        };
+
+        let target_key = Self::path_to_hash_bytes(to)?;
+        let target = self.get_accesses(to)?.unwrap_or_default();
+
+        let mut timestamps: Vec<u64> = source.iter().chain(target.iter()).copied().collect();
+        timestamps.sort_unstable();
+        let overflow = timestamps.len().saturating_sub(MAX_TIMESTAMPS_PER_FILE);
+        let merged: VecDeque<u64> = timestamps.drain(overflow..).collect();
+
+        tracing::debug!(
+            ?from,
+            ?to,
+            accesses = merged.len(),
+            "Copying frecency history"
+        );
+
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|source| Error::DbStartWriteTxn {
+                db: Self::LABEL,
+                source,
+            })?;
+        if let Err(e) = self.db.put(&mut wtxn, &target_key, &merged) {
+            if is_map_full(&e) {
+                self.health.mark_unhealthy("MDB_MAP_FULL on put");
+                tracing::error!(?to, "Frecency DB hit MDB_MAP_FULL; dropping history copy");
+                return Ok(false);
+            }
+            return Err(Error::DbWrite {
+                db: Self::LABEL,
+                source: e,
+            });
+        }
+
+        if let Err(e) = wtxn.commit() {
+            if is_map_full(&e) {
+                self.health.mark_unhealthy("MDB_MAP_FULL on commit");
+                tracing::error!(
+                    ?to,
+                    "Frecency DB hit MDB_MAP_FULL on commit; dropping history copy"
+                );
+                return Ok(false);
+            }
+            return Err(Error::DbCommit {
+                db: Self::LABEL,
+                source: e,
+            });
+        }
+
+        Ok(true)
     }
 
     pub fn get_access_score(&self, file_path: &Path, mode: FFFMode) -> i64 {
