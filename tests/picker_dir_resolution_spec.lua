@@ -1,5 +1,5 @@
 ---@diagnostic disable: undefined-field, missing-fields
--- Regression test for https://github.com/dmtrKovalenko/fff.nvim/issues/389
+-- Regression test for https://github.com/dmtrKovalenko/fff/issues/389
 -- When find_files_in_dir(dir) runs with dir != neovim's cwd, the Rust indexer
 -- reports paths relative to `dir`, but the Lua side used to resolve them
 -- against neovim's cwd when calling :edit / preview / quickfix — so files

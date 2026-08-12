@@ -4,7 +4,7 @@
     FFF MCP Server installer for Windows.
 .DESCRIPTION
     Pipe usage:
-        irm https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.ps1 | iex
+        irm https://raw.githubusercontent.com/dmtrKovalenko/fff/main/install-mcp.ps1 | iex
     Direct usage (supports params):
         iwr https://.../install-mcp.ps1 -OutFile install-mcp.ps1; .\install-mcp.ps1 -Version v0.1.2
     Env-var fallbacks (for the piped form):
@@ -29,7 +29,7 @@ $ErrorActionPreference = 'Stop'
 # Force TLS 1.2 — PS 5.1 on older Win10 may default to SSL3/TLS1.0 which GitHub rejects.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-$Repo = 'dmtrKovalenko/fff.nvim'
+$Repo = 'dmtrKovalenko/fff'
 $BinaryName = 'fff-mcp'
 if (-not $InstallDir) { $InstallDir = Join-Path $env:LOCALAPPDATA 'fff-mcp\bin' }
 

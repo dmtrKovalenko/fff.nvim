@@ -1,6 +1,6 @@
 # fff-search
 
-Python bindings for [FFF (Fast File Finder)](https://github.com/dmtrKovalenko/fff.nvim), built with [PyO3](https://pyo3.rs/) and [Maturin](https://www.maturin.rs/). Install with `pip install fff-search`; import as `fff`.
+Python bindings for [FFF (Fast File Finder)](https://github.com/dmtrKovalenko/fff), built with [PyO3](https://pyo3.rs/) and [Maturin](https://www.maturin.rs/). Install with `pip install fff-search`; import as `fff`.
 
 ## Requirements
 

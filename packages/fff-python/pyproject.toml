@@ -15,8 +15,8 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/dmtrKovalenko/fff.nvim"
-Issues = "https://github.com/dmtrKovalenko/fff.nvim/issues"
+Repository = "https://github.com/dmtrKovalenko/fff"
+Issues = "https://github.com/dmtrKovalenko/fff/issues"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]

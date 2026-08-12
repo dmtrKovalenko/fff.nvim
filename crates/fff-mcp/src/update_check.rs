@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-const REPO: &str = "dmtrKovalenko/fff.nvim";
+const REPO: &str = "dmtrKovalenko/fff";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 static UPDATE_NOTICE: OnceLock<String> = OnceLock::new();

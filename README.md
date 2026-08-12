@@ -37,7 +37,7 @@ curl -L https://dmtrkovalenko.dev/install-fff-mcp.sh | bash
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/dmtrKovalenko/fff.nvim/main/install-mcp.ps1 | iex
+irm https://raw.githubusercontent.com/dmtrKovalenko/fff/main/install-mcp.ps1 | iex
 ```
 
 The scripts live at [`install-mcp.sh`](./install-mcp.sh) and [`install-mcp.ps1`](./install-mcp.ps1) if you want to read them first. They print the exact wiring instructions for your client.
@@ -49,7 +49,7 @@ brew install dmtrKovalenko/fff/fff-mcp
 brew upgrade fff-mcp   # after new stable releases
 ```
 
-Formula lives in [`Formula/fff-mcp.rb`](./Formula/fff-mcp.rb) in this repo and is **auto-bumped on every stable release** (see `bump-homebrew-formula` in [`.github/workflows/release.yaml`](./.github/workflows/release.yaml)). Installs the prebuilt `fff-mcp` binary from [GitHub releases](https://github.com/dmtrKovalenko/fff.nvim/releases).
+Formula lives in [`Formula/fff-mcp.rb`](./Formula/fff-mcp.rb) in this repo and is **auto-bumped on every stable release** (see `bump-homebrew-formula` in [`.github/workflows/release.yaml`](./.github/workflows/release.yaml)). Installs the prebuilt `fff-mcp` binary from [GitHub releases](https://github.com/dmtrKovalenko/fff/releases).
 
 ### Codex setup
 
@@ -153,8 +153,9 @@ https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 #### lazy.nvim
 
 ```lua
+-- Package name changed from `fff.nvim` to `fff`. If you installed fff.nvim before, clean with `:Lazy clean`
 {
-  'dmtrKovalenko/fff.nvim',
+  'dmtrKovalenko/fff',
   build = function()
     -- downloads a prebuilt binary or falls back to cargo build
     require("fff.download").download_or_build_binary()
@@ -187,13 +188,14 @@ https://github.com/user-attachments/assets/5d0e1ce9-642c-4c44-aa88-01b05bb86abb
 #### vim.pack
 
 ```lua
-vim.pack.add({ 'https://github.com/dmtrKovalenko/fff.nvim' })
+-- Package name changed from `fff.nvim` to `fff`. If you installed fff.nvim before, clean with `:packdel fff.nvim`
+vim.pack.add({ 'https://github.com/dmtrKovalenko/fff' })
 
 vim.api.nvim_create_autocmd('PackChanged', {
   callback = function(ev)
     local name, kind = ev.data.spec.name, ev.data.kind
-    if name == 'fff.nvim' and (kind == 'install' or kind == 'update') then
-      if not ev.data.active then vim.cmd.packadd('fff.nvim') end
+    if name == 'fff' and (kind == 'install' or kind == 'update') then
+      if not ev.data.active then vim.cmd.packadd('fff') end
       require('fff.download').download_or_build_binary()
     end
   end,
@@ -614,7 +616,7 @@ cargo build --release -p fff-c --features zlob
 
 The output is a `cdylib` (`libfff_c.so` / `libfff_c.dylib` / `fff_c.dll`). The header lives at [`crates/fff-c/include/fff.h`](./crates/fff-c/include/fff.h).
 
-Prebuilt binaries for every version, including every commit on main, are on the [releases page](https://github.com/dmtrKovalenko/fff.nvim/releases). The same binaries also ship inside the `@ff-labs/fff-bin-*` npm packages.
+Prebuilt binaries for every version, including every commit on main, are on the [releases page](https://github.com/dmtrKovalenko/fff/releases). The same binaries also ship inside the `@ff-labs/fff-bin-*` npm packages.
 
 ### Install
 

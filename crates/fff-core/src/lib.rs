@@ -1,6 +1,6 @@
 //! # FFF Search — High-performance file finder core
 //!
-//! This crate provides the core search engine for [FFF (Fast File Finder)](https://github.com/dmtrKovalenko/fff.nvim).
+//! This crate provides the core search engine for [FFF (Fast File Finder)](https://github.com/dmtrKovalenko/fff).
 //! It includes filesystem indexing with real-time watching, fuzzy matching powered
 //! by [frizbee](https://docs.rs/neo_frizbee), frecency scoring backed by LMDB,
 //! and multi-mode grep search.

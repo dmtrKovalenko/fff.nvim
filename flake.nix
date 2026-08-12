@@ -1,5 +1,5 @@
 {
-  description = "fff.nvim";
+  description = "fff";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

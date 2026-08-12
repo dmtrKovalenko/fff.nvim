@@ -305,7 +305,7 @@ lint: lint-rust lint-lua lint-ts
 
 check: format lint
 
-FFF_RELEASE_REPO ?= dmtrKovalenko/fff.nvim
+FFF_RELEASE_REPO ?= dmtrKovalenko/fff
 FFF_FORMULA_PATH ?= Formula/fff-mcp.rb
 FFF_INSTALL_SCRIPT_PATH ?= install-mcp.sh
 

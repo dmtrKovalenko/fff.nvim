@@ -1,5 +1,5 @@
--- Single file Neovim config for testing fff.nvim locally
--- Usage: nvim -u /Users/neogoose/dev/fff.nvim/init.lua
+-- Single file Neovim config for testing fff locally
+-- Usage: nvim -u /Users/neogoose/dev/fff/init.lua
 
 -- Set up lazy.nvim plugin manager
 local lazypath = vim.fn.stdpath('data') .. '/lazy/lazy.nvim'
@@ -17,8 +17,8 @@ vim.opt.rtp:prepend(lazypath)
 
 require('lazy').setup({
   {
-    dir = '~/dev/fff.nvim',
-    'https://github.com/dmtrKovalenko/fff.nvim',
+    dir = '~/dev/fff',
+    'https://github.com/dmtrKovalenko/fff',
     build = function()
       -- this will download prebuild binary or try to use existing rustup toolchain to build from source
       -- (if you are using lazy you can use gb for rebuilding a plugin if needed)
@@ -34,7 +34,7 @@ require('lazy').setup({
     },
     config = function()
       require('fff').setup({
-        -- Configure fff.nvim here
+        -- Configure fff here
         ui = {
           width = 0.8,
           height = 0.8,
@@ -59,4 +59,4 @@ vim.keymap.set('n', 'fg', function() require('fff').find_in_git_root() end, { de
 vim.keymap.set('n', 'fr', function() require('fff').scan_files() end, { desc = 'Rescan files' })
 vim.keymap.set('n', 'fs', function() require('fff').refresh_git_status() end, { desc = 'Refresh git status' })
 
-vim.notify('FFF.nvim local config loaded! Press ff', vim.log.levels.INFO)
+vim.notify('FFF local config loaded! Press ff', vim.log.levels.INFO)
