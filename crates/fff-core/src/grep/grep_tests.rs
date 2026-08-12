@@ -461,3 +461,58 @@ fn test_grep_no_duplicates_with_overflow_trailing_bits() {
         result.matches.len()
     );
 }
+
+/// Issue #756: an AI-mode regex query with an inline FilePath scope and
+/// top-level alternation. The regex fragments are swallowed as bogus Glob
+/// constraints, the constrained search finds nothing, and the literal/regex
+/// fallback must NOT drop the FilePath scope — otherwise the `|` branch leaks
+/// matches into files outside the pinned path.
+#[test]
+fn regex_fallback_keeps_file_path_scope_issue_756() {
+    use fff_query_parser::{AiGrepConfig, QueryParser};
+    let dir = tempfile::tempdir().unwrap();
+    let base = crate::path_utils::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir(base.join("scope")).unwrap();
+    std::fs::write(
+        base.join("scope").join("target.css"),
+        "/* ---------- target ---------- */\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("outside.css"),
+        "/* ---------- outside ---------- */\n",
+    )
+    .unwrap();
+
+    let mut picker = FilePicker::new(FilePickerOptions {
+        base_path: base.to_str().unwrap().into(),
+        watch: false,
+        ..Default::default()
+    })
+    .unwrap();
+    picker.collect_files().unwrap();
+
+    let options = crate::GrepSearchOptions {
+        mode: super::GrepMode::Regex,
+        smart_case: true,
+        max_matches_per_file: 80,
+        page_limit: 100,
+        ..Default::default()
+    };
+
+    let raw = r"scope/target.css ^/\* |^\s*/\* ----------";
+    let query = QueryParser::new(AiGrepConfig).parse(raw);
+    let result = picker.grep(&query, &options);
+    let mut paths: Vec<String> = result
+        .files
+        .iter()
+        .map(|f| f.relative_path(&picker))
+        .collect();
+    paths.sort();
+
+    assert_eq!(
+        paths,
+        vec!["scope/target.css"],
+        "regex fallback must not leak outside the FilePath scope"
+    );
+}
