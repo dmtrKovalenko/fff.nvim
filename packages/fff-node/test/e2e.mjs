@@ -2,13 +2,13 @@ import { after, before, describe, it } from "node:test";
 import { strict as assert } from "node:assert";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FileFinder } from "../dist/src/index.js";
+import { FileFinder } from "../dist/index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 const normalizePath = (p) => p.replace(/\\/g, "/");
 
-/** @type {import("../dist/src/finder.js").FileFinder | null} */
+/** @type {import("../dist/finder.js").FileFinder | null} */
 let finder = null;
 
 describe("fff-node", { concurrency: 1 }, () => {

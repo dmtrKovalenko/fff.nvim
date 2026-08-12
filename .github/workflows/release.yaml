@@ -710,6 +710,8 @@ jobs:
           node-version: "25"
           registry-url: "https://registry.npmjs.org"
 
+      - uses: oven-sh/setup-bun@v2
+
       - name: Determine version
         id: version
         run: lua scripts/determine-version.lua
@@ -747,6 +749,8 @@ jobs:
           make set-npm-version PKG=packages/fff-bun VERSION="$VERSION"
 
           cd packages/fff-bun
+          bun install --frozen-lockfile
+          bun run build
           npm publish --tag "$TAG" --access public --provenance
 
       - name: Publish Node.js package
