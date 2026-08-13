@@ -34,6 +34,8 @@ export { SCAN_TIMEOUT_MS } from "./sdk";
 
 const DEFAULT_GREP_LIMIT = 20;
 const DEFAULT_FIND_LIMIT = 30;
+const GREP_PAGE_SIZE_MAX = 50;
+const GREP_CONTEXT_MAX = 20;
 const GREP_MAX_LINE_LENGTH = 500;
 const MENTION_MAX_RESULTS = 20;
 
@@ -126,6 +128,13 @@ function getFindCursor(id: string): FindCursor | undefined {
 function truncateLine(line: string, max = GREP_MAX_LINE_LENGTH): string {
   const trimmed = line.trim();
   return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}...`;
+}
+
+// Clamp caller-supplied context to a non-negative bounded integer so a large
+// value cannot multiply output size past the model window.
+function clampContext(context: number | undefined): number {
+  if (!context || context < 0) return 0;
+  return Math.min(Math.floor(context), GREP_CONTEXT_MAX);
 }
 
 const HOT_FRECENCY = 25;
@@ -691,7 +700,9 @@ export default function fffExtension(pi: ExtensionAPI) {
       }),
     ),
     context: Type.Optional(
-      Type.Number({ description: "Context lines before+after each match" }),
+      Type.Number({
+        description: `Context lines before+after each match (0-${GREP_CONTEXT_MAX})`,
+      }),
     ),
     limit: Type.Optional(
       Type.Number({
@@ -724,6 +735,10 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       const picker = aux ? aux.finder : await ensureFinder(activeCwd);
       const effectiveLimit = Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT);
+      // pageSize caps TOTAL matches across all files; maxMatchesPerFile alone
+      // only caps per-file, so limit=5 could still return a full SDK page.
+      const pageSize = Math.min(effectiveLimit, GREP_PAGE_SIZE_MAX);
+      const context = clampContext(params.context);
       const query = aux
         ? aux.query
         : buildQuery(params.path, pattern, params.exclude, activeCwd);
@@ -771,10 +786,11 @@ export default function fffExtension(pi: ExtensionAPI) {
       const grepResult = picker.grep(query, {
         mode,
         smartCase,
-        maxMatchesPerFile: Math.min(effectiveLimit, 50),
+        maxMatchesPerFile: pageSize,
+        pageSize,
         cursor: (params.cursor ? getCursor(params.cursor) : null) ?? null,
-        beforeContext: params.context ?? 0,
-        afterContext: params.context ?? 0,
+        beforeContext: context,
+        afterContext: context,
         classifyDefinitions: true,
         timeBudgetMs: GREP_TIME_BUDGET_MS,
       });
@@ -803,7 +819,8 @@ export default function fffExtension(pi: ExtensionAPI) {
         const fuzzy = picker.grep(fuzzyQuery, {
           mode: "fuzzy",
           smartCase,
-          maxMatchesPerFile: Math.min(effectiveLimit, 50),
+          maxMatchesPerFile: pageSize,
+          pageSize,
           cursor: null,
           beforeContext: 0,
           afterContext: 0,
@@ -1015,7 +1032,11 @@ export default function fffExtension(pi: ExtensionAPI) {
       constraints: Type.Optional(
         Type.String({ description: "File filter, e.g. '*.{ts,tsx} !test/'" }),
       ),
-      context: Type.Optional(Type.Number({ description: "Context lines before+after" })),
+      context: Type.Optional(
+        Type.Number({
+          description: `Context lines before+after (0-${GREP_CONTEXT_MAX})`,
+        }),
+      ),
       limit: Type.Optional(
         Type.Number({
           description: `Max matches (default ${DEFAULT_GREP_LIMIT})`,
@@ -1044,15 +1065,18 @@ export default function fffExtension(pi: ExtensionAPI) {
 
         const f = await ensureFinder(activeCwd);
         const effectiveLimit = Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT);
+        const pageSize = Math.min(effectiveLimit, GREP_PAGE_SIZE_MAX);
+        const context = clampContext(params.context);
 
         const grepResult = f.multiGrep({
           patterns: params.patterns,
           constraints: params.constraints,
-          maxMatchesPerFile: Math.min(effectiveLimit, 50),
+          maxMatchesPerFile: pageSize,
+          pageSize,
           smartCase: true,
           cursor: (params.cursor ? getCursor(params.cursor) : null) ?? null,
-          beforeContext: params.context ?? 0,
-          afterContext: params.context ?? 0,
+          beforeContext: context,
+          afterContext: context,
         });
 
         if (!grepResult.ok) throw new Error(grepResult.error);
