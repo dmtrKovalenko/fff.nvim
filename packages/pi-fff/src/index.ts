@@ -318,7 +318,7 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   const toolNames = resolveToolNames(currentMode);
 
-  // DB path resolution: flag > env > undefined (use fff-node defaults)
+  // DB path resolution: flag > env > undefined (no persistent DBs)
   const frecencyDbPath =
     (pi.getFlag("fff-frecency-db") as string | undefined) ??
     process.env.FFF_FRECENCY_DB ??
@@ -329,11 +329,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     undefined;
 
   // flag (boolean) > env ("1"/"true", or "0"/"false") > default.
-  function resolveBoolOpt(
-    flagName: string,
-    envName: string,
-    fallback = false,
-  ): boolean {
+  function resolveBoolOpt(flagName: string, envName: string, fallback = false): boolean {
     const flag = pi.getFlag(flagName);
     if (typeof flag === "boolean") return flag;
     if (typeof flag === "string") return flag === "true" || flag === "1";
@@ -384,10 +380,12 @@ export default function fffExtension(pi: ExtensionAPI) {
     );
   }
 
-  let auxPool = new AuxFinderPool({
+  const auxPool = new AuxFinderPool({
     enableFsRootScanning,
     enableHomeDirScanning,
     onHomeDirScan: warnHomeDirScan,
+    frecencyDbPath,
+    historyDbPath,
   });
 
   // in case cwd changes we need to figure this out

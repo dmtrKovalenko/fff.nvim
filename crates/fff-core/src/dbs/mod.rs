@@ -1,3 +1,4 @@
+pub(crate) mod env_pool;
 pub(crate) mod lmdb;
 
 pub mod db_healthcheck;

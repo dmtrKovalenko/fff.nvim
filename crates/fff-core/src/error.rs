@@ -34,6 +34,22 @@ pub enum Error {
         #[source]
         source: heed::Error,
     },
+    #[error(
+        "LMDB env at {path} is already open as the '{open_as}' database with different options; requested by '{requested_as}'. Use a distinct path per database."
+    )]
+    EnvSpecMismatch {
+        path: std::path::PathBuf,
+        open_as: &'static str,
+        requested_as: &'static str,
+    },
+    #[error(
+        "The {db} database at {path} is still used by {holders} other tracker(s) in this process"
+    )]
+    DbInUse {
+        db: &'static str,
+        path: std::path::PathBuf,
+        holders: usize,
+    },
     #[error("Failed to create {db} database: {source}")]
     DbCreate {
         db: &'static str,
