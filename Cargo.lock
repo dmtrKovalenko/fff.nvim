@@ -662,8 +662,10 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

@@ -1,8 +1,11 @@
 mod cursor;
 mod healthcheck;
 mod output;
+mod parent;
 mod server;
 mod update_check;
+
+use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use fff::file_picker::FilePicker;
@@ -92,7 +95,7 @@ pub const MCP_INSTRUCTIONS: &str = concat!(
     "  !generated/ - exclude generated code",
 );
 
-/// FFF MCP Server -- a high performance & accuracy file finder for AI code assistants.
+/// FFF MCP Server - a high performance & accuracy file finder for AI code assistants.
 #[derive(Parser)]
 #[command(name = "fff-mcp", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("FFF_GIT_HASH"), ")"))]
 pub(crate) struct Args {
@@ -183,11 +186,12 @@ pub(crate) struct Args {
     #[arg(long = "healthcheck")]
     pub(crate) healthcheck: bool,
 
-    /// Exit after this many seconds of inactivity. 0 = never exit.
+    /// Timeout of inactivity after which fff mcp will be exited. Even if the parent process
+    /// is alive we don't want to occupy resources on index and file watches if fff is unused
     #[arg(
         long = "idle-timeout-secs",
         env = "FFF_MCP_IDLE_TIMEOUT_SECS",
-        default_value_t = 900
+        default_value_t = 60 * 60
     )]
     idle_timeout_secs: u64,
 }
@@ -343,9 +347,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    if idle_timeout_secs > 0 {
+    let parent_watcher = parent::ParentWatcher::new();
+    match &parent_watcher {
+        Some(watcher) => tracing::info!(
+            "Watching parent process (pid {}); will exit when it dies",
+            watcher.parent_pid()
+        ),
+        None => tracing::warn!(
+            "Parent process liveness detection unavailable; idle timeout will exit unconditionally"
+        ),
+    }
+
+    if idle_timeout_secs > 0 || parent_watcher.is_some() {
         last_activity.store(
-            std::time::SystemTime::now()
+            SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
@@ -354,9 +369,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let last_activity_for_watchdog = last_activity.clone();
         tokio::spawn(async move {
-            let tick = std::time::Duration::from_secs(60);
+            let tick = watchdog_interval();
             loop {
                 tokio::time::sleep(tick).await;
+
+                if let Some(ref watcher) = parent_watcher {
+                    if !watcher.parent_alive() {
+                        tracing::info!(
+                            "Parent process (pid {}) exited, shutting down",
+                            watcher.parent_pid()
+                        );
+                        flush_logs_and_exit().await;
+                    }
+                    // Parent is alive: it owns our lifecycle, never exit on idle
+                    // Clients like Codex do not restart MCP servers @see #703
+                    continue;
+                }
+
+                if idle_timeout_secs == 0 {
+                    continue;
+                }
+
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -364,12 +397,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let last = last_activity_for_watchdog.load(std::sync::atomic::Ordering::Relaxed);
                 if now.saturating_sub(last) >= idle_timeout_secs {
-                    tracing::info!(
-                        "Exiting after {}s of inactivity (idle_timeout_secs={})",
-                        now.saturating_sub(last),
-                        idle_timeout_secs
-                    );
-                    std::process::exit(0);
+                    tracing::info!(?idle_timeout_secs, "Exiting due to inactivity",);
+                    flush_logs_and_exit().await;
                 }
             }
         });
@@ -395,4 +424,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+// Tracing appender is non blocking, to get full log give it some time before hard exit
+async fn flush_logs_and_exit() -> ! {
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    std::process::exit(0);
+}
+
+fn watchdog_interval() -> Duration {
+    if cfg!(debug_assertions)
+        && let Some(milliseconds) = std::env::var("FFF_MCP_TEST_WATCHDOG_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+    {
+        return Duration::from_millis(milliseconds);
+    }
+    Duration::from_secs(60)
 }
