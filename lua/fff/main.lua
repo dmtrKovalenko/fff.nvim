@@ -101,7 +101,13 @@ function M.clear_cache(scope)
 
   if scope == 'all' or scope == 'files' then
     local ok, err = pcall(fuzzy.cleanup_file_picker)
-    if not ok then table.insert(errors, 'cleanup file picker: ' .. tostring(err)) end
+    if not ok then
+      table.insert(errors, 'cleanup file picker: ' .. tostring(err))
+    else
+      -- Rust picker is gone; clear the core flag so the next ensure_initialized
+      -- rebuilds it instead of operating on a dropped picker (#772).
+      require('fff.core').mark_file_picker_uninitialized()
+    end
   end
 
   if scope == 'all' or scope == 'frecency' then

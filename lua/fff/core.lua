@@ -135,11 +135,17 @@ M.change_indexing_directory = function(new_path)
   return true
 end
 
-M.ensure_initialized = function()
-  if state.initialized then return fuzzy end
+--- Reset the file-picker flag so the next `ensure_initialized` recreates the
+--- Rust picker. Call after `cleanup_file_picker` drops it (`FFFClearCache`);
+--- otherwise the flag stays set and every later call operates on a dropped
+--- picker (see #772).
+M.mark_file_picker_uninitialized = function() state.file_picker_initialized = false end
 
+M.ensure_initialized = function()
   local config = require('fff.conf').get()
 
+  -- Refusal gates both one-time setup and (re)creating the picker so we never
+  -- index fs-root / home, even after a cache clear.
   -- Some folks are complaining that neovim instance is closing if ffi returns error on startup (via lazy=false)
   -- I can't repro so just precheck on lua side to prevent crashing neovim instance
   local refusal = fs_scanning_refusal(config)
@@ -149,45 +155,52 @@ M.ensure_initialized = function()
     return fuzzy
   end
 
-  state.initialized = true
-  if config.logging.enabled then
-    local log_success, log_error =
-      pcall(fuzzy.init_tracing, config.logging.log_file, config.logging.log_level, config.logging.retain_runs)
-    if log_success then
-      M.log_file_path = log_error
-    else
-      vim.notify('Failed to initialize logging: ' .. (tostring(log_error) or 'unknown error'), vim.log.levels.WARN)
+  if not state.initialized then
+    state.initialized = true
+    if config.logging.enabled then
+      local log_success, log_error =
+        pcall(fuzzy.init_tracing, config.logging.log_file, config.logging.log_level, config.logging.retain_runs)
+      if log_success then
+        M.log_file_path = log_error
+      else
+        vim.notify('Failed to initialize logging: ' .. (tostring(log_error) or 'unknown error'), vim.log.levels.WARN)
+      end
     end
+
+    local frecency_db_path = config.frecency.db_path or (vim.fn.stdpath('cache') .. '/fff_frecency')
+    local history_db_path = config.history.db_path or (vim.fn.stdpath('data') .. '/fff_history')
+
+    local ok, result = pcall(fuzzy.init_db, frecency_db_path, history_db_path, true)
+    if not ok then vim.notify('Failed to databases: ' .. tostring(result), vim.log.levels.WARN) end
+
+    setup_global_autocmds(config)
+
+    local highlights = require('fff.highlights')
+    highlights.setup()
+
+    vim.api.nvim_create_autocmd('ColorScheme', {
+      group = vim.api.nvim_create_augroup('fff_highlights', { clear = true }),
+      callback = function() highlights.setup() end,
+      desc = 'Re-apply FFF highlights on colorscheme change',
+    })
   end
 
-  local frecency_db_path = config.frecency.db_path or (vim.fn.stdpath('cache') .. '/fff_frecency')
-  local history_db_path = config.history.db_path or (vim.fn.stdpath('data') .. '/fff_history')
-
-  local ok, result = pcall(fuzzy.init_db, frecency_db_path, history_db_path, true)
-  if not ok then vim.notify('Failed to databases: ' .. tostring(result), vim.log.levels.WARN) end
-
-  ok, result = pcall(fuzzy.init_file_picker, config.base_path, {
-    follow_symlinks = config.follow_symlinks,
-    enable_fs_root_scanning = config.enable_fs_root_scanning,
-    enable_home_dir_scanning = config.enable_home_dir_scanning,
-    enable_filename_constraint = config.grep and config.grep.enable_filename_constraint,
-  })
-  if not ok then
-    vim.notify('Failed to initialize file picker: ' .. tostring(result), vim.log.levels.ERROR)
-    return fuzzy
+  -- Recreated whenever the picker was torn down (e.g. `FFFClearCache files`).
+  -- Guarded separately from one-time setup so a cache clear rebuilds the
+  -- picker instead of leaving a dropped one behind (#772).
+  if not state.file_picker_initialized then
+    local ok, result = pcall(fuzzy.init_file_picker, config.base_path, {
+      follow_symlinks = config.follow_symlinks,
+      enable_fs_root_scanning = config.enable_fs_root_scanning,
+      enable_home_dir_scanning = config.enable_home_dir_scanning,
+      enable_filename_constraint = config.grep and config.grep.enable_filename_constraint,
+    })
+    if not ok then
+      vim.notify('Failed to initialize file picker: ' .. tostring(result), vim.log.levels.ERROR)
+      return fuzzy
+    end
+    state.file_picker_initialized = true
   end
-
-  state.file_picker_initialized = true
-  setup_global_autocmds(config)
-
-  local highlights = require('fff.highlights')
-  highlights.setup()
-
-  vim.api.nvim_create_autocmd('ColorScheme', {
-    group = vim.api.nvim_create_augroup('fff_highlights', { clear = true }),
-    callback = function() highlights.setup() end,
-    desc = 'Re-apply FFF highlights on colorscheme change',
-  })
 
   return fuzzy
 end
