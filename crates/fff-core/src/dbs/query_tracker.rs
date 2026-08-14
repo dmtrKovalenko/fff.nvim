@@ -2,7 +2,7 @@ use super::db_healthcheck::DbHealthChecker;
 use super::lmdb::{DbHealth, LmdbStore, is_map_full};
 use crate::error::Error;
 use heed::types::{Bytes, SerdeBincode};
-use heed::{Database, Env};
+use heed::{Database, Env, WithoutTls};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -27,7 +27,7 @@ struct HistoryEntry {
 
 #[derive(Debug)]
 pub struct QueryTracker {
-    env: Env,
+    env: Env<WithoutTls>,
     // Database for (project_path, query) -> QueryMatchEntry mappings
     query_file_db: Database<Bytes, SerdeBincode<QueryMatchEntry>>,
     // Database for project_path -> VecDeque<HistoryEntry> mappings (file picker)
@@ -38,7 +38,7 @@ pub struct QueryTracker {
 }
 
 impl DbHealthChecker for QueryTracker {
-    fn get_env(&self) -> &Env {
+    fn get_env(&self) -> &Env<WithoutTls> {
         &self.env
     }
 
@@ -92,7 +92,7 @@ impl LmdbStore for QueryTracker {
     const MAX_DBS: u32 = 16;
     const SIZE_CAP_BYTES: u64 = 8 * 1024 * 1024;
 
-    fn env(&self) -> &Env {
+    fn env(&self) -> &Env<WithoutTls> {
         &self.env
     }
 
@@ -197,7 +197,7 @@ impl QueryTracker {
     /// offset=0 returns most recent, offset=1 returns 2nd most recent, etc.
     fn read_history_at_offset(
         db: &Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
-        env: &Env,
+        env: &Env<WithoutTls>,
         project_key: &[u8; 32],
         offset: usize,
     ) -> Result<Option<String>, Error> {

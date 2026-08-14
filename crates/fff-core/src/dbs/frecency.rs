@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use crate::file_picker::FFFMode;
 use crate::git::is_modified_status;
 use heed::types::{Bytes, SerdeBincode};
-use heed::{Database, Env};
+use heed::{Database, Env, WithoutTls};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::VecDeque, path::Path};
 
@@ -19,7 +19,7 @@ const AI_MAX_HISTORY_DAYS: f64 = 7.0; // Only consider accesses within 7 days
 
 #[derive(Debug)]
 pub struct FrecencyTracker {
-    env: Env,
+    env: Env<WithoutTls>,
     db: Database<Bytes, SerdeBincode<VecDeque<u64>>>,
     health: DbHealth,
 }
@@ -42,7 +42,7 @@ const AI_MODIFICATION_THRESHOLDS: [(i64, u64); 5] = [
 ];
 
 impl DbHealthChecker for FrecencyTracker {
-    fn get_env(&self) -> &heed::Env {
+    fn get_env(&self) -> &heed::Env<WithoutTls> {
         &self.env
     }
 
@@ -77,7 +77,7 @@ impl LmdbStore for FrecencyTracker {
     // MAP_SIZE so we don't hit MDB_MAP_FULL before the open-time erase fires.
     const SIZE_CAP_BYTES: u64 = 12 * 1024 * 1024;
 
-    fn env(&self) -> &Env {
+    fn env(&self) -> &Env<WithoutTls> {
         &self.env
     }
 
@@ -85,7 +85,7 @@ impl LmdbStore for FrecencyTracker {
         &self.health
     }
 
-    fn purge_stale_data(env: &Env) -> Result<()> {
+    fn purge_stale_data(env: &Env<WithoutTls>) -> Result<()> {
         let (deleted, pruned) = Self::purge_stale_entries(env)?;
         if deleted > 0 || pruned > 0 {
             tracing::info!(deleted, pruned, "Frecency GC purged entries");
@@ -121,7 +121,7 @@ impl FrecencyTracker {
     /// Removes entries where all timestamps are older than MAX_HISTORY_DAYS,
     /// and prunes stale timestamps from entries that still have recent ones.
     /// Returns (deleted_count, pruned_count).
-    fn purge_stale_entries(env: &Env) -> Result<(usize, usize)> {
+    fn purge_stale_entries(env: &Env<WithoutTls>) -> Result<(usize, usize)> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

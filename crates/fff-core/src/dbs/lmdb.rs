@@ -1,4 +1,4 @@
-use heed::{Database, Env, EnvOpenOptions};
+use heed::{Database, Env, EnvOpenOptions, WithoutTls};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -128,14 +128,14 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
     const SIZE_CAP_BYTES: u64;
 
     /// Borrow the env in the read lock
-    fn env(&self) -> &Env;
+    fn env(&self) -> &Env<WithoutTls>;
     /// Borrow the health flag from the tracker.
     fn health(&self) -> &DbHealth;
 
     /// Override to purge stale rows, compact, etc. Default no-op. Runs on
     /// the GC thread while a read lock is held against the shared handle,
     /// so destroy / re-init naturally wait for it.
-    fn purge_stale_data(_env: &Env) -> Result<()> {
+    fn purge_stale_data(_env: &Env<WithoutTls>) -> Result<()> {
         Ok(())
     }
 
@@ -143,7 +143,7 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
     /// the GC thread spawned by `spawn_gc` flips it to Healthy. Write
     /// paths flip it to Degraded on MDB_MAP_FULL.
     #[tracing::instrument]
-    fn open_env(db_path: &Path) -> Result<(Env, DbHealth)> {
+    fn open_env(db_path: &Path) -> Result<(Env<WithoutTls>, DbHealth)> {
         Self::erase_if_oversized(db_path);
         fs::create_dir_all(db_path).map_err(Error::CreateDir)?;
         let db = Self::LABEL;
@@ -151,8 +151,13 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
         const MAX_ATTEMPTS: u32 = 8;
         let mut attempt = 0u32;
         let env = loop {
+            // read_txn_without_tls: reader slots are tied to `MDB_txn` objects
+            // instead of OS threads. Without this, each thread that ever opens
+            // a read txn holds a slot for the lifetime of the process — rayon
+            // workers, watcher, GC and main thread quickly exhaust maxreaders
+            // and new nvim sessions crash with MDB_READERS_FULL (issue #664).
             let result = unsafe {
-                let mut opts = EnvOpenOptions::new();
+                let mut opts = EnvOpenOptions::new().read_txn_without_tls();
                 opts.map_size(Self::MAP_SIZE);
                 if Self::MAX_DBS > 0 {
                     opts.max_dbs(Self::MAX_DBS);
@@ -200,7 +205,10 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
 
     /// Open or create a database without blocking on the LMDB writer mutex
     /// when the database already exists.
-    fn open_database_safe<KC, DC>(env: &Env, name: Option<&str>) -> Result<Database<KC, DC>>
+    fn open_database_safe<KC, DC>(
+        env: &Env<WithoutTls>,
+        name: Option<&str>,
+    ) -> Result<Database<KC, DC>>
     where
         KC: 'static,
         DC: 'static,
