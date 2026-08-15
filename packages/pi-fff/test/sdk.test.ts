@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { loadFirst, sdkCandidates } from "../src/sdk";
 
@@ -30,20 +31,38 @@ describe("sdkCandidates", () => {
   });
 });
 
+describe("literal SDK imports", () => {
+  test("both SDK specifiers appear as literal dynamic imports for static graph scans", () => {
+    const source = readFileSync(new URL("../src/sdk.ts", import.meta.url), "utf8");
+    expect(source).toContain('import("@ff-labs/fff-bun")');
+    expect(source).toContain('import("@ff-labs/fff-node")');
+  });
+});
+
 describe("loadFirst", () => {
-  test("falls back to the second candidate when the first cannot be imported", async () => {
-    const mod = await loadFirst(["@ff-labs/does-not-exist-in-this-graph", "node:path"]);
-    expect(mod).toHaveProperty("resolve");
+  test("prefers the first candidate when both load", async () => {
+    const loaders = {
+      a: () => Promise.resolve({ FileFinder: { create: () => "a" } }),
+      b: () => Promise.resolve({ FileFinder: { create: () => "b" } }),
+    };
+    const mod = await loadFirst(["a", "b"], loaders);
+    expect(mod.FileFinder.create()).toBe("a");
   });
 
-  test("prefers the first candidate when both are importable", async () => {
-    const mod = await loadFirst(["node:path", "node:fs"]);
-    expect(mod).toHaveProperty("resolve");
+  test("falls back to the second candidate when the first import fails", async () => {
+    const loaders = {
+      a: () => Promise.reject(new Error("cannot find a")),
+      b: () => Promise.resolve({ FileFinder: { create: () => "b" } }),
+    };
+    const mod = await loadFirst(["a", "b"], loaders);
+    expect(mod.FileFinder.create()).toBe("b");
   });
 
   test("throws the last error when every candidate fails", async () => {
-    await expect(
-      loadFirst(["@ff-labs/does-not-exist-a", "@ff-labs/does-not-exist-b"]),
-    ).rejects.toThrow();
+    const loaders = {
+      a: () => Promise.reject(new Error("first failure")),
+      b: () => Promise.reject(new Error("second failure")),
+    };
+    await expect(loadFirst(["a", "b"], loaders)).rejects.toThrow("second failure");
   });
 });

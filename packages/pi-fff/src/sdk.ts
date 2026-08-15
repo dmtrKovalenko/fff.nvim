@@ -17,6 +17,14 @@ const SDK_ORDER: Record<"bun" | "node", readonly [string, string]> = {
   node: ["@ff-labs/fff-node", "@ff-labs/fff-bun"],
 };
 
+// Literal dynamic imports so hosts that statically scan extension graphs
+// (omp's legacy-pi-compat loader) discover and hook both SDK packages;
+// a variable `import(pkg)` would bypass that scan and fail at runtime.
+const SDK_IMPORTS = {
+  "@ff-labs/fff-bun": () => import("@ff-labs/fff-bun"),
+  "@ff-labs/fff-node": () => import("@ff-labs/fff-node"),
+} as const;
+
 function detectRuntime(): "bun" | "node" {
   if (typeof (globalThis as { Bun?: unknown }).Bun !== "undefined") return "bun";
   if (
@@ -35,11 +43,12 @@ export function sdkCandidates(): readonly [string, string] {
 
 export async function loadFirst(
   candidates: readonly [string, string],
+  loaders: Record<string, () => Promise<unknown>> = SDK_IMPORTS,
 ): Promise<{ FileFinder: FileFinderStatic }> {
   let lastError: unknown;
   for (const pkg of candidates) {
     try {
-      return (await import(pkg)) as { FileFinder: FileFinderStatic };
+      return (await loaders[pkg]()) as { FileFinder: FileFinderStatic };
     } catch (error) {
       lastError = error;
     }
