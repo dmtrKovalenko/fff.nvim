@@ -693,15 +693,11 @@ impl FileFinder {
             }
             let pattern_refs: Vec<&str> = patterns.iter().map(|s| s.as_str()).collect();
 
-            let parsed_constraints = constraints.as_ref().map(|c| {
-                if picker.mode().is_ai() {
-                    QueryParser::new(fff_query_parser::AiGrepConfig).parse(c)
-                } else {
-                    fff::grep::parse_grep_query(c)
-                }
-            });
+            let parsed_constraints = constraints
+                .as_ref()
+                .map(|c| QueryParser::new(fff_query_parser::AiGrepConfig).parse_constraints(c));
             let constraint_refs: &[fff::Constraint<'_>] = match &parsed_constraints {
-                Some(q) => &q.constraints,
+                Some(constraints) => constraints,
                 None => &[],
             };
             let options = grep_options(

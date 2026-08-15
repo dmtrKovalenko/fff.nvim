@@ -222,6 +222,17 @@ fn multi_grep_with_file_path_suffix_constraint() {
     }
 }
 
+#[test]
+fn multi_grep_with_missing_file_path_constraint_returns_no_matches() {
+    let tmp = TempDir::new().unwrap();
+    let picker = create_picker(tmp.path(), &[("other.lua", "handleRequest\n")]);
+
+    let constraints = [Constraint::FilePath("missing.lua")];
+    let result = picker.multi_grep(&["handleRequest"], &constraints, &plain_opts());
+
+    assert!(result.matches.is_empty());
+}
+
 /// Glob constraints must match native Windows paths — the picker normalises
 /// separators when handing paths to the glob matcher.
 #[test]

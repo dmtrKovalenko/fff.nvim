@@ -49,6 +49,14 @@ impl<C: ParserConfig> QueryParser<C> {
         Self { config }
     }
 
+    /// Parse a field containing only constraints.
+    pub fn parse_constraints<'a>(&self, query: &'a str) -> ConstraintVec<'a> {
+        query
+            .split_whitespace()
+            .filter_map(|token| parse_token(token, &self.config))
+            .collect()
+    }
+
     pub fn parse<'a>(&self, query: &'a str) -> FFFQuery<'a> {
         let raw_query = query;
         let config: &C = &self.config;
@@ -498,7 +506,7 @@ fn parse_git_status(value: &str) -> Option<Constraint<'_>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FileSearchConfig, GrepConfig};
+    use crate::{AiGrepConfig, FileSearchConfig, GrepConfig};
 
     /// File-picker-like config with filename-constraint detection enabled,
     /// mirroring the Neovim layer's opt-in behavior.
@@ -1017,6 +1025,42 @@ mod tests {
             result.constraints[0]
         );
         assert_eq!(result.grep_text(), "pattern");
+    }
+
+    #[test]
+    fn test_standalone_constraints_preserve_directory() {
+        let result = QueryParser::new(AiGrepConfig).parse_constraints("scope-a/");
+        assert_eq!(result.as_slice(), &[Constraint::PathSegment("scope-a")]);
+    }
+
+    #[test]
+    fn test_plain_constraints_preserve_directory_only() {
+        let directory = QueryParser::new(GrepConfig).parse_constraints("scope-a/");
+        assert_eq!(directory.as_slice(), &[Constraint::PathSegment("scope-a")]);
+
+        let file = QueryParser::new(GrepConfig).parse_constraints("scope-a/one.txt");
+        assert!(file.is_empty());
+    }
+
+    #[test]
+    fn test_standalone_constraints_preserve_file() {
+        let result = QueryParser::new(AiGrepConfig).parse_constraints("scope-a/one.txt");
+        assert_eq!(
+            result.as_slice(),
+            &[Constraint::FilePath("scope-a/one.txt")]
+        );
+    }
+
+    #[test]
+    fn test_standalone_constraints_preserve_file_without_search_text() {
+        let result = QueryParser::new(AiGrepConfig).parse_constraints("scope-a/ scope-a/one.txt");
+        assert_eq!(
+            result.as_slice(),
+            &[
+                Constraint::PathSegment("scope-a"),
+                Constraint::FilePath("scope-a/one.txt")
+            ]
+        );
     }
 
     #[test]
