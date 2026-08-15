@@ -9,6 +9,14 @@ export type FileFinderStatic = {
 
 let sdkPromise: Promise<{ FileFinder: FileFinderStatic }> | null = null;
 
+const SDK_ORDER: Record<"bun" | "node", readonly [string, string]> = {
+  // fff-bun is TS-source only and cannot be imported by Bun-compiled hosts
+  // (e.g. omp) whose module resolver rejects .ts under node_modules, so the
+  // JS-compiled fff-node is kept as a fallback for every runtime.
+  bun: ["@ff-labs/fff-bun", "@ff-labs/fff-node"],
+  node: ["@ff-labs/fff-node", "@ff-labs/fff-bun"],
+};
+
 function detectRuntime(): "bun" | "node" {
   if (typeof (globalThis as { Bun?: unknown }).Bun !== "undefined") return "bun";
   if (
@@ -17,6 +25,26 @@ function detectRuntime(): "bun" | "node" {
   )
     return "bun";
   return "node";
+}
+
+/** Preferred SDK order, overridable via FFF_SDK=bun|node. */
+export function sdkCandidates(): readonly [string, string] {
+  const forced = process.env.FFF_SDK;
+  return SDK_ORDER[forced === "node" ? "node" : forced === "bun" ? "bun" : detectRuntime()];
+}
+
+async function loadFirst(
+  candidates: readonly [string, string],
+): Promise<{ FileFinder: FileFinderStatic }> {
+  let lastError: unknown;
+  for (const pkg of candidates) {
+    try {
+      return (await import(pkg)) as { FileFinder: FileFinderStatic };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 export function loadSdk(): Promise<{ FileFinder: FileFinderStatic }> {
@@ -34,8 +62,7 @@ export function loadSdk(): Promise<{ FileFinder: FileFinderStatic }> {
   }
 
   // default to node as it seems like default option
-  const pkg = detectRuntime() === "bun" ? "@ff-labs/fff-bun" : "@ff-labs/fff-node";
-  const p = import(pkg) as Promise<{ FileFinder: FileFinderStatic }>;
+  const p = loadFirst(sdkCandidates());
   sdkPromise = p;
   (globalThis as Record<string, unknown>).__fffSdkPromiseGlobal = p;
   return p;
