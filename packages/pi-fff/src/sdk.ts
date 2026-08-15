@@ -35,10 +35,9 @@ function detectRuntime(): "bun" | "node" {
   return "node";
 }
 
-/** Preferred SDK order, overridable via FFF_SDK=bun|node. */
+/** Preferred SDK order for the detected runtime. */
 export function sdkCandidates(): readonly [string, string] {
-  const forced = process.env.FFF_SDK;
-  return SDK_ORDER[forced === "node" ? "node" : forced === "bun" ? "bun" : detectRuntime()];
+  return SDK_ORDER[detectRuntime()];
 }
 
 export async function loadFirst(
