@@ -148,7 +148,7 @@ jobs:
 
       - name: Install node dependencies
         shell: bash
-        run: cd packages/fff-node && npm install
+        run: cd packages && npm ci
 
       - name: Run node tests
         shell: bash
@@ -198,12 +198,14 @@ jobs:
         run: cargo build --release -p fff-c
 
       - name: Install workspace npm deps
-        run: npm install --no-package-lock
+        working-directory: packages
+        run: npm ci
 
       # Upstream @yuuang/ffi-rs-linux-x64-musl ships with libc:"glibc" in
       # its package.json (a publishing bug in ffi-rs), so npm filters it
       # out. Force-install it so the FFI runtime is present on Alpine.
       - name: Install ffi-rs musl runtime
+        working-directory: packages
         run: |
           FFI_RS_VERSION=$(node -p "require('ffi-rs/package.json').version")
           npm install --no-package-lock --no-save --force \
@@ -214,7 +216,7 @@ jobs:
       # this is what exercises detectLinuxLibc().
       - name: Stage musl bin package
         run: |
-          PKG_DIR=node_modules/@ff-labs/fff-bin-linux-x64-musl
+          PKG_DIR=packages/node_modules/@ff-labs/fff-bin-linux-x64-musl
           mkdir -p "$PKG_DIR"
           cp target/release/libfff_c.so "$PKG_DIR/libfff_c.so"
           cat >"$PKG_DIR/package.json" <<'JSON'
