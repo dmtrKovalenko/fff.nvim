@@ -119,16 +119,26 @@ describe("AuxFinderPool covering reuse", () => {
     expect(createOptions[0].enableHomeDirScanning).toBe(false);
   });
 
-  // Regression for #700: aux finders must not reopen the main frecency/history
-  // LMDB envs, or heed fails with "environment already open in this program".
-  test("aux finders are created without frecency/history db paths", async () => {
-    const pool = makePool();
+  // #700 is fixed by the process-wide LMDB env pool: same-path opens share one
+  // env, so aux finders now reuse the session's frecency/history DBs.
+  test("aux finders receive the pool's frecency/history db paths", async () => {
+    const pool = makePool({
+      frecencyDbPath: "/dbs/frecency",
+      historyDbPath: "/dbs/history",
+    });
     await pool.acquire("/a/b/c");
     await pool.acquire("/x/y");
     expect(createOptions.length).toBe(2);
     for (const opts of createOptions) {
-      expect(opts.frecencyDbPath).toBeUndefined();
-      expect(opts.historyDbPath).toBeUndefined();
+      expect(opts.frecencyDbPath).toBe("/dbs/frecency");
+      expect(opts.historyDbPath).toBe("/dbs/history");
     }
+  });
+
+  test("aux finders stay db-less when the session has no db paths", async () => {
+    const pool = makePool();
+    await pool.acquire("/a/b/c");
+    expect(createOptions[0].frecencyDbPath).toBeUndefined();
+    expect(createOptions[0].historyDbPath).toBeUndefined();
   });
 });

@@ -18,6 +18,8 @@ export interface AuxOpts {
   enableHomeDirScanning?: boolean;
   // Called before a newly spawned aux picker starts a scan that covers $HOME.
   onHomeDirScan?: (root: string) => void;
+  frecencyDbPath?: string;
+  historyDbPath?: string;
 }
 
 export class AuxFinderPool {
@@ -100,17 +102,18 @@ export class AuxFinderPool {
     }
 
     const { FileFinder } = await loadSdk();
-    // LMDB env can only be opened once per process; the main finder already
-    // owns the frecency/history DBs. Aux finders are transient and run without
-    // persistent scoring — see issue #700.
     const result = FileFinder.create({
       basePath: root,
+      frecencyDbPath: this.opts.frecencyDbPath,
+      historyDbPath: this.opts.historyDbPath,
       aiMode: true,
       enableHomeDirScanning,
       enableFsRootScanning: this.opts.enableFsRootScanning,
     });
-    if (!result.ok)
+
+    if (!result.ok) {
       throw new Error(`Failed to create aux file finder for ${root}: ${result.error}`);
+    }
 
     await result.value.waitForScan(SCAN_TIMEOUT_MS);
     const entry: AuxPicker = {

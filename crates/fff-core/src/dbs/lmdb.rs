@@ -1,12 +1,11 @@
-use heed::{Database, Env, EnvOpenOptions};
-use std::fs;
+use heed::{Database, Env};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
-use std::time::Duration;
 
+use super::env_pool::{EnvSpec, SharedEnv};
 use crate::error::{Error, Result};
 
 pub(crate) fn is_map_full(err: &heed::Error) -> bool {
@@ -85,9 +84,13 @@ pub(crate) fn spawn_lmdb_gc<T: LmdbStore>(shared: Arc<RwLock<Option<T>>>) {
             let Some(ref tracker) = *guard else {
                 return; // destroyed before we started
             };
-            let env = tracker.env();
+            // Trackers attaching to an already-pooled env must not repeat the
+            // GC; the first opener's run flips the shared health flag.
+            if !tracker.shared_env().try_start_gc() {
+                return;
+            }
 
-            if let Err(e) = T::purge_stale_data(env) {
+            if let Err(e) = T::purge_stale_data(tracker.shared_env()) {
                 tracing::debug!("purge_stale_data failed: {e}");
             }
 
@@ -105,18 +108,6 @@ pub(crate) fn spawn_lmdb_gc<T: LmdbStore>(shared: Arc<RwLock<Option<T>>>) {
     }
 }
 
-// Concurrent `mdb_env_open` calls on the same path can race on macOS
-// this is for some reason fixabtly by simple retry of the open
-fn is_transient_env_open_error(err: &heed::Error) -> bool {
-    match err {
-        heed::Error::Io(io) => matches!(
-            io.kind(),
-            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::NotFound
-        ),
-        _ => false,
-    }
-}
-
 pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
     /// Short label used to defferintiate different instances of this trait
     const LABEL: &'static str;
@@ -127,85 +118,51 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
     /// Hard cap on `data.mdb` size.
     const SIZE_CAP_BYTES: u64;
 
-    /// Borrow the env in the read lock
-    fn env(&self) -> &Env;
+    /// Borrow the pooled env handle shared by every tracker of this path.
+    fn shared_env(&self) -> &SharedEnv;
     /// Borrow the health flag from the tracker.
     fn health(&self) -> &DbHealth;
+
+    /// Borrow the raw heed env.
+    fn env(&self) -> &Env {
+        self.shared_env()
+    }
 
     /// Override to purge stale rows, compact, etc. Default no-op. Runs on
     /// the GC thread while a read lock is held against the shared handle,
     /// so destroy / re-init naturally wait for it.
-    fn purge_stale_data(_env: &Env) -> Result<()> {
+    fn purge_stale_data(_env: &SharedEnv) -> Result<()> {
         Ok(())
     }
 
-    /// Open the LMDB env. Returns env + a `DbHealth` starting in Pending;
-    /// the GC thread spawned by `spawn_gc` flips it to Healthy. Write
-    /// paths flip it to Degraded on MDB_MAP_FULL.
+    /// Open (or join) the process-shared LMDB env for `db_path`. The health
+    /// flag is per-env: the GC of the first opener flips it for everyone.
     #[tracing::instrument]
-    fn open_env(db_path: &Path) -> Result<(Env, DbHealth)> {
-        Self::erase_if_oversized(db_path);
-        fs::create_dir_all(db_path).map_err(Error::CreateDir)?;
-        let db = Self::LABEL;
-
-        const MAX_ATTEMPTS: u32 = 8;
-        let mut attempt = 0u32;
-        let env = loop {
-            let result = unsafe {
-                let mut opts = EnvOpenOptions::new();
-                opts.map_size(Self::MAP_SIZE);
-                if Self::MAX_DBS > 0 {
-                    opts.max_dbs(Self::MAX_DBS);
-                }
-                opts.open(db_path)
-            };
-
-            match result {
-                Ok(env) => break env,
-                Err(e) if is_transient_env_open_error(&e) && attempt + 1 < MAX_ATTEMPTS => {
-                    attempt += 1;
-                    tracing::debug!(
-                        path = %db_path.display(),
-                        attempt,
-                        error = ?e,
-                        "transient LMDB env open error, retrying"
-                    );
-
-                    thread::sleep(Duration::from_millis(50));
-                }
-                Err(e) => return Err(Error::EnvOpen { db, source: e }),
-            }
-        };
-
-        // Reclaim reader slots left behind by prior processes that died
-        // without cleanup. Must run before we start any read txns (which
-        // open_database_safe does) — otherwise we may hit MDB_READERS_FULL
-        // on a fresh env just because lock.mdb still has stale entries
-        // from a previous crash.
-        //
-        // This is the one LMDB maintenance call we run on the caller's
-        // thread. If the lock file is genuinely wedged this will block
-        // forever, but the alternative — never getting past init — is
-        // worse and the bg-thread trick doesn't solve it anyway.
-        match env.clear_stale_readers() {
-            Ok(cleared) if cleared > 0 => {
-                tracing::warn!(cleared, "reclaimed stale LMDB reader slots at open");
-            }
-            Ok(_) => {}
-            Err(e) => tracing::debug!("clear_stale_readers at open failed: {e}"),
-        }
-
-        Ok((env, DbHealth::new()))
+    fn open_env(db_path: &Path) -> Result<(SharedEnv, DbHealth)> {
+        let shared = SharedEnv::get_or_open(
+            db_path,
+            &EnvSpec {
+                label: Self::LABEL,
+                map_size: Self::MAP_SIZE,
+                max_dbs: Self::MAX_DBS,
+                size_cap_bytes: Self::SIZE_CAP_BYTES,
+            },
+        )?;
+        let health = shared.health().clone();
+        Ok((shared, health))
     }
 
     /// Open or create a database without blocking on the LMDB writer mutex
     /// when the database already exists.
-    fn open_database_safe<KC, DC>(env: &Env, name: Option<&str>) -> Result<Database<KC, DC>>
+    fn open_database_safe<KC, DC>(env: &SharedEnv, name: Option<&str>) -> Result<Database<KC, DC>>
     where
         KC: 'static,
         DC: 'static,
     {
         let db = Self::LABEL;
+        // mdb_dbi_open must not run from concurrent txns in this process.
+        let _dbi_guard = env.lock_dbi_open();
+
         let rtxn = env
             .read_txn()
             .map_err(|source| Error::DbStartReadTxn { db, source })?;
@@ -236,24 +193,5 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
                 Ok(handle)
             }
         }
-    }
-
-    fn erase_if_oversized(db_path: &Path) {
-        let data = db_path.join("data.mdb");
-        let Ok(meta) = fs::metadata(&data) else {
-            return;
-        };
-        if meta.len() <= Self::SIZE_CAP_BYTES {
-            return;
-        }
-
-        tracing::error!(
-            path = %db_path.display(),
-            size = meta.len(),
-            cap = Self::SIZE_CAP_BYTES,
-            "LMDB db exceeds size cap, erasing"
-        );
-        let _ = fs::remove_file(&data);
-        let _ = fs::remove_file(db_path.join("lock.mdb"));
     }
 }

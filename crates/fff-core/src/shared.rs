@@ -491,20 +491,31 @@ impl<T: LmdbStore> SharedDb<T> {
 
     /// Drop the in-memory tracker and delete the on-disk database directory.
     ///
-    /// Acquires the write lock, ensuring all readers (including any active mmap
-    /// access) are finished before the LMDB environment is closed and the files
-    /// are removed.
-    ///
     /// Returns `Ok(Some(path))` with the deleted path, or `Ok(None)` if no tracker was initialized.
     pub fn destroy(&self) -> Result<Option<PathBuf>, Error> {
         let mut guard = self.write()?;
         let Some(tracker) = guard.take() else {
             return Ok(None);
         };
+
+        let closing_event = match tracker.shared_env().destroy() {
+            Ok(closing) => closing,
+            Err(e) => {
+                *guard = Some(tracker);
+                return Err(e);
+            }
+        };
+
         let db_path = tracker.env().path().to_path_buf();
         // Drop closes the LMDB env and unmaps the files
         drop(tracker);
         drop(guard);
+
+        // Deleting before mdb_env_close finishes would race the unmap.
+        if let Some(event) = closing_event {
+            event.wait_timeout(Duration::from_secs(5));
+        }
+
         std::fs::remove_dir_all(&db_path).map_err(|source| Error::RemoveDbDir {
             path: db_path.clone(),
             source,
