@@ -22,9 +22,9 @@ import type {
 } from "@ff-labs/fff-node";
 import { Type } from "@sinclair/typebox";
 import { AuxFinderPool, routePathConstraint } from "./aux-finders";
+import { FilePickerFactory } from "./file-picker";
+import { isHomeDir, resolveDbPaths } from "./paths";
 import { buildQuery } from "./query";
-import { isHomeDir } from "./paths";
-import { loadSdk, SCAN_TIMEOUT_MS } from "./sdk";
 
 export { SCAN_TIMEOUT_MS } from "./sdk";
 
@@ -162,16 +162,7 @@ export function fffFileAnnotation(item: {
   return "";
 }
 
-// fff-core native definition classifier (byte-level scanner in Rust) is enabled
-// via GrepOptions.classifyDefinitions. Each GrepMatch carries isDefinition for
-// downstream consumers; pi-fff does NOT use it to re-sort.
-//
-// Ordering policy: NO CUSTOM SORTING. The engine already returns items in
-// frecency order (most-accessed files first). pi-fff only groups consecutive
-// matches into per-file blocks and preserves whatever order the engine
-// provided — inside a file we keep matches in source-line order because the
-// engine emits them that way.
-
+// DO NOT ATTEMPT TO RESORT OUTPUT HERE IT ONLY CONFUSES MODELS
 function formatGrepOutput(result: GrepResult): string {
   if (result.items.length === 0) return "No matches found";
 
@@ -179,7 +170,6 @@ function formatGrepOutput(result: GrepResult): string {
   // This preserves native frecency ordering across files without re-sorting.
   const lines: string[] = [];
   let currentFile = "";
-  let shown = 0;
 
   for (const match of result.items) {
     if (match.relativePath !== currentFile) {
@@ -194,7 +184,6 @@ function formatGrepOutput(result: GrepResult): string {
     });
 
     lines.push(` ${match.lineNumber}: ${truncateLine(match.lineContent)}`);
-    shown++;
 
     match.contextAfter?.forEach((line: string, i: number) => {
       const lineNum = match.lineNumber + 1 + i;
@@ -318,15 +307,14 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   const toolNames = resolveToolNames(currentMode);
 
-  // DB path resolution: flag > env > undefined (no persistent DBs)
-  const frecencyDbPath =
-    (pi.getFlag("fff-frecency-db") as string | undefined) ??
-    process.env.FFF_FRECENCY_DB ??
-    undefined;
-  const historyDbPath =
-    (pi.getFlag("fff-history-db") as string | undefined) ??
-    process.env.FFF_HISTORY_DB ??
-    undefined;
+  // DB path resolution: flag > env > existing fff.nvim db > pi-local data dir.
+  const resolvedDbPaths = resolveDbPaths({
+    frecency:
+      (pi.getFlag("fff-frecency-db") as string | undefined) ??
+      process.env.FFF_FRECENCY_DB,
+    history:
+      (pi.getFlag("fff-history-db") as string | undefined) ?? process.env.FFF_HISTORY_DB,
+  });
 
   // flag (boolean) > env ("1"/"true", or "0"/"false") > default.
   function resolveBoolOpt(flagName: string, envName: string, fallback = false): boolean {
@@ -380,12 +368,21 @@ export default function fffExtension(pi: ExtensionAPI) {
     );
   }
 
+  const pickers = new FilePickerFactory({
+    frecencyDbPath: resolvedDbPaths.frecency,
+    historyDbPath: resolvedDbPaths.history,
+    onDbFailure: (error) =>
+      uiCtx?.ui.notify(
+        `(fff): Failed to open frecency/history database (${error}). Continuing without frecency persistence.`,
+        "error",
+      ),
+  });
+
   const auxPool = new AuxFinderPool({
     enableFsRootScanning,
     enableHomeDirScanning,
     onHomeDirScan: warnHomeDirScan,
-    frecencyDbPath,
-    historyDbPath,
+    pickers,
   });
 
   // in case cwd changes we need to figure this out
@@ -402,22 +399,14 @@ export default function fffExtension(pi: ExtensionAPI) {
         finderCwd = null;
       }
 
-      const { FileFinder } = await loadSdk();
-      const result = FileFinder.create({
+      // if the dbs can't be opened the factory falls back to a db-less picker,
+      // e.g. when some other process corrupts the lock
+      mainFinder = await pickers.create({
         basePath: cwd,
-        frecencyDbPath,
-        historyDbPath,
-        aiMode: true,
         enableHomeDirScanning,
         enableFsRootScanning,
       });
-
-      if (!result.ok)
-        throw new Error(`Failed to create FFF file finder: ${result.error}`);
-
-      mainFinder = result.value;
       finderCwd = cwd;
-      await mainFinder.waitForScan(SCAN_TIMEOUT_MS);
       return mainFinder;
     })().finally(() => {
       finderPromise = null;

@@ -36,11 +36,22 @@ mock.module("@ff-labs/fff-node", () => finderModule);
 mock.module("@ff-labs/fff-bun", () => finderModule);
 
 const { AuxFinderPool } = await import("../src/aux-finders");
+const { FilePickerFactory } = await import("../src/file-picker");
+
+function makePickers() {
+  return new FilePickerFactory({
+    frecencyDbPath: "/dbs/frecency",
+    historyDbPath: "/dbs/history",
+  });
+}
 
 describe("AuxFinderPool concurrent dedup (#746)", () => {
   test("two concurrent acquires for same root share one finder", async () => {
     created.length = 0;
-    const pool = new AuxFinderPool({ enableFsRootScanning: false });
+    const pool = new AuxFinderPool({
+      enableFsRootScanning: false,
+      pickers: makePickers(),
+    });
     const [a, b] = await Promise.all([
       pool.acquire("/Users/x"),
       pool.acquire("/Users/x"),
@@ -51,7 +62,10 @@ describe("AuxFinderPool concurrent dedup (#746)", () => {
 
   test("sequential acquire after in-flight one resolves still reuses", async () => {
     created.length = 0;
-    const pool = new AuxFinderPool({ enableFsRootScanning: false });
+    const pool = new AuxFinderPool({
+      enableFsRootScanning: false,
+      pickers: makePickers(),
+    });
     const first = pool.acquire("/Users/x");
     const second = pool.acquire("/Users/x");
     await Promise.all([first, second]);
