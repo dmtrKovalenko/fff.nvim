@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { sdkCandidates } from "../src/sdk";
+import { loadFirst, sdkCandidates } from "../src/sdk";
 
 describe("sdkCandidates", () => {
   const original = process.env.FFF_SDK;
@@ -27,5 +27,23 @@ describe("sdkCandidates", () => {
     process.env.FFF_SDK = "nope";
     // test runner is Bun, so runtime detection yields the bun candidates
     expect(sdkCandidates()[0]).toBe("@ff-labs/fff-bun");
+  });
+});
+
+describe("loadFirst", () => {
+  test("falls back to the second candidate when the first cannot be imported", async () => {
+    const mod = await loadFirst(["@ff-labs/does-not-exist-in-this-graph", "node:path"]);
+    expect(mod).toHaveProperty("resolve");
+  });
+
+  test("prefers the first candidate when both are importable", async () => {
+    const mod = await loadFirst(["node:path", "node:fs"]);
+    expect(mod).toHaveProperty("resolve");
+  });
+
+  test("throws the last error when every candidate fails", async () => {
+    await expect(
+      loadFirst(["@ff-labs/does-not-exist-a", "@ff-labs/does-not-exist-b"]),
+    ).rejects.toThrow();
   });
 });

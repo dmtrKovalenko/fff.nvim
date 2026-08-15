@@ -33,7 +33,7 @@ export function sdkCandidates(): readonly [string, string] {
   return SDK_ORDER[forced === "node" ? "node" : forced === "bun" ? "bun" : detectRuntime()];
 }
 
-async function loadFirst(
+export async function loadFirst(
   candidates: readonly [string, string],
 ): Promise<{ FileFinder: FileFinderStatic }> {
   let lastError: unknown;
