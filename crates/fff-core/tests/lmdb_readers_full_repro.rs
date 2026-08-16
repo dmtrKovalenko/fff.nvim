@@ -9,6 +9,12 @@ use std::time::Duration;
 
 use heed::EnvOpenOptions;
 
+// This binary links heed directly without the fff lib, so nothing pulls in
+// advapi32 for lmdb's security-descriptor calls in mdb_env_setup_locks.
+#[cfg(windows)]
+#[link(name = "advapi32")]
+unsafe extern "C" {}
+
 fn temp_env_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("fff-readers-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
