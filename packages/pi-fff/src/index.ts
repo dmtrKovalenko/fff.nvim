@@ -22,6 +22,7 @@ import type {
 } from "@ff-labs/fff-node";
 import { Type } from "@sinclair/typebox";
 import { AuxFinderPool, routePathConstraint } from "./aux-finders";
+import { type FffMode, loadConfig, VALID_MODES } from "./config";
 import { FilePickerFactory } from "./file-picker";
 import { isHomeDir, resolveDbPaths } from "./paths";
 import { buildQuery } from "./query";
@@ -45,11 +46,7 @@ const GREP_TIME_BUDGET_MS = 10_000;
 const HOME_SCAN_STATUS_KEY = "fff";
 const HOME_SCAN_POLL_MS = 1_000;
 const HOME_SCAN_DISABLE_HINT =
-  "You can prevent home dir indexing with --fff-enable-home-scan=false (or FFF_ENABLE_HOME_SCAN=0).";
-
-type FffMode = "tools-and-ui" | "tools-only" | "override";
-
-const VALID_MODES: FffMode[] = ["tools-and-ui", "tools-only", "override"];
+  "You can prevent home dir indexing with --fff-enable-home-scan=false, FFF_ENABLE_HOME_SCAN=0, or enableHomeDirScanning in pi-fff.json.";
 
 interface ToolNames {
   grep: string;
@@ -299,44 +296,77 @@ export default function fffExtension(pi: ExtensionAPI) {
   let finderPromise: Promise<FileFinderApi> | null = null;
   let activeCwd = process.cwd();
 
-  // Mode resolution: flag > env > default
-  let currentMode: FffMode =
-    (pi.getFlag("fff-mode") as FffMode) ??
-    (process.env.PI_FFF_MODE as FffMode) ??
-    "tools-and-ui";
+  const config = loadConfig();
 
+  // All startup options use the same flag > env > file > fallback order.
+  function getConfigValue<T>(
+    flagName: string,
+    envName: string,
+    fileValue: T | undefined,
+    fallback: T,
+    parse: (value: unknown) => T | undefined = (value) => value as T,
+  ): T {
+    const flagValue = pi.getFlag(flagName);
+    if (flagValue !== undefined) {
+      const value = parse(flagValue);
+      if (value !== undefined) return value;
+    }
+
+    const envValue = process.env[envName];
+    if (envValue !== undefined) {
+      const value = parse(envValue);
+      if (value !== undefined) return value;
+    }
+
+    return fileValue ?? fallback;
+  }
+
+  function parseBoolean(value: unknown): boolean | undefined {
+    if (typeof value === "boolean") return value;
+    if (value === "1" || value === "true") return true;
+    if (value === "0" || value === "false") return false;
+    return undefined;
+  }
+
+  let currentMode = getConfigValue(
+    "fff-mode",
+    "PI_FFF_MODE",
+    config.mode,
+    "tools-and-ui",
+  );
   const toolNames = resolveToolNames(currentMode);
 
-  // DB path resolution: flag > env > existing fff.nvim db > pi-local data dir.
   const resolvedDbPaths = resolveDbPaths({
-    frecency:
-      (pi.getFlag("fff-frecency-db") as string | undefined) ??
-      process.env.FFF_FRECENCY_DB,
-    history:
-      (pi.getFlag("fff-history-db") as string | undefined) ?? process.env.FFF_HISTORY_DB,
+    frecency: getConfigValue(
+      "fff-frecency-db",
+      "FFF_FRECENCY_DB",
+      config.frecencyDbPath,
+      undefined,
+    ),
+    history: getConfigValue(
+      "fff-history-db",
+      "FFF_HISTORY_DB",
+      config.historyDbPath,
+      undefined,
+    ),
   });
 
-  // flag (boolean) > env ("1"/"true", or "0"/"false") > default.
-  function resolveBoolOpt(flagName: string, envName: string, fallback = false): boolean {
-    const flag = pi.getFlag(flagName);
-    if (typeof flag === "boolean") return flag;
-    if (typeof flag === "string") return flag === "true" || flag === "1";
-    const env = process.env[envName];
-    if (env === "1" || env === "true") return true;
-    if (env === "0" || env === "false") return false;
-    return fallback;
-  }
   // Root scanning opt-in: FFF refuses to init at / unless this is set.
-  const enableFsRootScanning = resolveBoolOpt(
+  const enableFsRootScanning = getConfigValue(
     "fff-enable-root-scan",
     "FFF_ENABLE_ROOT_SCAN",
+    config.enableFsRootScanning,
+    false,
+    parseBoolean,
   );
   // Home dir scanning is on by default (launching pi from $HOME is a normal
   // flow), but configurable so users with huge $HOME trees can opt out.
-  const enableHomeDirScanning = resolveBoolOpt(
+  const enableHomeDirScanning = getConfigValue(
     "fff-enable-home-scan",
     "FFF_ENABLE_HOME_SCAN",
+    config.enableHomeDirScanning,
     true,
+    parseBoolean,
   );
 
   function getMode(): FffMode {
