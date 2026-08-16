@@ -25,6 +25,10 @@ jobs:
   build-nvim:
     name: Build Neovim ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_IDLE_TIMEOUT: "0"
     permissions:
       contents: read
       id-token: write
@@ -95,6 +99,11 @@ jobs:
         with:
           key: nvim-${{ matrix.target }}
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
+
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
@@ -150,6 +159,10 @@ jobs:
   build-c:
     name: Build C FFI ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_IDLE_TIMEOUT: "0"
     permissions:
       contents: read
     strategy:
@@ -232,6 +245,11 @@ jobs:
         with:
           key: c-${{ matrix.target }}
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
+
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
@@ -298,6 +316,10 @@ jobs:
   build-mcp:
     name: Build MCP ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_IDLE_TIMEOUT: "0"
     permissions:
       contents: read
     strategy:
@@ -347,6 +369,11 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           key: mcp-${{ matrix.target }}
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
