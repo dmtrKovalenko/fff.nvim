@@ -47,7 +47,8 @@ jobs:
           components: rustfmt, clippy
 
       - name: Run tests
-        run: cargo test --no-default-features --features zlob --workspace --exclude fff-nvim
+        # fff-python requires full python o3 machinery which is very slow
+        run: cargo test --no-default-features --features zlob --workspace --exclude fff-nvim --exclude fff-python
 
   stress-test:
     name: Fuzz Tests

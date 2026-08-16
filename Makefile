@@ -45,6 +45,11 @@ sync-js-api-check:
 build:
 	cargo build --release --no-default-features --features zlob
 
+# Only the crates the e2e suites load (nvim lua tests + C/bun/node FFI tests),
+# skipping fff-python (pyo3) and fff-mcp (tokio/rmcp) which e2e never touches.
+build-e2e:
+	cargo build --release -p fff-nvim -p fff-c --no-default-features --features zlob
+
 build-c-lib:
 	cargo build --release -p fff-c --no-default-features --features zlob
 
@@ -90,7 +95,7 @@ test-setup:
 	fi
 
 test-rust:
-	cargo test --workspace --no-default-features --features zlob --exclude fff-nvim
+	cargo test --workspace --no-default-features --features zlob --exclude fff-nvim --exclude fff-python
 
 # Watcher rescan harness: asserts that editing, build output, git activity and
 # preview reads all stay on the incremental path instead of re-walking the tree.
