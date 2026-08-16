@@ -17,6 +17,8 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "13.0"
   CARGO_PROFILE_RELEASE_LTO: thin
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
 
 jobs:
   test:
@@ -38,6 +40,11 @@ jobs:
           cache: true
           cache-on-failure: true
           cache-key: "v1-rust-python"
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5

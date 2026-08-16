@@ -17,6 +17,8 @@ env:
   # Ensure consistent macOS deployment target across all compiled objects
   # (Rust, cc-compiled C code, and Zig-compiled zlob) to avoid linker warnings
   MACOSX_DEPLOYMENT_TARGET: "13"
+  # RUSTC_WRAPPER is set per job, since cargo fmt runs without sccache.
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   test:
@@ -46,7 +48,14 @@ jobs:
           cache-key: "v1-rust"
           components: rustfmt, clippy
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
+
       - name: Run tests
+        env:
+          RUSTC_WRAPPER: sccache
         # fff-python requires full python o3 machinery which is very slow
         run: cargo test --no-default-features --features zlob --workspace --exclude fff-nvim --exclude fff-python
 
@@ -66,6 +75,7 @@ jobs:
       FFF_STRESS_CASES: "5"
       FFF_STRESS_MIN_OPS: "30"
       FFF_STRESS_MAX_OPS: "60"
+      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v5
 
@@ -81,6 +91,11 @@ jobs:
           cache-on-failure: true
           cache-key: "v1-rust-stress-${{ matrix.os }}"
           components: rustfmt, clippy
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
 
       - name: Stress test seeded
         shell: bash
@@ -125,7 +140,14 @@ jobs:
           cache-on-failure: true
           cache-key: "v1-rust-i686"
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
+
       - name: Build fff-search for i686
+        env:
+          RUSTC_WRAPPER: sccache
         run: cargo build -p fff-search --target i686-unknown-linux-gnu
 
   fmt:
@@ -158,6 +180,13 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-          
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
+
       - name: Run clippy
+        env:
+          RUSTC_WRAPPER: sccache
         run: cargo clippy --no-default-features --features zlob -- -D warnings

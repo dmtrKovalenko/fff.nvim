@@ -29,6 +29,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     # e2e tests could be flaky on CI so we do not block release creation if they failed
     continue-on-error: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    # alpine-musl installs rust via apk and has no sccache, so keep this scoped.
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
     strategy:
       fail-fast: false
       matrix:
@@ -53,9 +57,19 @@ jobs:
           cache-key: "v2-lua-e2e"
           rustflags: ""
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
+
       - name: Build Rust binary
         shell: bash
         run: make build-e2e
+
+      - name: sccache stats
+        if: always()
+        shell: bash
+        run: sccache --show-stats
 
       - name: Verify Windows DLL has no unexpected dependencies
         if: matrix.os == 'windows-latest'
