@@ -133,16 +133,22 @@ describe("fff-node watch", { concurrency: 1 }, () => {
 
   it("a rename arrives as one renamed event carrying both paths", async () => {
     const callback = mock.fn();
-    const sub = finder.watch(callback);
+    const arrivals = [];
+    const t0 = Date.now();
+    const sub = finder.watch((events) => {
+      arrivals.push(Date.now() - t0);
+      callback(events);
+    });
     assert.ok(sub.ok, `watch failed: ${!sub.ok ? sub.error : ""}`);
 
     const from = join(baseDir, "move-me.txt");
     const to = join(baseDir, "moved.txt");
     writeFileSync(from, "move me\n");
     // Let the create land so the rename lands in its own batch.
-    await waitFor(() =>
+    const created = await waitFor(() =>
       deliveredEvents(callback).some((e) => e.path.endsWith("move-me.txt")),
     );
+    assert.ok(created, "the create event for move-me.txt never arrived");
     callback.mock.resetCalls();
 
     renameSync(from, to);
@@ -152,7 +158,7 @@ describe("fff-node watch", { concurrency: 1 }, () => {
     );
     assert.ok(
       renamed,
-      `expected a renamed event, got: ${JSON.stringify(deliveredEvents(callback))}`,
+      `expected a renamed event for ${JSON.stringify(to)} (batch arrivals at ms: ${JSON.stringify(arrivals)}), got: ${JSON.stringify(deliveredEvents(callback))}`,
     );
     assert.equal(renamed.from, from);
     // The move is one event, not a removal plus a creation.
