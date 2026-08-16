@@ -17,6 +17,15 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "13.0"
   CARGO_PROFILE_RELEASE_LTO: thin
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
+  # fff-search alone exceeds the 600s default on windows, and the server sees
+  # no new requests while it compiles, so it would idle out mid-unit.
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   test:
@@ -38,6 +47,11 @@ jobs:
           cache: true
           cache-on-failure: true
           cache-key: "v1-rust-python"
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.17.0
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
