@@ -274,20 +274,7 @@ test-stress: test-stress-seeded test-stress-random test-stress-regressions test-
 set-npm-version:
 	@test -n "$(PKG)" || (echo "PKG is required" && exit 1)
 	@test -n "$(VERSION)" || (echo "VERSION is required" && exit 1)
-	node -e " \
-		const fs = require('fs'); \
-		const pkg = JSON.parse(fs.readFileSync('$(PKG)/package.json', 'utf8')); \
-		pkg.version = '$(VERSION)'; \
-		if (pkg.optionalDependencies) { \
-			for (const dep of Object.keys(pkg.optionalDependencies)) { \
-				pkg.optionalDependencies[dep] = '$(VERSION)'; \
-			} \
-		} \
-		for (const dep of ['@ff-labs/fff-bun', '@ff-labs/fff-node']) { \
-			if (pkg.dependencies?.[dep]) pkg.dependencies[dep] = '$(VERSION)'; \
-		} \
-		fs.writeFileSync('$(PKG)/package.json', JSON.stringify(pkg, null, 2) + '\n'); \
-	"
+	node scripts/set-npm-version.mjs "$(PKG)" "$(VERSION)"
 	@echo "Set $(PKG) to $(VERSION)"
 
 format-rust:
@@ -295,7 +282,7 @@ format-rust:
 format-lua:
 	stylua .
 format-ts:
-	bun format
+	cd packages && bun format
 
 format: format-rust format-lua format-ts
 
@@ -304,7 +291,7 @@ lint-rust:
 lint-lua:
 	 ~/.luarocks/bin/luacheck .
 lint-ts:
-	bun lint
+	cd packages && bun lint
 
 lint: lint-rust lint-lua lint-ts
 
