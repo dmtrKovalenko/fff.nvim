@@ -43,7 +43,7 @@ const AI_MODIFICATION_THRESHOLDS: [(i64, u64); 5] = [
 ];
 
 impl DbHealthChecker for FrecencyTracker {
-    fn get_env(&self) -> &heed::Env {
+    fn get_env(&self) -> &heed::Env<heed::WithoutTls> {
         &self.env
     }
 

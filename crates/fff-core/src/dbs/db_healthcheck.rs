@@ -14,7 +14,7 @@ pub struct DbHealth {
 }
 
 pub trait DbHealthChecker {
-    fn get_env(&self) -> &heed::Env;
+    fn get_env(&self) -> &heed::Env<heed::WithoutTls>;
     fn is_healthy(&self) -> bool;
     /// Entries per database, each group has a static string label
     fn count_entries(&self) -> Result<Vec<(&'static str, u64)>>;

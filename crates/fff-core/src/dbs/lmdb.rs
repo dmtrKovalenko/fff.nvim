@@ -1,4 +1,4 @@
-use heed::{Database, Env};
+use heed::{Database, Env, WithoutTls};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -124,7 +124,7 @@ pub(crate) trait LmdbStore: Sized + Send + Sync + 'static {
     fn health(&self) -> &DbHealth;
 
     /// Borrow the raw heed env.
-    fn env(&self) -> &Env {
+    fn env(&self) -> &Env<WithoutTls> {
         self.shared_env()
     }
 
