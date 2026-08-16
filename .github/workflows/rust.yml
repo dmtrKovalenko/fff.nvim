@@ -19,6 +19,13 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "13"
   # RUSTC_WRAPPER is set per job, since cargo fmt runs without sccache.
   SCCACHE_GHA_ENABLED: "true"
+  # fff-search alone exceeds the 600s default on windows, and the server sees
+  # no new requests while it compiles, so it would idle out mid-unit.
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   test:

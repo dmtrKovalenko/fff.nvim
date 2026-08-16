@@ -20,6 +20,10 @@ on:
 env:
   CLICOLOR: 1
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   stylua:
     name: Check lua files using Stylua
