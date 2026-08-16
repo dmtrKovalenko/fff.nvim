@@ -52,7 +52,7 @@ function nvimDataDir(): string {
   return path.join(HOME_DIR, ".local", "share", "nvim");
 }
 
-function piDataDir(): string {
+export function piDataDir(): string {
   return process.env.PI_CODING_AGENT_DIR ?? path.join(HOME_DIR, ".pi", "agent");
 }
 
