@@ -39,7 +39,7 @@ pub struct QueryTracker {
 }
 
 impl DbHealthChecker for QueryTracker {
-    fn get_env(&self) -> &Env {
+    fn get_env(&self) -> &Env<heed::WithoutTls> {
         &self.env
     }
 
@@ -198,7 +198,7 @@ impl QueryTracker {
     /// offset=0 returns most recent, offset=1 returns 2nd most recent, etc.
     fn read_history_at_offset(
         db: &Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
-        env: &Env,
+        env: &Env<heed::WithoutTls>,
         project_key: &[u8; 32],
         offset: usize,
     ) -> Result<Option<String>, Error> {

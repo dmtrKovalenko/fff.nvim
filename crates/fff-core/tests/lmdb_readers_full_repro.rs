@@ -96,3 +96,62 @@ fn raised_max_readers_admits_more_than_126_live_readers() {
         "all {THREADS} live reader threads should get a slot; got {acquired}"
     );
 }
+
+// Structural fix for #783: with MDB_NOTLS a reader slot is tied to the txn
+// object and freed on drop, not pinned per thread. 200 long-lived threads each
+// open+drop a txn against the *default* 126-slot table; in TLS mode this
+// plateaus at 126, in NOTLS mode every thread must succeed.
+#[test]
+fn notls_releases_slots_of_live_threads() {
+    let dir = temp_env_dir("notls");
+    let env = unsafe {
+        EnvOpenOptions::new()
+            .read_txn_without_tls()
+            .map_size(10 * 1024 * 1024)
+            .open(&dir)
+    }
+    .unwrap();
+
+    const THREADS: usize = 200;
+    let stop = Arc::new(AtomicBool::new(false));
+    let ready = Arc::new(Barrier::new(THREADS + 1));
+    // Serialize txns so the test measures slot *release*, not concurrency.
+    let txn_gate = Arc::new(std::sync::Mutex::new(()));
+    let acquired = Arc::new(AtomicUsize::new(0));
+
+    let mut handles = Vec::new();
+    for _ in 0..THREADS {
+        let env = env.clone();
+        let stop = stop.clone();
+        let ready = ready.clone();
+        let txn_gate = txn_gate.clone();
+        let acquired = acquired.clone();
+        handles.push(std::thread::spawn(move || {
+            {
+                let _gate = txn_gate.lock().unwrap();
+                if let Ok(txn) = env.read_txn() {
+                    acquired.fetch_add(1, Ordering::Relaxed);
+                    drop(txn); // NOTLS: slot returns to the pool here
+                }
+            }
+            // Stay alive: in TLS mode this thread would keep its slot pinned.
+            ready.wait();
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::park_timeout(Duration::from_millis(5));
+            }
+        }));
+    }
+
+    ready.wait();
+    let got = acquired.load(Ordering::Relaxed);
+    stop.store(true, Ordering::Relaxed);
+    for h in handles {
+        h.join().unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        got, THREADS,
+        "NOTLS must free slots on txn drop; only {got}/{THREADS} live threads got one"
+    );
+}

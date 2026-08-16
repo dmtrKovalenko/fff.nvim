@@ -1,4 +1,4 @@
-use heed::{Env, EnvOpenOptions};
+use heed::{Env, EnvOpenOptions, WithoutTls};
 use std::collections::HashMap;
 use std::fs;
 use std::ops::Deref;
@@ -19,7 +19,7 @@ pub(crate) struct EnvSpec {
 }
 
 pub(crate) struct PooledEnv {
-    env: Env,
+    env: Env<WithoutTls>,
     key: PathBuf,
     /// lmdb's env spec label
     label: &'static str,
@@ -47,8 +47,8 @@ impl Drop for PooledEnv {
 pub(crate) struct SharedEnv(Arc<PooledEnv>);
 
 impl Deref for SharedEnv {
-    type Target = Env;
-    fn deref(&self) -> &Env {
+    type Target = Env<WithoutTls>;
+    fn deref(&self) -> &Env<WithoutTls> {
         &self.0.env
     }
 }
@@ -92,7 +92,9 @@ impl SharedEnv {
 
                 erase_if_oversized(&path, spec);
                 let result = unsafe {
-                    let mut opts = EnvOpenOptions::new();
+                    // MDB_NOTLS: reader slots are tied to txn objects (freed on
+                    // commit/abort) instead of pinned per thread for its lifetime (#783).
+                    let mut opts = EnvOpenOptions::new().read_txn_without_tls();
                     opts.map_size(spec.map_size);
                     opts.max_readers(max_readers());
                     if spec.max_dbs > 0 {
