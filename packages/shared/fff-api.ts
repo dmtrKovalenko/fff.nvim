@@ -300,7 +300,11 @@ export interface ScanProgress {
  */
 export type WatchEventKind = "created" | "modified" | "removed" | "rescan" | "renamed";
 
-/** A single filesystem change notification. */
+/**
+ * A single filesystem change notification. Paths are canonicalized: on
+ * Windows, 8.3 short names (`RUNNER~1`) are expanded, so compare against a
+ * canonicalized base (e.g. `fs.realpathSync.native`).
+ */
 export interface WatchEvent {
   /** Absolute path of the affected file (base path to rescan if `kind == rescan`) */
   path: string;
