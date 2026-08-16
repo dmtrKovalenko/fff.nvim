@@ -12,6 +12,14 @@ fn main() {
         println!("cargo::rustc-cfg=rescan_stats");
     }
 
+    // lmdb-master-sys's mdb_env_setup_locks needs security-descriptor APIs on
+    // Windows but its build script never links advapi32; supply it here so
+    // minimal test binaries don't fail with LNK2019.
+    let target = std::env::var("TARGET").unwrap_or_default();
+    if target.contains("windows") {
+        println!("cargo:rustc-link-lib=advapi32");
+    }
+
     // When the `zlob` feature is enabled (Zig-compiled C library):
     // On Windows MSVC, explicitly link the C runtime libraries.
     // Zig-compiled static libraries don't emit /DEFAULTLIB directives for the
