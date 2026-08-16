@@ -123,7 +123,7 @@ SMOKE_BIN := $(TARGET_DIR)/fff_c_smoke
 SMOKE_SRC := crates/fff-c/tests/smoke.c
 SMOKE_INCLUDE := crates/fff-c/include
 
-test-c-smoke: build
+test-c-smoke: build-e2e
 	$(CC) $(CFLAGS) -I $(SMOKE_INCLUDE) -L $(TARGET_DIR) \
 		-Wl,-rpath,@loader_path/../target/release \
 		-Wl,-rpath,$$(pwd)/$(TARGET_DIR) \
@@ -136,7 +136,7 @@ test-c-api: test-c-smoke
 # neovim instance swallows internal crashes and doesn't rise the the error exiting silently
 # so check the stdout in case the sigsegv coming out of fff was printed (actual regression).
 # Output is streamed live via `tee`; pipefail (set above) propagates nvim's exit.
-test-lua: test-setup build
+test-lua: test-setup build-e2e
 	@logfile=$$(mktemp); \
 	trap 'rm -f "$$logfile"' EXIT; \
 	nvim --headless -u tests/minimal_init.lua \
@@ -148,7 +148,7 @@ test-lua: test-setup build
 		exit 1; \
 	fi
 
-test-lua-snap: test-setup build
+test-lua-snap: test-setup build-e2e
 	@logfile=$$(mktemp); \
 	trap 'rm -f "$$logfile"' EXIT; \
 	nvim --headless -u tests/minimal_init.lua \
@@ -164,13 +164,13 @@ test-version: test-setup
 	nvim --headless -u tests/minimal_init.lua \
 		-c "PlenaryBustedFile tests/version_spec.lua" 2>&1
 
-prepare-bun: build sync-js-api
+prepare-bun: build-e2e sync-js-api
 	mkdir -p packages/fff-bun/bin
 	cp target/release/libfff_c.dylib packages/fff-bun/bin/ 2>/dev/null || true; \
 	cp target/release/libfff_c.so packages/fff-bun/bin/ 2>/dev/null || true; \
 	cp target/release/fff_c.dll packages/fff-bun/bin/ 2>/dev/null || true
 
-prepare-node: build sync-js-api
+prepare-node: build-e2e sync-js-api
 	mkdir -p packages/fff-node/bin
 	cp target/release/libfff_c.dylib packages/fff-node/bin/ 2>/dev/null || true; \
 	cp target/release/libfff_c.so packages/fff-node/bin/ 2>/dev/null || true; \
