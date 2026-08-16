@@ -132,16 +132,28 @@ Mode precedence:
 ## Flags
 
 - `--fff-mode <mode>` — set mode (see above)
-- `--fff-frecency-db <path>` — path to frecency database (also: `FFF_FRECENCY_DB` env)
-- `--fff-history-db <path>` — path to query history database (also: `FFF_HISTORY_DB` env)
+- `--fff-frecency-db <path>` — path to frecency database (also: `FFF_FRECENCY_DB` env). Optional; see [Data](#data) for the default.
+- `--fff-history-db <path>` — path to query history database (also: `FFF_HISTORY_DB` env). Optional; see [Data](#data) for the default.
 - `--fff-enable-root-scan` — allow indexing when launched from `/` (also: `FFF_ENABLE_ROOT_SCAN=1` env). FFF refuses to init at the filesystem root by default.
 - `--fff-enable-home-scan` — index the home directory when launched from `$HOME` (also: `FFF_ENABLE_HOME_SCAN` env). Enabled by default. Disable with `--fff-enable-home-scan=false` or `FFF_ENABLE_HOME_SCAN=0` if your `$HOME` contains huge trees (toolchains, kernel sources, build outputs) that make the background index run for a long time. When launched from `$HOME` with this enabled, pi shows a warning that the whole home tree is being indexed.
 
 ## Data
 
-When database paths are provided, FFF stores:
-- frecency database — file access frequency/recency
-- history database — query-to-file selection history
+FFF uses two LMDB databases:
+- frecency database - file access frequency/recency, used to rank results
+- history database - query-to-file selection history
+
+Each path is resolved independently, in this order:
+
+1. CLI flag — `--fff-frecency-db` / `--fff-history-db`
+2. Env var — `FFF_FRECENCY_DB` / `FFF_HISTORY_DB`
+3. An existing [fff.nvim](https://github.com/dmtrKovalenko/fff.nvim) database, so pi reuses the frecency you built up in your editor:
+   - frecency: `$XDG_CACHE_HOME/nvim/fff_nvim`
+   - history: `$XDG_DATA_HOME/nvim/fff_queries`
+   - `XDG_CACHE_HOME` defaults to `~/.cache` and `XDG_DATA_HOME` to `~/.local/share`; on Windows both fall back under `%LOCALAPPDATA%\nvim-data`. Only directories count — a plain file at those paths is ignored.
+4. pi-local directory, created on demand — `$PI_CODING_AGENT_DIR/fff/{frecency,history}`, defaulting to `~/.pi/agent/fff/{frecency,history}`
+
+The extension only reads these databases; it never records the agent's own searches into your Neovim history. If a database cannot be opened, the finder starts without persistence and pi shows a warning instead of failing.
 
 No project files are uploaded anywhere by this extension. It runs locally and only uses the configured LLM through pi itself.
 

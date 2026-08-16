@@ -49,6 +49,7 @@
     "@sinclair/typebox": "*"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.8",
     "@types/node": "^22.0.0",
     "typescript": "^5.0.0"
   }

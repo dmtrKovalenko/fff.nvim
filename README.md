@@ -120,7 +120,7 @@ Three operating modes, switchable at runtime with `/fff-mode`:
 | `tools-only`             | Only tool injection. Keeps pi's native editor autocomplete.                       |
 | `override`               | Replaces pi's built-in `grep`, `find`, and `multi_grep` with FFF implementations. |
 
-Env vars: `PI_FFF_MODE`, `FFF_FRECENCY_DB`, `FFF_HISTORY_DB`. Flags: `--fff-mode`, `--fff-frecency-db`, `--fff-history-db`.
+Env vars: `PI_FFF_MODE`, `FFF_FRECENCY_DB`, `FFF_HISTORY_DB`. Flags: `--fff-mode`, `--fff-frecency-db`, `--fff-history-db`. The databases default to your existing fff.nvim ones when present, otherwise `~/.pi/agent/fff/`.
 
 ### Agent-facing tools
 

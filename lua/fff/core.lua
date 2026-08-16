@@ -167,10 +167,7 @@ M.ensure_initialized = function()
       end
     end
 
-    local frecency_db_path = config.frecency.db_path or (vim.fn.stdpath('cache') .. '/fff_frecency')
-    local history_db_path = config.history.db_path or (vim.fn.stdpath('data') .. '/fff_history')
-
-    local ok, result = pcall(fuzzy.init_db, frecency_db_path, history_db_path, true)
+    local ok, result = pcall(fuzzy.init_db, config.frecency.db_path, config.history.db_path, true)
     if not ok then vim.notify('Failed to databases: ' .. tostring(result), vim.log.levels.WARN) end
 
     setup_global_autocmds(config)

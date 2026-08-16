@@ -87,7 +87,7 @@ mock.module("@sinclair/typebox", () => ({
       properties,
       options,
     }),
-    Optional: (value: unknown) => ({ ...value, optional: true }),
+    Optional: (value: Record<string, unknown>) => ({ ...value, optional: true }),
     String: schema("string"),
     Union: (items: unknown[], options?: unknown) => ({ type: "union", items, options }),
   },
@@ -120,11 +120,12 @@ function createPi(mode?: string) {
 function createContext(cwd = "/tmp/workspace") {
   return {
     cwd,
+    // Signatures mirror the real pi UI surface so mock.calls stays typed.
     ui: {
-      addAutocompleteProvider: mock(() => undefined),
-      notify: mock(() => undefined),
+      addAutocompleteProvider: mock((_factory: (current: any) => any) => undefined),
+      notify: mock((_message: string, _level?: string) => undefined),
       setEditorComponent: mock(() => undefined),
-      setStatus: mock(() => undefined),
+      setStatus: mock((_key: string, _text?: string) => undefined),
     },
   };
 }
@@ -211,9 +212,9 @@ describe("pi-fff $HOME scan warning", () => {
     });
     const setup = await start(undefined, os.homedir());
 
-    const [key, text] = setup.ctx.ui.setStatus.mock.calls.at(-1) as [string, string];
-    expect(key).toBe("fff");
-    expect(text).toContain("12345 files");
+    const lastStatus = setup.ctx.ui.setStatus.mock.calls.at(-1);
+    expect(lastStatus?.[0]).toBe("fff");
+    expect(lastStatus?.[1]).toContain("12345 files");
 
     // session_shutdown must stop the poller and clear the footer.
     await shutdown(setup);
@@ -239,8 +240,9 @@ describe("pi-fff autocomplete registration", () => {
     expect(createCalls).toEqual([
       {
         basePath: "/tmp/workspace",
-        frecencyDbPath: undefined,
-        historyDbPath: undefined,
+        // Resolved defaults are host-dependent; covered by test/db-paths.test.ts.
+        frecencyDbPath: expect.any(String),
+        historyDbPath: expect.any(String),
         aiMode: true,
         enableHomeDirScanning: true,
         enableFsRootScanning: false,
