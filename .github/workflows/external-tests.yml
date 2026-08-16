@@ -55,7 +55,7 @@ jobs:
 
       - name: Build Rust binary
         shell: bash
-        run: make build
+        run: make build-e2e
 
       - name: Verify Windows DLL has no unexpected dependencies
         if: matrix.os == 'windows-latest'

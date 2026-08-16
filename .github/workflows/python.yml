@@ -15,6 +15,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   MACOSX_DEPLOYMENT_TARGET: "13.0"
+  CARGO_PROFILE_RELEASE_LTO: thin
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
 
 jobs:
   test:
@@ -31,7 +33,11 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1.15.4
+        with:
+          cache: true
+          cache-on-failure: true
+          cache-key: "v1-rust-python"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -43,6 +49,8 @@ jobs:
         working-directory: packages/fff-python
         shell: bash
         run: |
-          uv sync --all-extras
+          # --no-install-project: uv would otherwise build the wheel via
+          # maturin's PEP 517 backend, then `maturin develop` builds it again.
+          uv sync --all-extras --no-install-project
           uv run maturin develop --release
           uv run pytest -v
