@@ -94,6 +94,7 @@ impl SharedEnv {
                 let result = unsafe {
                     let mut opts = EnvOpenOptions::new();
                     opts.map_size(spec.map_size);
+                    opts.max_readers(max_readers());
                     if spec.max_dbs > 0 {
                         opts.max_dbs(spec.max_dbs);
                     }
@@ -219,6 +220,23 @@ const MAX_TRANSIENT_RETRIES: u32 = 8;
 
 // Concurrent mdb_env_open calls on the same path can race on macOS
 // this is for some reason fixable by simple retry of the open
+// heed's default reader table is 126 slots. In TLS mode each thread pins a slot
+// for its lifetime, so long-lived embedders (Neovim, node agents) that share one
+// lock file across many processes/threads exhaust it (#783). Reader slots are
+// tiny (~64B), so raise the ceiling; `FFF_LMDB_MAX_READERS` lets hosts tune it.
+const DEFAULT_MAX_READERS: u32 = 1024;
+
+fn max_readers() -> u32 {
+    parse_max_readers(std::env::var("FFF_LMDB_MAX_READERS").ok())
+}
+
+// Never drop below heed's default 126; ignore missing/garbage/too-small values.
+fn parse_max_readers(raw: Option<String>) -> u32 {
+    raw.and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|&n| n >= 126)
+        .unwrap_or(DEFAULT_MAX_READERS)
+}
+
 fn is_transient_env_open_error(err: &heed::Error) -> bool {
     match err {
         heed::Error::Io(io) => matches!(
@@ -247,4 +265,18 @@ fn erase_if_oversized(db_path: &Path, spec: &EnvSpec) {
     );
     let _ = fs::remove_file(&data);
     let _ = fs::remove_file(db_path.join("lock.mdb"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_MAX_READERS, parse_max_readers};
+
+    #[test]
+    fn max_readers_parsing() {
+        assert_eq!(parse_max_readers(None), DEFAULT_MAX_READERS);
+        assert_eq!(parse_max_readers(Some("nan".into())), DEFAULT_MAX_READERS);
+        assert_eq!(parse_max_readers(Some("64".into())), DEFAULT_MAX_READERS); // below 126 floor
+        assert_eq!(parse_max_readers(Some(" 512 ".into())), 512);
+        assert_eq!(parse_max_readers(Some("126".into())), 126);
+    }
 }
