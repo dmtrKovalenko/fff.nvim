@@ -7,7 +7,10 @@ use crate::lmdb::{DbHealth, LmdbStore, is_map_full};
 use heed::Database;
 use heed::types::{Bytes, SerdeBincode};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{collections::VecDeque, path::Path};
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+};
 
 const DECAY_CONSTANT: f64 = 0.0693; // ln(2)/10 for 10-day half-life
 const SECONDS_PER_DAY: f64 = 86400.0;
@@ -316,28 +319,19 @@ impl FrecencyTracker {
     }
 
     pub fn copy_history(&self, from: &Path, to: &Path) -> Result<bool> {
-        if from == to {
-            return Ok(false);
+        Ok(!self
+            .copy_history_many(&[(from.to_path_buf(), to.to_path_buf())])?
+            .is_empty())
+    }
+
+    // All pairs are merged inside a single write transaction so a directory
+    // move never turns into thousands of sequential commits. Returns the
+    // destination paths whose history was actually carried over.
+    pub fn copy_history_many(&self, pairs: &[(PathBuf, PathBuf)]) -> Result<Vec<PathBuf>> {
+        let mut carried = Vec::new();
+        if pairs.is_empty() {
+            return Ok(carried);
         }
-
-        let Some(source) = self.get_accesses(from)?.filter(|a| !a.is_empty()) else {
-            return Ok(false);
-        };
-
-        let target_key = Self::path_to_hash_bytes(to)?;
-        let target = self.get_accesses(to)?.unwrap_or_default();
-
-        let mut timestamps: Vec<u64> = source.iter().chain(target.iter()).copied().collect();
-        timestamps.sort_unstable();
-        let overflow = timestamps.len().saturating_sub(MAX_TIMESTAMPS_PER_FILE);
-        let merged: VecDeque<u64> = timestamps.drain(overflow..).collect();
-
-        tracing::debug!(
-            ?from,
-            ?to,
-            accesses = merged.len(),
-            "Copying frecency history"
-        );
 
         let mut wtxn = self
             .env
@@ -346,26 +340,60 @@ impl FrecencyTracker {
                 db: Self::LABEL,
                 source,
             })?;
-        if let Err(e) = self.db.put(&mut wtxn, &target_key, &merged) {
-            if is_map_full(&e) {
-                self.health.mark_unhealthy("MDB_MAP_FULL on put");
-                tracing::error!(?to, "Frecency DB hit MDB_MAP_FULL; dropping history copy");
-                return Ok(false);
+
+        for (from, to) in pairs {
+            if from == to {
+                continue;
             }
-            return Err(Error::DbWrite {
-                db: Self::LABEL,
-                source: e,
-            });
+
+            let source_key = Self::path_to_hash_bytes(from)?;
+            let target_key = Self::path_to_hash_bytes(to)?;
+            let read = |key| {
+                self.db.get(&wtxn, key).map_err(|source| Error::DbRead {
+                    db: Self::LABEL,
+                    source,
+                })
+            };
+            let Some(source) = read(&source_key)?.filter(|a| !a.is_empty()) else {
+                continue;
+            };
+            let target = read(&target_key)?.unwrap_or_default();
+
+            let mut timestamps: Vec<u64> = source.iter().chain(target.iter()).copied().collect();
+            timestamps.sort_unstable();
+            let overflow = timestamps.len().saturating_sub(MAX_TIMESTAMPS_PER_FILE);
+            let merged: VecDeque<u64> = timestamps.drain(overflow..).collect();
+
+            tracing::debug!(
+                ?from,
+                ?to,
+                accesses = merged.len(),
+                "Copying frecency history"
+            );
+
+            if let Err(e) = self.db.put(&mut wtxn, &target_key, &merged) {
+                if is_map_full(&e) {
+                    self.health.mark_unhealthy("MDB_MAP_FULL on put");
+                    tracing::error!(?to, "Frecency DB hit MDB_MAP_FULL; dropping history copy");
+                    return Ok(Vec::new());
+                }
+                return Err(Error::DbWrite {
+                    db: Self::LABEL,
+                    source: e,
+                });
+            }
+            carried.push(to.clone());
+        }
+
+        if carried.is_empty() {
+            return Ok(carried);
         }
 
         if let Err(e) = wtxn.commit() {
             if is_map_full(&e) {
                 self.health.mark_unhealthy("MDB_MAP_FULL on commit");
-                tracing::error!(
-                    ?to,
-                    "Frecency DB hit MDB_MAP_FULL on commit; dropping history copy"
-                );
-                return Ok(false);
+                tracing::error!("Frecency DB hit MDB_MAP_FULL on commit; dropping history copy");
+                return Ok(Vec::new());
             }
             return Err(Error::DbCommit {
                 db: Self::LABEL,
@@ -373,7 +401,7 @@ impl FrecencyTracker {
             });
         }
 
-        Ok(true)
+        Ok(carried)
     }
 
     pub fn get_access_score(&self, file_path: &Path, mode: FFFMode) -> i64 {

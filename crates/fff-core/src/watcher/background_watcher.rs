@@ -692,17 +692,13 @@ pub(crate) fn handle_debounced_events(
         if let Ok(frecency_guard) = shared_frecency.read()
             && let Some(ref frecency) = *frecency_guard
         {
-            for (to, from) in &renames {
-                match frecency.copy_history(from, to) {
-                    Ok(true) => carried.push(to.clone()),
-                    Ok(false) => {}
-                    Err(e) => error!(
-                        ?from,
-                        ?to,
-                        "Failed to carry frecency over a rename: {:?}",
-                        e
-                    ),
-                }
+            let pairs: Vec<_> = renames
+                .iter()
+                .map(|(to, from)| (from.clone(), to.clone()))
+                .collect();
+            match frecency.copy_history_many(&pairs) {
+                Ok(paths) => carried = paths,
+                Err(e) => error!("Failed to carry frecency over renames: {:?}", e),
             }
         }
 

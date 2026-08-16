@@ -573,6 +573,31 @@ fn paired_rename_events_are_trusted_over_the_heuristic() {
 }
 
 #[test]
+fn rename_into_an_ignored_destination_stays_silent() {
+    let f = Fixture::new();
+    f.write("src/note.txt", "scratch");
+    f.index();
+    let events = f.subscribe_with(
+        "**",
+        WatchOptions {
+            ignore: vec!["*.log".to_string()],
+        },
+    );
+
+    std::fs::rename(f.path("src/note.txt"), f.path("src/note.log")).unwrap();
+    f.feed([
+        remove_file(f.path("src/note.txt")),
+        create(f.path("src/note.log")),
+    ]);
+
+    let received = events.recv_timeout(Duration::from_millis(500));
+    assert!(
+        received.is_err(),
+        "a rename whose destination is ignored must not reach the subscriber: {received:?}"
+    );
+}
+
+#[test]
 fn editing_an_indexed_file_is_never_mistaken_for_a_rename() {
     let f = Fixture::new();
     f.write("src/keep.rs", "same size!!");
@@ -587,7 +612,10 @@ fn editing_an_indexed_file_is_never_mistaken_for_a_rename() {
         .modified()
         .unwrap();
     std::fs::remove_file(f.path("src/gone.rs")).unwrap();
-    std::fs::File::open(f.path("src/keep.rs"))
+    // Windows requires write access on the handle to change timestamps.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(f.path("src/keep.rs"))
         .unwrap()
         .set_modified(mtime)
         .unwrap();
@@ -747,13 +775,21 @@ impl Fixture {
     }
 
     fn subscribe(&self, pattern: &str) -> mpsc::Receiver<Vec<WatchEvent>> {
+        self.subscribe_with(pattern, WatchOptions::default())
+    }
+
+    fn subscribe_with(
+        &self,
+        pattern: &str,
+        options: WatchOptions,
+    ) -> mpsc::Receiver<Vec<WatchEvent>> {
         let (sender, receiver) = mpsc::channel();
         self.picker
             .watch_registry()
             .subscribe(
                 &self.base,
                 pattern,
-                WatchOptions::default(),
+                options,
                 Box::new(move |_, events| {
                     let _ = sender.send(events.to_vec());
                 }),

@@ -225,17 +225,23 @@ impl WatchSub {
         }
 
         // Subtract per-subscription ignores from the match mask.
+        mask & !self.ignore_mask(paths, scratch)
+    }
+
+    fn ignore_mask(&self, paths: &[&str], scratch: &mut Vec<usize>) -> WatchMask {
+        let mut mask = 0;
+
         for g in &self.ignore.globs {
             scratch.clear();
             glob_matches_into(g, paths, scratch);
             for &index in scratch.iter() {
-                mask &= !(1 << index);
+                mask |= 1 << index;
             }
         }
         if !self.ignore.prefixes.is_empty() {
             for (index, path) in paths.iter().enumerate() {
                 if self.ignore.prefix_matches(Path::new(path)) {
-                    mask &= !(1 << index);
+                    mask |= 1 << index;
                 }
             }
         }
@@ -515,7 +521,10 @@ impl WatchRegistry {
             for sub in &state.subs {
                 let mut matched = sub.filter_mask(&path_refs, &mut scratch);
                 if has_renames {
-                    matched |= sub.filter_mask(&from_refs, &mut scratch);
+                    // A source-path hit never resurrects an event whose
+                    // destination this subscription ignores.
+                    matched |= sub.filter_mask(&from_refs, &mut scratch)
+                        & !sub.ignore_mask(&path_refs, &mut scratch);
                 }
                 let mut delivery_mask = (matched & visible_mask) | rescan_mask;
                 if delivery_mask == 0 {

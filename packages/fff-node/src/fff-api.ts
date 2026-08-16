@@ -308,10 +308,10 @@ export type WatchEventKind = "created" | "modified" | "removed" | "rescan" | "re
 
 /** A single filesystem change notification. */
 export interface WatchEvent {
-  /** Absolute path of the affected file (base path to rescan if `kind ==rescan`) */
+  /** Absolute path of the affected file (base path to rescan if `kind == rescan`) */
   path: string;
   kind: WatchEventKind;
-  /** Absolute path the file moved from. Only set when `kind === "renamed"`. */
+  /** Absolute path the file moved from. Only set when `kind == "renamed"`. */
   from?: string;
 }
 
