@@ -40,9 +40,10 @@ let baseDir = "";
 
 describe("fff-node watch", { concurrency: 1 }, () => {
   before(async () => {
-    // realpath: Windows tmpdir() may return an 8.3 short path (RUNNER~1) that
-    // won't prefix-match the core's canonicalized base when used as a pattern
-    baseDir = realpathSync(mkdtempSync(join(tmpdir(), "fff-watch-test-")));
+    // realpathSync.native: Windows tmpdir() may return an 8.3 short path
+    // (RUNNER~1); only the native variant expands it to the long form the
+    // core reports in event paths.
+    baseDir = realpathSync.native(mkdtempSync(join(tmpdir(), "fff-watch-test-")));
     const dbDir = mkdtempSync(join(tmpdir(), "fff-watch-db-"));
 
     // Seed files so the initial scan has content
@@ -133,12 +134,7 @@ describe("fff-node watch", { concurrency: 1 }, () => {
 
   it("a rename arrives as one renamed event carrying both paths", async () => {
     const callback = mock.fn();
-    const arrivals = [];
-    const t0 = Date.now();
-    const sub = finder.watch((events) => {
-      arrivals.push(Date.now() - t0);
-      callback(events);
-    });
+    const sub = finder.watch(callback);
     assert.ok(sub.ok, `watch failed: ${!sub.ok ? sub.error : ""}`);
 
     const from = join(baseDir, "move-me.txt");
@@ -158,7 +154,7 @@ describe("fff-node watch", { concurrency: 1 }, () => {
     );
     assert.ok(
       renamed,
-      `expected a renamed event for ${JSON.stringify(to)} (batch arrivals at ms: ${JSON.stringify(arrivals)}), got: ${JSON.stringify(deliveredEvents(callback))}`,
+      `expected a renamed event for ${JSON.stringify(to)}, got: ${JSON.stringify(deliveredEvents(callback))}`,
     );
     assert.equal(renamed.from, from);
     // The move is one event, not a removal plus a creation.
