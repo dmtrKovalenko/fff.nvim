@@ -8,6 +8,7 @@ export const VALID_MODES = ["tools-and-ui", "tools-only", "override"] as const;
 export type FffMode = (typeof VALID_MODES)[number];
 
 export interface FffConfig {
+  $schema?: string;
   mode?: FffMode;
   frecencyDbPath?: string;
   historyDbPath?: string;
@@ -16,6 +17,7 @@ export interface FffConfig {
 }
 
 const CONFIG_KEYS = new Set<keyof FffConfig>([
+  "$schema",
   "mode",
   "frecencyDbPath",
   "historyDbPath",
@@ -57,6 +59,7 @@ export function loadConfig(agentDir = piDataDir()): FffConfig {
     throw invalidConfig(configPath, `"mode" must be one of ${VALID_MODES.join(", ")}`);
   }
 
+  validateString(configPath, parsed, "$schema");
   validateString(configPath, parsed, "frecencyDbPath");
   validateString(configPath, parsed, "historyDbPath");
   validateBoolean(configPath, parsed, "enableFsRootScanning");
@@ -80,7 +83,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function validateString(
   configPath: string,
   config: Record<string, unknown>,
-  key: "frecencyDbPath" | "historyDbPath",
+  key: "$schema" | "frecencyDbPath" | "historyDbPath",
 ): void {
   const value = config[key];
   if (value !== undefined && (typeof value !== "string" || value.length === 0)) {

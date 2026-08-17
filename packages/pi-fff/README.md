@@ -136,6 +136,7 @@ For persistent global configuration, create `pi-fff.json` in pi's agent director
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/dmtrKovalenko/fff/main/packages/pi-fff/pi-fff.schema.json",
   "mode": "override",
   "frecencyDbPath": "/path/to/frecency",
   "historyDbPath": "/path/to/history",
@@ -148,6 +149,7 @@ All fields are optional:
 
 | Field | Type | Default |
 |---|---|---|
+| `$schema` | non-empty string | none |
 | `mode` | `tools-and-ui`, `tools-only`, or `override` | `tools-and-ui` |
 | `frecencyDbPath` | non-empty string | See [Data](#data) |
 | `historyDbPath` | non-empty string | See [Data](#data) |
