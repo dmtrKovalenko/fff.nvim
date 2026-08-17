@@ -30,7 +30,8 @@
     ]
   },
   "files": [
-    "src"
+    "src",
+    "pi-fff.schema.json"
   ],
   "publishConfig": {
     "access": "public"

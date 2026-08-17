@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dmtrKovalenko/fff/main/packages/pi-fff/pi-fff.schema.json",
+  "title": "pi-fff configuration",
+  "description": "Global startup configuration for the pi-fff extension.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Schema URL used by editors for validation and completion."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["tools-and-ui", "tools-only", "override"],
+      "default": "tools-and-ui",
+      "description": "Controls which FFF tools and autocomplete integrations are enabled."
+    },
+    "frecencyDbPath": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path to the frecency database."
+    },
+    "historyDbPath": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path to the query history database."
+    },
+    "enableFsRootScanning": {
+      "type": "boolean",
+      "default": false,
+      "description": "Allows indexing when pi is launched from the filesystem root."
+    },
+    "enableHomeDirScanning": {
+      "type": "boolean",
+      "default": true,
+      "description": "Allows indexing when pi is launched from the home directory."
+    }
+  }
+}

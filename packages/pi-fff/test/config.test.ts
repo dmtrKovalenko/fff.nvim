@@ -24,6 +24,8 @@ describe("loadConfig", () => {
 
   test("loads every supported option", () => {
     const config = {
+      $schema:
+        "https://raw.githubusercontent.com/dmtrKovalenko/fff/main/packages/pi-fff/pi-fff.schema.json",
       mode: "override" as const,
       frecencyDbPath: "/data/frecency",
       historyDbPath: "/data/history",
@@ -57,6 +59,8 @@ describe("loadConfig", () => {
 
   test("rejects invalid option values", () => {
     const cases: [Record<string, unknown>, string][] = [
+      [{ $schema: false }, '"$schema" must be a non-empty string'],
+      [{ $schema: "" }, '"$schema" must be a non-empty string'],
       [{ mode: "replace" }, '"mode" must be one of'],
       [{ frecencyDbPath: "" }, '"frecencyDbPath" must be a non-empty string'],
       [{ historyDbPath: false }, '"historyDbPath" must be a non-empty string'],
