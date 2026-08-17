@@ -102,19 +102,35 @@ type EventHandler = (...args: any[]) => unknown;
 function createPi(mode?: string, flags: Record<string, unknown> = {}) {
   const events = new Map<string, EventHandler>();
   const commands = new Map<string, any>();
+  const registeredFlags = new Set<string>();
+  let flagsReady = false;
 
   const pi = {
-    getFlag: mock((name: string) =>
-      name === "fff-mode" && mode !== undefined ? mode : flags[name],
-    ),
+    getFlag: mock((name: string) => {
+      if (!flagsReady || !registeredFlags.has(name)) return undefined;
+      return name === "fff-mode" && mode !== undefined ? mode : flags[name];
+    }),
     on: mock((event: string, handler: EventHandler) => {
-      events.set(event, handler);
+      events.set(event, (...args) => {
+        flagsReady = true;
+        return handler(...args);
+      });
     }),
     registerCommand: mock((name: string, command: any) => {
-      commands.set(name, command);
+      commands.set(name, {
+        ...command,
+        handler: (...args: any[]) => {
+          flagsReady = true;
+          return command.handler(...args);
+        },
+      });
     }),
-    registerFlag: mock(() => undefined),
+    registerFlag: mock((name: string) => {
+      registeredFlags.add(name);
+    }),
     registerTool: mock((_tool: any) => undefined),
+    getActiveTools: mock(() => ["read"] as string[]),
+    setActiveTools: mock((_names: string[]) => undefined),
     appendEntry: mock(() => undefined),
   };
 
@@ -124,6 +140,9 @@ function createPi(mode?: string, flags: Record<string, unknown> = {}) {
 function createContext(cwd = "/tmp/workspace") {
   return {
     cwd,
+    sessionManager: {
+      getEntries: mock(() => [] as any[]),
+    },
     // Signatures mirror the real pi UI surface so mock.calls stays typed.
     ui: {
       addAutocompleteProvider: mock((_factory: (current: any) => any) => undefined),
@@ -258,11 +277,93 @@ describe("pi-fff global config", () => {
     });
     await shutdown(setup);
   });
+
+  test("falls through invalid flag and environment modes", async () => {
+    writeConfig({ mode: "override" });
+    process.env.PI_FFF_MODE = "invalid-env-mode";
+
+    const setup = await start("invalid-flag-mode");
+    const toolNames = setup.pi.registerTool.mock.calls.map(([tool]) => tool.name);
+
+    expect(toolNames).toContain("grep");
+    expect(toolNames).toContain("find");
+    expect(toolNames).not.toContain("ffgrep");
+    await shutdown(setup);
+  });
 });
 
 function writeConfig(config: Record<string, unknown>): void {
   fs.writeFileSync(configPath, JSON.stringify(config));
 }
+
+describe("pi-fff session mode", () => {
+  test("registers tools only after restoring the saved mode", async () => {
+    const setup = createPi("tools-and-ui");
+    const ctx = createContext();
+    ctx.sessionManager.getEntries.mockReturnValue([
+      { type: "custom", customType: "fff-mode", data: { mode: "override" } },
+    ]);
+    fffExtension(setup.pi as any);
+
+    expect(setup.pi.registerTool).not.toHaveBeenCalled();
+    await setup.events.get("session_start")?.({ reason: "startup" }, ctx);
+
+    const tools = setup.pi.registerTool.mock.calls.map(([tool]) => tool);
+    const toolNames = tools.map((tool) => tool.name);
+    expect(toolNames).toContain("grep");
+    expect(toolNames).toContain("find");
+    expect(toolNames).not.toContain("ffgrep");
+    expect(toolNames).not.toContain("fffind");
+    const grepTool = tools.find((tool) => tool.name === "grep");
+    expect(grepTool.promptGuidelines[0].startsWith("grep:")).toBe(true);
+    expect(setup.pi.setActiveTools).toHaveBeenCalledWith(
+      expect.arrayContaining(["read", "grep", "find"]),
+    );
+
+    await setup.commands.get("fff-mode").handler("", ctx);
+    expect(ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Current mode: 'override' (flag: tools-and-ui)",
+      "info",
+    );
+    await shutdown(setup);
+  });
+
+  test("registers tools before an unbound SDK session's first agent turn", async () => {
+    const setup = createPi("override");
+    const ctx = createContext();
+    fffExtension(setup.pi as any);
+
+    expect(setup.pi.registerTool).not.toHaveBeenCalled();
+    await setup.events.get("before_agent_start")?.({}, ctx);
+
+    const toolNames = setup.pi.registerTool.mock.calls.map(([tool]) => tool.name);
+    expect(toolNames).toContain("grep");
+    expect(toolNames).toContain("find");
+    expect(createCalls).toHaveLength(0);
+    await shutdown(setup);
+  });
+
+  test("keeps the active mode unchanged until a tool-name switch is reloaded", async () => {
+    const setup = await start();
+
+    await setup.commands.get("fff-mode").handler("override", setup.ctx);
+
+    expect(setup.pi.appendEntry).toHaveBeenCalledWith("fff-mode", {
+      mode: "override",
+    });
+    expect(setup.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Mode 'override' saved. Run /reload to apply the tool name change.",
+      "info",
+    );
+
+    await setup.commands.get("fff-mode").handler("", setup.ctx);
+    expect(setup.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Current mode: 'tools-and-ui' (flag: unset)",
+      "info",
+    );
+    await shutdown(setup);
+  });
+});
 
 // Regression for #743: launching from $HOME must be visible and interruptible.
 describe("pi-fff $HOME scan warning", () => {
@@ -477,7 +578,7 @@ describe("pi-fff autocomplete registration", () => {
   });
 
   test("/fff-mode changes mention behavior without touching the editor", async () => {
-    const { commands, ctx } = await start();
+    const { commands, ctx, pi } = await start();
     const factory = ctx.ui.addAutocompleteProvider.mock.calls[0][0];
     const current = currentProvider();
     const provider = factory(current);
@@ -485,6 +586,7 @@ describe("pi-fff autocomplete registration", () => {
     await commands.get("fff-mode").handler("tools-only", ctx);
     await provider.getSuggestions(["@src"], 0, 4, abortOptions());
 
+    expect(pi.appendEntry).toHaveBeenCalledWith("fff-mode", { mode: "tools-only" });
     expect(current.getSuggestions).toHaveBeenCalledTimes(1);
     expect(finders[0].mixedSearch).not.toHaveBeenCalled();
     expect(ctx.ui.setEditorComponent).not.toHaveBeenCalled();
