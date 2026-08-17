@@ -169,6 +169,8 @@ export function routePathConstraint(
   if (!pathConstraint) return null;
   let candidate = pathConstraint.trim();
   if (!candidate) return null;
+  const explicitlyRooted =
+    path.isAbsolute(candidate) || candidate === "~" || candidate.startsWith("~/");
   if (candidate === "~" || candidate.startsWith("~/"))
     candidate = path.join(HOME_DIR, candidate.slice(1));
   if (!path.isAbsolute(candidate)) {
@@ -177,7 +179,12 @@ export function routePathConstraint(
     candidate = path.resolve(cwd, candidate);
   }
   const rel = path.relative(cwd, candidate);
-  if (!isOutsideWorkspaceRelativePath(rel)) return null;
+  if (rel === "") return null;
+  if (
+    !isOutsideWorkspaceRelativePath(rel) &&
+    !(explicitlyRooted && path.resolve(cwd) === path.resolve(HOME_DIR))
+  )
+    return null;
   return resolveAuxRoot(candidate);
 }
 

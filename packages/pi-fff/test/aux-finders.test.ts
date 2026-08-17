@@ -20,8 +20,20 @@ describe("routePathConstraint", () => {
     expect(routePathConstraint("..foo/bar", cwd)).toBeNull();
   });
 
-  test("returns null for absolute paths inside the workspace", () => {
+  test("returns null for absolute paths inside a project workspace", () => {
     expect(routePathConstraint("/tmp/workspace/src", cwd)).toBeNull();
+  });
+
+  test("routes explicit paths under home when home is the workspace", () => {
+    const target = fs.mkdtempSync(path.join(os.homedir(), ".fff-route-"));
+    try {
+      expect(routePathConstraint(target, os.homedir())).toEqual({
+        root: target,
+        suffix: "",
+      });
+    } finally {
+      fs.rmSync(target, { recursive: true, force: true });
+    }
   });
 
   test("routes absolute paths outside the workspace", () => {
