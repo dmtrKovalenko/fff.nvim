@@ -1,0 +1,46 @@
+name: Oxc
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/**"
+      - .github/workflows/oxc.yml
+  pull_request:
+    paths:
+      - "packages/**"
+      - .github/workflows/oxc.yml
+
+env:
+  CLICOLOR: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  oxc:
+    name: Check packages with oxfmt and oxlint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: oxfmt
+        run: bun run format:check
+
+      - name: oxlint
+        run: bun run lint -- -f github --deny-warnings
