@@ -351,13 +351,7 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   function resolveStartupConfig(): void {
     setMode(
-      getConfigValue(
-        "fff-mode",
-        "PI_FFF_MODE",
-        config.mode,
-        "tools-and-ui",
-        parseMode,
-      ),
+      getConfigValue("fff-mode", "PI_FFF_MODE", config.mode, "tools-and-ui", parseMode),
     );
     resolvedDbPaths = resolveDbPaths({
       frecency: getConfigValue(

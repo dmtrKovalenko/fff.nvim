@@ -1,0 +1,21 @@
+{
+  "printWidth": 90,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": false,
+  "quoteProps": "as-needed",
+  "trailingComma": "all",
+  "arrowParens": "always",
+  "bracketSpacing": true,
+  "ignorePatterns": [
+    "*/dist",
+    "fff-bin-*",
+    "**/*.js",
+    "**/*.cjs",
+    "**/*.mjs",
+    "**/*.json",
+    "**/*.md",
+    "**/*.toml"
+  ]
+}

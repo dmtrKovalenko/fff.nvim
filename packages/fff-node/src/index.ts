@@ -39,10 +39,7 @@
  * @packageDocumentation
  */
 
-export {
-  binaryExists,
-  findBinary,
-} from "./binary.js";
+export { binaryExists, findBinary } from "./binary.js";
 export { closeLibrary } from "./ffi.js";
 export type {
   DbHealth,

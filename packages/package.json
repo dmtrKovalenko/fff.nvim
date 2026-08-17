@@ -2,13 +2,14 @@
   "private": true,
   "workspaces": ["fff-bun", "fff-node", "pi-fff"],
   "scripts": {
-    "format": "biome format --write .",
-    "format:check": "biome format .",
-    "lint": "biome lint .",
-    "check": "biome check --write .",
-    "check:ci": "biome check ."
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint .",
+    "check": "oxfmt . && oxlint --fix .",
+    "check:ci": "oxfmt --check . && oxlint ."
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.4"
+    "oxfmt": "0.63.0",
+    "oxlint": "1.78.0"
   }
 }
