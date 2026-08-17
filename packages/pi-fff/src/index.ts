@@ -620,12 +620,12 @@ export default function fffExtension(pi: ExtensionAPI) {
   let toolsRegistered = false;
 
   function queueTool<TParams extends TSchema, TDetails = unknown, TState = any>(
-    name: keyof ToolNames,
+    resolveName: () => string,
     definition: PendingToolDefinition<TParams, TDetails, TState>,
   ): void {
     pendingTools.push(() => {
       const { promptGuidelines, ...tool } = definition;
-      const resolvedName = toolNames[name];
+      const resolvedName = resolveName();
       pi.registerTool({
         ...tool,
         name: resolvedName,
@@ -820,7 +820,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     ),
   });
 
-  queueTool("grep", {
+  queueTool(() => toolNames.grep, {
     description: `Grep file contents. Smart-case, auto-detects regex vs literal, git-aware. Results are ranked by frecency (most-accessed files first); matches within a file stay in source order. Default limit ${DEFAULT_GREP_LIMIT}.`,
     promptSnippet: "Grep contents",
     promptGuidelines: (names) => [
@@ -1009,7 +1009,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     ),
   });
 
-  queueTool("find", {
+  queueTool(() => toolNames.find, {
     description: `Fuzzy path search and glob search. Matches against the whole repo-relative path, not just the filename. Frecency-ranked, git-aware. Multi-word = narrower (AND). Default limit ${DEFAULT_FIND_LIMIT}.`,
     promptSnippet: "Find files by path or glob",
     promptGuidelines: (names) => [
@@ -1149,7 +1149,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       cursor: Type.Optional(Type.String({ description: "Pagination cursor" })),
     });
 
-    queueTool("multiGrep", {
+    queueTool(() => toolNames.multiGrep, {
       description:
         "Search file contents for ANY of multiple literal patterns (OR, SIMD Aho-Corasick). Faster than regex alternation.",
       promptSnippet: "Multi-pattern OR content search",
