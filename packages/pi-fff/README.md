@@ -116,7 +116,7 @@ Parameters:
 
 - `/fff-health` — show FFF status (indexed files, git info, frecency/history DB status)
 - `/fff-rescan` — trigger a file rescan
-- `/fff-mode <mode>` — switch mode (tool name change requires restart)
+- `/fff-mode <mode>` — switch mode (tool name changes require `/reload`)
 
 ## Modes
 
@@ -124,11 +124,13 @@ Parameters:
 - `tools-only`: additional tools only; keep pi's default `@` autocomplete
 - `override`: replaces pi's built-in `find`, `grep` and adds `multi_grep` + FFF-backed `@` autocomplete
 
-Mode precedence:
+Startup mode precedence:
 1. `--fff-mode <mode>` CLI flag
 2. `PI_FFF_MODE=<mode>` environment variable
 3. `mode` in the global config file
 4. default (`tools-and-ui`)
+
+When a session resumes, its most recent `/fff-mode` selection takes precedence over the startup resolution above. Switching to or from `override` takes effect after `/reload`, when the tools are registered again.
 
 ## Configuration
 

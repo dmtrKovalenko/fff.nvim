@@ -6,7 +6,11 @@
  */
 
 import nodePath from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import {
   type AutocompleteItem,
   type AutocompleteProvider,
@@ -20,7 +24,7 @@ import type {
   MixedItem,
   SearchResult,
 } from "@ff-labs/fff-node";
-import { Type } from "@sinclair/typebox";
+import { Type, type TSchema } from "@sinclair/typebox";
 import { AuxFinderPool, routePathConstraint } from "./aux-finders";
 import { type FffMode, loadConfig, VALID_MODES } from "./config";
 import { FilePickerFactory } from "./file-picker";
@@ -328,53 +332,69 @@ export default function fffExtension(pi: ExtensionAPI) {
     return undefined;
   }
 
-  let currentMode = getConfigValue(
-    "fff-mode",
-    "PI_FFF_MODE",
-    config.mode,
-    "tools-and-ui",
-  );
-  const toolNames = resolveToolNames(currentMode);
-
-  const resolvedDbPaths = resolveDbPaths({
-    frecency: getConfigValue(
-      "fff-frecency-db",
-      "FFF_FRECENCY_DB",
-      config.frecencyDbPath,
-      undefined,
-    ),
-    history: getConfigValue(
-      "fff-history-db",
-      "FFF_HISTORY_DB",
-      config.historyDbPath,
-      undefined,
-    ),
-  });
-
-  // Root scanning opt-in: FFF refuses to init at / unless this is set.
-  const enableFsRootScanning = getConfigValue(
-    "fff-enable-root-scan",
-    "FFF_ENABLE_ROOT_SCAN",
-    config.enableFsRootScanning,
-    false,
-    parseBoolean,
-  );
-  // Home dir scanning is on by default (launching pi from $HOME is a normal
-  // flow), but configurable so users with huge $HOME trees can opt out.
-  const enableHomeDirScanning = getConfigValue(
-    "fff-enable-home-scan",
-    "FFF_ENABLE_HOME_SCAN",
-    config.enableHomeDirScanning,
-    true,
-    parseBoolean,
-  );
-
-  function getMode(): FffMode {
-    return currentMode;
+  function parseMode(value: unknown): FffMode | undefined {
+    return typeof value === "string" && VALID_MODES.includes(value as FffMode)
+      ? (value as FffMode)
+      : undefined;
   }
+
+  let currentMode: FffMode = "tools-and-ui";
+  let toolNames = resolveToolNames(currentMode);
+  let resolvedDbPaths: ReturnType<typeof resolveDbPaths>;
+  let enableFsRootScanning = false;
+  let enableHomeDirScanning = true;
 
   function setMode(mode: FffMode): void {
     currentMode = mode;
+    toolNames = resolveToolNames(mode);
+  }
+
+  function resolveStartupConfig(): void {
+    setMode(
+      getConfigValue(
+        "fff-mode",
+        "PI_FFF_MODE",
+        config.mode,
+        "tools-and-ui",
+        parseMode,
+      ),
+    );
+    resolvedDbPaths = resolveDbPaths({
+      frecency: getConfigValue(
+        "fff-frecency-db",
+        "FFF_FRECENCY_DB",
+        config.frecencyDbPath,
+        undefined,
+      ),
+      history: getConfigValue(
+        "fff-history-db",
+        "FFF_HISTORY_DB",
+        config.historyDbPath,
+        undefined,
+      ),
+    });
+
+    // Root scanning opt-in: FFF refuses to init at / unless this is set.
+    enableFsRootScanning = getConfigValue(
+      "fff-enable-root-scan",
+      "FFF_ENABLE_ROOT_SCAN",
+      config.enableFsRootScanning,
+      false,
+      parseBoolean,
+    );
+    // Home dir scanning is on by default (launching pi from $HOME is a normal
+    // flow), but configurable so users with huge $HOME trees can opt out.
+    enableHomeDirScanning = getConfigValue(
+      "fff-enable-home-scan",
+      "FFF_ENABLE_HOME_SCAN",
+      config.enableHomeDirScanning,
+      true,
+      parseBoolean,
+    );
+  }
+
+  function getMode(): FffMode {
+    return currentMode;
   }
 
   function shouldEnableMentions(): boolean {
@@ -398,22 +418,28 @@ export default function fffExtension(pi: ExtensionAPI) {
     );
   }
 
-  const pickers = new FilePickerFactory({
-    frecencyDbPath: resolvedDbPaths.frecency,
-    historyDbPath: resolvedDbPaths.history,
-    onDbFailure: (error) =>
-      uiCtx?.ui.notify(
-        `(fff): Failed to open frecency/history database (${error}). Continuing without frecency persistence.`,
-        "error",
-      ),
-  });
+  let pickers: FilePickerFactory | null = null;
+  let auxPool: AuxFinderPool | null = null;
 
-  const auxPool = new AuxFinderPool({
-    enableFsRootScanning,
-    enableHomeDirScanning,
-    onHomeDirScan: warnHomeDirScan,
-    pickers,
-  });
+  function initializeFinderFactories(): void {
+    if (pickers) return;
+
+    pickers = new FilePickerFactory({
+      frecencyDbPath: resolvedDbPaths.frecency,
+      historyDbPath: resolvedDbPaths.history,
+      onDbFailure: (error) =>
+        uiCtx?.ui.notify(
+          `(fff): Failed to open frecency/history database (${error}). Continuing without frecency persistence.`,
+          "error",
+        ),
+    });
+    auxPool = new AuxFinderPool({
+      enableFsRootScanning,
+      enableHomeDirScanning,
+      onHomeDirScan: warnHomeDirScan,
+      pickers,
+    });
+  }
 
   // in case cwd changes we need to figure this out
   function ensureFinder(cwd: string): Promise<FileFinderApi> {
@@ -431,6 +457,7 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       // if the dbs can't be opened the factory falls back to a db-less picker,
       // e.g. when some other process corrupts the lock
+      if (!pickers) throw new Error("FFF picker factory is not initialized");
       mainFinder = await pickers.create({
         basePath: cwd,
         enableHomeDirScanning,
@@ -485,9 +512,9 @@ export default function fffExtension(pi: ExtensionAPI) {
       finderCwd = null;
     }
 
-    if (auxPool) {
-      auxPool.destroy();
-    }
+    auxPool?.destroy();
+    auxPool = null;
+    pickers = null;
   }
 
   async function resolveFinderForPath(
@@ -497,6 +524,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   ): Promise<{ finder: FileFinderApi; query: string; root: string } | null> {
     const route = routePathConstraint(pathParam, activeCwd);
     if (!route) return null;
+    if (!auxPool) throw new Error("FFF auxiliary finder pool is not initialized");
     const aux = await auxPool.acquire(route.root);
     // A broader covering picker may have been reused; rebase the suffix so the
     // constraint stays relative to the picker's actual root.
@@ -577,6 +605,45 @@ export default function fffExtension(pi: ExtensionAPI) {
     });
   }
 
+  type PendingToolDefinition<
+    TParams extends TSchema,
+    TDetails = unknown,
+    TState = any,
+  > = Omit<
+    ToolDefinition<TParams, TDetails, TState>,
+    "name" | "label" | "promptGuidelines"
+  > & {
+    promptGuidelines?: (names: ToolNames) => string[];
+  };
+
+  const pendingTools: (() => string)[] = [];
+  let toolsRegistered = false;
+
+  function queueTool<TParams extends TSchema, TDetails = unknown, TState = any>(
+    resolveName: () => string,
+    definition: PendingToolDefinition<TParams, TDetails, TState>,
+  ): void {
+    pendingTools.push(() => {
+      const { promptGuidelines, ...tool } = definition;
+      const resolvedName = resolveName();
+      pi.registerTool({
+        ...tool,
+        name: resolvedName,
+        label: resolvedName,
+        promptGuidelines: promptGuidelines?.(toolNames),
+      });
+      return resolvedName;
+    });
+  }
+
+  function registerPendingTools(): void {
+    if (toolsRegistered) return;
+
+    const registeredNames = pendingTools.map((register) => register());
+    pi.setActiveTools([...new Set([...pi.getActiveTools(), ...registeredNames])]);
+    toolsRegistered = true;
+  }
+
   // --- Flags / lifecycle ---
 
   pi.registerFlag("fff-mode", {
@@ -606,34 +673,48 @@ export default function fffExtension(pi: ExtensionAPI) {
     type: "boolean",
   });
 
+  function reportInitFailure(ctx: ExtensionContext, error: unknown): void {
+    ctx.ui.notify(
+      `FFF init failed: ${error instanceof Error ? error.message : String(error)}`,
+      "error",
+    );
+  }
+
+  function prepareSession(ctx: ExtensionContext): void {
+    activeCwd = ctx.cwd;
+    uiCtx = ctx;
+    if (toolsRegistered) return;
+
+    // Pi populates extension flag values after loading extensions.
+    resolveStartupConfig();
+
+    // Restore persisted mode before registering tools so a saved override
+    // can safely change their names after /reload or session resume.
+    const entries = ctx.sessionManager?.getEntries();
+    if (entries) {
+      const modeEntry = [...entries]
+        .reverse()
+        .find(
+          (e: { type: string; customType?: string }) =>
+            e.type === "custom" && e.customType === "fff-mode",
+        );
+      if (
+        modeEntry &&
+        typeof (modeEntry as any).data?.mode === "string" &&
+        VALID_MODES.includes((modeEntry as any).data.mode as FffMode)
+      ) {
+        const restored = (modeEntry as any).data.mode as FffMode;
+        if (restored !== currentMode) setMode(restored);
+      }
+    }
+
+    initializeFinderFactories();
+    registerPendingTools();
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     try {
-      activeCwd = ctx.cwd;
-      uiCtx = ctx as unknown as typeof uiCtx;
-
-      // Restore persisted mode from session entries. This handles session
-      // resume after process restart where env vars are lost, and ensures
-      // the env var is set for the next /reload in the same session.
-      const entries = ctx.sessionManager?.getEntries();
-      if (entries) {
-        const modeEntry = [...entries]
-          .reverse()
-          .find(
-            (e: { type: string; customType?: string }) =>
-              e.type === "custom" && e.customType === "fff-mode",
-          );
-        if (
-          modeEntry &&
-          typeof (modeEntry as any).data?.mode === "string" &&
-          VALID_MODES.includes((modeEntry as any).data.mode as FffMode)
-        ) {
-          const restored = (modeEntry as any).data.mode as FffMode;
-          if (restored !== currentMode) {
-            currentMode = restored;
-          }
-        }
-      }
-
+      prepareSession(ctx);
       registerAutocompleteProvider(ctx);
       await ensureFinder(activeCwd);
 
@@ -651,11 +732,19 @@ export default function fffExtension(pi: ExtensionAPI) {
       // waitForScan() also resolves on timeout, so poll until the scan really
       // settles before clearing the footer.
       if (atHome) trackHomeScanStatus();
-    } catch (e: unknown) {
-      ctx.ui.notify(
-        `FFF init failed: ${e instanceof Error ? e.message : String(e)}`,
-        "error",
-      );
+    } catch (error: unknown) {
+      reportInitFailure(ctx, error);
+    }
+  });
+
+  // SDK callers can prompt without binding session_start. Prepare on the first
+  // agent turn as a fallback so the tools still reach that turn's tool set.
+  pi.on("before_agent_start", (_event, ctx) => {
+    if (toolsRegistered) return;
+    try {
+      prepareSession(ctx);
+    } catch (error: unknown) {
+      reportInitFailure(ctx, error);
     }
   });
 
@@ -731,16 +820,14 @@ export default function fffExtension(pi: ExtensionAPI) {
     ),
   });
 
-  pi.registerTool({
-    name: toolNames.grep,
-    label: toolNames.grep,
+  queueTool(() => toolNames.grep, {
     description: `Grep file contents. Smart-case, auto-detects regex vs literal, git-aware. Results are ranked by frecency (most-accessed files first); matches within a file stay in source order. Default limit ${DEFAULT_GREP_LIMIT}.`,
     promptSnippet: "Grep contents",
-    promptGuidelines: [
-      `${toolNames.grep}: prefer bare identifiers as patterns. Literal queries are most efficient.`,
-      `${toolNames.grep}: use path for include ('src/', '*.ts') and exclude for noise ('test/,*.min.js').`,
-      `${toolNames.grep}: caseSensitive: true when you need exact case (smart-case otherwise).`,
-      `${toolNames.grep}: after 1-2 greps, read the top match instead of more greps.`,
+    promptGuidelines: (names) => [
+      `${names.grep}: prefer bare identifiers as patterns. Literal queries are most efficient.`,
+      `${names.grep}: use path for include ('src/', '*.ts') and exclude for noise ('test/,*.min.js').`,
+      `${names.grep}: caseSensitive: true when you need exact case (smart-case otherwise).`,
+      `${names.grep}: after 1-2 greps, read the top match instead of more greps.`,
     ],
     parameters: grepSchema,
 
@@ -922,18 +1009,16 @@ export default function fffExtension(pi: ExtensionAPI) {
     ),
   });
 
-  pi.registerTool({
-    name: toolNames.find,
-    label: toolNames.find,
+  queueTool(() => toolNames.find, {
     description: `Fuzzy path search and glob search. Matches against the whole repo-relative path, not just the filename. Frecency-ranked, git-aware. Multi-word = narrower (AND). Default limit ${DEFAULT_FIND_LIMIT}.`,
     promptSnippet: "Find files by path or glob",
-    promptGuidelines: [
-      `${toolNames.find}: matches the WHOLE path, not just the filename — \`profile\` hits \`chrome/browser/profiles/x.cc\` too.`,
-      `${toolNames.find}: keep queries to 1-2 terms; extra words narrow.`,
-      `${toolNames.find}: use for paths, not content. Use ${toolNames.grep} for content.`,
-      `${toolNames.find}: for exact path matches use a glob in \`path\` — e.g. path: '**/profile.h' for exact filename, or path: 'src/**/profile.h' scoped to a subtree. Bare patterns are fuzzy.`,
-      `${toolNames.find}: to list everything inside a directory, pass path: 'dir/**' with an empty or wildcard pattern instead of using pattern alone.`,
-      `${toolNames.find}: use exclude: 'test/,*.min.js' to cut noise in large repos.`,
+    promptGuidelines: (names) => [
+      `${names.find}: matches the WHOLE path, not just the filename — \`profile\` hits \`chrome/browser/profiles/x.cc\` too.`,
+      `${names.find}: keep queries to 1-2 terms; extra words narrow.`,
+      `${names.find}: use for paths, not content. Use ${names.grep} for content.`,
+      `${names.find}: for exact path matches use a glob in \`path\` — e.g. path: '**/profile.h' for exact filename, or path: 'src/**/profile.h' scoped to a subtree. Bare patterns are fuzzy.`,
+      `${names.find}: to list everything inside a directory, pass path: 'dir/**' with an empty or wildcard pattern instead of using pattern alone.`,
+      `${names.find}: use exclude: 'test/,*.min.js' to cut noise in large repos.`,
     ],
     parameters: findSchema,
 
@@ -942,10 +1027,12 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       // if resumed we use the same picker as before
       const resumed = params.cursor ? getFindCursor(params.cursor) : undefined;
+      const pool = auxPool;
+      if (!pool) throw new Error("FFF auxiliary finder pool is not initialized");
       const aux = resumed
         ? resumed.auxRoot
           ? {
-              finder: (await auxPool.acquire(resumed.auxRoot, { exact: true })).finder,
+              finder: (await pool.acquire(resumed.auxRoot, { exact: true })).finder,
               root: resumed.auxRoot,
             }
           : null
@@ -1062,16 +1149,14 @@ export default function fffExtension(pi: ExtensionAPI) {
       cursor: Type.Optional(Type.String({ description: "Pagination cursor" })),
     });
 
-    pi.registerTool({
-      name: toolNames.multiGrep,
-      label: toolNames.multiGrep,
+    queueTool(() => toolNames.multiGrep, {
       description:
         "Search file contents for ANY of multiple literal patterns (OR, SIMD Aho-Corasick). Faster than regex alternation.",
       promptSnippet: "Multi-pattern OR content search",
-      promptGuidelines: [
-        `${toolNames.multiGrep}: use when searching for several identifiers at once.`,
-        `${toolNames.multiGrep}: include all naming-convention variants (snake/camel/Pascal).`,
-        `${toolNames.multiGrep}: patterns are literal. Use constraints for file filters.`,
+      promptGuidelines: (names) => [
+        `${names.multiGrep}: use when searching for several identifiers at once.`,
+        `${names.multiGrep}: include all naming-convention variants (snake/camel/Pascal).`,
+        `${names.multiGrep}: patterns are literal. Use constraints for file filters.`,
       ],
       parameters: multiGrepSchema,
 
@@ -1146,6 +1231,15 @@ export default function fffExtension(pi: ExtensionAPI) {
   pi.registerCommand("fff-mode", {
     description: "Show or set FFF mode: /fff-mode [tools-and-ui | tools-only | override]",
     handler: async (args, ctx) => {
+      if (!toolsRegistered) {
+        try {
+          prepareSession(ctx);
+        } catch (error: unknown) {
+          reportInitFailure(ctx, error);
+          return;
+        }
+      }
+
       const arg = (args || "").trim();
 
       // No args - show current mode
@@ -1164,15 +1258,18 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       const newMode = arg as FffMode;
       const oldMode = getMode();
-      setMode(newMode);
-
       pi.appendEntry("fff-mode", { mode: newMode });
 
-      const note =
-        (oldMode === "override") !== (newMode === "override")
-          ? " (tool name change requires /reload)"
-          : "";
-      ctx.ui.notify(`Mode changed: '${oldMode}' → '${newMode}'${note}`, "info");
+      if ((oldMode === "override") !== (newMode === "override")) {
+        ctx.ui.notify(
+          `Mode '${newMode}' saved. Run /reload to apply the tool name change.`,
+          "info",
+        );
+        return;
+      }
+
+      setMode(newMode);
+      ctx.ui.notify(`Mode changed: '${oldMode}' → '${newMode}'`, "info");
     },
   });
 

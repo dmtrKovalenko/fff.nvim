@@ -153,6 +153,7 @@ function startSession(
   const events = new Map<string, EventHandler>();
   const tools = new Map<string, RegisteredTool>();
   const notifications: Array<{ message: string; level?: string }> = [];
+  let activeTools: string[] = [];
 
   const flags: Record<string, unknown> = {
     "fff-frecency-db": dbs.frecencyDbPath,
@@ -165,6 +166,10 @@ function startSession(
     registerCommand: () => undefined,
     registerFlag: () => undefined,
     registerTool: (tool: RegisteredTool) => tools.set(tool.name, tool),
+    getActiveTools: () => activeTools,
+    setActiveTools: (names: string[]) => {
+      activeTools = names;
+    },
     appendEntry: () => undefined,
   };
 
