@@ -1,4 +1,5 @@
 mod cursor;
+mod handshake;
 mod healthcheck;
 mod output;
 mod parent;
@@ -12,8 +13,10 @@ use fff::file_picker::FilePicker;
 use fff::frecency::FrecencyTracker;
 use fff::{FFFMode, SharedFilePicker, SharedFrecency};
 use git2::Repository;
+use handshake::ProbeTolerantTransport;
 use mimalloc::MiMalloc;
-use rmcp::{ServiceExt, transport::stdio};
+use rmcp::ServiceExt;
+use rmcp::transport::async_rw::AsyncRwTransport;
 use server::FffServer;
 
 #[global_allocator]
@@ -340,7 +343,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     const STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-    let service = match tokio::time::timeout(STARTUP_TIMEOUT, server.serve(stdio())).await {
+    let stdio = AsyncRwTransport::new_server(tokio::io::stdin(), tokio::io::stdout());
+    let transport = ProbeTolerantTransport::new(stdio);
+    let service = match tokio::time::timeout(STARTUP_TIMEOUT, server.serve(transport)).await {
         Ok(res) => res.map_err(|e| format!("Failed to start MCP server: {}", e))?,
         Err(_) => {
             return Err("MCP initialize handshake did not complete within 60s".into());
