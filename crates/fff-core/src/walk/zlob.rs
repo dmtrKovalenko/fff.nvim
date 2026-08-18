@@ -78,10 +78,12 @@ pub(crate) fn walk_collect_files(
             .map(|ns| (ns / 1_000_000_000).max(0) as u64)
             .unwrap_or(0);
 
-        let basename_offset = entry.basename_offset_in_relative();
         // zlob emits '/'-separated relative paths, which is fff's canonical
         // internal form on every platform — store them verbatim.
-        let rel_str = String::from_utf8_lossy(rel_bytes).into_owned();
+        let (rel_str, basename_offset) = crate::file_picker::decode_walk_rel_path(
+            rel_bytes,
+            entry.basename_offset_in_relative(),
+        );
         let item = FileItem::new_raw(basename_offset, size, modified, None, is_binary);
 
         let mut guard = collected.lock();

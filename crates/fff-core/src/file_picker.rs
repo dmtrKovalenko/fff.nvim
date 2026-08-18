@@ -504,9 +504,7 @@ impl FileItem {
         modified: u64,
     ) -> (Self, String) {
         let is_binary = is_known_binary_extension(path);
-        // SAFETY-ish: paths on macOS/Linux are bytes; lossy conversion mirrors
-        // the existing `to_string_lossy()` behavior on non-UTF8 names.
-        let rel_str = String::from_utf8_lossy(relative_path).into_owned();
+        let (rel_str, basename_offset) = decode_walk_rel_path(relative_path, basename_offset);
         let item = Self::new_raw(basename_offset, size, modified, git_status, is_binary);
         (item, rel_str)
     }
@@ -2262,6 +2260,21 @@ fn push_dir_item(
     dirs.push(DirItem::new(dir_string, last_seg));
 }
 
+/// Decodes raw walker path bytes into the index's UTF-8 form, returning the
+/// basename offset valid for that string. Lossy decoding rewrites invalid
+/// bytes as 3-byte U+FFFD, so a raw-byte offset can land mid-char; recompute
+/// it in that (cold) case. Valid UTF-8 keeps the walker's offset for free.
+#[inline]
+pub(crate) fn decode_walk_rel_path(relative_path: &[u8], basename_offset: u16) -> (String, u16) {
+    match String::from_utf8_lossy(relative_path) {
+        std::borrow::Cow::Borrowed(valid) => (valid.to_owned(), basename_offset),
+        std::borrow::Cow::Owned(lossy) => {
+            let offset = lossy.rfind(std::path::is_separator).map_or(0, |i| i + 1) as u16;
+            (lossy, offset)
+        }
+    }
+}
+
 /// Fast extension-based binary detection. Avoids opening files during scan.
 /// Covers the vast majority of binary files in typical repositories.
 #[inline]
@@ -2558,6 +2571,31 @@ mod tests {
                 "file {rel} must live under its parent dir",
             );
         }
+    }
+
+    /// Walkers hand out raw path bytes plus a basename offset measured on
+    /// those bytes. Invalid UTF-8 becomes a 3-byte U+FFFD, so the offset must
+    /// be recomputed on the decoded string or every slice at it panics.
+    #[test]
+    fn dir_table_handles_invalid_utf8_dir_names() {
+        let raw: &[u8] = b"\xff\xffx/file.txt";
+        let raw_offset = raw.iter().position(|b| *b == b'/').unwrap() as u16 + 1;
+        let (item, rel) =
+            FileItem::new_from_walk_bytes(Path::new("file.txt"), raw, raw_offset, None, 0, 0);
+
+        assert_eq!(rel, "\u{FFFD}\u{FFFD}x/file.txt");
+        assert!(rel.is_char_boundary(item.path.filename_offset as usize));
+        assert_eq!(&rel[item.path.filename_offset as usize..], "file.txt");
+
+        let mut pairs = vec![(item, rel)];
+        let walked = vec!["\u{FFFD}\u{FFFD}x/".to_string()];
+        let mut builder = crate::simd_path::ChunkedPathStoreBuilder::new(pairs.len());
+        let dirs = populates_dirs_files_chunked_storage(&mut pairs, &walked, &mut builder);
+        let store = builder.finish();
+        let arena = store.as_arena_ptr();
+
+        let table: Vec<String> = dirs.iter().map(|d| d.relative_path(arena)).collect();
+        assert_eq!(table, ["\u{FFFD}\u{FFFD}x/"]);
     }
 
     #[test]
