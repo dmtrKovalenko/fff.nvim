@@ -1,3 +1,5 @@
+local process = require('fff_plus.process')
+
 local M = {}
 
 local function split_nul(output)
@@ -60,36 +62,62 @@ function M.parse_status(output)
   return entries
 end
 
-function M.run(git_root, args)
-  local command = { 'git', '-C', vim.fn.shellescape(git_root) }
-  for _, argument in ipairs(args) do
-    table.insert(command, vim.fn.shellescape(argument))
-  end
+function M.run(command, opts, done) return process.run(command, opts, done) end
 
-  local handle = io.popen(table.concat(command, ' ') .. ' 2>/dev/null')
-  if not handle then return nil end
-  local output = handle:read('*a')
-  local ok = handle:close()
-  if not ok then return nil end
-  return output
+local function transform(command, cwd, parse, fallback, done)
+  return M.run(command, { cwd = cwd }, function(result)
+    if not result.ok then
+      done(fallback, result)
+      return
+    end
+    done(parse(result.stdout), result)
+  end)
 end
 
-function M.tracked(git_root)
-  local output = M.run(git_root, { 'ls-files', '-z' })
-  if not output then return {} end
-  return M.parse_tracked(output)
+function M.root(cwd, done)
+  return transform(
+    { 'git', 'rev-parse', '--show-toplevel' },
+    cwd,
+    function(output) return vim.trim(output) end,
+    nil,
+    done
+  )
 end
 
-function M.status(git_root)
-  local output = M.run(git_root, { 'status', '--porcelain=v1', '-z', '--untracked-files=all' })
-  if not output then return {} end
-  return M.parse_status(output)
+function M.tracked(git_root, done) return transform({ 'git', 'ls-files', '-z' }, git_root, M.parse_tracked, {}, done) end
+
+function M.status(git_root, done)
+  return transform(
+    { 'git', 'status', '--porcelain=v1', '-z', '--untracked-files=all' },
+    git_root,
+    M.parse_status,
+    {},
+    done
+  )
 end
 
-function M.diff(git_root, relative_path)
-  local output = M.run(git_root, { 'diff', '--no-ext-diff', 'HEAD', '--', relative_path })
-  if not output or output == '' then return nil end
-  return output
+function M.diff(git_root, relative_path, done)
+  return transform(
+    { 'git', 'diff', '--no-ext-diff', 'HEAD', '--', relative_path },
+    git_root,
+    function(output) return output ~= '' and output or nil end,
+    nil,
+    done
+  )
 end
+
+local function mutate(git_root, command, paths, done)
+  local argv = { 'git' }
+  vim.list_extend(argv, command)
+  table.insert(argv, '--')
+  vim.list_extend(argv, paths)
+  return M.run(argv, { cwd = git_root }, function(result) done(result.ok, result) end)
+end
+
+function M.stage(git_root, paths, done) return mutate(git_root, { 'add' }, paths, done) end
+
+function M.unstage(git_root, paths, done) return mutate(git_root, { 'restore', '--staged' }, paths, done) end
+
+function M.restore(git_root, paths, done) return mutate(git_root, { 'restore', '--worktree' }, paths, done) end
 
 return M

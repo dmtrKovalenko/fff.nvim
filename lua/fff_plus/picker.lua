@@ -1,3 +1,4 @@
+local actions = require('fff_plus.actions')
 local matcher = require('fff_plus.matcher')
 local layout = require('fff_plus.layout')
 local selection = require('fff_plus.selection')
@@ -45,11 +46,31 @@ function Picker:changed()
 end
 
 function Picker:refresh()
-  local items = self.spec.items(self)
-  self.items = type(items) == 'table' and items or {}
-  self.cursor = 1
-  self:apply_query()
-  self:changed()
+  if self.source_job then
+    local cancel = self.source_job.cancel or self.source_job.kill
+    if cancel then pcall(cancel, self.source_job, 15) end
+    self.source_job = nil
+  end
+
+  self.source_generation = self.source_generation + 1
+  local generation = self.source_generation
+  local completed = false
+  local function done(items)
+    completed = true
+    if self.closed or generation ~= self.source_generation then return end
+    self.source_job = nil
+    self.items = type(items) == 'table' and items or {}
+    self.cursor = 1
+    self:apply_query()
+    self:changed()
+  end
+
+  local result = self.spec.items(self, done)
+  if type(result) == 'table' and (result.cancel or result.kill) then
+    if not completed then self.source_job = result end
+  else
+    done(result)
+  end
   return self.items
 end
 
@@ -111,12 +132,7 @@ function Picker:confirm(action)
   return true
 end
 
-function Picker:action(name, ...)
-  local action = self.spec.actions and self.spec.actions[name]
-  if not action then return false end
-  action(self, self:current(), ...)
-  return true
-end
+function Picker:action(name, ...) return actions.run(self, name, self.spec.actions, ...) end
 
 function Picker:close(confirmed)
   if self.closed then return end
@@ -127,6 +143,11 @@ function Picker:close(confirmed)
     local cancel = self.preview_job.cancel or self.preview_job.kill
     if cancel then pcall(cancel, self.preview_job, 15) end
     self.preview_job = nil
+  end
+  if self.source_job then
+    local cancel = self.source_job.cancel or self.source_job.kill
+    if cancel then pcall(cancel, self.source_job, 15) end
+    self.source_job = nil
   end
 
   if self.spec.on_close then self.spec.on_close(self, confirmed == true) end
@@ -461,6 +482,7 @@ function M.create(spec, opts)
     cursor = 1,
     closed = false,
     preview_generation = 0,
+    source_generation = 0,
   }, Picker)
 
   return instance

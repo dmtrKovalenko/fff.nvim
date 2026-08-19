@@ -2,7 +2,7 @@ SHELL := bash
 .SHELLFLAGS := -o pipefail -ec
 
 LUA_FILES := lua/fff_plus/*.lua lua/fff_plus/pickers/*.lua plugin/fff_plus.lua tests/*.lua
-UNIT_TESTS := tests/test_fff_plus_extension.lua tests/test_picker_core.lua
+UNIT_TESTS := tests/test_fff_plus_extension.lua tests/test_picker_core.lua tests/test_async.lua tests/test_actions.lua
 
 .PHONY: all test test-lua test-integration lint format format-check
 
