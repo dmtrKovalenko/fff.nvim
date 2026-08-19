@@ -78,6 +78,19 @@ local function test_colors_shared_picker_adapter()
   print('✓ colors uses the shared picker interface')
 end
 
+local function test_buffers_shared_picker_adapter()
+  print('Testing buffers shared picker adapter...')
+  local buffers = require('fff_plus.pickers.buffers')
+  local instance = buffers.create({ enter = false, preview = { enabled = false } })
+  instance:refresh()
+
+  assert(instance.spec.name == 'buffers', 'buffers should be a shared picker adapter')
+  assert(instance:count() >= 1, 'buffers adapter should supply listed buffers')
+  assert(instance:format(instance:current()).text, 'buffers adapter should return structured formatting')
+  instance:close(false)
+  print('✓ buffers uses the shared picker interface')
+end
+
 local function test_fuzzy_matcher()
   print('Testing fuzzy matcher...')
   local matcher = require('fff_plus.matcher')
@@ -221,18 +234,14 @@ local function test_picker_actions()
     path = vim.api.nvim_buf_get_name(bufnr),
   }
 
-  buffers.state.active = true
-  buffers.state.items = { buffer_item }
-  buffers.state.filtered_items = { buffer_item }
-  buffers.state.cursor = 1
-  buffers.state.selected = { [bufnr] = true }
-  buffers.state.config = { preview = { enabled = false }, jump_to_existing = true }
-  assert(buffers.find_existing_window(bufnr) == vim.api.nvim_get_current_win())
+  local buffer_picker = buffers.create({ preview = { enabled = false }, jump_to_existing = true })
+  buffer_picker.items = { buffer_item }
+  buffer_picker.filtered_items = { buffer_item }
+  buffer_picker.selected_keys = { [bufnr] = true }
+  buffers.state = buffer_picker
+  assert(buffers.find_existing_window(bufnr, buffer_picker) == vim.api.nvim_get_current_win())
 
-  local original_buffer_close = buffers.close
-  buffers.close = function() buffers.state.active = false end
-  buffers.send_to_quickfix()
-  buffers.close = original_buffer_close
+  buffer_picker:action('qflist')
   local buffer_qf = vim.fn.getqflist({ title = 1, items = 1 })
   assert(buffer_qf.title == 'FFF+ Buffers' and #buffer_qf.items == 1)
   vim.cmd('cclose')
@@ -297,6 +306,7 @@ local function run_tests()
     test_extension_module_loads,
     test_picker_modules_load,
     test_colors_shared_picker_adapter,
+    test_buffers_shared_picker_adapter,
     test_fuzzy_matcher,
     test_viewport_calculation,
     test_picker_layout,

@@ -39,6 +39,7 @@ function Picker:changed()
   if self.active then
     self:render()
     self:update_status()
+    self:update_preview()
   end
   if self.spec.on_change then self.spec.on_change(self, self:current()) end
 end
@@ -110,10 +111,25 @@ function Picker:confirm(action)
   return true
 end
 
+function Picker:action(name, ...)
+  local action = self.spec.actions and self.spec.actions[name]
+  if not action then return false end
+  action(self, self:current(), ...)
+  return true
+end
+
 function Picker:close(confirmed)
   if self.closed then return end
   self.active = false
   self.closed = true
+
+  if self.preview_job then
+    local cancel = self.preview_job.cancel or self.preview_job.kill
+    if cancel then pcall(cancel, self.preview_job, 15) end
+    self.preview_job = nil
+  end
+
+  if self.spec.on_close then self.spec.on_close(self, confirmed == true) end
 
   for _, win in ipairs({ self.input_win, self.list_win, self.preview_win }) do
     if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
@@ -124,7 +140,6 @@ function Picker:close(confirmed)
 
   pcall(vim.api.nvim_del_augroup_by_name, self.augroup_name)
   if M.active[self.spec.name] == self then M.active[self.spec.name] = nil end
-  if self.spec.on_close then self.spec.on_close(self, confirmed == true) end
 end
 
 local function highlight(config, name, fallback) return config.hl and config.hl[name] or fallback end
@@ -133,6 +148,10 @@ function Picker:create_ui()
   local frame = layout.frame(vim.o.columns, vim.o.lines, self.config.layout, self.config.fullscreen)
   local prompt_position = self.config.layout.prompt_position or 'bottom'
   local list_height = math.max(1, frame.height - 3)
+  local has_preview = self.spec.preview and self.config.preview.enabled ~= false
+  local preview_width = has_preview and math.max(1, math.floor(frame.width * (self.config.layout.preview_size or 0.5)))
+    or 0
+  local picker_width = math.max(1, frame.width - preview_width - (has_preview and 2 or 0))
 
   self.input_buf = vim.api.nvim_create_buf(false, true)
   self.list_buf = vim.api.nvim_create_buf(false, true)
@@ -146,12 +165,20 @@ function Picker:create_ui()
   vim.bo[self.list_buf].filetype = 'fff_plus_list'
   vim.bo[self.list_buf].modifiable = false
 
+  if has_preview then
+    self.preview_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(self.preview_buf, string.format('fff-plus %s preview %d', self.spec.name, self.id))
+    vim.bo[self.preview_buf].buftype = 'nofile'
+    vim.bo[self.preview_buf].filetype = 'fff_plus_preview'
+    vim.bo[self.preview_buf].modifiable = false
+  end
+
   local list_row = prompt_position == 'bottom' and frame.row + 1 or frame.row + 2
   local input_row = prompt_position == 'bottom' and frame.row + list_height + 2 or frame.row + 1
 
   local list_config = {
     relative = 'editor',
-    width = frame.width,
+    width = picker_width,
     height = list_height,
     col = frame.col,
     row = list_row,
@@ -166,7 +193,7 @@ function Picker:create_ui()
 
   local input_config = {
     relative = 'editor',
-    width = frame.width,
+    width = picker_width,
     height = 1,
     col = frame.col,
     row = input_row,
@@ -179,6 +206,20 @@ function Picker:create_ui()
   end
   self.input_win = vim.api.nvim_open_win(self.input_buf, false, input_config)
 
+  if has_preview then
+    self.preview_win = vim.api.nvim_open_win(self.preview_buf, false, {
+      relative = 'editor',
+      width = preview_width,
+      height = frame.height,
+      col = frame.col + picker_width + 2,
+      row = frame.row,
+      border = 'single',
+      style = 'minimal',
+      title = ' Preview ',
+      title_pos = 'left',
+    })
+  end
+
   local win_hl = string.format(
     'Normal:%s,FloatBorder:%s,FloatTitle:%s',
     highlight(self.config, 'normal', 'NormalFloat'),
@@ -189,6 +230,10 @@ function Picker:create_ui()
   vim.wo[self.list_win].winhighlight = win_hl
   vim.wo[self.list_win].signcolumn = 'yes:1'
   vim.wo[self.list_win].cursorline = false
+  if self.preview_win then
+    vim.wo[self.preview_win].winhighlight = win_hl
+    vim.wo[self.preview_win].wrap = self.config.preview.wrap_lines or false
+  end
 
   self:setup_keymaps()
   self:setup_input_listener()
@@ -210,6 +255,7 @@ function Picker:render()
   local last = view.reverse and view.first or view.last
   local step = view.reverse and -1 or 1
   local lines = {}
+  local rendered = {}
 
   for _ = 1, view.padding do
     table.insert(lines, string.rep(' ', width))
@@ -218,6 +264,11 @@ function Picker:render()
     local formatted = self:format(self.filtered_items[index])
     local text = type(formatted) == 'table' and formatted.text or formatted
     table.insert(lines, tostring(text or ''))
+    rendered[#lines] = {
+      item = self.filtered_items[index],
+      highlights = type(formatted) == 'table' and formatted.highlights or nil,
+      sign = type(formatted) == 'table' and formatted.sign or nil,
+    }
   end
   if #lines == 0 then lines = { self.config.empty_text or 'No results' } end
 
@@ -225,6 +276,29 @@ function Picker:render()
   vim.api.nvim_buf_set_lines(self.list_buf, 0, -1, false, lines)
   vim.bo[self.list_buf].modifiable = false
   vim.api.nvim_buf_clear_namespace(self.list_buf, self.ns_id, 0, -1)
+
+  for line, value in pairs(rendered) do
+    for _, value_hl in ipairs(value.highlights or {}) do
+      vim.api.nvim_buf_add_highlight(
+        self.list_buf,
+        self.ns_id,
+        value_hl.group,
+        line - 1,
+        value_hl.start or 0,
+        value_hl.finish or -1
+      )
+    end
+
+    local sign = value.sign
+    if self.selected_keys[self:key(value.item)] then sign = { text = '▊', hl = 'Visual' } end
+    if sign and sign.text and sign.text ~= '' then
+      vim.api.nvim_buf_set_extmark(self.list_buf, self.ns_id, line - 1, 0, {
+        sign_text = sign.text,
+        sign_hl_group = sign.hl or 'Normal',
+        priority = sign.priority or 1000,
+      })
+    end
+  end
 
   if #self.filtered_items > 0 and view.cursor_line > 0 then
     vim.api.nvim_win_set_cursor(self.list_win, { view.cursor_line, 0 })
@@ -236,6 +310,53 @@ function Picker:render()
       0,
       -1
     )
+  end
+end
+
+function Picker:apply_preview(result)
+  if not self.preview_buf or not vim.api.nvim_buf_is_valid(self.preview_buf) then return end
+  result = result or {}
+  local lines = result.lines or { result.text or 'No preview available' }
+
+  vim.bo[self.preview_buf].modifiable = true
+  vim.api.nvim_buf_set_lines(self.preview_buf, 0, -1, false, lines)
+  if result.filetype then vim.bo[self.preview_buf].filetype = result.filetype end
+  vim.bo[self.preview_buf].modifiable = false
+
+  if result.title and self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
+    vim.api.nvim_win_set_config(self.preview_win, { title = ' ' .. result.title .. ' ', title_pos = 'left' })
+  end
+end
+
+function Picker:update_preview()
+  if not self.active or not self.preview_buf or not self.spec.preview then return end
+  self.preview_generation = self.preview_generation + 1
+  local generation = self.preview_generation
+  local item = self:current()
+  if not item then
+    self:apply_preview()
+    return
+  end
+
+  if self.preview_job then
+    local cancel = self.preview_job.cancel or self.preview_job.kill
+    if cancel then pcall(cancel, self.preview_job, 15) end
+    self.preview_job = nil
+  end
+
+  local function done(result)
+    vim.schedule(function()
+      if self.active and generation == self.preview_generation then self:apply_preview(result) end
+    end)
+  end
+
+  local ok, result = pcall(self.spec.preview, self, item, done)
+  if not ok then
+    done({ lines = { 'Preview failed: ' .. tostring(result) }, filetype = 'text' })
+  elseif type(result) == 'table' and (result.lines or result.text) then
+    self:apply_preview(result)
+  elseif type(result) == 'table' then
+    self.preview_job = result
   end
 end
 
@@ -262,6 +383,15 @@ function Picker:setup_keymaps()
   set(keys.select_split or '<C-s>', function() self:confirm('split') end)
   set(keys.select_vsplit or '<C-v>', function() self:confirm('vsplit') end)
   set(keys.select_tab or '<C-t>', function() self:confirm('tab') end)
+  set(keys.toggle_select or '<Tab>', function() self:toggle_selection() end)
+  set(keys.send_to_quickfix or '<C-q>', function() self:action('qflist') end)
+  set(keys.paste, function() self:action('paste') end)
+  set(keys.preview_scroll_up, function() self:action('preview_scroll_up') end)
+  set(keys.preview_scroll_down, function() self:action('preview_scroll_down') end)
+
+  for name, key in pairs(self.spec.keymaps or {}) do
+    set(key, function() self:action(name) end)
+  end
 
   local up = type(keys.move_up) == 'table' and keys.move_up or { keys.move_up or '<C-p>' }
   local down = type(keys.move_down) == 'table' and keys.move_down or { keys.move_down or '<C-n>' }
@@ -295,6 +425,7 @@ function Picker:open()
   self:create_ui()
   self:render()
   self:update_status()
+  self:update_preview()
   M.active[self.spec.name] = self
   M.last = self
 
@@ -329,6 +460,7 @@ function M.create(spec, opts)
     query = tostring(opts.query or ''),
     cursor = 1,
     closed = false,
+    preview_generation = 0,
   }, Picker)
 
   return instance

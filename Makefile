@@ -11,7 +11,7 @@ all: format-check lint test
 test: test-lua
 
 test-lua:
-	@for test in $(UNIT_TESTS); do \
+	@set -e; for test in $(UNIT_TESTS); do \
 		NVIM_LOG_FILE=/tmp/fff-plus-nvim.log nvim --headless -u tests/minimal_init.lua -l "$$test"; \
 	done
 

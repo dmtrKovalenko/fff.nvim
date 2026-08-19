@@ -74,3 +74,34 @@ assert(not vim.api.nvim_win_is_valid(input_win), 'close should remove the input 
 assert(not vim.api.nvim_win_is_valid(list_win), 'close should remove the list window')
 
 print('Shared picker UI smoke test passed')
+
+local custom_action_item
+local preview_ui = picker.pick({
+  name = 'preview-memory',
+  items = function()
+    return {
+      { id = 1, text = 'first' },
+      { id = 2, text = 'second' },
+    }
+  end,
+  preview = function(_, item) return { title = item.text, lines = { 'preview ' .. item.text }, filetype = 'text' } end,
+  actions = {
+    custom = function(_, item) custom_action_item = item end,
+  },
+}, { enter = false, layout = { prompt_position = 'top' }, preview = { enabled = true } })
+
+assert(vim.api.nvim_win_is_valid(preview_ui.preview_win), 'preview sources should create a preview window')
+assert(
+  vim.api.nvim_buf_get_lines(preview_ui.preview_buf, 0, -1, false)[1] == 'preview first',
+  'preview should render the current item'
+)
+preview_ui:action('custom')
+assert(custom_action_item.id == 1, 'custom actions should receive the current item')
+preview_ui:move('down')
+assert(
+  vim.api.nvim_buf_get_lines(preview_ui.preview_buf, 0, -1, false)[1] == 'preview second',
+  'moving should update the preview'
+)
+preview_ui:close(false)
+
+print('Shared picker preview and action tests passed')
