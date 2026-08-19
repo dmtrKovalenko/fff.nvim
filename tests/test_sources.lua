@@ -55,7 +55,12 @@ assert(
 )
 
 assert(smart.create({ preview = { enabled = false } }).spec.name == 'smart')
-assert(lines.create({ preview = { enabled = false } }).spec.name == 'lines')
-assert(diagnostics.create({ preview = { enabled = false } }).spec.name == 'diagnostics')
+local lines_picker = lines.create({ preview = { enabled = false } })
+assert(lines_picker.spec.name == 'lines' and lines_picker.spec.text(current_lines[1]) == current_lines[1].text)
+local diagnostics_picker = diagnostics.create({ preview = { enabled = false } })
+assert(
+  diagnostics_picker.spec.name == 'diagnostics'
+    and diagnostics_picker.spec.text(diagnostic_items[1]) == diagnostic_items[1].message
+)
 
 print('Smart, lines, and diagnostics source tests passed')

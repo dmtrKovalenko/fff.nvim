@@ -99,7 +99,9 @@ end
 
 local function collect_indexed(opts)
   if opts.indexed_files then return opts.indexed_files end
-  local ok, result = pcall(require('fff').file_search, '', {
+  local loaded, fff = pcall(require, 'fff')
+  if not loaded or type(fff.file_search) ~= 'function' then return {} end
+  local ok, result = pcall(fff.file_search, '', {
     cwd = opts.cwd,
     max_results = opts.max_results or 200,
     wait_for_index_ms = opts.wait_for_index_ms or 0,

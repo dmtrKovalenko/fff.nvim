@@ -122,7 +122,8 @@ local function test_buffers_shared_picker_adapter()
 
   assert(instance.spec.name == 'buffers', 'buffers should be a shared picker adapter')
   assert(instance:count() >= 1, 'buffers adapter should supply listed buffers')
-  assert(instance:format(instance:current()).text, 'buffers adapter should return structured formatting')
+  local formatted = instance:format(instance:current())
+  assert(formatted.text and formatted.match_offset, 'buffers adapter should align formatting with match highlights')
   instance:close(false)
   print('✓ buffers uses the shared picker interface')
 end

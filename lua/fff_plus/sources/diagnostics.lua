@@ -66,7 +66,7 @@ function M.create(opts)
     title = opts.title,
     items = function() return M.collect(opts) end,
     key = function(item) return string.format('%d:%d:%d:%s', item.bufnr, item.line, item.col, item.message) end,
-    text = function(item) return item.message .. ' ' .. item.relative_path end,
+    text = function(item) return item.message end,
     fields = function(item)
       return {
         severity = item.severity_name,

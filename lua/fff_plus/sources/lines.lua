@@ -48,7 +48,7 @@ function M.create(opts)
     title = opts.title,
     items = function() return M.collect(opts) end,
     key = function(item) return string.format('%d:%d', item.bufnr, item.line) end,
-    text = function(item) return item.text .. ' ' .. item.relative_path end,
+    text = function(item) return item.text end,
     fields = function(item) return { buffer = item.relative_path, path = item.path, line = tostring(item.line) } end,
     format = function(item) return item.display end,
     preview = shared.preview_buffer,

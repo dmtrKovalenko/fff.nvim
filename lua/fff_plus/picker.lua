@@ -84,13 +84,15 @@ end
 
 function Picker:set_query(query)
   self.query = tostring(query or '')
+  self.history_index = nil
   self.cursor = 1
   self:apply_query()
   self:changed()
 end
 
-function Picker:replace_query(query)
+function Picker:replace_query(query, history_index)
   self:set_query(query)
+  self.history_index = history_index
   if self.input_buf and vim.api.nvim_buf_is_valid(self.input_buf) then
     vim.api.nvim_buf_set_lines(self.input_buf, 0, -1, false, { self.query })
     if self.input_win and vim.api.nvim_win_is_valid(self.input_win) then
@@ -114,19 +116,16 @@ end
 function Picker:history_previous()
   local history = M.history[self.spec.name] or {}
   if #history == 0 then return self.query end
-  self.history_index = self.history_index and math.max(1, self.history_index - 1) or #history
-  return self:replace_query(history[self.history_index])
+  local index = self.history_index and math.max(1, self.history_index - 1) or #history
+  return self:replace_query(history[index], index)
 end
 
 function Picker:history_next()
   local history = M.history[self.spec.name] or {}
   if not self.history_index then return self.query end
-  if self.history_index >= #history then
-    self.history_index = nil
-    return self:replace_query('')
-  end
-  self.history_index = self.history_index + 1
-  return self:replace_query(history[self.history_index])
+  if self.history_index >= #history then return self:replace_query('') end
+  local index = self.history_index + 1
+  return self:replace_query(history[index], index)
 end
 
 function Picker:count() return #self.filtered_items end

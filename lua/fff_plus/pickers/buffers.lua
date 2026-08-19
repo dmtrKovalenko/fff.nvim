@@ -97,11 +97,13 @@ local function format_item(item)
   local status = item.status ~= '' and item.status .. ' ' or '  '
   local flags = (item.modified and '[+]' or '') .. (item.readonly and '[RO]' or '')
   if flags ~= '' then flags = ' ' .. flags end
-  local text = string.format('[%d] %s%s %s%s  %s', item.bufnr, status, icon, item.name, flags, item.directory)
+  local prefix = string.format('[%d] %s%s ', item.bufnr, status, icon)
+  local text = prefix .. item.display_name .. flags
   local highlights = { { group = icon_hl or 'Normal', start = #string.format('[%d] %s', item.bufnr, status) } }
   return {
     text = text,
     highlights = highlights,
+    match_offset = #prefix,
     sign = item.current and { text = '▎', hl = 'Conditional' } or nil,
   }
 end

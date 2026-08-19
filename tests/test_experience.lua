@@ -47,6 +47,8 @@ local browsing = picker.create(spec, { enter = false })
 assert(browsing:history_previous() == 'beta', 'history should start with the newest query')
 assert(browsing:history_previous() == 'alpha', 'history should walk toward older queries')
 assert(browsing:history_next() == 'beta', 'history should walk toward newer queries')
+browsing:set_query('manual')
+assert(browsing:history_next() == 'manual', 'typing should leave query-history navigation')
 
 local help = browsing:help_lines()
 assert(table.concat(help, '\n'):find('refresh', 1, true), 'help should describe shared actions')
