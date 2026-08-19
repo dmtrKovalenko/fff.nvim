@@ -4,6 +4,9 @@ local registry = {
   buffers = 'fff_plus.pickers.buffers',
   colors = 'fff_plus.pickers.colors',
   git_files = 'fff_plus.pickers.git_files',
+  smart = 'fff_plus.sources.smart',
+  lines = 'fff_plus.sources.lines',
+  diagnostics = 'fff_plus.sources.diagnostics',
 }
 
 local default_config = {
@@ -71,6 +74,28 @@ function M.git_files(opts) return M.open('git_files', opts) end
 
 function M.git_status(opts) return M.open('git_files', opts) end
 
+function M.smart(opts) return M.open('smart', opts) end
+
+function M.lines(opts)
+  opts = vim.tbl_deep_extend('force', { scope = 'current' }, opts or {})
+  return M.open('lines', opts)
+end
+
+function M.loaded_lines(opts)
+  opts = vim.tbl_deep_extend('force', { scope = 'loaded' }, opts or {})
+  return M.open('lines', opts)
+end
+
+function M.diagnostics(opts)
+  opts = vim.tbl_deep_extend('force', { scope = 'workspace' }, opts or {})
+  return M.open('diagnostics', opts)
+end
+
+function M.buffer_diagnostics(opts)
+  opts = vim.tbl_deep_extend('force', { scope = 'buffer' }, opts or {})
+  return M.open('diagnostics', opts)
+end
+
 function M.tracked_files(opts)
   opts = vim.tbl_deep_extend('force', { source = 'tracked', title = 'Git Files' }, opts or {})
   return M.open('git_files', opts)
@@ -122,6 +147,31 @@ function M.register_commands()
   create_command('FFFPlusResume', function(opts) M.resume({ fullscreen = opts.bang }) end, {
     bang = true,
     desc = 'Resume the most recently closed fff-plus.nvim picker',
+  })
+
+  create_command('FFFPlusSmart', function(opts) M.smart({ fullscreen = opts.bang }) end, {
+    bang = true,
+    desc = 'Browse buffers, recent files, and indexed files with fff-plus.nvim',
+  })
+
+  create_command('FFFPlusLines', function(opts) M.lines({ fullscreen = opts.bang }) end, {
+    bang = true,
+    desc = 'Browse lines in the current buffer with fff-plus.nvim',
+  })
+
+  create_command('FFFPlusLoadedLines', function(opts) M.loaded_lines({ fullscreen = opts.bang }) end, {
+    bang = true,
+    desc = 'Browse lines in loaded buffers with fff-plus.nvim',
+  })
+
+  create_command('FFFPlusDiagnostics', function(opts) M.diagnostics({ fullscreen = opts.bang }) end, {
+    bang = true,
+    desc = 'Browse workspace diagnostics with fff-plus.nvim',
+  })
+
+  create_command('FFFPlusBufferDiagnostics', function(opts) M.buffer_diagnostics({ fullscreen = opts.bang }) end, {
+    bang = true,
+    desc = 'Browse current-buffer diagnostics with fff-plus.nvim',
   })
 
   if not M.config.legacy_commands then return end

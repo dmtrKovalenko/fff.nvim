@@ -24,11 +24,17 @@ plus.setup()
 assert(type(plus.buffers) == 'function', 'fff_plus.buffers should load with real upstream')
 assert(type(plus.colors) == 'function', 'fff_plus.colors should load with real upstream')
 assert(type(plus.git_status) == 'function', 'fff_plus.git_status should load with real upstream')
+assert(type(plus.smart) == 'function', 'fff_plus.smart should load with real upstream')
+assert(type(plus.lines) == 'function', 'fff_plus.lines should load with real upstream')
+assert(type(plus.diagnostics) == 'function', 'fff_plus.diagnostics should load with real upstream')
 
 for _, name in ipairs({
   'fff_plus.pickers.buffers',
   'fff_plus.pickers.colors',
   'fff_plus.pickers.git_files',
+  'fff_plus.sources.smart',
+  'fff_plus.sources.lines',
+  'fff_plus.sources.diagnostics',
 }) do
   assert_module(name)
 end

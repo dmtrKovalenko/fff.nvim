@@ -444,6 +444,11 @@ function Picker:apply_preview(result)
   if result.filetype then vim.bo[self.preview_buf].filetype = result.filetype end
   vim.bo[self.preview_buf].modifiable = false
 
+  if result.cursor and self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
+    local line = math.min(math.max(1, result.cursor[1] or 1), math.max(1, #lines))
+    pcall(vim.api.nvim_win_set_cursor, self.preview_win, { line, result.cursor[2] or 0 })
+  end
+
   if result.title and self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
     vim.api.nvim_win_set_config(self.preview_win, { title = ' ' .. result.title .. ' ', title_pos = 'left' })
   end
