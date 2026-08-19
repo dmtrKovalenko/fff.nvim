@@ -1,16 +1,21 @@
 SHELL := bash
 .SHELLFLAGS := -o pipefail -ec
 
-LUA_FILES := lua/fff_plus/*.lua lua/fff_plus/pickers/*.lua plugin/fff_plus.lua tests/test_fff_plus_extension.lua
+LUA_FILES := lua/fff_plus/*.lua lua/fff_plus/pickers/*.lua plugin/fff_plus.lua tests/*.lua
 
-.PHONY: all test test-lua lint format format-check
+.PHONY: all test test-lua test-integration lint format format-check
 
 all: format-check lint test
 
 test: test-lua
 
 test-lua:
-	nvim --headless -u tests/minimal_init.lua -l tests/test_fff_plus_extension.lua
+	NVIM_LOG_FILE=/tmp/fff-plus-nvim.log nvim --headless -u tests/minimal_init.lua -l tests/test_fff_plus_extension.lua
+
+test-integration:
+	@test -n "$(FFF_UPSTREAM)" || (echo "FFF_UPSTREAM must point to an upstream fff checkout" && exit 1)
+	FFF_UPSTREAM="$(FFF_UPSTREAM)" NVIM_LOG_FILE=/tmp/fff-plus-nvim.log \
+		nvim --headless -u tests/integration_init.lua -l tests/test_real_upstream.lua
 
 lint:
 	@for file in $(LUA_FILES); do \
@@ -18,7 +23,7 @@ lint:
 	done
 
 format:
-	stylua lua plugin tests/test_fff_plus_extension.lua
+	stylua lua plugin tests
 
 format-check:
-	stylua --check lua plugin tests/test_fff_plus_extension.lua
+	stylua --check lua plugin tests

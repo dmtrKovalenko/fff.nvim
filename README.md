@@ -2,9 +2,9 @@
 
 # fff-plus.nvim
 
-Extra Neovim pickers for [fff.nvim](https://github.com/dmtrKovalenko/fff.nvim).
+Extra Neovim pickers for [fff](https://github.com/dmtrKovalenko/fff).
 
-`fff-plus.nvim` is a small extension plugin. Upstream `fff.nvim` keeps owning
+`fff-plus.nvim` is a small extension plugin. Upstream `fff` keeps owning
 the Rust backend, binary downloader, file search, live grep, frecency index, and
 release pipeline. This plugin adds the picker workflows that are useful day to
 day but do not need to live in the backend project.
@@ -19,13 +19,13 @@ MP4 version.
 
 ## Installation
 
-Install upstream `fff.nvim` first, then install `fff-plus.nvim`.
+Install upstream `fff` first, then install `fff-plus.nvim`.
 
 ### lazy.nvim
 
 ```lua
 {
-  'dmtrKovalenko/fff.nvim',
+  'dmtrKovalenko/fff',
   build = function()
     require('fff.download').download_or_build_binary()
   end,
@@ -37,7 +37,7 @@ Install upstream `fff.nvim` first, then install `fff-plus.nvim`.
 },
 {
   'vinitkumar/fff-plus.nvim',
-  dependencies = { 'dmtrKovalenko/fff.nvim' },
+  dependencies = { 'dmtrKovalenko/fff' },
   opts = {
     legacy_commands = false,
   },
@@ -54,15 +54,15 @@ Install upstream `fff.nvim` first, then install `fff-plus.nvim`.
 
 ```lua
 vim.pack.add({
-  'https://github.com/dmtrKovalenko/fff.nvim',
+  'https://github.com/dmtrKovalenko/fff',
   'https://github.com/vinitkumar/fff-plus.nvim',
 })
 
 vim.api.nvim_create_autocmd('PackChanged', {
   callback = function(ev)
     local name, kind = ev.data.spec.name, ev.data.kind
-    if name == 'fff.nvim' and (kind == 'install' or kind == 'update') then
-      if not ev.data.active then vim.cmd.packadd('fff.nvim') end
+    if name == 'fff' and (kind == 'install' or kind == 'update') then
+      if not ev.data.active then vim.cmd.packadd('fff') end
       require('fff.download').download_or_build_binary()
     end
   end,

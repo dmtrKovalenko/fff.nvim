@@ -36,4 +36,4 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: latest
-          args: --color=always --check lua plugin tests/test_fff_plus_extension.lua
+          args: --color=always --check lua plugin tests

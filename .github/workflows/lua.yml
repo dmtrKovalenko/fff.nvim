@@ -39,3 +39,45 @@ jobs:
 
       - name: Run extension tests
         run: make test-lua
+
+  upstream-integration:
+    name: Upstream integration (${{ matrix.upstream }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        upstream: [main, release]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Neovim
+        run: |
+          curl -L https://github.com/neovim/neovim/releases/download/v0.11.5/nvim-linux-x86_64.tar.gz -o /opt/nvim.tar.gz
+          mkdir /opt/nvim
+          tar xzf /opt/nvim.tar.gz -C /opt/nvim
+          mv /opt/nvim/nvim-linux-x86_64/* /opt/nvim
+          echo "/opt/nvim/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve upstream revision
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_KIND: ${{ matrix.upstream }}
+        run: |
+          if [ "$UPSTREAM_KIND" = "main" ]; then
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          else
+            tag=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/repos/dmtrKovalenko/fff/releases/latest | jq -r .tag_name)
+            test -n "$tag" && test "$tag" != "null"
+            echo "ref=$tag" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clone upstream fff
+        env:
+          UPSTREAM_REF: ${{ steps.upstream.outputs.ref }}
+        run: git clone --depth=1 --branch "$UPSTREAM_REF" https://github.com/dmtrKovalenko/fff.git /tmp/fff
+
+      - name: Run real-upstream smoke test
+        run: make test-integration FFF_UPSTREAM=/tmp/fff
