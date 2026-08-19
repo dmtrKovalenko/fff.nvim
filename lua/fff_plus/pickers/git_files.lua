@@ -89,7 +89,7 @@ local function format_item(item)
       hl = git_utils.get_border_highlight(item.git_status),
     }
   end
-  return { text = '  ' .. item.relative_path, sign = sign }
+  return { text = '  ' .. item.relative_path, sign = sign, match_offset = 2 }
 end
 
 local function preview_file(instance, item)

@@ -17,5 +17,11 @@ end
 M.register('refresh', function(instance) instance:refresh() end)
 M.register('select_all', function(instance) instance:select_all() end)
 M.register('close', function(instance) instance:close(false) end)
+M.register('toggle_preview', function(instance) instance:toggle_preview() end)
+M.register('maximize', function(instance) instance:toggle_maximize() end)
+M.register('focus_input', function(instance) instance:focus('input') end)
+M.register('focus_list', function(instance) instance:focus('list') end)
+M.register('focus_preview', function(instance) instance:focus('preview') end)
+M.register('help', function(instance) instance:toggle_help() end)
 
 return M

@@ -33,6 +33,10 @@ assert(instance:count() == 3, 'refresh should collect source items')
 instance:set_query('btl')
 assert(instance:count() == 1, 'query should fuzzy-filter source items')
 assert(instance:current().text == 'buffer_test.lua', 'current should return the ranked item')
+assert(
+  vim.deep_equal(instance.matches[instance:current()].positions, { 1, 8, 13 }),
+  'picker should retain match positions'
+)
 
 instance:toggle_selection()
 assert(#instance:selected() == 1, 'toggle_selection should select the current item')

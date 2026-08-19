@@ -109,7 +109,7 @@ local function test_colors_shared_picker_adapter()
 
   assert(instance.spec.name == 'colors', 'colors should be a shared picker adapter')
   assert(instance:count() == 2, 'colors adapter should supply colorscheme items')
-  assert(instance:format(instance:current()):find('default', 1, true), 'colors adapter should format its items')
+  assert(instance:format(instance:current()).text:find('default', 1, true), 'colors adapter should format its items')
   instance:close(false)
   print('✓ colors uses the shared picker interface')
 end

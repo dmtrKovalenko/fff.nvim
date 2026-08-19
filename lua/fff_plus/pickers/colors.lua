@@ -84,7 +84,7 @@ function M.create(opts)
     items = function() return M.get_colorscheme_items() end,
     key = function(item) return item.name end,
     text = function(item) return item.name end,
-    format = function(item) return (item.current and '* ' or '  ') .. item.name end,
+    format = function(item) return { text = (item.current and '* ' or '  ') .. item.name, match_offset = 2 } end,
     on_change = function(_, item)
       if item then pcall(vim.cmd.colorscheme, item.name) end
     end,

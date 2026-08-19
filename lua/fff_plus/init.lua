@@ -76,6 +76,8 @@ function M.tracked_files(opts)
   return M.open('git_files', opts)
 end
 
+function M.resume(opts) return require('fff_plus.picker').resume(nil, opts) end
+
 function M.register_commands()
   create_command(
     'FFFPlusBuffers',
@@ -115,6 +117,11 @@ function M.register_commands()
   create_command('FFFPlusGitStatus', function(opts) M.git_status({ fullscreen = opts.bang }) end, {
     bang = true,
     desc = 'Browse Git status files with fff-plus.nvim',
+  })
+
+  create_command('FFFPlusResume', function(opts) M.resume({ fullscreen = opts.bang }) end, {
+    bang = true,
+    desc = 'Resume the most recently closed fff-plus.nvim picker',
   })
 
   if not M.config.legacy_commands then return end
