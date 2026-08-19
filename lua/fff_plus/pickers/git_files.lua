@@ -182,6 +182,7 @@ function M.create(opts)
   local instance = picker.create({
     name = 'git_files',
     title = opts.title,
+    resume = function(resume_opts) return M.open(resume_opts) end,
     items = load_items,
     key = function(item) return item.relative_path end,
     text = function(item) return item.relative_path end,

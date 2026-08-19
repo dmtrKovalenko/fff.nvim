@@ -179,6 +179,7 @@ function M.create(opts)
   local instance = picker.create({
     name = 'buffers',
     title = 'Buffers',
+    resume = function(resume_opts) return M.open(resume_opts) end,
     items = function() return M.get_buffer_items() end,
     key = function(item) return item.bufnr end,
     text = function(item) return item.display_name end,

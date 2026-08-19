@@ -81,6 +81,7 @@ function M.create(opts)
   return picker.create({
     name = 'colors',
     title = 'Colors',
+    resume = function(resume_opts) return M.open(resume_opts) end,
     items = function() return M.get_colorscheme_items() end,
     key = function(item) return item.name end,
     text = function(item) return item.name end,

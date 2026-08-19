@@ -66,4 +66,19 @@ resumed:focus('list')
 assert(vim.api.nvim_get_current_win() == resumed.list_win, 'focus actions should switch picker panes')
 resumed:close(false)
 
+local factory_opts
+local factory = picker.create({
+  name = 'factory-memory',
+  items = function() return {} end,
+  resume = function(opts)
+    factory_opts = opts
+    return { active = true, query = opts.query }
+  end,
+}, { enter = false })
+factory:set_query('factory query')
+factory:close(false)
+local factory_resumed = picker.resume('factory-memory', { fullscreen = true })
+assert(factory_opts and factory_opts.fullscreen, 'resume should rebuild picker adapters through their factory')
+assert(factory_resumed.query == 'factory query', 'adapter resume should retain the saved query')
+
 print('Picker history, resume, help, focus, and responsive layout tests passed')

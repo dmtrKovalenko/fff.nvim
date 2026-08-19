@@ -27,6 +27,7 @@ local function validate_spec(spec)
     text = { spec.text, 'function', true },
     fields = { spec.fields, 'function', true },
     confirm = { spec.confirm, 'function', true },
+    resume = { spec.resume, 'function', true },
   })
 end
 
@@ -720,6 +721,7 @@ function M.resume(name, opts)
   if not snapshot then return nil end
   local resumed_opts =
     vim.tbl_deep_extend('force', vim.deepcopy(snapshot.opts or {}), { query = snapshot.query }, opts or {})
+  if snapshot.spec.resume then return snapshot.spec.resume(resumed_opts) end
   return M.pick(snapshot.spec, resumed_opts)
 end
 

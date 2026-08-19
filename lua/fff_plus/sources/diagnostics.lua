@@ -64,6 +64,7 @@ function M.create(opts)
   local instance = picker.create({
     name = 'diagnostics',
     title = opts.title,
+    resume = function(resume_opts) return M.open(resume_opts) end,
     items = function() return M.collect(opts) end,
     key = function(item) return string.format('%d:%d:%d:%s', item.bufnr, item.line, item.col, item.message) end,
     text = function(item) return item.message end,

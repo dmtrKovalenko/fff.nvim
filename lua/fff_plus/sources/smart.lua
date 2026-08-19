@@ -139,6 +139,7 @@ function M.create(opts)
   local instance = picker.create({
     name = 'smart',
     title = 'Smart',
+    resume = function(resume_opts) return M.open(resume_opts) end,
     items = load_items,
     key = function(item) return item.path end,
     text = function(item) return item.relative_path end,
