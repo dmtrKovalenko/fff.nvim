@@ -56,6 +56,28 @@ local function test_picker_modules_load()
   print('✓ fff_plus picker modules load correctly')
 end
 
+local function test_colors_shared_picker_adapter()
+  print('Testing colors shared picker adapter...')
+  local colors = require('fff_plus.pickers.colors')
+  local original_items = colors.get_colorscheme_items
+  colors.get_colorscheme_items = function()
+    return {
+      { name = 'default', current = true },
+      { name = 'habamax', current = false },
+    }
+  end
+
+  local instance = colors.create({ enter = false })
+  instance:refresh()
+  colors.get_colorscheme_items = original_items
+
+  assert(instance.spec.name == 'colors', 'colors should be a shared picker adapter')
+  assert(instance:count() == 2, 'colors adapter should supply colorscheme items')
+  assert(instance:format(instance:current()):find('default', 1, true), 'colors adapter should format its items')
+  instance:close(false)
+  print('✓ colors uses the shared picker interface')
+end
+
 local function test_fuzzy_matcher()
   print('Testing fuzzy matcher...')
   local matcher = require('fff_plus.matcher')
@@ -274,6 +296,7 @@ local function run_tests()
   local tests = {
     test_extension_module_loads,
     test_picker_modules_load,
+    test_colors_shared_picker_adapter,
     test_fuzzy_matcher,
     test_viewport_calculation,
     test_picker_layout,
@@ -295,6 +318,4 @@ local function run_tests()
   return true
 end
 
-if arg[0]:match('test_fff_plus_extension') then
-  if not run_tests() then os.exit(1) end
-end
+if not run_tests() then error('fff-plus extension tests failed') end

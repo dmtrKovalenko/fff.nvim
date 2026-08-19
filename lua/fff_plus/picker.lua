@@ -1,9 +1,13 @@
 local matcher = require('fff_plus.matcher')
+local layout = require('fff_plus.layout')
 local selection = require('fff_plus.selection')
+local viewport = require('fff_plus.viewport')
 
 local M = {}
 local Picker = {}
 Picker.__index = Picker
+M.active = {}
+M.next_id = 0
 
 local function default_key(item) return item.id or item.path or item.text or tostring(item) end
 
@@ -31,11 +35,20 @@ function Picker:apply_query()
   self.cursor = math.min(math.max(1, self.cursor), math.max(1, #self.filtered_items))
 end
 
+function Picker:changed()
+  if self.active then
+    self:render()
+    self:update_status()
+  end
+  if self.spec.on_change then self.spec.on_change(self, self:current()) end
+end
+
 function Picker:refresh()
   local items = self.spec.items(self)
   self.items = type(items) == 'table' and items or {}
   self.cursor = 1
   self:apply_query()
+  self:changed()
   return self.items
 end
 
@@ -43,6 +56,7 @@ function Picker:set_query(query)
   self.query = tostring(query or '')
   self.cursor = 1
   self:apply_query()
+  self:changed()
 end
 
 function Picker:count() return #self.filtered_items end
@@ -58,7 +72,9 @@ end
 function Picker:toggle_selection()
   local item = self:current()
   if not item then return false end
-  return selection.toggle(self.selected_keys, self:key(item))
+  local selected = selection.toggle(self.selected_keys, self:key(item))
+  if self.active then self:render() end
+  return selected
 end
 
 function Picker:select_all()
@@ -74,29 +90,239 @@ function Picker:select_all()
     local key = self:key(item)
     self.selected_keys[key] = all_selected and nil or true
   end
+  if self.active then self:render() end
   return not all_selected
+end
+
+function Picker:move(direction)
+  if #self.filtered_items == 0 then return end
+  local prompt_position = self.config.layout.prompt_position or 'bottom'
+  self.cursor = viewport.move(self.cursor, #self.filtered_items, direction, prompt_position)
+  self:changed()
 end
 
 function Picker:confirm(action)
   local item = self:current()
   if not item or not self.spec.confirm then return false end
-  self.spec.confirm(self, item, action or 'edit')
+  local after_close = self.spec.confirm(self, item, action or 'edit')
+  if self.active then self:close(true) end
+  if type(after_close) == 'function' then after_close() end
   return true
 end
 
 function Picker:close(confirmed)
   if self.closed then return end
+  self.active = false
   self.closed = true
+
+  for _, win in ipairs({ self.input_win, self.list_win, self.preview_win }) do
+    if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+  end
+  for _, buf in ipairs({ self.input_buf, self.list_buf, self.preview_buf }) do
+    if buf and vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_delete(buf, { force = true }) end
+  end
+
+  pcall(vim.api.nvim_del_augroup_by_name, self.augroup_name)
+  if M.active[self.spec.name] == self then M.active[self.spec.name] = nil end
   if self.spec.on_close then self.spec.on_close(self, confirmed == true) end
+end
+
+local function highlight(config, name, fallback) return config.hl and config.hl[name] or fallback end
+
+function Picker:create_ui()
+  local frame = layout.frame(vim.o.columns, vim.o.lines, self.config.layout, self.config.fullscreen)
+  local prompt_position = self.config.layout.prompt_position or 'bottom'
+  local list_height = math.max(1, frame.height - 3)
+
+  self.input_buf = vim.api.nvim_create_buf(false, true)
+  self.list_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(self.input_buf, string.format('fff-plus %s input %d', self.spec.name, self.id))
+  vim.api.nvim_buf_set_name(self.list_buf, string.format('fff-plus %s list %d', self.spec.name, self.id))
+
+  vim.bo[self.input_buf].buftype = 'prompt'
+  vim.bo[self.input_buf].filetype = 'fff_plus_input'
+  vim.fn.prompt_setprompt(self.input_buf, self.config.prompt)
+  vim.bo[self.list_buf].buftype = 'nofile'
+  vim.bo[self.list_buf].filetype = 'fff_plus_list'
+  vim.bo[self.list_buf].modifiable = false
+
+  local list_row = prompt_position == 'bottom' and frame.row + 1 or frame.row + 2
+  local input_row = prompt_position == 'bottom' and frame.row + list_height + 2 or frame.row + 1
+
+  local list_config = {
+    relative = 'editor',
+    width = frame.width,
+    height = list_height,
+    col = frame.col,
+    row = list_row,
+    border = 'single',
+    style = 'minimal',
+  }
+  if prompt_position == 'bottom' then
+    list_config.title = ' ' .. self.config.title .. ' '
+    list_config.title_pos = 'left'
+  end
+  self.list_win = vim.api.nvim_open_win(self.list_buf, false, list_config)
+
+  local input_config = {
+    relative = 'editor',
+    width = frame.width,
+    height = 1,
+    col = frame.col,
+    row = input_row,
+    border = 'single',
+    style = 'minimal',
+  }
+  if prompt_position == 'top' then
+    input_config.title = ' ' .. self.config.title .. ' '
+    input_config.title_pos = 'left'
+  end
+  self.input_win = vim.api.nvim_open_win(self.input_buf, false, input_config)
+
+  local win_hl = string.format(
+    'Normal:%s,FloatBorder:%s,FloatTitle:%s',
+    highlight(self.config, 'normal', 'NormalFloat'),
+    highlight(self.config, 'border', 'FloatBorder'),
+    highlight(self.config, 'title', 'FloatTitle')
+  )
+  vim.wo[self.input_win].winhighlight = win_hl
+  vim.wo[self.list_win].winhighlight = win_hl
+  vim.wo[self.list_win].signcolumn = 'yes:1'
+  vim.wo[self.list_win].cursorline = false
+
+  self:setup_keymaps()
+  self:setup_input_listener()
+end
+
+function Picker:format(item)
+  if not self.spec.format then return self:text(item) end
+  return self.spec.format(item, self)
+end
+
+function Picker:render()
+  if not self.active or not self.list_win or not vim.api.nvim_win_is_valid(self.list_win) then return end
+
+  local height = vim.api.nvim_win_get_height(self.list_win)
+  local width = vim.api.nvim_win_get_width(self.list_win)
+  local prompt_position = self.config.layout.prompt_position or 'bottom'
+  local view = viewport.calculate(#self.filtered_items, self.cursor, height, prompt_position)
+  local first = view.reverse and view.last or view.first
+  local last = view.reverse and view.first or view.last
+  local step = view.reverse and -1 or 1
+  local lines = {}
+
+  for _ = 1, view.padding do
+    table.insert(lines, string.rep(' ', width))
+  end
+  for index = first, last, step do
+    local formatted = self:format(self.filtered_items[index])
+    local text = type(formatted) == 'table' and formatted.text or formatted
+    table.insert(lines, tostring(text or ''))
+  end
+  if #lines == 0 then lines = { self.config.empty_text or 'No results' } end
+
+  vim.bo[self.list_buf].modifiable = true
+  vim.api.nvim_buf_set_lines(self.list_buf, 0, -1, false, lines)
+  vim.bo[self.list_buf].modifiable = false
+  vim.api.nvim_buf_clear_namespace(self.list_buf, self.ns_id, 0, -1)
+
+  if #self.filtered_items > 0 and view.cursor_line > 0 then
+    vim.api.nvim_win_set_cursor(self.list_win, { view.cursor_line, 0 })
+    vim.api.nvim_buf_add_highlight(
+      self.list_buf,
+      self.ns_id,
+      highlight(self.config, 'cursor', 'Visual'),
+      view.cursor_line - 1,
+      0,
+      -1
+    )
+  end
+end
+
+function Picker:update_status()
+  if not self.active or not self.input_win or not vim.api.nvim_win_is_valid(self.input_win) then return end
+  local status = string.format('%d/%d', #self.filtered_items, #self.items)
+  local width = vim.api.nvim_win_get_width(self.input_win)
+  vim.api.nvim_buf_clear_namespace(self.input_buf, self.ns_id, 0, -1)
+  vim.api.nvim_buf_set_extmark(self.input_buf, self.ns_id, 0, 0, {
+    virt_text = { { status, 'LineNr' } },
+    virt_text_win_col = math.max(0, width - #status - 2),
+  })
+end
+
+function Picker:setup_keymaps()
+  local keys = self.config.keymaps
+  local opts = { buffer = self.input_buf, noremap = true, silent = true }
+  local function set(key, callback)
+    if key then vim.keymap.set('i', key, callback, opts) end
+  end
+
+  set(keys.close or '<Esc>', function() self:close(false) end)
+  set(keys.select or '<CR>', function() self:confirm('edit') end)
+  set(keys.select_split or '<C-s>', function() self:confirm('split') end)
+  set(keys.select_vsplit or '<C-v>', function() self:confirm('vsplit') end)
+  set(keys.select_tab or '<C-t>', function() self:confirm('tab') end)
+
+  local up = type(keys.move_up) == 'table' and keys.move_up or { keys.move_up or '<C-p>' }
+  local down = type(keys.move_down) == 'table' and keys.move_down or { keys.move_down or '<C-n>' }
+  for _, key in ipairs(up) do
+    set(key, function() self:move('up') end)
+  end
+  for _, key in ipairs(down) do
+    set(key, function() self:move('down') end)
+  end
+end
+
+function Picker:setup_input_listener()
+  vim.api.nvim_buf_attach(self.input_buf, false, {
+    on_lines = function()
+      vim.schedule(function()
+        if not self.active or not vim.api.nvim_buf_is_valid(self.input_buf) then return end
+        local line = vim.api.nvim_buf_get_lines(self.input_buf, 0, 1, false)[1] or ''
+        local prompt = self.config.prompt
+        if line:sub(1, #prompt) == prompt then line = line:sub(#prompt + 1) end
+        self:set_query(line)
+      end)
+    end,
+  })
+end
+
+function Picker:open()
+  if self.active then return self end
+  self.closed = false
+  self.active = true
+  self:refresh()
+  self:create_ui()
+  self:render()
+  self:update_status()
+  M.active[self.spec.name] = self
+  M.last = self
+
+  if self.opts.enter ~= false then
+    vim.api.nvim_set_current_win(self.input_win)
+    vim.cmd('startinsert!')
+  end
+  return self
 end
 
 function M.create(spec, opts)
   validate_spec(spec)
   opts = opts or {}
 
+  local config = vim.tbl_deep_extend('force', require('fff.conf').get() or {}, opts)
+  config.layout = config.layout or {}
+  config.keymaps = config.keymaps or {}
+  config.preview = config.preview or {}
+  config.prompt = config.prompt or '> '
+  config.title = config.title or spec.title or spec.name
+
+  M.next_id = M.next_id + 1
   local instance = setmetatable({
+    id = M.next_id,
+    ns_id = vim.api.nvim_create_namespace(string.format('fff_plus_picker_%d', M.next_id)),
     spec = spec,
     opts = opts,
+    config = config,
     items = {},
     filtered_items = {},
     selected_keys = {},
@@ -110,9 +336,7 @@ end
 
 function M.pick(spec, opts)
   local instance = M.create(spec, opts)
-  instance:refresh()
-  M.last = instance
-  return instance
+  return instance:open()
 end
 
 return M

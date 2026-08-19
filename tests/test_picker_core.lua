@@ -47,3 +47,30 @@ assert(instance:current() == nil, 'current should be nil when the picker is empt
 assert(#instance:selected({ fallback = true }) == 1, 'explicit selections should survive filtering')
 
 print('Shared picker core tests passed')
+
+local ui = picker.pick({
+  name = 'ui-memory',
+  title = 'Memory',
+  items = function()
+    return {
+      { id = 1, text = 'one.lua' },
+      { id = 2, text = 'two.lua' },
+    }
+  end,
+  key = function(item) return item.id end,
+  text = function(item) return item.text end,
+  format = function(item) return item.text end,
+}, { enter = false, layout = { prompt_position = 'top' } })
+
+assert(ui.active == true, 'pick should open an active picker')
+assert(vim.api.nvim_win_is_valid(ui.input_win), 'pick should create an input window')
+assert(vim.api.nvim_win_is_valid(ui.list_win), 'pick should create a list window')
+assert(vim.api.nvim_buf_get_lines(ui.list_buf, 0, -1, false)[1] == 'one.lua', 'pick should render source items')
+
+local input_win = ui.input_win
+local list_win = ui.list_win
+ui:close(false)
+assert(not vim.api.nvim_win_is_valid(input_win), 'close should remove the input window')
+assert(not vim.api.nvim_win_is_valid(list_win), 'close should remove the list window')
+
+print('Shared picker UI smoke test passed')
