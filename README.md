@@ -43,6 +43,9 @@ Install upstream `fff` first, then install `fff-plus.nvim`.
   },
   keys = {
     { '<C-b>', function() require('fff_plus').buffers() end, desc = 'FFF+ buffers' },
+    { '<leader>f', function() require('fff_plus').smart() end, desc = 'FFF+ smart files' },
+    { '<leader>l', function() require('fff_plus').lines() end, desc = 'FFF+ buffer lines' },
+    { '<leader>d', function() require('fff_plus').diagnostics() end, desc = 'FFF+ diagnostics' },
     { '<leader>c', function() require('fff_plus').colors() end, desc = 'FFF+ colors' },
     { '<leader>g', function() require('fff_plus').tracked_files() end, desc = 'FFF+ tracked files' },
     { '<leader>s', function() require('fff_plus').git_status() end, desc = 'FFF+ git status' },
@@ -82,20 +85,72 @@ require('fff_plus').setup({
 | `require('fff_plus').tracked_files()` | `:FFFPlusGitFiles` | Browse files tracked by Git |
 | `require('fff_plus').git_status()` | `:FFFPlusGitStatus` | Browse changed files with status indicators and diff preview |
 | `require('fff_plus').git_files()` | `:FFFPlusGFiles` | Compatibility API for the Git-status picker |
+| `require('fff_plus').smart()` | `:FFFPlusSmart` | Combine buffers, recent files, and upstream indexed files; deduplicate and frecency-rank them |
+| `require('fff_plus').lines()` | `:FFFPlusLines` | Browse nonblank lines in the current buffer |
+| `require('fff_plus').loaded_lines()` | `:FFFPlusLoadedLines` | Browse nonblank lines in loaded, listed buffers |
+| `require('fff_plus').diagnostics()` | `:FFFPlusDiagnostics` | Browse workspace diagnostics, ordered by severity and location |
+| `require('fff_plus').buffer_diagnostics()` | `:FFFPlusBufferDiagnostics` | Browse diagnostics in the current buffer |
+| `require('fff_plus').resume()` | `:FFFPlusResume` | Resume the most recently closed FFF+ picker and query |
 
-All pickers support ranked fuzzy matching and keep long result lists scrolled to
-the selected item. Add `!` to an extension command to use the fullscreen
-layout, for example `:FFFPlusBuffers!`.
+All pickers support smart-case ranked matching, query history, resume, help,
+selection, responsive layouts, and matched-character highlighting. Add `!` to
+an extension command to use the fullscreen layout, for example
+`:FFFPlusBuffers!`.
 
-Buffers and both Git pickers support these actions using upstream FFF keymap
-defaults:
+### Queries
+
+Space-separated terms are combined. Lowercase terms are case-insensitive;
+terms containing uppercase letters preserve case.
+
+| Query | Meaning |
+| --- | --- |
+| `fpm` | Fuzzy subsequence match |
+| `'picker` | Exact contiguous match |
+| `^lua` | Prefix match |
+| `.lua$` | Suffix match |
+| `picker !test` | Match `picker`, excluding results matching `test` |
+| `kind:buffer init` | Match a source-specific field plus a text term |
+
+Smart supports `kind:`, `source:`, and `path:` fields. Lines supports
+`buffer:`, `path:`, and `line:`. Diagnostics supports `severity:`, `source:`,
+`code:`, and `path:`.
+
+### Actions
+
+Shared picker controls:
 
 | Action | Default key |
 | --- | --- |
+| Move up / down | `<C-p>` / `<C-n>` |
+| Open / split / vertical split / tab | `<CR>` / `<C-s>` / `<C-v>` / `<C-t>` |
 | Toggle selection | `<Tab>` |
+| Select all filtered results | `<C-a>` |
+| Previous / next query | `<C-Up>` / `<C-Down>` |
+| Refresh | `<F5>` |
+| Toggle available preview / maximize | `<C-/>` / `<C-g>m` |
+| Focus input / list / preview | `<C-g>i` / `<C-g>l` / `<C-g>p` |
+| Show key help | `<F1>` |
+
+Buffers, Git files, Smart, Lines, and Diagnostics also support:
+
+| Action | Default key |
+| --- | --- |
 | Send selected/current entries to quickfix | `<C-q>` |
-| Open in split / vertical split / tab | `<C-s>` / `<C-v>` / `<C-t>` |
+| Send selected/current entries to location list | `<C-g>q` |
+
+Buffers, Git files, and Smart also support:
+
+| Action | Default key |
+| --- | --- |
 | Paste selected/current paths into the invoking buffer | `<A-CR>` |
+
+Git status mutations run asynchronously. Restore always asks for confirmation:
+
+| Action | Default key |
+| --- | --- |
+| Stage selected/current files | `<A-s>` |
+| Unstage selected/current files | `<A-u>` |
+| Restore selected/current worktree files | `<A-r>` |
 
 Override the paste key per call, or make the buffer picker jump to a window
 that already displays the selected buffer:
@@ -104,6 +159,19 @@ that already displays the selected buffer:
 require('fff_plus').buffers({
   jump_to_existing = true,
   keymaps = { paste = '<M-p>' },
+})
+```
+
+Preview can be placed on any side and automatically disappears when the frame
+is too narrow or short. Every option can also be passed to an individual picker:
+
+```lua
+require('fff_plus').smart({
+  layout = {
+    preview_position = 'left', -- left, right, top, or bottom
+    preview_size = 0.4,
+    preview_min_width = 70,
+  },
 })
 ```
 
@@ -150,8 +218,11 @@ sync burden low, but these pickers still reuse upstream Lua internals:
 - `fff.conf`
 - `fff.file_picker.preview`
 - `fff.file_picker.icons`
-- `fff.utils`
 - `fff.highlights`
+
+Smart uses upstream's public `fff.file_search()` API for indexed and frecency
+ranked results. Git commands and diff previews use `vim.system` argv arrays and
+are cancelled when superseded or when the picker closes.
 
 If upstream refactors those modules, `fff-plus.nvim` may need a compatibility
 update. The long-term ideal is a small public picker-extension API in upstream

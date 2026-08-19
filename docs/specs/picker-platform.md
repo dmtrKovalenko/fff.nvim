@@ -112,18 +112,18 @@ input into shell command strings.
 
 ## Implementation Tasks
 
-- [ ] Add integration smoke coverage and update the upstream installation name.
-- [ ] Define and test the shared picker interface, then migrate one existing
+- [x] Add integration smoke coverage and update the upstream installation name.
+- [x] Define and test the shared picker interface, then migrate one existing
       picker without behavior loss.
-- [ ] Migrate the remaining existing pickers and delete duplicated lifecycle
+- [x] Migrate the remaining existing pickers and delete duplicated lifecycle
       implementations.
-- [ ] Add the process adapter and move Git listing and preview work off the main
+- [x] Add the process adapter and move Git listing and preview work off the main
       loop.
-- [ ] Add shared actions, help, resume/history, and responsive layouts.
-- [ ] Extend matching and rendered match highlighting.
-- [ ] Add safe Git status mutation actions.
-- [ ] Add smart, lines, and diagnostics source adapters and public entrypoints.
-- [ ] Update documentation and run full verification.
+- [x] Add shared actions, help, resume/history, and responsive layouts.
+- [x] Extend matching and rendered match highlighting.
+- [x] Add safe Git status mutation actions.
+- [x] Add smart, lines, and diagnostics source adapters and public entrypoints.
+- [x] Update documentation and run full verification.
 
 ## Open Questions
 
