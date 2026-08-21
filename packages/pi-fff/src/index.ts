@@ -50,7 +50,8 @@ const GREP_TIME_BUDGET_MS = 10_000;
 const HOME_SCAN_STATUS_KEY = "fff";
 const HOME_SCAN_POLL_MS = 1_000;
 const HOME_SCAN_DISABLE_HINT =
-  "You can prevent home dir indexing with --fff-enable-home-scan=false, FFF_ENABLE_HOME_SCAN=0, or enableHomeDirScanning in pi-fff.json.";
+  "You can prevent home dir indexing with --fff-enable-home-scan=false, FFF_ENABLE_HOME_SCAN=0, or enableHomeDirScanning in pi-fff.json. " +
+  "To keep indexing but silence this warning use --fff-warn-home-scan=false, FFF_WARN_HOME_SCAN=0, or warnOnHomeDirScan in pi-fff.json.";
 
 interface ToolNames {
   grep: string;
@@ -343,6 +344,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   let resolvedDbPaths: ReturnType<typeof resolveDbPaths>;
   let enableFsRootScanning = false;
   let enableHomeDirScanning = true;
+  let warnOnHomeDirScan = true;
 
   function setMode(mode: FffMode): void {
     currentMode = mode;
@@ -385,6 +387,15 @@ export default function fffExtension(pi: ExtensionAPI) {
       true,
       parseBoolean,
     );
+    // Users who intentionally index $HOME see the warning on every launch and
+    // can do nothing about it, so let them mute it (issue #806).
+    warnOnHomeDirScan = getConfigValue(
+      "fff-warn-home-scan",
+      "FFF_WARN_HOME_SCAN",
+      config.warnOnHomeDirScan,
+      true,
+      parseBoolean,
+    );
   }
 
   function getMode(): FffMode {
@@ -406,6 +417,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   let homeScanTimer: ReturnType<typeof setInterval> | null = null;
 
   function warnHomeDirScan(root: string): void {
+    if (!warnOnHomeDirScan) return;
     uiCtx?.ui.notify(
       `(fff): Your cwd (${root}) is too large. Indexing will take additional time and resources.\n${HOME_SCAN_DISABLE_HINT}`,
       "warning",
@@ -664,6 +676,12 @@ export default function fffExtension(pi: ExtensionAPI) {
   pi.registerFlag("fff-enable-home-scan", {
     description:
       "Index the home dir when launched from $HOME (default true; disable with --fff-enable-home-scan=false or FFF_ENABLE_HOME_SCAN=0)",
+    type: "boolean",
+  });
+
+  pi.registerFlag("fff-warn-home-scan", {
+    description:
+      "Warn when indexing $HOME (default true; silence with --fff-warn-home-scan=false or FFF_WARN_HOME_SCAN=0)",
     type: "boolean",
   });
 
