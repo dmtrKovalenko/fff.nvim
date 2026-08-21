@@ -504,11 +504,17 @@ impl FileItem {
         modified: u64,
     ) -> (Self, String) {
         let is_binary = is_known_binary_extension(path);
-        // SAFETY-ish: paths on macOS/Linux are bytes; lossy conversion mirrors
-        // the existing `to_string_lossy()` behavior on non-UTF8 names.
-        let rel_str = String::from_utf8_lossy(relative_path).into_owned();
-        let item = Self::new_raw(basename_offset, size, modified, git_status, is_binary);
-        (item, rel_str)
+        // basename_offset indexes the raw bytes; from_utf8_lossy keeps those
+        // indices only for valid UTF-8, so re-derive when a byte was replaced (#799).
+        let rel = String::from_utf8_lossy(relative_path);
+        let fname_offset = match &rel {
+            std::borrow::Cow::Borrowed(_) => basename_offset,
+            std::borrow::Cow::Owned(s) => {
+                s.rfind(std::path::is_separator).map_or(0, |i| i + 1) as u16
+            }
+        };
+        let item = Self::new_raw(fname_offset, size, modified, git_status, is_binary);
+        (item, rel.into_owned())
     }
 
     pub(crate) fn update_frecency_scores(
@@ -2394,6 +2400,17 @@ pub(crate) fn hint_allocator_collect() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn walk_bytes_offset_stays_on_a_char_boundary_for_non_utf8_names() {
+        // 0xFF becomes a 3-byte U+FFFD, so the raw basename_offset (2, past
+        // "\xff/") would slice inside it; the split must stay on a boundary (#799).
+        let (item, rel) =
+            FileItem::new_from_walk_bytes(Path::new("x.txt"), b"\xff/.txt", 2, None, 0, 0);
+        let (dir, file) = rel.split_at(item.path.filename_offset as usize);
+        assert_eq!(dir, "\u{fffd}/");
+        assert_eq!(file, ".txt");
+    }
 
     /// The watcher must watch every ancestor directory up to `base_path`,
     /// not just the immediate parents of indexed files. The dir table is
