@@ -50,8 +50,8 @@ const GREP_TIME_BUDGET_MS = 10_000;
 const HOME_SCAN_STATUS_KEY = "fff";
 const HOME_SCAN_POLL_MS = 1_000;
 const HOME_SCAN_DISABLE_HINT =
-  "You can prevent home dir indexing with --fff-enable-home-scan=false, FFF_ENABLE_HOME_SCAN=0, or enableHomeDirScanning in pi-fff.json. " +
-  "To keep indexing but silence this warning use --fff-warn-home-scan=false, FFF_WARN_HOME_SCAN=0, or warnOnHomeDirScan in pi-fff.json.";
+  'You can prevent home dir indexing with --fff-enable-home-scan=false, FFF_ENABLE_HOME_SCAN=0, or "enableHomeDirScanning": false in pi-fff.json. ' +
+  'To keep indexing but silence this warning use --fff-warn-home-scan=false, FFF_WARN_HOME_SCAN=0, or "warnOnHomeDirScan": false in pi-fff.json.';
 
 interface ToolNames {
   grep: string;
