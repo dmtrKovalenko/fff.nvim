@@ -264,7 +264,8 @@ impl BigramIndexBuilder {
     fn flush_seen(&self, seen: &[u64; SEEN_WORDS], word_idx: usize, bit_mask: u64) {
         let col_base = self.col_data_ptr();
         let words = self.words;
-        for (blk, block) in seen.chunks_exact(8).enumerate() {
+        // SEEN_WORDS is a multiple of 8, so the remainder is always empty.
+        for (blk, block) in seen.as_chunks::<8>().0.iter().enumerate() {
             // OR-test whole blocks so the mostly-empty bitmap scans fast.
             if block.iter().fold(0u64, |a, &w| a | w) == 0 {
                 continue;
