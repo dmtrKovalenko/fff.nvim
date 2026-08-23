@@ -427,8 +427,7 @@ describe("pi-fff $HOME scan warning", () => {
     await shutdown(setup);
   });
 
-  // #806: indexing $HOME can be intentional, so the warning must be mutable
-  // without turning the scan off. The progress footer stays.
+  // #806: muting the warning must not turn the scan or the footer off.
   test("FFF_WARN_HOME_SCAN=0 mutes the warning but keeps indexing", async () => {
     process.env.FFF_WARN_HOME_SCAN = "0";
     const setup = await start(undefined, os.homedir());

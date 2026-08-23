@@ -387,8 +387,6 @@ export default function fffExtension(pi: ExtensionAPI) {
       true,
       parseBoolean,
     );
-    // Users who intentionally index $HOME see the warning on every launch and
-    // can do nothing about it, so let them mute it (issue #806).
     warnOnHomeDirScan = getConfigValue(
       "fff-warn-home-scan",
       "FFF_WARN_HOME_SCAN",
