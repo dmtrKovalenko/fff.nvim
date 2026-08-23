@@ -1,9 +1,6 @@
-//! Regression test for https://github.com/dmtrKovalenko/fff/issues/799
-//!
-//! Unix filenames are arbitrary bytes. The zlob walker used to pair a raw-byte
-//! basename offset with a lossily decoded path, so every invalid byte (3-byte
-//! U+FFFD) shifted the real offset and the dir-table sweep sliced inside a
-//! replacement char, panicking on the Rayon scan thread and aborting.
+// Regression test for https://github.com/dmtrKovalenko/fff/issues/799
+// Unix-only: Windows filenames are UTF-16 and cannot carry these bytes.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -52,7 +49,6 @@ const EXTRA_CASES: &[(&str, bool)] = &[
 ];
 
 #[test]
-#[cfg(unix)]
 fn scans_invalid_utf8_corpus_without_panicking() {
     let tmp = TempDir::new().unwrap();
     let Some(expected) = build_chain(tmp.path(), REPRO_COMPONENTS) else {
@@ -73,7 +69,6 @@ fn scans_invalid_utf8_corpus_without_panicking() {
 }
 
 #[test]
-#[cfg(unix)]
 fn scans_mixed_encoding_corpus_without_panicking() {
     let tmp = TempDir::new().unwrap();
     let Some(()) = build_paths(tmp.path(), EXTRA_CASES) else {
@@ -102,7 +97,6 @@ fn scans_mixed_encoding_corpus_without_panicking() {
 /// Searching by a plain ASCII component of a path whose other components are
 /// invalid UTF-8 must still work end to end.
 #[test]
-#[cfg(unix)]
 fn searches_across_invalid_utf8_parents() {
     let tmp = TempDir::new().unwrap();
     if build_chain(tmp.path(), REPRO_COMPONENTS).is_none() {
@@ -204,7 +198,6 @@ fn assert_dirs_indexed(picker: &FilePicker, file_path: &str) {
 /// previous one. Returns the '/'-joined lossy path of the leaf file, or `None`
 /// when the filesystem refuses invalid UTF-8 names (APFS returns EILSEQ, ZFS
 /// with utf8only likewise) so the test skips instead of failing.
-#[cfg(unix)]
 fn build_chain(root: &Path, components: &[(&str, bool)]) -> Option<String> {
     let mut path = PathBuf::from(root);
     let mut decoded = String::new();
@@ -226,7 +219,6 @@ fn build_chain(root: &Path, components: &[(&str, bool)]) -> Option<String> {
 }
 
 /// Materializes independent '/'-joined hex paths under `root`.
-#[cfg(unix)]
 fn build_paths(root: &Path, specs: &[(&str, bool)]) -> Option<()> {
     for (hex, is_dir) in specs {
         let mut path = PathBuf::from(root);
@@ -248,13 +240,11 @@ fn build_paths(root: &Path, specs: &[(&str, bool)]) -> Option<()> {
     Some(())
 }
 
-#[cfg(unix)]
 fn os_str(bytes: &[u8]) -> &std::ffi::OsStr {
     use std::os::unix::ffi::OsStrExt;
     std::ffi::OsStr::from_bytes(bytes)
 }
 
-#[cfg(unix)]
 fn create(path: &Path, is_dir: bool) -> bool {
     if is_dir {
         std::fs::create_dir_all(path).is_ok()
