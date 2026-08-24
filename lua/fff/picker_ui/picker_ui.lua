@@ -52,6 +52,7 @@ M.on_input_change = search_manager.on_input_change
 M.cycle_grep_modes = search_manager.cycle_grep_modes
 M.recall_query_from_history = search_manager.recall_query_from_history
 M.cycle_forward_query = search_manager.cycle_forward_query
+M.clear_query = search_manager.clear_query
 M.get_suggestion_renderer = search_manager.get_suggestion_renderer
 
 -- Wire renderer module (list rendering, scroll, empty state)
