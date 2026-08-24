@@ -82,6 +82,8 @@ describe('file renderer relative path display', function()
     local filename = 'main.lua'
     local long_directory = table.concat({ 'very', 'long', 'nested', 'directory' }, path_separator)
     local item = { name = filename, relative_path = long_directory .. path_separator .. filename }
+    local filename_rel_start = #item.relative_path - #filename
+    item.match_ranges = { { filename_rel_start, filename_rel_start + 1 } }
     local ctx = make_context()
     ctx.max_path_width = 22
     ctx.win_width = 22
@@ -94,5 +96,14 @@ describe('file renderer relative path display', function()
     assert.is_true(line:sub(-#filename) == filename)
     assert.is_nil(line:find(long_directory, 1, true))
     assert.is_true(vim.fn.strdisplaywidth(line) <= ctx.max_path_width)
+
+    local buf = vim.api.nvim_create_buf(false, true)
+    local ns = vim.api.nvim_create_namespace('fff-file-renderer-test')
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
+    renderer.apply_highlights(item, ctx, 1, buf, ns, 1, line)
+
+    local filename_start = assert(line:find(filename, 1, true)) - 1
+    assert.are.same({ { filename_start, filename_start + 1 } }, highlight_ranges(buf, ns, 'Search'))
+    vim.api.nvim_buf_delete(buf, { force = true })
   end)
 end)
