@@ -37,6 +37,7 @@ local M = {}
 --- @field insert_newline_escape string
 --- @field cycle_previous_query string
 --- @field cycle_forward_query string
+--- @field clear_query string|string[]|nil
 --- @field grep_jump_to_next_file string|string[]
 --- @field grep_jump_to_prev_file string|string[]
 --- @field toggle_select string

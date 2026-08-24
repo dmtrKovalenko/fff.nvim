@@ -368,6 +368,8 @@ require('fff').setup({
     grep_jump_to_next_file = { '<C-A-n>', '<A-Down>' },
     grep_jump_to_prev_file = { '<C-A-p>', '<A-Up>' },
     cycle_previous_query = '<C-Up>',
+    -- unbound by default, wipes the whole input line
+    -- clear_query = '<C-u>', -- overrides preview_scroll_up in insert mode
     toggle_select = '<Tab>',
     send_to_quickfix = '<C-q>',
     focus_list = '<leader>l',

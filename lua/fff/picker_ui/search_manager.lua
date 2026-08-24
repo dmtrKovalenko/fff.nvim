@@ -318,6 +318,19 @@ function M.recall_query_from_history()
   end)
 end
 
+function M.clear_query()
+  if not P.state.active then return end
+
+  S.history_offset = nil
+  vim.api.nvim_buf_set_lines(S.input_buf, 0, -1, false, { S.config.prompt })
+
+  vim.schedule(function()
+    if P.state.active and S.input_win and vim.api.nvim_win_is_valid(S.input_win) then
+      vim.api.nvim_win_set_cursor(S.input_win, { 1, #S.config.prompt })
+    end
+  end)
+end
+
 function M.cycle_forward_query()
   if not P.state.active then return end
 

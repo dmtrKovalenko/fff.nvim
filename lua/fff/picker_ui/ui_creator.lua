@@ -389,6 +389,8 @@ function M.setup_keymaps()
   set_keymap({ 'i', 'n' }, keymaps.toggle_select, P.toggle_select, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.send_to_quickfix, P.send_to_quickfix, input_opts)
   set_keymap({ 'i', 'n' }, keymaps.cycle_grep_modes, P.cycle_grep_modes, input_opts)
+  -- last, so an explicitly configured key wins over the built-in bound to it
+  set_keymap('i', keymaps.clear_query, P.clear_query, input_opts)
 
   if keymaps.insert_newline_escape then
     -- Inserts the literal 2-char `\n` sequence which the grep engine
