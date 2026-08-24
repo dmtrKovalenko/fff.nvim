@@ -675,6 +675,8 @@ local function open_ui_with_state(query, results, location, merged_config, curre
   end
 
   M.monitor_scan_progress(0)
+
+  vim.api.nvim_exec_autocmds('User', { pattern = 'FFFOpen', modeline = false })
   return true
 end
 
