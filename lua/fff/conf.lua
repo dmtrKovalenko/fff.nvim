@@ -65,6 +65,7 @@ local M = {}
 --- @field modes string[]
 --- @field trim_whitespace boolean
 --- @field location_format string
+
 --- @alias FffSelectAction 'edit' | 'split' | 'vsplit' | 'tab'
 
 --- @class FffSelectConfig
