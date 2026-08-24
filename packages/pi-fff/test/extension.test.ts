@@ -190,6 +190,7 @@ const CONFIG_ENV_KEYS = [
   "FFF_HISTORY_DB",
   "FFF_ENABLE_ROOT_SCAN",
   "FFF_ENABLE_HOME_SCAN",
+  "FFF_WARN_HOME_SCAN",
 ] as const;
 
 const savedEnv: Record<string, string | undefined> = {};
@@ -423,6 +424,39 @@ describe("pi-fff $HOME scan warning", () => {
 
     expect(setup.ctx.ui.notify).not.toHaveBeenCalled();
     expect(setup.ctx.ui.setStatus).not.toHaveBeenCalled();
+    await shutdown(setup);
+  });
+
+  // #806: muting the warning must not turn the scan or the footer off.
+  test("FFF_WARN_HOME_SCAN=0 mutes the warning but keeps indexing", async () => {
+    process.env.FFF_WARN_HOME_SCAN = "0";
+    const setup = await start(undefined, os.homedir());
+
+    expect(setup.ctx.ui.notify).not.toHaveBeenCalled();
+    expect(setup.ctx.ui.setStatus).toHaveBeenCalledWith(
+      "fff",
+      "Agent is indexing $HOME, this can lead to high CPU",
+    );
+    expect(
+      (createCalls[0] as { enableHomeDirScanning: boolean }).enableHomeDirScanning,
+    ).toBe(true);
+    await shutdown(setup);
+  });
+
+  test("--fff-warn-home-scan=false mutes the warning", async () => {
+    const setup = await start(undefined, os.homedir(), {
+      "fff-warn-home-scan": false,
+    });
+
+    expect(setup.ctx.ui.notify).not.toHaveBeenCalled();
+    await shutdown(setup);
+  });
+
+  test("warnOnHomeDirScan in the config file mutes the warning", async () => {
+    writeConfig({ warnOnHomeDirScan: false });
+    const setup = await start(undefined, os.homedir());
+
+    expect(setup.ctx.ui.notify).not.toHaveBeenCalled();
     await shutdown(setup);
   });
 });

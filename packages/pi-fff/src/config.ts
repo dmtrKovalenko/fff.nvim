@@ -14,6 +14,7 @@ export interface FffConfig {
   historyDbPath?: string;
   enableFsRootScanning?: boolean;
   enableHomeDirScanning?: boolean;
+  warnOnHomeDirScan?: boolean;
 }
 
 const CONFIG_KEYS = new Set<keyof FffConfig>([
@@ -23,6 +24,7 @@ const CONFIG_KEYS = new Set<keyof FffConfig>([
   "historyDbPath",
   "enableFsRootScanning",
   "enableHomeDirScanning",
+  "warnOnHomeDirScan",
 ]);
 
 export function loadConfig(agentDir = piDataDir()): FffConfig {
@@ -64,6 +66,7 @@ export function loadConfig(agentDir = piDataDir()): FffConfig {
   validateString(configPath, parsed, "historyDbPath");
   validateBoolean(configPath, parsed, "enableFsRootScanning");
   validateBoolean(configPath, parsed, "enableHomeDirScanning");
+  validateBoolean(configPath, parsed, "warnOnHomeDirScan");
 
   return parsed as FffConfig;
 }
@@ -94,7 +97,7 @@ function validateString(
 function validateBoolean(
   configPath: string,
   config: Record<string, unknown>,
-  key: "enableFsRootScanning" | "enableHomeDirScanning",
+  key: "enableFsRootScanning" | "enableHomeDirScanning" | "warnOnHomeDirScan",
 ): void {
   const value = config[key];
   if (value !== undefined && typeof value !== "boolean") {

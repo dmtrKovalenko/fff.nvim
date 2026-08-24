@@ -31,6 +31,7 @@ describe("loadConfig", () => {
       historyDbPath: "/data/history",
       enableFsRootScanning: true,
       enableHomeDirScanning: false,
+      warnOnHomeDirScan: false,
     };
     writeConfig(config);
 
@@ -66,6 +67,7 @@ describe("loadConfig", () => {
       [{ historyDbPath: false }, '"historyDbPath" must be a non-empty string'],
       [{ enableFsRootScanning: 1 }, '"enableFsRootScanning" must be a boolean'],
       [{ enableHomeDirScanning: "false" }, '"enableHomeDirScanning" must be a boolean'],
+      [{ warnOnHomeDirScan: "false" }, '"warnOnHomeDirScan" must be a boolean'],
     ];
 
     for (const [config, message] of cases) {

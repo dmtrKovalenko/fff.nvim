@@ -143,7 +143,8 @@ For persistent global configuration, create `pi-fff.json` in pi's agent director
   "frecencyDbPath": "/path/to/frecency",
   "historyDbPath": "/path/to/history",
   "enableFsRootScanning": false,
-  "enableHomeDirScanning": true
+  "enableHomeDirScanning": true,
+  "warnOnHomeDirScan": true
 }
 ```
 
@@ -157,6 +158,7 @@ All fields are optional:
 | `historyDbPath` | non-empty string | See [Data](#data) |
 | `enableFsRootScanning` | boolean | `false` |
 | `enableHomeDirScanning` | boolean | `true` |
+| `warnOnHomeDirScan` | boolean | `true` |
 
 CLI flags take precedence over environment variables, which take precedence over this file. A missing file is ignored. Malformed JSON, unknown fields, and invalid values stop the extension from loading and report the file path and error. `/fff-mode` changes the current session; it does not edit this file.
 
@@ -169,6 +171,7 @@ The file is global only. Project-level config cannot safely control tool names b
 - `--fff-history-db <path>` — path to query history database (also: `FFF_HISTORY_DB` env). Optional; see [Data](#data) for the default.
 - `--fff-enable-root-scan` — allow indexing when launched from `/` (also: `FFF_ENABLE_ROOT_SCAN=1` env). FFF refuses to init at the filesystem root by default.
 - `--fff-enable-home-scan` — index the home directory when launched from `$HOME` (also: `FFF_ENABLE_HOME_SCAN` env). Enabled by default. Disable with `--fff-enable-home-scan=false` or `FFF_ENABLE_HOME_SCAN=0` if your `$HOME` contains huge trees (toolchains, kernel sources, build outputs) that make the background index run for a long time. When launched from `$HOME` with this enabled, pi shows a warning that the whole home tree is being indexed.
+- `--fff-warn-home-scan` — show the warning notification when `$HOME` is indexed (also: `FFF_WARN_HOME_SCAN` env). Enabled by default. Disable with `--fff-warn-home-scan=false`, `FFF_WARN_HOME_SCAN=0`, or `"warnOnHomeDirScan": false` in `pi-fff.json`. Indexing and the footer status are unaffected.
 
 ## Data
 

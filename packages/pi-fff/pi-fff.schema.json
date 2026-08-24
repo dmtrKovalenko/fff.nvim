@@ -36,6 +36,11 @@
       "type": "boolean",
       "default": true,
       "description": "Allows indexing when pi is launched from the home directory."
+    },
+    "warnOnHomeDirScan": {
+      "type": "boolean",
+      "default": true,
+      "description": "Shows a warning notification when the home directory is indexed."
     }
   }
 }
