@@ -2,6 +2,8 @@
 --- Simple renderer for file items with 2 functions: render_line and apply_highlights
 local M = {}
 
+local path_separator = package.config:sub(1, 1)
+
 --- File Item structure from Rust
 --- @class FileItem
 --- @field path string Absolute file path
@@ -49,15 +51,23 @@ function M.render_line(item, ctx, item_idx) -- luacheck: ignore item_idx
     end
   end
 
-  -- Format filename and path
-  -- Don't reserve space for frecency - path takes priority
+  local display_relative_path = ctx.mode ~= 'grep'
+    and ctx.config.file_picker
+    and ctx.config.file_picker.display_relative_path
   local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
-  local available_width = math.max(ctx.max_path_width - icon_width, 40)
+  local min_width = display_relative_path and 0 or 40
+  local available_width = math.max(ctx.max_path_width - icon_width, min_width)
   local filename, dir_path = ctx.format_file_display(item, available_width)
 
-  -- Build line
-  local line = icon and string.format('%s %s %s%s', icon, filename, dir_path, frecency)
-    or string.format('%s %s%s', filename, dir_path, frecency)
+  local line
+  if display_relative_path then
+    local display_path = dir_path ~= '' and (dir_path .. path_separator .. filename) or filename
+    line = icon and string.format('%s %s%s', icon, display_path, frecency)
+      or string.format('%s%s', display_path, frecency)
+  else
+    line = icon and string.format('%s %s %s%s', icon, filename, dir_path, frecency)
+      or string.format('%s %s%s', filename, dir_path, frecency)
+  end
 
   local padding = math.max(0, ctx.win_width - vim.fn.strdisplaywidth(line) + 5)
   table.insert(lines, line .. string.rep(' ', padding))
@@ -84,8 +94,12 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
 
   -- Get icon and paths
   local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
+  local display_relative_path = ctx.mode ~= 'grep'
+    and ctx.config.file_picker
+    and ctx.config.file_picker.display_relative_path
   local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
-  local available_width = math.max(ctx.max_path_width - icon_width, 40)
+  local min_width = display_relative_path and 0 or 40
+  local available_width = math.max(ctx.max_path_width - icon_width, min_width)
   local filename, dir_path = ctx.format_file_display(item, available_width)
 
   -- 1. Cursor highlight
@@ -116,6 +130,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
     local git_text_hl = item.git_status and highlights.get_git_text_highlight(item.git_status) or nil
     if git_text_hl and git_text_hl ~= '' and not is_current_file then
       local filename_start = #icon + 1
+      if display_relative_path and #dir_path > 0 then filename_start = filename_start + #dir_path + #path_separator end
       vim.api.nvim_buf_set_extmark(
         buf,
         ns_id,
@@ -142,16 +157,22 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
 
   -- 5. Directory path (dimmed)
   if #filename > 0 and #dir_path > 0 then
-    local prefix_len = #filename + 1 -- filename bytes + space
-    if icon then
-      prefix_len = prefix_len + #icon + 1 -- if icon add icon bytes + space
+    local prefix_len
+    local path_end
+    if display_relative_path then
+      prefix_len = icon and (#icon + 1) or 0
+      path_end = prefix_len + #dir_path + #path_separator
+    else
+      prefix_len = #filename + 1
+      if icon then prefix_len = prefix_len + #icon + 1 end
+      path_end = prefix_len + #dir_path
     end
     vim.api.nvim_buf_set_extmark(
       buf,
       ns_id,
       line_idx - 1,
       prefix_len,
-      { end_col = prefix_len + #dir_path, hl_group = ctx.config.hl.directory_path }
+      { end_col = path_end, hl_group = ctx.config.hl.directory_path }
     )
   end
 
@@ -229,11 +250,21 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
     local filename_rel_start = math.max(0, #rel_path - #filename)
     local filename_rel_end = filename_rel_start + #filename
     local filename_line_start = icon and (#icon + 1) or 0
-    local dir_line_start = filename_line_start + #filename + 1
-    local segments = { { filename_rel_start, filename_rel_end, filename_line_start } }
+    local segments
 
-    if original_dir_path ~= '' and dir_path == original_dir_path then
-      segments[#segments + 1] = { 0, #original_dir_path, dir_line_start }
+    if display_relative_path then
+      if dir_path ~= '' then filename_line_start = filename_line_start + #dir_path + #path_separator end
+      segments = { { filename_rel_start, filename_rel_end, filename_line_start } }
+      if original_dir_path ~= '' and dir_path == original_dir_path then
+        local path_line_start = icon and (#icon + 1) or 0
+        segments[#segments + 1] = { 0, filename_rel_start, path_line_start }
+      end
+    else
+      local dir_line_start = filename_line_start + #filename + 1
+      segments = { { filename_rel_start, filename_rel_end, filename_line_start } }
+      if original_dir_path ~= '' and dir_path == original_dir_path then
+        segments[#segments + 1] = { 0, #original_dir_path, dir_line_start }
+      end
     end
 
     local function apply_segment(raw_start, raw_end, segment)

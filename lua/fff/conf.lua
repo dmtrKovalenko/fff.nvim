@@ -65,7 +65,6 @@ local M = {}
 --- @field modes string[]
 --- @field trim_whitespace boolean
 --- @field location_format string
-
 --- @alias FffSelectAction 'edit' | 'split' | 'vsplit' | 'tab'
 
 --- @class FffSelectConfig
@@ -452,6 +451,7 @@ local function init()
     -- find_files settings
     file_picker = {
       current_file_label = '(current)',
+      display_relative_path = false,
       fuzzy_query_highlighting = false,
     },
     -- grep settings
