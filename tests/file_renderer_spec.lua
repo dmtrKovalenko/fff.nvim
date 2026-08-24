@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-field, need-check-nil
 local renderer = require('fff.picker_ui.file_renderer')
 
 local icons = require('fff.file_picker.icons')
