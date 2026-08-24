@@ -277,6 +277,17 @@ Both `file_search` and `content_search` honour an optional `cwd` field. The firs
 - If the index is still warming up after a `change_indexing_directory`, you can pass `wait_for_index_ms = N` to block for up to `N` ms regardless of whether `cwd` triggered the swap. Pass `0` to skip waiting entirely (useful for fire-and-forget calls where partial results are acceptable).
 - Invalid or non-existent `cwd` paths return an empty result and emit an error via `vim.notify`.
 
+### Autocmds
+
+The picker fires `User` autocmds when it opens and closes. `FFFOpen` runs with the prompt window focused, `FFFClose` runs after every picker window is gone — so hide global UI, not window-local options of the picker itself:
+
+```lua
+vim.api.nvim_create_autocmd('User', {
+  pattern = { 'FFFOpen', 'FFFClose' },
+  callback = function(ev) vim.o.showtabline = ev.match == 'FFFOpen' and 0 or 2 end,
+})
+```
+
 ### Commands
 
 - `:FFFScan`. Rescan files.
