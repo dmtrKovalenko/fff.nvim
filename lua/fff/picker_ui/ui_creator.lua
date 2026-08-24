@@ -462,6 +462,13 @@ function M.setup_keymaps()
     set_keymap('n', keymaps.send_to_quickfix, P.send_to_quickfix, preview_opts)
   end
 
+  -- Applied last so a user mapping wins over the built-in on the same lhs.
+  for mode, maps in pairs(S.config.mappings or {}) do
+    for lhs, rhs in pairs(maps) do
+      set_keymap(mode, lhs, rhs, input_opts)
+    end
+  end
+
   vim.api.nvim_buf_attach(S.input_buf, false, {
     on_lines = function()
       vim.schedule(function() P.on_input_change() end)

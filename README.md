@@ -362,6 +362,10 @@ require('fff').setup({
     focus_list = '<leader>l',
     focus_preview = '<leader>p',
   },
+  -- extra keymaps for the picker input, keyed by mode, applied over the built-ins
+  mappings = {
+    -- i = { ['<A-BS>'] = function() vim.api.nvim_input('<C-w>') end },
+  },
   frecency = {
     enabled = true,
     db_path = vim.fn.stdpath('cache') .. '/fff_nvim',
