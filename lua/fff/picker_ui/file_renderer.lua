@@ -52,6 +52,7 @@ function M.render_line(item, ctx, item_idx) -- luacheck: ignore item_idx
   end
 
   local display_relative_path = ctx.mode ~= 'grep'
+    and ctx.suggestion_source ~= 'grep'
     and ctx.config.file_picker
     and ctx.config.file_picker.display_relative_path
   local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
@@ -95,6 +96,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   -- Get icon and paths
   local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
   local display_relative_path = ctx.mode ~= 'grep'
+    and ctx.suggestion_source ~= 'grep'
     and ctx.config.file_picker
     and ctx.config.file_picker.display_relative_path
   local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
