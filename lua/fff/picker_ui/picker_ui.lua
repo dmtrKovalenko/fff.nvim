@@ -666,7 +666,8 @@ local function open_ui_with_state(query, results, location, merged_config, curre
   if query then
     vim.schedule(function()
       if M.state.active and M.state.input_win and vim.api.nvim_win_is_valid(M.state.input_win) then
-        vim.api.nvim_win_set_cursor(M.state.input_win, { 1, #M.state.config.prompt + #query })
+        local line = vim.api.nvim_buf_get_lines(M.state.input_buf, 0, 1, false)[1] or ''
+        vim.api.nvim_win_set_cursor(M.state.input_win, { 1, #line })
         vim.cmd('startinsert!')
       end
     end)
