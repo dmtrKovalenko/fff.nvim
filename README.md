@@ -15,6 +15,27 @@ Originally started as [Neovim plugin](#neovim-plugin) people loved, but it turne
 
 ---
 
+## Sponsors
+
+fff is MIT and open source forever. Development is supported by these companies:
+
+<table>
+  <tr>
+    <td align="center" width="110"><sub><b>💎<br>DIAMOND</b></sub></td>
+    <td align="center" width="420"><a href="https://anoma.ly"><img alt="Anomaly" src="./assets/sponsors/anomaly.png" width="400"></a></td>
+    <td><b><a href="https://anoma.ly">Anomaly</a></b><br><sub>The team behind <a href="https://opencode.ai">opencode</a>.</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>🥇<br>GOLD</b></sub></td>
+    <td align="center"><a href="https://mangoproxy.com/?utm_source=dmtrkovalenko&utm_medium=partner&utm_campaign=dmtrkovalenko_github"><img alt="Mango Proxy" src="./assets/sponsors/mango-proxy.png" width="280"></a></td>
+    <td><b><a href="https://mangoproxy.com/?utm_source=dmtrkovalenko&utm_medium=partner&utm_campaign=dmtrkovalenko_github">Mango Proxy</a></b><br><sub>Fast, secure proxies for all the needs.</sub></td>
+  </tr>
+</table>
+
+<sub>Use and enjoy fff? <a href="mailto:dmitriy@iusevimbtw.com">Become a sponsor to get your features/fixes the highest priority</a>.</sub>
+
+---
+
 Pick what you are interested in:
 
 <details id="mcp-server">
