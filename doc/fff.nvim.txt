@@ -1,5 +1,5 @@
 *fff.nvim.txt*
-                             For Neovim >= 0.10.0    Last change: 2026 July 30
+                           For Neovim >= 0.10.0    Last change: 2026 August 25
 
 ==============================================================================
 Table of Contents                                 *fff.nvim-table-of-contents*
@@ -163,6 +163,20 @@ first call to either function lazily initialises the picker at
 - Invalid or non-existent `cwd` paths return an empty result and emit an error via `vim.notify`.
 
 
+AUTOCMDS ~
+
+The picker fires `User` autocmds when it opens and closes. `FFFOpen` runs with
+the prompt window focused, `FFFClose` runs after every picker window is gone
+— so hide global UI, not window-local options of the picker itself:
+
+>lua
+    vim.api.nvim_create_autocmd('User', {
+      pattern = { 'FFFOpen', 'FFFClose' },
+      callback = function(ev) vim.o.showtabline = ev.match == 'FFFOpen' and 0 or 2 end,
+    })
+<
+
+
 COMMANDS ~
 
 - `:FFFScan`. Rescan files.
@@ -244,10 +258,16 @@ Defaults are sensible. Override only what you care about.
         grep_jump_to_next_file = { '<C-A-n>', '<A-Down>' },
         grep_jump_to_prev_file = { '<C-A-p>', '<A-Up>' },
         cycle_previous_query = '<C-Up>',
+        -- unbound by default, wipes the whole input line
+        -- clear_query = '<C-u>', -- overrides preview_scroll_up in insert mode
         toggle_select = '<Tab>',
         send_to_quickfix = '<C-q>',
         focus_list = '<leader>l',
         focus_preview = '<leader>p',
+      },
+      -- extra keymaps for the picker input, keyed by mode, applied over the built-ins
+      mappings = {
+        -- i = { ['<A-BS>'] = function() vim.api.nvim_input('<C-w>') end },
       },
       frecency = {
         enabled = true,
