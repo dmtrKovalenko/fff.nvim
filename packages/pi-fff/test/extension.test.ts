@@ -191,6 +191,7 @@ const CONFIG_ENV_KEYS = [
   "FFF_ENABLE_ROOT_SCAN",
   "FFF_ENABLE_HOME_SCAN",
   "FFF_WARN_HOME_SCAN",
+  "FFF_FOLLOW_SYMLINKS",
 ] as const;
 
 const savedEnv: Record<string, string | undefined> = {};
@@ -227,6 +228,7 @@ describe("pi-fff global config", () => {
       historyDbPath: "/config/history",
       enableFsRootScanning: true,
       enableHomeDirScanning: false,
+      followSymlinks: true,
     });
 
     const setup = await start();
@@ -242,6 +244,7 @@ describe("pi-fff global config", () => {
       aiMode: true,
       enableHomeDirScanning: false,
       enableFsRootScanning: true,
+      followSymlinks: true,
     });
     await shutdown(setup);
   });
@@ -259,10 +262,12 @@ describe("pi-fff global config", () => {
     process.env.FFF_HISTORY_DB = "/env/history";
     process.env.FFF_ENABLE_ROOT_SCAN = "1";
     process.env.FFF_ENABLE_HOME_SCAN = "1";
+    process.env.FFF_FOLLOW_SYMLINKS = "1";
 
     const setup = await start("tools-and-ui", undefined, {
       "fff-frecency-db": "/flag/frecency",
       "fff-enable-root-scan": false,
+      "fff-follow-symlinks": false,
     });
     const toolNames = setup.pi.registerTool.mock.calls.map(([tool]) => tool.name);
 
@@ -275,7 +280,19 @@ describe("pi-fff global config", () => {
       aiMode: true,
       enableHomeDirScanning: true,
       enableFsRootScanning: false,
+      followSymlinks: false,
     });
+    await shutdown(setup);
+  });
+
+  // #627: worktree and stow layouts reach their files through symlinks, which the
+  // walker skips unless this is on.
+  test("follows symlinks when the environment enables them", async () => {
+    process.env.FFF_FOLLOW_SYMLINKS = "1";
+
+    const setup = await start();
+
+    expect((createCalls[0] as { followSymlinks: boolean }).followSymlinks).toBe(true);
     await shutdown(setup);
   });
 
@@ -476,6 +493,7 @@ describe("pi-fff autocomplete registration", () => {
         aiMode: true,
         enableHomeDirScanning: true,
         enableFsRootScanning: false,
+        followSymlinks: false,
       },
     ]);
   });

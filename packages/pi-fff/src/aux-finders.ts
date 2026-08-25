@@ -16,6 +16,7 @@ interface AuxPicker {
 export interface AuxOpts {
   enableFsRootScanning: boolean;
   enableHomeDirScanning?: boolean;
+  followSymlinks?: boolean;
   pickers: FilePickerFactory;
   // Called before a newly spawned aux picker starts a scan that covers $HOME.
   onHomeDirScan?: (root: string) => void;
@@ -104,6 +105,7 @@ export class AuxFinderPool {
       basePath: root,
       enableHomeDirScanning,
       enableFsRootScanning: this.opts.enableFsRootScanning,
+      followSymlinks: this.opts.followSymlinks,
     });
 
     const entry: AuxPicker = { root, finder, lastUsed: Date.now() };

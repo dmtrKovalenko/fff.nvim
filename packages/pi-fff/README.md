@@ -144,7 +144,8 @@ For persistent global configuration, create `pi-fff.json` in pi's agent director
   "historyDbPath": "/path/to/history",
   "enableFsRootScanning": false,
   "enableHomeDirScanning": true,
-  "warnOnHomeDirScan": true
+  "warnOnHomeDirScan": true,
+  "followSymlinks": false
 }
 ```
 
@@ -159,6 +160,7 @@ All fields are optional:
 | `enableFsRootScanning` | boolean | `false` |
 | `enableHomeDirScanning` | boolean | `true` |
 | `warnOnHomeDirScan` | boolean | `true` |
+| `followSymlinks` | boolean | `false` |
 
 CLI flags take precedence over environment variables, which take precedence over this file. A missing file is ignored. Malformed JSON, unknown fields, and invalid values stop the extension from loading and report the file path and error. `/fff-mode` changes the current session; it does not edit this file.
 
@@ -172,6 +174,7 @@ The file is global only. Project-level config cannot safely control tool names b
 - `--fff-enable-root-scan` — allow indexing when launched from `/` (also: `FFF_ENABLE_ROOT_SCAN=1` env). FFF refuses to init at the filesystem root by default.
 - `--fff-enable-home-scan` — index the home directory when launched from `$HOME` (also: `FFF_ENABLE_HOME_SCAN` env). Enabled by default. Disable with `--fff-enable-home-scan=false` or `FFF_ENABLE_HOME_SCAN=0` if your `$HOME` contains huge trees (toolchains, kernel sources, build outputs) that make the background index run for a long time. When launched from `$HOME` with this enabled, pi shows a warning that the whole home tree is being indexed.
 - `--fff-warn-home-scan` — show the warning notification when `$HOME` is indexed (also: `FFF_WARN_HOME_SCAN` env). Enabled by default. Disable with `--fff-warn-home-scan=false`, `FFF_WARN_HOME_SCAN=0`, or `"warnOnHomeDirScan": false` in `pi-fff.json`. Indexing and the footer status are unaffected.
+- `--fff-follow-symlinks` — index through directory symlinks (also: `FFF_FOLLOW_SYMLINKS=1` env, or `"followSymlinks": true` in `pi-fff.json`). Disabled by default, matching the Node SDK and fff.nvim. Enable it when the indexed tree reaches its real files through symlinks — a git worktree whose `docs/` links back to the main checkout, or a stowed dotfiles layout — otherwise those files are missing from `@`-mentions and from find/grep. The indexed tree must not contain symlink cycles: the walker does not de-duplicate visited targets, and a cycle can wedge the file watcher.
 
 ## Data
 
