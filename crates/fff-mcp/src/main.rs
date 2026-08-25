@@ -117,6 +117,7 @@ pub(crate) struct Args {
 
     /// Path-shape hint for per-session log files.
     /// Each fff-mcp startup writes a fresh sibling file `<stem>+<UTC-timestamp>+<pid>.<ext>`
+    /// Defaults to `$XDG_STATE_HOME/fff/fff_mcp.log` (`~/.local/state/fff/fff_mcp.log`).
     #[arg(long = "log-file")]
     log_file: Option<String>,
 
@@ -213,14 +214,31 @@ fn resolve_defaults(args: &mut Args) {
     }
 
     if args.log_file.is_none() {
-        let home = dirs_home();
-        let is_windows = cfg!(target_os = "windows");
-        args.log_file = Some(if is_windows {
-            format!("{}\\AppData\\Local\\fff_mcp.log", home)
-        } else {
-            format!("{}/.cache/fff_mcp.log", home)
-        });
+        args.log_file = Some(default_log_file());
     }
+}
+
+// Own subdirectory: log rotation read_dir's the parent on every startup, and the
+// per-session `<stem>+<ts>+<pid>.log` files otherwise pile up in its root.
+#[cfg(not(windows))]
+fn default_log_file() -> String {
+    let base =
+        absolute_env("XDG_STATE_HOME").unwrap_or_else(|| format!("{}/.local/state", dirs_home()));
+    format!("{}/fff/fff_mcp.log", base)
+}
+
+#[cfg(windows)]
+fn default_log_file() -> String {
+    let base =
+        absolute_env("LOCALAPPDATA").unwrap_or_else(|| format!("{}\\AppData\\Local", dirs_home()));
+    format!("{}\\fff\\fff_mcp.log", base)
+}
+
+// XDG spec: a non-absolute value must be ignored as if unset.
+fn absolute_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .filter(|value| std::path::Path::new(value).is_absolute())
 }
 
 fn dirs_home() -> String {
@@ -446,4 +464,17 @@ fn watchdog_interval() -> Duration {
         return Duration::from_millis(milliseconds);
     }
     Duration::from_secs(60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_log_file_lives_in_own_dir() {
+        let path = std::path::PathBuf::from(default_log_file());
+        assert!(path.is_absolute(), "{}", path.display());
+        assert_eq!(path.file_name().unwrap(), "fff_mcp.log");
+        assert_eq!(path.parent().unwrap().file_name().unwrap(), "fff");
+    }
 }
