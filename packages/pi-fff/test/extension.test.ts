@@ -228,7 +228,7 @@ describe("pi-fff global config", () => {
       historyDbPath: "/config/history",
       enableFsRootScanning: true,
       enableHomeDirScanning: false,
-      followSymlinks: true,
+      followSymlinks: false,
     });
 
     const setup = await start();
@@ -244,7 +244,7 @@ describe("pi-fff global config", () => {
       aiMode: true,
       enableHomeDirScanning: false,
       enableFsRootScanning: true,
-      followSymlinks: true,
+      followSymlinks: false,
     });
     await shutdown(setup);
   });
@@ -285,14 +285,14 @@ describe("pi-fff global config", () => {
     await shutdown(setup);
   });
 
-  // #627: worktree and stow layouts reach their files through symlinks, which the
-  // walker skips unless this is on.
-  test("follows symlinks when the environment enables them", async () => {
-    process.env.FFF_FOLLOW_SYMLINKS = "1";
+  // #627: worktree and stow layouts reach their files through symlinks, so following
+  // them is the default and the environment is the way out.
+  test("stops following symlinks when the environment disables them", async () => {
+    process.env.FFF_FOLLOW_SYMLINKS = "0";
 
     const setup = await start();
 
-    expect((createCalls[0] as { followSymlinks: boolean }).followSymlinks).toBe(true);
+    expect((createCalls[0] as { followSymlinks: boolean }).followSymlinks).toBe(false);
     await shutdown(setup);
   });
 
@@ -493,7 +493,7 @@ describe("pi-fff autocomplete registration", () => {
         aiMode: true,
         enableHomeDirScanning: true,
         enableFsRootScanning: false,
-        followSymlinks: false,
+        followSymlinks: true,
       },
     ]);
   });

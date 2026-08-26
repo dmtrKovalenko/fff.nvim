@@ -44,8 +44,8 @@
     },
     "followSymlinks": {
       "type": "boolean",
-      "default": false,
-      "description": "Indexes through directory symlinks, e.g. a git worktree or stow layout whose files live behind links. The tree must not contain symlink cycles."
+      "default": true,
+      "description": "Indexes through directory symlinks, e.g. a git worktree or stow layout whose files live behind links. Set to false to keep the walk inside the real tree."
     }
   }
 }

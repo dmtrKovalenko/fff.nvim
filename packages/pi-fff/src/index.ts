@@ -345,7 +345,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   let enableFsRootScanning = false;
   let enableHomeDirScanning = true;
   let warnOnHomeDirScan = true;
-  let followSymlinks = false;
+  let followSymlinks = true;
 
   function setMode(mode: FffMode): void {
     currentMode = mode;
@@ -395,13 +395,13 @@ export default function fffExtension(pi: ExtensionAPI) {
       true,
       parseBoolean,
     );
-    // Symlinked trees (git worktrees, stow layouts) are skipped by default, and
-    // loop protection is the caller's job, so following stays opt-in.
+    // On by default: worktree and stow layouts reach their files through links,
+    // and an agent silently missing them is worse than the extra walk.
     followSymlinks = getConfigValue(
       "fff-follow-symlinks",
       "FFF_FOLLOW_SYMLINKS",
       config.followSymlinks,
-      false,
+      true,
       parseBoolean,
     );
   }
@@ -691,7 +691,7 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   pi.registerFlag("fff-follow-symlinks", {
     description:
-      "Index through directory symlinks, e.g. a git worktree or stow layout (also: FFF_FOLLOW_SYMLINKS env). Disabled by default; the tree must not contain symlink cycles",
+      "Index through directory symlinks, e.g. a git worktree or stow layout (default true; disable with --fff-follow-symlinks=false or FFF_FOLLOW_SYMLINKS=0)",
     type: "boolean",
   });
 
