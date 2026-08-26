@@ -92,14 +92,15 @@ pub fn run_healthcheck(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
     // 5. Log path hint (per-session files written next to this path)
     if let Some(ref log_path) = args.log_file {
-        let parent_ok = std::path::Path::new(log_path)
+        let parent_ok = log_path
             .parent()
             .is_some_and(|p| p.is_dir() || p.parent().is_some());
+        let log_path = log_path.to_string_lossy();
         all_ok &= check(
             "Log path",
             parent_ok,
             if parent_ok {
-                log_path
+                &log_path
             } else {
                 "parent directory does not exist"
             },

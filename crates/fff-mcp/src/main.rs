@@ -6,6 +6,7 @@ mod parent;
 mod server;
 mod update_check;
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use clap::Parser;
@@ -117,9 +118,10 @@ pub(crate) struct Args {
 
     /// Path-shape hint for per-session log files.
     /// Each fff-mcp startup writes a fresh sibling file `<stem>+<UTC-timestamp>+<pid>.<ext>`
-    /// Defaults to `$XDG_STATE_HOME/fff/fff_mcp.log` (`~/.local/state/fff/fff_mcp.log`).
+    /// Defaults to `$XDG_STATE_HOME/fff/fff_mcp.log` (`~/.local/state/fff/fff_mcp.log`),
+    /// on Windows to `%LOCALAPPDATA%\fff\fff_mcp.log` (`~\AppData\Local\fff\fff_mcp.log`).
     #[arg(long = "log-file")]
-    log_file: Option<String>,
+    log_file: Option<PathBuf>,
 
     /// Log level (e.g. trace, debug, info, warn, error).
     #[arg(long = "log-level")]
@@ -208,7 +210,7 @@ fn resolve_defaults(args: &mut Args) {
         .into_iter()
         .flatten()
     {
-        if let Some(parent) = std::path::Path::new(path).parent() {
+        if let Some(parent) = Path::new(path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
     }
@@ -221,30 +223,31 @@ fn resolve_defaults(args: &mut Args) {
 // Own subdirectory: log rotation read_dir's the parent on every startup, and the
 // per-session `<stem>+<ts>+<pid>.log` files otherwise pile up in its root.
 #[cfg(not(windows))]
-fn default_log_file() -> String {
+fn default_log_file() -> PathBuf {
     let base =
-        absolute_env("XDG_STATE_HOME").unwrap_or_else(|| format!("{}/.local/state", dirs_home()));
-    format!("{}/fff/fff_mcp.log", base)
+        absolute_env("XDG_STATE_HOME").unwrap_or_else(|| dirs_home().join(".local").join("state"));
+    base.join("fff").join("fff_mcp.log")
 }
 
 #[cfg(windows)]
-fn default_log_file() -> String {
+fn default_log_file() -> PathBuf {
     let base =
-        absolute_env("LOCALAPPDATA").unwrap_or_else(|| format!("{}\\AppData\\Local", dirs_home()));
-    format!("{}\\fff\\fff_mcp.log", base)
+        absolute_env("LOCALAPPDATA").unwrap_or_else(|| dirs_home().join("AppData").join("Local"));
+    base.join("fff").join("fff_mcp.log")
 }
 
 // XDG spec: a non-absolute value must be ignored as if unset.
-fn absolute_env(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .filter(|value| std::path::Path::new(value).is_absolute())
+fn absolute_env(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
+        .map(PathBuf::from)
+        .filter(|value| value.is_absolute())
 }
 
-fn dirs_home() -> String {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| "/tmp".to_string())
+// Relative homes would break the absolute-path contract of the default above.
+fn dirs_home() -> PathBuf {
+    absolute_env("HOME")
+        .or_else(|| absolute_env("USERPROFILE"))
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 #[tokio::main]
@@ -256,8 +259,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return healthcheck::run_healthcheck(&args);
     }
 
-    let log_file = args.log_file.as_deref().unwrap_or("");
-    if let Err(e) = fff::log::init_tracing(log_file, args.log_level.as_deref(), None) {
+    let log_file = args
+        .log_file
+        .as_deref()
+        .unwrap_or(Path::new(""))
+        .to_string_lossy();
+    if let Err(e) = fff::log::init_tracing(&log_file, args.log_level.as_deref(), None) {
         eprintln!("Warning: Failed to init tracing: {}", e);
     }
 
@@ -472,7 +479,7 @@ mod tests {
 
     #[test]
     fn default_log_file_lives_in_own_dir() {
-        let path = std::path::PathBuf::from(default_log_file());
+        let path = default_log_file();
         assert!(path.is_absolute(), "{}", path.display());
         assert_eq!(path.file_name().unwrap(), "fff_mcp.log");
         assert_eq!(path.parent().unwrap().file_name().unwrap(), "fff");
