@@ -7,6 +7,8 @@ type MockFinder = {
   isDestroyed: boolean;
   waitForScan: ReturnType<typeof mock>;
   mixedSearch: ReturnType<typeof mock>;
+  grep: ReturnType<typeof mock>;
+  glob: ReturnType<typeof mock>;
   getScanProgress: ReturnType<typeof mock>;
   destroy: ReturnType<typeof mock>;
 };
@@ -14,7 +16,16 @@ type MockFinder = {
 const createCalls: unknown[] = [];
 let finders: MockFinder[] = [];
 let mixedSearchImpl: ((query: string, options: unknown) => unknown) | undefined;
+let grepImpl: ((query: string, options: any) => unknown) | undefined;
+let globImpl: ((pattern: string, options: any) => unknown) | undefined;
 let scanProgressImpl: (() => unknown) | undefined;
+
+function emptyGrepResult() {
+  return {
+    ok: true,
+    value: { items: [], totalMatched: 0, totalFiles: 0, nextCursor: null },
+  };
+}
 
 function createMockFinder(): MockFinder {
   return {
@@ -44,6 +55,14 @@ function createMockFinder(): MockFinder {
           totalDirs: 0,
         },
       };
+    }),
+    grep: mock((query: string, options: any) => {
+      if (grepImpl) return grepImpl(query, options);
+      return emptyGrepResult();
+    }),
+    glob: mock((pattern: string, options: any) => {
+      if (globImpl) return globImpl(pattern, options);
+      return { ok: true, value: { items: [], totalMatched: 0, totalFiles: 0 } };
     }),
     destroy: mock(function (this: MockFinder) {
       this.isDestroyed = true;
@@ -203,6 +222,8 @@ beforeEach(() => {
   createCalls.length = 0;
   finders = [];
   mixedSearchImpl = undefined;
+  grepImpl = undefined;
+  globImpl = undefined;
   scanProgressImpl = undefined;
 
   for (const key of CONFIG_ENV_KEYS) delete process.env[key];
@@ -457,6 +478,126 @@ describe("pi-fff $HOME scan warning", () => {
     const setup = await start(undefined, os.homedir());
 
     expect(setup.ctx.ui.notify).not.toHaveBeenCalled();
+    await shutdown(setup);
+  });
+});
+
+// Regression for #830: a path constraint pinning an unindexed file must not be
+// silently dropped, turning the grep into a repo-wide fuzzy search.
+describe("pi-fff grep fuzzy fallback", () => {
+  const grepWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fff-grep-"));
+  fs.mkdirSync(path.join(grepWorkspace, "node_modules", "react"), { recursive: true });
+  fs.writeFileSync(
+    path.join(grepWorkspace, "node_modules", "react", "package.json"),
+    JSON.stringify({ exports: { "./jsx-runtime": "./jsx-runtime.js" } }),
+  );
+
+  afterAll(() => fs.rmSync(grepWorkspace, { recursive: true, force: true }));
+
+  // Mimics the native picker: the constrained query hits nothing because
+  // node_modules is excluded from the index, an unconstrained one matches
+  // arbitrary frecency-ranked source files.
+  function excludedIndexGrep(query: string) {
+    if (query.includes("node_modules")) return emptyGrepResult();
+    return {
+      ok: true,
+      value: {
+        items: [
+          {
+            relativePath: "src/renderer/App.tsx",
+            lineNumber: 12,
+            lineContent: "  useEffect(() => {",
+          },
+        ],
+        totalMatched: 1,
+        totalFiles: 1,
+        nextCursor: null,
+      },
+    };
+  }
+
+  async function grepTool(cwd: string) {
+    const setup = await start(undefined, cwd);
+    const tool = setup.pi.registerTool.mock.calls
+      .map(([t]) => t)
+      .find((t) => t.name === "grep" || t.name === "ffgrep");
+    expect(tool).toBeDefined();
+    return { setup, tool };
+  }
+
+  test("keeps the constraint when the pinned file exists but is not indexed", async () => {
+    grepImpl = (query) => excludedIndexGrep(query);
+    const { setup, tool } = await grepTool(grepWorkspace);
+
+    const result = await tool.execute("call-1", {
+      pattern: "jsx-runtime",
+      path: "node_modules/react/package.json",
+    });
+
+    const text = result.content[0].text;
+    expect(text).not.toContain("src/renderer/App.tsx");
+    expect(text).toContain("No matches found");
+    expect(text).toContain("not indexed");
+    // Every grep call must have carried the constraint.
+    for (const [query] of finders[0].grep.mock.calls) {
+      expect(query).toContain("node_modules/react/package.json");
+    }
+    await shutdown(setup);
+  });
+
+  test("broadens for a misnamed file but says the constraint was dropped", async () => {
+    grepImpl = (query) => {
+      if (query.includes("does-not-exist.ts")) return emptyGrepResult();
+      return excludedIndexGrep("jsx-runtime");
+    };
+    const { setup, tool } = await grepTool(grepWorkspace);
+
+    const result = await tool.execute("call-2", {
+      pattern: "jsx-runtime",
+      path: "src/does-not-exist.ts",
+    });
+
+    const text = result.content[0].text;
+    expect(text).toContain("src/renderer/App.tsx");
+    expect(text).toContain("path constraint dropped");
+    await shutdown(setup);
+  });
+
+  test("an indexed pinned file with no hits stays a plain miss", async () => {
+    fs.writeFileSync(path.join(grepWorkspace, "package.json"), "{}");
+    grepImpl = () => emptyGrepResult();
+    globImpl = (pattern) => ({
+      ok: true,
+      value: {
+        items: [{ relativePath: pattern, fileName: pattern, gitStatus: "clean" }],
+        totalMatched: 1,
+        totalFiles: 1,
+      },
+    });
+    const { setup, tool } = await grepTool(grepWorkspace);
+
+    const result = await tool.execute("call-3", {
+      pattern: "jsx-runtime",
+      path: "package.json",
+    });
+
+    expect(result.content[0].text).toBe("No matches found");
+    await shutdown(setup);
+  });
+
+  test("directory constraints keep the constrained fuzzy query", async () => {
+    grepImpl = (query) => excludedIndexGrep(query);
+    const { setup, tool } = await grepTool(grepWorkspace);
+
+    const result = await tool.execute("call-4", {
+      pattern: "jsx-runtime",
+      path: "node_modules/react/",
+    });
+
+    expect(result.content[0].text).toContain("No matches found");
+    for (const [query] of finders[0].grep.mock.calls) {
+      expect(query).toContain("node_modules/react/");
+    }
     await shutdown(setup);
   });
 });
