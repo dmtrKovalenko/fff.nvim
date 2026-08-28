@@ -173,7 +173,9 @@ impl<'a> GrepResult<'a> {
         options: &GrepSearchOptions,
         total_files: usize,
         filtered_file_count: usize,
-        budget_exceeded: bool,
+        // Set when an abort stopped the search: the lowest index in files_to_search
+        // that was not searched, i.e. the exact resume point for the next page.
+        abort_resume: Option<usize>,
     ) -> Self {
         let page_limit = options.page_limit;
 
@@ -191,6 +193,11 @@ impl<'a> GrepResult<'a> {
         let mut files_consumed: usize = 0;
 
         for (batch_idx, file, file_matches) in per_file_results {
+            // Matches past the abort point are dropped; the cursor re-searches them.
+            if abort_resume.is_some_and(|resume_at| batch_idx >= resume_at) {
+                continue;
+            }
+
             // batch_idx is the 0-based position in files_to_search.
             // Advance files_consumed to include this file and all no-match files before it.
             files_consumed = batch_idx + 1;
@@ -214,13 +221,16 @@ impl<'a> GrepResult<'a> {
             }
         }
 
-        // If no file had any match, we searched the entire slice.
-        if result_files.is_empty() {
-            files_consumed = files_to_search_len;
+        // An abort stopped us at a known index. Otherwise, zero matches means the
+        // whole slice was searched.
+        match abort_resume {
+            Some(resume_at) => files_consumed = resume_at.min(files_to_search_len),
+            None if result_files.is_empty() => files_consumed = files_to_search_len,
+            None => {}
         }
 
-        let has_more = budget_exceeded
-            || (all_matches.len() >= page_limit && files_consumed < files_to_search_len);
+        let has_more = files_consumed < files_to_search_len
+            && (abort_resume.is_some() || all_matches.len() >= page_limit);
 
         let next_file_offset = if has_more {
             options.file_offset + files_consumed

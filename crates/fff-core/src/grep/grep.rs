@@ -16,7 +16,7 @@ use fff_query_parser::{FFFQuery, GrepConfig, QueryParser};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tracing::Level;
 
 #[allow(clippy::large_enum_variant)]
@@ -562,6 +562,9 @@ where
     let search_start = std::time::Instant::now();
     let page_limit = options.page_limit;
     let budget_exceeded = AtomicBool::new(false);
+    // Lowest index in files_to_search an abort skipped. Everything below it was
+    // searched, so it is the exact resume point for the next page.
+    let first_skipped = AtomicUsize::new(usize::MAX);
 
     let mut result_files: Vec<&'a FileItem> = Vec::new();
     let mut all_matches: Vec<GrepMatch> = Vec::new();
@@ -600,23 +603,19 @@ where
                 // tested it out a few times, this is just fine for rayon worker in this specific
                 // case it doesn't reallocate this many times and it is actually faster than using
                 // scoped threads with a predefined local scratch buffers because of spawn cost
-                || (Vec::with_capacity(64 * 1024), MmapSlot::default()),
-                |(buf, mmap_slot), (local_idx, file)| {
-                    // perform all the atomic machinery on every 8th
-                    if local_idx % 8 == 0 {
-                        let mut need_abort = ctx.abort_signal.load(Ordering::Relaxed);
-                        if !need_abort
-                            && let Some(budget) = time_budget
-                            && all_matches.len() > 1
-                            && search_start.elapsed() > budget
-                        {
-                            need_abort = true;
-                        }
+                || (Vec::with_capacity(64 * 1024), MmapSlot::default(), false),
+                |(buf, mmap_slot, aborted), (local_idx, file)| {
+                    // perform all the atomic machinery on every 8th; `aborted`
+                    // latches so the rest of this worker's range bails out for free
+                    if !*aborted && local_idx % 8 == 0 {
+                        *aborted = ctx.abort_signal.load(Ordering::Relaxed)
+                            || time_budget.is_some_and(|b| search_start.elapsed() > b);
+                    }
 
-                        if need_abort {
-                            budget_exceeded.store(true, Ordering::Relaxed);
-                            return None;
-                        }
+                    if *aborted {
+                        budget_exceeded.store(true, Ordering::Relaxed);
+                        first_skipped.fetch_min(chunk_offset + local_idx, Ordering::Relaxed);
+                        return None;
                     }
 
                     let content = file.get_content_for_search(
@@ -648,11 +647,23 @@ where
             .flatten()
             .collect();
 
-        // Every file in the chunk was visited by rayon (matched or not).
+        // Every file in the chunk was visited by rayon (matched or not), unless an
+        // abort cut it short — then we only consumed up to the first skipped file.
+        let abort_resume = budget_exceeded
+            .load(Ordering::Relaxed)
+            .then(|| first_skipped.load(Ordering::Relaxed));
         files_consumed = chunk_offset + chunk.len();
+        if let Some(resume_at) = abort_resume {
+            files_consumed = files_consumed.min(resume_at);
+        }
 
         // Flatten this chunk's results into the accumulator.
         for (batch_idx, file, file_matches) in chunk_results {
+            // Matches past the abort point are dropped; the cursor re-searches them.
+            if abort_resume.is_some_and(|resume_at| batch_idx >= resume_at) {
+                continue;
+            }
+
             let file_result_idx = result_files.len();
             result_files.push(file);
 
@@ -678,13 +689,15 @@ where
         }
     }
 
-    // If no file had any match, we searched the entire slice.
-    if result_files.is_empty() {
+    let aborted = budget_exceeded.load(Ordering::Relaxed);
+
+    // If no file had any match, we searched the entire slice. An abort is the
+    // exception: files_consumed already holds how far we actually got.
+    if result_files.is_empty() && !aborted {
         files_consumed = files_to_search.len();
     }
 
-    let has_more = budget_exceeded.load(Ordering::Relaxed)
-        || (page_filled && files_consumed < files_to_search.len());
+    let has_more = (aborted || page_filled) && files_consumed < files_to_search.len();
 
     let next_file_offset = if has_more {
         options.file_offset + files_consumed
