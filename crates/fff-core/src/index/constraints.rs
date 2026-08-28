@@ -148,6 +148,12 @@ pub(crate) type GlobPattern = zlob::ZlobPattern;
 #[cfg(all(not(feature = "zlob"), feature = "ripgrep"))]
 pub(crate) type GlobPattern = globset::GlobMatcher;
 
+/// `PERIOD` on top of `RECOMMENDED`: we filter an index that already contains
+/// dotfiles, so `**/x` must cross `.config`/`.pi` components. Without it zlob
+/// applies fnmatch's leading-dot rule and diverges from the globset backend.
+#[cfg(feature = "zlob")]
+const GLOB_FLAGS: zlob::ZlobFlags = zlob::ZlobFlags::RECOMMENDED.union(zlob::ZlobFlags::PERIOD);
+
 /// How `Constraint::Glob` is evaluated for each item.
 enum GlobStrategy {
     /// No Glob constraint present.
@@ -504,7 +510,7 @@ fn walk_globs<F: FnMut(&str)>(c: &Constraint<'_>, f: &mut F) {
 
 #[cfg(feature = "zlob")]
 pub(crate) fn compile_one(pattern: &str) -> Option<GlobPattern> {
-    zlob::ZlobPattern::compile(pattern, zlob::ZlobFlags::RECOMMENDED).ok()
+    zlob::ZlobPattern::compile(pattern, GLOB_FLAGS).ok()
 }
 
 #[cfg(all(not(feature = "zlob"), feature = "ripgrep"))]
@@ -519,8 +525,7 @@ pub(crate) fn compile_one(pattern: &str) -> Option<GlobPattern> {
 #[cfg(feature = "zlob")]
 fn match_glob_pattern(pattern: &str, paths: &[&str]) -> Vec<bool> {
     let mut mask = vec![false; paths.len()];
-    let Ok(hits) = zlob::zlob_match_paths_indices(pattern, paths, zlob::ZlobFlags::RECOMMENDED)
-    else {
+    let Ok(hits) = zlob::zlob_match_paths_indices(pattern, paths, GLOB_FLAGS) else {
         return mask;
     };
     for i in hits.to_iter() {
