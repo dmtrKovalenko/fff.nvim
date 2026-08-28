@@ -5,6 +5,7 @@
  * @-mention autocomplete suggestions to the interactive editor.
  */
 
+import fs from "node:fs";
 import nodePath from "node:path";
 import type {
   ExtensionAPI,
@@ -28,7 +29,7 @@ import { Type, type TSchema } from "@sinclair/typebox";
 import { AuxFinderPool, routePathConstraint } from "./aux-finders";
 import { type FffMode, loadConfig, VALID_MODES } from "./config";
 import { FilePickerFactory } from "./file-picker";
-import { isHomeDir, resolveDbPaths } from "./paths";
+import { HOME_DIR, isHomeDir, resolveDbPaths } from "./paths";
 import { buildQuery } from "./query";
 
 export { SCAN_TIMEOUT_MS } from "./sdk";
@@ -929,7 +930,14 @@ export default function fffExtension(pi: ExtensionAPI) {
         // excluded / out-of-scope directories.
         const lastSeg = params.path?.split(/[\\/]/).pop() ?? "";
         const pathTargetsFile = /\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(lastSeg);
-        const fuzzyQuery = pathTargetsFile ? pattern : query;
+        // A pinned file that exists on disk is not a misnamed guess, so widening
+        // past it would answer a different question with repo-wide noise (#830).
+        const pinnedFile =
+          pathTargetsFile && params.path
+            ? resolvePinnedFile(params.path, activeCwd)
+            : null;
+        const dropConstraint = pathTargetsFile && !pinnedFile;
+        const fuzzyQuery = dropConstraint ? pattern : query;
         const fuzzy = picker.grep(fuzzyQuery, {
           mode: "fuzzy",
           smartCase,
@@ -943,8 +951,15 @@ export default function fffExtension(pi: ExtensionAPI) {
         });
 
         if (fuzzy.ok && fuzzy.value.items.length > 0) {
-          fuzzyNotice = `0 exact matches. Maybe you meant this?`;
+          fuzzyNotice = dropConstraint
+            ? `0 exact matches, path constraint dropped (no such file: ${params.path}); results are repo-wide`
+            : `0 exact matches. Maybe you meant this?`;
           result = fuzzy.value;
+        } else if (
+          pinnedFile &&
+          !isIndexedFile(picker, aux ? aux.root : activeCwd, pinnedFile)
+        ) {
+          fuzzyNotice = `${params.path} is not indexed (gitignored or excluded)`;
         }
       }
 
@@ -1334,4 +1349,36 @@ export default function fffExtension(pi: ExtensionAPI) {
       ctx.ui.notify("FFF rescan triggered", "info");
     },
   });
+}
+
+// Absolute path of an existing regular file named by a `path` constraint, or
+// null when the constraint is a glob or points at nothing / a directory.
+function resolvePinnedFile(pathParam: string, cwd: string): string | null {
+  const trimmed = pathParam.trim();
+  if (!trimmed || /[*?[{]/.test(trimmed)) return null;
+  const expanded =
+    trimmed === "~" || trimmed.startsWith("~/")
+      ? nodePath.join(HOME_DIR, trimmed.slice(1))
+      : trimmed;
+
+  try {
+    const abs = nodePath.resolve(cwd, expanded);
+    return fs.statSync(abs).isFile() ? abs : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether the picker's index holds `absPath`. Runs only on the zero-result path,
+// so the extra index pass never touches a hot query.
+function isIndexedFile(picker: FileFinderApi, root: string, absPath: string): boolean {
+  const rel = nodePath.relative(root, absPath).replaceAll(nodePath.sep, "/");
+  if (!rel || rel.startsWith("../")) return false;
+
+  try {
+    const result = picker.glob(rel, { pageSize: 1 });
+    return result.ok && result.value.items.some((file) => file.relativePath === rel);
+  } catch {
+    return true;
+  }
 }
