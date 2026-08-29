@@ -414,7 +414,6 @@ require('fff').setup({
     status_text_color = false, -- true to color filenames by git status
   },
   file_picker = {
-    display_relative_path = false, -- show paths as `path/to/file` instead of `file path/to`
     fuzzy_query_highlighting = false, -- true to highlight fuzzy query matches in file picker results
   },
   select = {
