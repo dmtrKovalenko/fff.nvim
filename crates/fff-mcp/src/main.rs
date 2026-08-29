@@ -243,12 +243,22 @@ fn absolute_env(key: &str) -> Option<PathBuf> {
         .filter(|value| value.is_absolute())
 }
 
-// Relative homes would break the absolute-path contract of the default above.
+// Relative homes would break the absolute-path contract of the default above,
+// and TMPDIR can be relative too, so every fallback is filtered for absoluteness.
 fn dirs_home() -> PathBuf {
     absolute_env("HOME")
         .or_else(|| absolute_env("USERPROFILE"))
-        .unwrap_or_else(std::env::temp_dir)
+        .or_else(|| {
+            let tmp = std::env::temp_dir();
+            tmp.is_absolute().then_some(tmp)
+        })
+        .unwrap_or_else(|| PathBuf::from(FALLBACK_ROOT))
 }
+
+#[cfg(not(windows))]
+const FALLBACK_ROOT: &str = "/tmp";
+#[cfg(windows)]
+const FALLBACK_ROOT: &str = "C:\\Windows\\Temp";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -259,13 +269,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return healthcheck::run_healthcheck(&args);
     }
 
-    let log_file = args
-        .log_file
-        .as_deref()
-        .unwrap_or(Path::new(""))
-        .to_string_lossy();
-    if let Err(e) = fff::log::init_tracing(&log_file, args.log_level.as_deref(), None) {
-        eprintln!("Warning: Failed to init tracing: {}", e);
+    // init_tracing takes &str (stable across fff-c/-python/-nvim), so reject a
+    // non-UTF-8 --log-file rather than let to_string_lossy retarget the file.
+    let log_file = args.log_file.as_deref().unwrap_or(Path::new(""));
+    match log_file.to_str() {
+        Some(log_file) => {
+            if let Err(e) = fff::log::init_tracing(log_file, args.log_level.as_deref(), None) {
+                eprintln!("Warning: Failed to init tracing: {}", e);
+            }
+        }
+        None => eprintln!(
+            "Warning: --log-file is not valid UTF-8, file logging disabled: {}",
+            log_file.display()
+        ),
     }
 
     let base_path = args.base_path.unwrap_or_else(|| {
