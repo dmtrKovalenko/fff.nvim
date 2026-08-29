@@ -7,6 +7,7 @@ type MockFinder = {
   isDestroyed: boolean;
   waitForScan: ReturnType<typeof mock>;
   mixedSearch: ReturnType<typeof mock>;
+  grep: ReturnType<typeof mock>;
   getScanProgress: ReturnType<typeof mock>;
   destroy: ReturnType<typeof mock>;
 };
@@ -14,6 +15,7 @@ type MockFinder = {
 const createCalls: unknown[] = [];
 let finders: MockFinder[] = [];
 let mixedSearchImpl: ((query: string, options: unknown) => unknown) | undefined;
+let grepImpl: ((query: string, options: unknown) => unknown) | undefined;
 let scanProgressImpl: (() => unknown) | undefined;
 
 function createMockFinder(): MockFinder {
@@ -42,6 +44,20 @@ function createMockFinder(): MockFinder {
           totalMatched: 0,
           totalFiles: 0,
           totalDirs: 0,
+        },
+      };
+    }),
+    grep: mock((query: string, options: unknown) => {
+      if (grepImpl) return grepImpl(query, options);
+      return {
+        ok: true,
+        value: {
+          items: [],
+          totalMatched: 0,
+          totalFiles: 0,
+          totalFilesSearched: 0,
+          filteredFileCount: 0,
+          nextCursor: null,
         },
       };
     }),
@@ -203,6 +219,7 @@ beforeEach(() => {
   createCalls.length = 0;
   finders = [];
   mixedSearchImpl = undefined;
+  grepImpl = undefined;
   scanProgressImpl = undefined;
 
   for (const key of CONFIG_ENV_KEYS) delete process.env[key];
@@ -645,5 +662,44 @@ describe("pi-fff autocomplete registration", () => {
     expect(shouldTrigger).toBe(false);
     expect(current.applyCompletion).toHaveBeenCalledTimes(1);
     expect(current.shouldTriggerFileCompletion).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ffgrep per-file cap (#825)", () => {
+  function grepTool(setup: { pi: { registerTool: ReturnType<typeof mock> } }) {
+    const tool = setup.pi.registerTool.mock.calls
+      .map(([t]) => t)
+      .find((t) => t.name === "ffgrep" || t.name === "grep");
+    expect(tool).toBeDefined();
+    return tool;
+  }
+
+  // Grep cursors advance by file offset, so maxMatchesPerFile must NOT be clamped
+  // to pageSize — otherwise same-file overflow is unreachable on later pages.
+  test("passes a per-file cap decoupled from pageSize", async () => {
+    let captured: any;
+    grepImpl = (_query, options) => {
+      captured = options;
+      return {
+        ok: true,
+        value: {
+          items: [],
+          totalMatched: 0,
+          totalFiles: 0,
+          totalFilesSearched: 0,
+          filteredFileCount: 0,
+          nextCursor: null,
+        },
+      };
+    };
+
+    const setup = await start("tools-and-ui");
+    const tool = grepTool(setup);
+    await tool.execute("call-1", { pattern: "TODO", limit: 20 }, abortOptions().signal);
+
+    expect(captured).toBeDefined();
+    expect(captured.pageSize).toBe(20);
+    expect(captured.maxMatchesPerFile).toBe(200);
+    expect(captured.maxMatchesPerFile).toBeGreaterThan(captured.pageSize);
   });
 });
