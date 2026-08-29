@@ -1,5 +1,5 @@
 import type { FileFinderApi, InitOptions, Result } from "@ff-labs/fff-node";
-import { type FileFinderStatic, loadSdk, SCAN_TIMEOUT_MS } from "./sdk";
+import { type FileFinderStatic, loadSdk } from "./sdk";
 
 export interface PickerOptions {
   basePath: string;
@@ -30,7 +30,7 @@ export class FilePickerFactory {
     return this.dbDisabled;
   }
 
-  /** Opens a scanned, ready-to-use picker. Throws if it cannot be created. */
+  /** Opens a picker that scans in the background. Throws if it cannot be created. */
   async create(options: PickerOptions): Promise<FileFinderApi> {
     const { FileFinder } = await loadSdk();
     const result = this.openWithDbFallback(FileFinder, options);
@@ -41,9 +41,6 @@ export class FilePickerFactory {
       );
     }
 
-    // waitForScan() also resolves on timeout, so this bounds startup rather
-    // than guaranteeing a complete index.
-    await result.value.waitForScan(SCAN_TIMEOUT_MS);
     return result.value;
   }
 
