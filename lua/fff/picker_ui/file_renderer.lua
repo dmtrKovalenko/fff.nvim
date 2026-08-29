@@ -2,7 +2,7 @@
 --- Simple renderer for file items with 2 functions: render_line and apply_highlights
 local M = {}
 
-local path_separator = package.config:sub(1, 1)
+local file_name_renderer = require('fff.picker_ui.file_name_renderer')
 
 --- File Item structure from Rust
 --- @class FileItem
@@ -51,24 +51,7 @@ function M.render_line(item, ctx, item_idx) -- luacheck: ignore item_idx
     end
   end
 
-  local display_relative_path = ctx.mode ~= 'grep'
-    and ctx.suggestion_source ~= 'grep'
-    and ctx.config.file_picker
-    and ctx.config.file_picker.display_relative_path
-  local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
-  local min_width = display_relative_path and 0 or 40
-  local available_width = math.max(ctx.max_path_width - icon_width, min_width)
-  local filename, dir_path = ctx.format_file_display(item, available_width)
-
-  local line
-  if display_relative_path then
-    local display_path = dir_path ~= '' and (dir_path .. path_separator .. filename) or filename
-    line = icon and string.format('%s %s%s', icon, display_path, frecency)
-      or string.format('%s%s', display_path, frecency)
-  else
-    line = icon and string.format('%s %s %s%s', icon, filename, dir_path, frecency)
-      or string.format('%s %s%s', filename, dir_path, frecency)
-  end
+  local line = file_name_renderer.build(item, ctx, icon).text .. frecency
 
   local padding = math.max(0, ctx.win_width - vim.fn.strdisplaywidth(line) + 5)
   table.insert(lines, line .. string.rep(' ', padding))
@@ -95,14 +78,8 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
 
   -- Get icon and paths
   local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
-  local display_relative_path = ctx.mode ~= 'grep'
-    and ctx.suggestion_source ~= 'grep'
-    and ctx.config.file_picker
-    and ctx.config.file_picker.display_relative_path
-  local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
-  local min_width = display_relative_path and 0 or 40
-  local available_width = math.max(ctx.max_path_width - icon_width, min_width)
-  local filename, dir_path = ctx.format_file_display(item, available_width)
+  local name_layout = file_name_renderer.build(item, ctx, icon)
+  local filename, dir_path = name_layout.filename, name_layout.dir_path
 
   -- 1. Cursor highlight
   if is_cursor then
@@ -131,8 +108,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   if ctx.config.git and ctx.config.git.status_text_color and icon and #filename > 0 then
     local git_text_hl = item.git_status and highlights.get_git_text_highlight(item.git_status) or nil
     if git_text_hl and git_text_hl ~= '' and not is_current_file then
-      local filename_start = #icon + 1
-      if display_relative_path and #dir_path > 0 then filename_start = filename_start + #dir_path + #path_separator end
+      local filename_start = name_layout.filename_col
       vim.api.nvim_buf_set_extmark(
         buf,
         ns_id,
@@ -159,22 +135,12 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
 
   -- 5. Directory path (dimmed)
   if #filename > 0 and #dir_path > 0 then
-    local prefix_len
-    local path_end
-    if display_relative_path then
-      prefix_len = icon and (#icon + 1) or 0
-      path_end = prefix_len + #dir_path + #path_separator
-    else
-      prefix_len = #filename + 1
-      if icon then prefix_len = prefix_len + #icon + 1 end
-      path_end = prefix_len + #dir_path
-    end
     vim.api.nvim_buf_set_extmark(
       buf,
       ns_id,
       line_idx - 1,
-      prefix_len,
-      { end_col = path_end, hl_group = ctx.config.hl.directory_path }
+      name_layout.dir_col,
+      { end_col = name_layout.dir_end_col, hl_group = ctx.config.hl.directory_path }
     )
   end
 
@@ -242,32 +208,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
     local ranges = item.match_ranges
     if not ranges or #ranges == 0 then return end
 
-    local rel_path = item.relative_path or ''
-    if type(rel_path) ~= 'string' then rel_path = tostring(rel_path) end
-
-    local original_dir_path = ''
-    local parent_dir = vim.fn.fnamemodify(rel_path, ':h')
-    if parent_dir ~= '.' and parent_dir ~= '' then original_dir_path = parent_dir end
-
-    local filename_rel_start = math.max(0, #rel_path - #filename)
-    local filename_rel_end = filename_rel_start + #filename
-    local filename_line_start = icon and (#icon + 1) or 0
-    local segments
-
-    if display_relative_path then
-      if dir_path ~= '' then filename_line_start = filename_line_start + #dir_path + #path_separator end
-      segments = { { filename_rel_start, filename_rel_end, filename_line_start } }
-      if original_dir_path ~= '' and dir_path == original_dir_path then
-        local path_line_start = icon and (#icon + 1) or 0
-        segments[#segments + 1] = { 0, filename_rel_start, path_line_start }
-      end
-    else
-      local dir_line_start = filename_line_start + #filename + 1
-      segments = { { filename_rel_start, filename_rel_end, filename_line_start } }
-      if original_dir_path ~= '' and dir_path == original_dir_path then
-        segments[#segments + 1] = { 0, #original_dir_path, dir_line_start }
-      end
-    end
+    local segments = file_name_renderer.fuzzy_segments(item, name_layout)
 
     local function apply_segment(raw_start, raw_end, segment)
       local source_start, source_end, target_start = segment[1], segment[2], segment[3]

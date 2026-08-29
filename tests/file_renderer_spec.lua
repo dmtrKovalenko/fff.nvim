@@ -24,7 +24,8 @@ local function make_context()
     debug_enabled = false,
     selected_files = {},
     config = {
-      file_picker = { display_relative_path = true, fuzzy_query_highlighting = true },
+      layout = { show_path_first = true },
+      file_picker = { fuzzy_query_highlighting = true },
       git = { status_text_color = true },
       hl = { directory_path = 'Comment', matched = 'Search' },
     },
@@ -42,7 +43,7 @@ local function highlight_ranges(buf, ns, group)
   return ranges
 end
 
-describe('file renderer relative path display', function()
+describe('file renderer path first display', function()
   before_each(function()
     icons.get_icon = function() return 'I', 'Icon' end
     highlights.get_git_text_highlight = function() return 'GitText' end
@@ -105,6 +106,38 @@ describe('file renderer relative path display', function()
 
     local filename_start = assert(line:find(filename, 1, true)) - 1
     assert.are.same({ { filename_start, filename_start + 1 } }, highlight_ranges(buf, ns, 'Search'))
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+
+  it('applies to grep file group headers as well', function()
+    local item = { name = 'main.lua', relative_path = relative_path }
+    local ctx = make_context()
+    ctx.mode = 'grep'
+    ctx.suggestion_source = 'grep'
+    assert.are.equal('I ' .. relative_path, vim.trim(renderer.render_line(item, ctx)[1]))
+  end)
+
+  it('keeps the name first layout and its offsets when disabled', function()
+    local item = {
+      name = 'main.lua',
+      relative_path = relative_path,
+      git_status = 'modified',
+      match_ranges = { { 0, 1 }, { 15, 16 } },
+    }
+    local ctx = make_context()
+    ctx.config.layout.show_path_first = false
+    local line = renderer.render_line(item, ctx)[1]
+    assert.are.equal('I main.lua ' .. directory, vim.trim(line))
+
+    local buf = vim.api.nvim_create_buf(false, true)
+    local ns = vim.api.nvim_create_namespace('fff-file-renderer-test')
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
+    renderer.apply_highlights(item, ctx, 1, buf, ns, 1, line)
+
+    assert.are.same({ { 2, 2 + #'main.lua' } }, highlight_ranges(buf, ns, 'GitText'))
+    assert.are.same({ { 11, 11 + #directory } }, highlight_ranges(buf, ns, 'Comment'))
+    -- rel_path byte 15 is the 'm' of main.lua, byte 0 is the 's' of src
+    assert.are.same({ { 2, 3 }, { 11, 12 } }, highlight_ranges(buf, ns, 'Search'))
     vim.api.nvim_buf_delete(buf, { force = true })
   end)
 end)
