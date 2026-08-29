@@ -40,6 +40,10 @@ export { SCAN_TIMEOUT_MS } from "./sdk";
 const DEFAULT_GREP_LIMIT = 20;
 const DEFAULT_FIND_LIMIT = 30;
 const GREP_PAGE_SIZE_MAX = 50;
+// Per-file match cap. Must stay decoupled from pageSize: grep cursors advance by
+// file offset, so clamping this to pageSize makes same-file overflow unreachable
+// on later pages (#825). Matches the engine default.
+const GREP_MAX_MATCHES_PER_FILE = 200;
 const GREP_CONTEXT_MAX = 20;
 const GREP_MAX_LINE_LENGTH = 500;
 const MENTION_MAX_RESULTS = 20;
@@ -849,8 +853,9 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       const picker = aux ? aux.finder : await ensureFinder(activeCwd);
       const effectiveLimit = Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT);
-      // pageSize caps TOTAL matches across all files; maxMatchesPerFile alone
-      // only caps per-file, so limit=5 could still return a full SDK page.
+      // pageSize caps TOTAL matches across all files (soft cap: the current file
+      // is always finished first). maxMatchesPerFile stays decoupled at the engine
+      // default so same-file overflow remains reachable via cursor (#825).
       const pageSize = Math.min(effectiveLimit, GREP_PAGE_SIZE_MAX);
       const context = clampContext(params.context);
       const query = aux
@@ -900,7 +905,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       const grepResult = picker.grep(query, {
         mode,
         smartCase,
-        maxMatchesPerFile: pageSize,
+        maxMatchesPerFile: GREP_MAX_MATCHES_PER_FILE,
         pageSize,
         cursor: (params.cursor ? getCursor(params.cursor) : null) ?? null,
         beforeContext: context,
@@ -933,7 +938,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         const fuzzy = picker.grep(fuzzyQuery, {
           mode: "fuzzy",
           smartCase,
-          maxMatchesPerFile: pageSize,
+          maxMatchesPerFile: GREP_MAX_MATCHES_PER_FILE,
           pageSize,
           cursor: null,
           beforeContext: 0,
@@ -1183,7 +1188,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         const grepResult = f.multiGrep({
           patterns: params.patterns,
           constraints: params.constraints,
-          maxMatchesPerFile: pageSize,
+          maxMatchesPerFile: GREP_MAX_MATCHES_PER_FILE,
           pageSize,
           smartCase: true,
           cursor: (params.cursor ? getCursor(params.cursor) : null) ?? null,
