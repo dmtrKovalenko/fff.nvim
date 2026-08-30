@@ -32,6 +32,7 @@ describe("loadConfig", () => {
       enableFsRootScanning: true,
       enableHomeDirScanning: false,
       warnOnHomeDirScan: false,
+      followSymlinks: true,
     };
     writeConfig(config);
 
@@ -68,6 +69,7 @@ describe("loadConfig", () => {
       [{ enableFsRootScanning: 1 }, '"enableFsRootScanning" must be a boolean'],
       [{ enableHomeDirScanning: "false" }, '"enableHomeDirScanning" must be a boolean'],
       [{ warnOnHomeDirScan: "false" }, '"warnOnHomeDirScan" must be a boolean'],
+      [{ followSymlinks: "true" }, '"followSymlinks" must be a boolean'],
     ];
 
     for (const [config, message] of cases) {

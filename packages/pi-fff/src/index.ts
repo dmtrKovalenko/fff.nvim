@@ -349,6 +349,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   let enableFsRootScanning = false;
   let enableHomeDirScanning = true;
   let warnOnHomeDirScan = true;
+  let followSymlinks = true;
 
   function setMode(mode: FffMode): void {
     currentMode = mode;
@@ -398,6 +399,15 @@ export default function fffExtension(pi: ExtensionAPI) {
       true,
       parseBoolean,
     );
+    // On by default: worktree and stow layouts reach their files through links,
+    // and an agent silently missing them is worse than the extra walk.
+    followSymlinks = getConfigValue(
+      "fff-follow-symlinks",
+      "FFF_FOLLOW_SYMLINKS",
+      config.followSymlinks,
+      true,
+      parseBoolean,
+    );
   }
 
   function getMode(): FffMode {
@@ -444,6 +454,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     auxPool = new AuxFinderPool({
       enableFsRootScanning,
       enableHomeDirScanning,
+      followSymlinks,
       onHomeDirScan: warnHomeDirScan,
       pickers,
     });
@@ -470,6 +481,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         basePath: cwd,
         enableHomeDirScanning,
         enableFsRootScanning,
+        followSymlinks,
       });
       finderCwd = cwd;
       return mainFinder;
@@ -678,6 +690,12 @@ export default function fffExtension(pi: ExtensionAPI) {
   pi.registerFlag("fff-enable-home-scan", {
     description:
       "Index the home dir when launched from $HOME (default true; disable with --fff-enable-home-scan=false or FFF_ENABLE_HOME_SCAN=0)",
+    type: "boolean",
+  });
+
+  pi.registerFlag("fff-follow-symlinks", {
+    description:
+      "Index through directory symlinks, e.g. a git worktree or stow layout (default true; disable with --fff-follow-symlinks=false or FFF_FOLLOW_SYMLINKS=0)",
     type: "boolean",
   });
 

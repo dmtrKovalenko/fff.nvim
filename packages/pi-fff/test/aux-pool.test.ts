@@ -84,6 +84,13 @@ describe("AuxFinderPool covering reuse", () => {
     expect(created.length).toBe(1);
   });
 
+  test("passes followSymlinks through to the aux picker", async () => {
+    const pool = makePool({ followSymlinks: true });
+    await pool.acquire("/a/b/c");
+
+    expect(createOptions[0]?.followSymlinks).toBe(true);
+  });
+
   test("does not reuse a picker rooted deeper than the requested path", async () => {
     const pool = makePool();
     await pool.acquire("/a/b/c");
