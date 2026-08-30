@@ -432,6 +432,13 @@ export interface GrepOptions {
    * partial results. 0 = unlimited. (default: 0)
    */
   timeBudgetMs?: number;
+  /**
+   * Apply `timeBudgetMs` even before anything matched. Off by default: plain and
+   * regex grep only start counting once matches exist, so a zero-match query
+   * scans every candidate file. Turn on for a hard bound; `nextCursor` then
+   * resumes at the first unsearched file. (default: false)
+   */
+  enforceTimeBudget?: boolean;
   /** Number of context lines to include before each match (default: 0) */
   beforeContext?: number;
   /** Number of context lines to include after each match (default: 0) */
@@ -538,6 +545,13 @@ export interface MultiGrepOptions {
    * partial results. 0 = unlimited. (default: 0)
    */
   timeBudgetMs?: number;
+  /**
+   * Apply `timeBudgetMs` even before anything matched. Off by default: plain and
+   * regex grep only start counting once matches exist, so a zero-match query
+   * scans every candidate file. Turn on for a hard bound; `nextCursor` then
+   * resumes at the first unsearched file. (default: false)
+   */
+  enforceTimeBudget?: boolean;
   /** Number of context lines to include before each match (default: 0) */
   beforeContext?: number;
   /** Number of context lines to include after each match (default: 0) */

@@ -596,6 +596,10 @@ where
         chunk_size = (chunk_size * growth).min(max_chunk);
         let chunk_offset = files_consumed;
 
+        // Unless enforcement is requested the budget stays dormant until matches
+        // exist, so a zero-match query keeps its historical full-scan behaviour.
+        let budget = time_budget.filter(|_| options.enforce_time_budget || all_matches.len() > 1);
+
         let chunk_results: Vec<(usize, &'a FileItem, Vec<GrepMatch>)> = chunk
             .par_iter()
             .enumerate()
@@ -606,10 +610,12 @@ where
                 || (Vec::with_capacity(64 * 1024), MmapSlot::default(), false),
                 |(buf, mmap_slot, aborted), (local_idx, file)| {
                     // perform all the atomic machinery on every 8th; `aborted`
-                    // latches so the rest of this worker's range bails out for free
-                    if !*aborted && local_idx % 8 == 0 {
+                    // latches so the rest of this worker's range bails out for free.
+                    // File 0 is never skipped: a cursor of 0 reads as "done", so
+                    // the page must always consume at least one file.
+                    if !*aborted && local_idx % 8 == 0 && chunk_offset + local_idx > 0 {
                         *aborted = ctx.abort_signal.load(Ordering::Relaxed)
-                            || time_budget.is_some_and(|b| search_start.elapsed() > b);
+                            || budget.is_some_and(|b| search_start.elapsed() > b);
                     }
 
                     if *aborted {

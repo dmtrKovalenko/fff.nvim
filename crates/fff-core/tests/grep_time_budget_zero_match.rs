@@ -32,7 +32,7 @@ fn create_picker(base: &Path, needle_at: Option<usize>) -> FilePicker {
     picker
 }
 
-fn budget_opts(mode: GrepMode) -> GrepSearchOptions {
+fn budget_opts(mode: GrepMode, enforce_time_budget: bool) -> GrepSearchOptions {
     GrepSearchOptions {
         max_file_size: 1024 * 1024,
         max_matches_per_file: 200,
@@ -41,6 +41,7 @@ fn budget_opts(mode: GrepMode) -> GrepSearchOptions {
         page_limit: 500,
         mode,
         time_budget_ms: 5,
+        enforce_time_budget,
         before_context: 0,
         after_context: 0,
         classify_definitions: false,
@@ -49,15 +50,15 @@ fn budget_opts(mode: GrepMode) -> GrepSearchOptions {
     }
 }
 
-/// A zero-match search must stop at the time budget and hand back a resume
-/// cursor instead of scanning every candidate file. See issue #826.
+/// With `enforce_time_budget` a zero-match search must stop at the budget and
+/// hand back a resume cursor instead of scanning every candidate. Issue #826.
 #[test]
-fn zero_match_search_stops_at_time_budget() {
+fn zero_match_search_stops_at_enforced_time_budget() {
     let tmp = TempDir::new().unwrap();
     let picker = create_picker(tmp.path(), None);
 
     let parsed = parse_grep_query("zzz-absent-literal");
-    let result = picker.grep(&parsed, &budget_opts(GrepMode::PlainText));
+    let result = picker.grep(&parsed, &budget_opts(GrepMode::PlainText, true));
 
     assert_eq!(result.matches.len(), 0, "sanity: query must not match");
     assert_eq!(result.filtered_file_count, FILE_COUNT);
@@ -72,13 +73,28 @@ fn zero_match_search_stops_at_time_budget() {
     );
 }
 
+/// Default stays as it always was: plain/regex ignores the budget until matches
+/// exist, so a zero-match query still scans everything and reports no cursor.
+#[test]
+fn zero_match_search_ignores_unenforced_time_budget() {
+    let tmp = TempDir::new().unwrap();
+    let picker = create_picker(tmp.path(), None);
+
+    let parsed = parse_grep_query("zzz-absent-literal");
+    let result = picker.grep(&parsed, &budget_opts(GrepMode::PlainText, false));
+
+    assert_eq!(result.matches.len(), 0, "sanity: query must not match");
+    assert_eq!(result.total_files_searched, result.filtered_file_count);
+    assert_eq!(result.next_file_offset, 0);
+}
+
 #[test]
 fn zero_match_fuzzy_search_stops_at_time_budget() {
     let tmp = TempDir::new().unwrap();
     let picker = create_picker(tmp.path(), None);
 
     let parsed = parse_grep_query("zzzabsentfuzzy");
-    let result = picker.grep(&parsed, &budget_opts(GrepMode::Fuzzy));
+    let result = picker.grep(&parsed, &budget_opts(GrepMode::Fuzzy, false));
 
     assert_eq!(result.matches.len(), 0, "sanity: query must not match");
     assert!(
@@ -100,7 +116,7 @@ fn budget_resume_cursor_does_not_skip_files() {
     let picker = create_picker(tmp.path(), Some(FILE_COUNT - 1));
 
     let parsed = parse_grep_query(NEEDLE);
-    let mut opts = budget_opts(GrepMode::PlainText);
+    let mut opts = budget_opts(GrepMode::PlainText, true);
     let mut found = 0usize;
     let mut pages = 0usize;
 

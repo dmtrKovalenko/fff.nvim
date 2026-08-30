@@ -155,8 +155,11 @@ pub(super) fn fuzzy_grep_search<'a>(
                     )
                 },
                 |(matcher, buf, mmap_slot), (local_idx, file)| {
-                    if abort_signal.load(Ordering::Relaxed)
-                        || time_budget.is_some_and(|b| search_start.elapsed() > b)
+                    // File 0 is never skipped: a cursor of 0 reads as "done", so
+                    // the page must always consume at least one file.
+                    if chunk_offset + local_idx > 0
+                        && (abort_signal.load(Ordering::Relaxed)
+                            || time_budget.is_some_and(|b| search_start.elapsed() > b))
                     {
                         budget_exceeded.store(true, Ordering::Relaxed);
                         first_skipped.fetch_min(chunk_offset + local_idx, Ordering::Relaxed);
