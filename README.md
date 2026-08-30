@@ -613,7 +613,7 @@ const rustFiles = finder.value.glob("**/*.rs", { pageSize: 100 });
 finder.value.destroy();
 ```
 
-Every method returns a `Result<T>` (`{ ok: true, value } | { ok: false, error }`). Full type reference: [`packages/fff-node/src/types.ts`](./packages/fff-node/src/types.ts).
+Every method returns a `Result<T>` (`{ ok: true, value } | { ok: false, error }`). Full type reference: [`packages/fff-node/src/fff-api.ts`](./packages/fff-node/src/fff-api.ts).
 
 </details>
 
