@@ -54,18 +54,16 @@ pub(crate) fn walk_collect_files(
         if !entry.is_file() {
             // unlike ripgrep walker zlob doesnt show .git files
             if entry.is_dir() {
-                let rel_bytes = entry.relative_path_bytes();
-                if !rel_bytes.is_empty() {
-                    let mut rel = String::from_utf8_lossy(rel_bytes).into_owned();
-                    rel.push('/');
-                    collected.lock().1.push(rel);
+                let relative_path = entry.relative_path_lossy();
+                if !relative_path.is_empty() {
+                    let mut relative_path = relative_path.into_owned();
+                    relative_path.push('/');
+                    collected.lock().1.push(relative_path);
                 }
             }
 
             return WalkState::Continue;
         }
-
-        let rel_bytes = entry.relative_path_bytes();
 
         // `basename()` returns `&str` for files only.
         let basename = entry.basename().unwrap_or("");
@@ -78,14 +76,16 @@ pub(crate) fn walk_collect_files(
             .map(|ns| (ns / 1_000_000_000).max(0) as u64)
             .unwrap_or(0);
 
-        let basename_offset = entry.basename_offset_in_relative();
+        // Lossy pair: the offset must index the decoded string, not the raw
+        // bytes, or it lands inside a U+FFFD on invalid-UTF-8 names (#799).
+        let basename_offset = entry.basename_offset_in_relative_lossy() as u16;
         // zlob emits '/'-separated relative paths, which is fff's canonical
         // internal form on every platform — store them verbatim.
-        let rel_str = String::from_utf8_lossy(rel_bytes).into_owned();
+        let relative_path = entry.relative_path_lossy().into_owned();
         let item = FileItem::new_raw(basename_offset, size, modified, None, is_binary);
 
         let mut guard = collected.lock();
-        guard.0.push((item, rel_str));
+        guard.0.push((item, relative_path));
         let n = guard.0.len();
         drop(guard);
 
