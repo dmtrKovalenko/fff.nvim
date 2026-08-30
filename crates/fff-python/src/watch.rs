@@ -47,7 +47,7 @@ impl WatchSubscription {
         slf
     }
 
-    fn __exit__(&self, _exc_type: PyObject, _exc_value: PyObject, _traceback: PyObject) {
+    fn __exit__(&self, _exc_type: Py<PyAny>, _exc_value: Py<PyAny>, _traceback: Py<PyAny>) {
         self.unsubscribe();
     }
 
