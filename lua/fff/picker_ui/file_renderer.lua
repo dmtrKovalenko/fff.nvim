@@ -2,6 +2,8 @@
 --- Simple renderer for file items with 2 functions: render_line and apply_highlights
 local M = {}
 
+local file_name_renderer = require('fff.picker_ui.file_name_renderer')
+
 --- File Item structure from Rust
 --- @class FileItem
 --- @field path string Absolute file path
@@ -49,15 +51,7 @@ function M.render_line(item, ctx, item_idx) -- luacheck: ignore item_idx
     end
   end
 
-  -- Format filename and path
-  -- Don't reserve space for frecency - path takes priority
-  local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
-  local available_width = math.max(ctx.max_path_width - icon_width, 40)
-  local filename, dir_path = ctx.format_file_display(item, available_width)
-
-  -- Build line
-  local line = icon and string.format('%s %s %s%s', icon, filename, dir_path, frecency)
-    or string.format('%s %s%s', filename, dir_path, frecency)
+  local line = file_name_renderer.build(item, ctx, icon).text .. frecency
 
   local padding = math.max(0, ctx.win_width - vim.fn.strdisplaywidth(line) + 5)
   table.insert(lines, line .. string.rep(' ', padding))
@@ -84,9 +78,8 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
 
   -- Get icon and paths
   local icon, icon_hl_group = icons.get_icon(item.name, item.extension, false)
-  local icon_width = icon and (vim.fn.strdisplaywidth(icon) + 1) or 0
-  local available_width = math.max(ctx.max_path_width - icon_width, 40)
-  local filename, dir_path = ctx.format_file_display(item, available_width)
+  local name_layout = file_name_renderer.build(item, ctx, icon)
+  local filename, dir_path = name_layout.filename, name_layout.dir_path
 
   -- 1. Cursor highlight
   if is_cursor then
@@ -115,7 +108,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
   if ctx.config.git and ctx.config.git.status_text_color and icon and #filename > 0 then
     local git_text_hl = item.git_status and highlights.get_git_text_highlight(item.git_status) or nil
     if git_text_hl and git_text_hl ~= '' and not is_current_file then
-      local filename_start = #icon + 1
+      local filename_start = name_layout.filename_col
       vim.api.nvim_buf_set_extmark(
         buf,
         ns_id,
@@ -142,16 +135,12 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
 
   -- 5. Directory path (dimmed)
   if #filename > 0 and #dir_path > 0 then
-    local prefix_len = #filename + 1 -- filename bytes + space
-    if icon then
-      prefix_len = prefix_len + #icon + 1 -- if icon add icon bytes + space
-    end
     vim.api.nvim_buf_set_extmark(
       buf,
       ns_id,
       line_idx - 1,
-      prefix_len,
-      { end_col = prefix_len + #dir_path, hl_group = ctx.config.hl.directory_path }
+      name_layout.dir_col,
+      { end_col = name_layout.dir_end_col, hl_group = ctx.config.hl.directory_path }
     )
   end
 
@@ -219,22 +208,7 @@ function M.apply_highlights(item, ctx, item_idx, buf, ns_id, line_idx, line_cont
     local ranges = item.match_ranges
     if not ranges or #ranges == 0 then return end
 
-    local rel_path = item.relative_path or ''
-    if type(rel_path) ~= 'string' then rel_path = tostring(rel_path) end
-
-    local original_dir_path = ''
-    local parent_dir = vim.fn.fnamemodify(rel_path, ':h')
-    if parent_dir ~= '.' and parent_dir ~= '' then original_dir_path = parent_dir end
-
-    local filename_rel_start = math.max(0, #rel_path - #filename)
-    local filename_rel_end = filename_rel_start + #filename
-    local filename_line_start = icon and (#icon + 1) or 0
-    local dir_line_start = filename_line_start + #filename + 1
-    local segments = { { filename_rel_start, filename_rel_end, filename_line_start } }
-
-    if original_dir_path ~= '' and dir_path == original_dir_path then
-      segments[#segments + 1] = { 0, #original_dir_path, dir_line_start }
-    end
+    local segments = file_name_renderer.fuzzy_segments(item, name_layout)
 
     local function apply_segment(raw_start, raw_end, segment)
       local source_start, source_end, target_start = segment[1], segment[2], segment[3]

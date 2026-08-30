@@ -28,6 +28,7 @@ local function setup(geometry, opts)
   child.o.columns = geometry.cols
 
   local debug_enabled = opts.debug == true
+  local show_path_first = opts.show_path_first == true
   -- Default show_file_info hides timings: Modified/Accessed timestamps drift
   -- between runs and would otherwise force `ignore_text` on those rows. Tests
   -- can override (or restore) by passing `opts.show_file_info`.
@@ -48,6 +49,9 @@ local function setup(geometry, opts)
           prompt = '> ',
           frecency = { enabled = true, db_path = %q },
           history  = { enabled = true, db_path = %q },
+          layout = {
+            show_path_first = %s,
+          },
           logging  = { enabled = false },
           debug    = {
             enabled = %s,
@@ -63,6 +67,7 @@ local function setup(geometry, opts)
       geometry.winborder or '',
       fixture.frecency_db,
       fixture.history_db,
+      tostring(show_path_first),
       tostring(debug_enabled),
       tostring(debug_enabled),
       vim.inspect(show_file_info)
@@ -183,6 +188,20 @@ for _, prompt in ipairs(PROMPT_POSITIONS) do
   end
 end
 T['debug_wide'] = debug_wide_set
+
+T['show_path_first'] = MiniTest.new_set({
+  hooks = {
+    pre_case = function() setup(LAYOUTS[3], { show_path_first = true }) end,
+    post_case = teardown,
+  },
+})
+
+for _, prompt in ipairs(PROMPT_POSITIONS) do
+  T['show_path_first']['query_main_' .. prompt] = function()
+    open_picker(prompt, 'main')
+    assert_snapshot_match()
+  end
+end
 
 T['combo'] = MiniTest.new_set({
   hooks = {
