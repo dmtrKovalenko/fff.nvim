@@ -15,8 +15,8 @@ resolver = "2"
 module_inception = "allow"
 
 [workspace.dependencies]
-fff-grep = { version = "0.10.5", path = "crates/fff-grep" }
-fff-query-parser = { version = "0.10.5", path = "crates/fff-query-parser", default-features = false }
+fff-grep = { version = "0.10.6", path = "crates/fff-grep" }
+fff-query-parser = { version = "0.10.6", path = "crates/fff-query-parser", default-features = false }
 
 # Shared dependencies
 ahash = "0.8"
