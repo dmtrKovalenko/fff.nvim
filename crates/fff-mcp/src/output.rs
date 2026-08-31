@@ -21,9 +21,11 @@ fn frecency_word(score: i32) -> Option<&'static str> {
 }
 
 pub fn file_suffix(git_status: Option<git2::Status>, frecency_score: i32) -> String {
+    // `clean` is the default state of nearly every file: annotating it burns
+    // context without adding signal. Only exceptional git state is surfaced.
     match (
         frecency_word(frecency_score),
-        format_git_status_opt(git_status),
+        format_git_status_opt(git_status).filter(|status| *status != "clean"),
     ) {
         (Some(f), Some(g)) => format!(" - {f} git:{g}"),
         (Some(f), None) => format!(" - {f}"),
@@ -544,6 +546,27 @@ fn collect_file_preview<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suffix_omits_clean_git_status() {
+        assert_eq!(file_suffix(None, 0), "");
+        assert_eq!(file_suffix(Some(git2::Status::CURRENT), 0), "");
+        assert_eq!(file_suffix(Some(git2::Status::empty()), 0), "");
+        assert_eq!(file_suffix(None, 120), " - hot");
+    }
+
+    #[test]
+    fn suffix_keeps_dirty_git_status() {
+        assert_eq!(
+            file_suffix(Some(git2::Status::WT_MODIFIED), 0),
+            " git:modified"
+        );
+        assert_eq!(file_suffix(Some(git2::Status::WT_NEW), 0), " git:untracked");
+        assert_eq!(
+            file_suffix(Some(git2::Status::INDEX_MODIFIED), 60),
+            " - warm git:staged_modified"
+        );
+    }
 
     #[test]
     fn trunc_strips_trailing_whitespace() {
