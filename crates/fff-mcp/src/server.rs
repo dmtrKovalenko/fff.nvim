@@ -13,12 +13,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SCAN_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+const MAX_CONTEXT_LINES: usize = 100;
+
 fn normalize_max_results(raw: Option<f64>, default: usize) -> usize {
     match raw {
         None => default,
         Some(v) if v <= 0.0 || !v.is_finite() => default,
         Some(v) => (v.round() as usize).max(1),
     }
+}
+
+// Context lines are copied per match, so a bogus float must not saturate to usize::MAX.
+fn normalize_context(raw: Option<f64>) -> Option<usize> {
+    let v = raw?;
+    if !v.is_finite() || v < 0.0 {
+        return None;
+    }
+    Some((v.round() as usize).min(MAX_CONTEXT_LINES))
 }
 
 fn cleanup_fuzzy_query(s: &str) -> String {
@@ -102,6 +113,8 @@ pub struct GrepParams {
     pub cursor: Option<String>,
     /// Output format (default 'content').
     pub output_mode: Option<String>,
+    /// Context lines before/after each match.
+    pub context: Option<f64>,
 }
 
 fn deserialize_patterns<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -573,7 +586,7 @@ impl FffServer {
             max_results,
             params.cursor.as_deref(),
             output_mode,
-            None,
+            normalize_context(params.context),
         )?;
         self.maybe_append_update_notice(&mut result);
         Ok(result)
@@ -606,7 +619,7 @@ impl FffServer {
 impl FffServer {
     fn multi_grep_inner(&self, params: MultiGrepParams) -> Result<CallToolResult, ErrorData> {
         let max_results = normalize_max_results(params.max_results, 20);
-        let context = params.context.map(|v| v.round() as usize);
+        let context = normalize_context(params.context);
         let output_mode = OutputMode::new(params.output_mode.as_deref());
 
         let file_offset = params
@@ -719,6 +732,22 @@ mod tests {
         let via_pattern: GrepParams =
             serde_json::from_str(r#"{"pattern":"foo"}"#).expect("pattern alias");
         assert_eq!(via_pattern.query, "foo");
+    }
+
+    #[test]
+    fn normalize_context_rejects_bogus_and_caps() {
+        assert_eq!(normalize_context(None), None);
+        assert_eq!(normalize_context(Some(3.4)), Some(3));
+        assert_eq!(normalize_context(Some(-1.0)), None);
+        assert_eq!(normalize_context(Some(f64::NAN)), None);
+        assert_eq!(normalize_context(Some(1e308)), Some(MAX_CONTEXT_LINES));
+    }
+
+    #[test]
+    fn grep_params_parses_context() {
+        let params: GrepParams =
+            serde_json::from_str(r#"{"query":"foo","context":3}"#).expect("context field");
+        assert_eq!(params.context, Some(3.0));
     }
 
     #[test]

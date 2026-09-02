@@ -40,6 +40,10 @@ export { SCAN_TIMEOUT_MS } from "./sdk";
 const DEFAULT_GREP_LIMIT = 20;
 const DEFAULT_FIND_LIMIT = 30;
 const GREP_PAGE_SIZE_MAX = 50;
+// Per-file match cap. Must stay decoupled from pageSize: grep cursors advance by
+// file offset, so clamping this to pageSize makes same-file overflow unreachable
+// on later pages (#825). Matches the engine default.
+const GREP_MAX_MATCHES_PER_FILE = 200;
 const GREP_CONTEXT_MAX = 20;
 const GREP_MAX_LINE_LENGTH = 500;
 const MENTION_MAX_RESULTS = 20;
@@ -345,6 +349,7 @@ export default function fffExtension(pi: ExtensionAPI) {
   let enableFsRootScanning = false;
   let enableHomeDirScanning = true;
   let warnOnHomeDirScan = true;
+  let followSymlinks = true;
 
   function setMode(mode: FffMode): void {
     currentMode = mode;
@@ -394,6 +399,15 @@ export default function fffExtension(pi: ExtensionAPI) {
       true,
       parseBoolean,
     );
+    // On by default: worktree and stow layouts reach their files through links,
+    // and an agent silently missing them is worse than the extra walk.
+    followSymlinks = getConfigValue(
+      "fff-follow-symlinks",
+      "FFF_FOLLOW_SYMLINKS",
+      config.followSymlinks,
+      true,
+      parseBoolean,
+    );
   }
 
   function getMode(): FffMode {
@@ -440,6 +454,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     auxPool = new AuxFinderPool({
       enableFsRootScanning,
       enableHomeDirScanning,
+      followSymlinks,
       onHomeDirScan: warnHomeDirScan,
       pickers,
     });
@@ -466,6 +481,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         basePath: cwd,
         enableHomeDirScanning,
         enableFsRootScanning,
+        followSymlinks,
       });
       finderCwd = cwd;
       return mainFinder;
@@ -677,6 +693,12 @@ export default function fffExtension(pi: ExtensionAPI) {
     type: "boolean",
   });
 
+  pi.registerFlag("fff-follow-symlinks", {
+    description:
+      "Index through directory symlinks, e.g. a git worktree or stow layout (default true; disable with --fff-follow-symlinks=false or FFF_FOLLOW_SYMLINKS=0)",
+    type: "boolean",
+  });
+
   pi.registerFlag("fff-warn-home-scan", {
     description:
       "Warn when indexing $HOME (default true; silence with --fff-warn-home-scan=false or FFF_WARN_HOME_SCAN=0)",
@@ -849,8 +871,9 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       const picker = aux ? aux.finder : await ensureFinder(activeCwd);
       const effectiveLimit = Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT);
-      // pageSize caps TOTAL matches across all files; maxMatchesPerFile alone
-      // only caps per-file, so limit=5 could still return a full SDK page.
+      // pageSize caps TOTAL matches across all files (soft cap: the current file
+      // is always finished first). maxMatchesPerFile stays decoupled at the engine
+      // default so same-file overflow remains reachable via cursor (#825).
       const pageSize = Math.min(effectiveLimit, GREP_PAGE_SIZE_MAX);
       const context = clampContext(params.context);
       const query = aux
@@ -900,7 +923,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       const grepResult = picker.grep(query, {
         mode,
         smartCase,
-        maxMatchesPerFile: pageSize,
+        maxMatchesPerFile: GREP_MAX_MATCHES_PER_FILE,
         pageSize,
         cursor: (params.cursor ? getCursor(params.cursor) : null) ?? null,
         beforeContext: context,
@@ -933,7 +956,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         const fuzzy = picker.grep(fuzzyQuery, {
           mode: "fuzzy",
           smartCase,
-          maxMatchesPerFile: pageSize,
+          maxMatchesPerFile: GREP_MAX_MATCHES_PER_FILE,
           pageSize,
           cursor: null,
           beforeContext: 0,
@@ -1183,7 +1206,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         const grepResult = f.multiGrep({
           patterns: params.patterns,
           constraints: params.constraints,
-          maxMatchesPerFile: pageSize,
+          maxMatchesPerFile: GREP_MAX_MATCHES_PER_FILE,
           pageSize,
           smartCase: true,
           cursor: (params.cursor ? getCursor(params.cursor) : null) ?? null,

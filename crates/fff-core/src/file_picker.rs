@@ -506,9 +506,19 @@ impl FileItem {
         let is_binary = is_known_binary_extension(path);
         // SAFETY-ish: paths on macOS/Linux are bytes; lossy conversion mirrors
         // the existing `to_string_lossy()` behavior on non-UTF8 names.
-        let rel_str = String::from_utf8_lossy(relative_path).into_owned();
+        let decoded = String::from_utf8_lossy(relative_path).into_owned();
+        // The caller's offset indexes the raw bytes; re-measure it against the
+        // decoded string so it never lands inside a U+FFFD (#799).
+        let dir_bytes = relative_path
+            .get(..basename_offset as usize)
+            .unwrap_or(relative_path);
+        let basename_offset = if std::str::from_utf8(dir_bytes).is_ok() {
+            basename_offset
+        } else {
+            String::from_utf8_lossy(dir_bytes).len() as u16
+        };
         let item = Self::new_raw(basename_offset, size, modified, git_status, is_binary);
-        (item, rel_str)
+        (item, decoded)
     }
 
     pub(crate) fn update_frecency_scores(

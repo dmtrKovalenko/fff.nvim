@@ -9,6 +9,7 @@ local M = {}
 --- @field min_list_height number
 --- @field show_scrollbar boolean
 --- @field path_shorten_strategy string
+--- @field show_path_first boolean
 --- @field border? 'single'|'double'|'rounded'|'solid'|'shadow'|'none'|table<string[],string[]> Border preset; falls back to `vim.o.winborder` when nil
 
 --- @class FffPreviewConfig
@@ -279,6 +280,8 @@ local function init()
       -- 'end': truncates from the end, keeps the start (home/user/projects)
       -- 'start': truncates from the start, keeps the end (.../parts/ai_extracted)
       path_shorten_strategy = 'middle',
+      -- Render results as `path/to/file` instead of `file path/to`
+      show_path_first = false,
     },
     preview = {
       enabled = true,

@@ -5,6 +5,7 @@ export interface PickerOptions {
   basePath: string;
   enableHomeDirScanning?: boolean;
   enableFsRootScanning?: boolean;
+  followSymlinks?: boolean;
 }
 
 /** Opens every picker in this pi process — the cwd picker and the aux pickers —

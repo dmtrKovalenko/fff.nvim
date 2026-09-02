@@ -212,7 +212,7 @@ impl FileFinder {
         let init_frecency = shared_frecency.clone();
         let init_query_tracker = query_tracker.clone();
 
-        py.allow_threads(move || -> PyResult<()> {
+        py.detach(move || -> PyResult<()> {
             if let Some(path) = frecency_db_path {
                 create_parent_dir(&path)?;
                 let tracker = FrecencyTracker::open(&path).map_err(py_err)?;
@@ -276,9 +276,9 @@ impl FileFinder {
     fn __exit__(
         &mut self,
         py: Python<'_>,
-        _exc_type: PyObject,
-        _exc_value: PyObject,
-        _traceback: PyObject,
+        _exc_type: Py<PyAny>,
+        _exc_value: Py<PyAny>,
+        _traceback: Py<PyAny>,
     ) {
         let _ = self.close(py);
     }
@@ -286,7 +286,7 @@ impl FileFinder {
     fn close(&mut self, py: Python<'_>) -> PyResult<()> {
         // Release the GIL while an in-flight callback finishes.
         let picker = self.picker.clone();
-        py.allow_threads(move || picker.shutdown_watches_and_wait());
+        py.detach(move || picker.shutdown_watches_and_wait());
         clear_shared_state(&self.picker, &self.frecency, &self.query_tracker);
         Ok(())
     }
@@ -357,7 +357,7 @@ impl FileFinder {
         let query_tracker = self.query_tracker.clone();
         let query = query.to_string();
 
-        py.allow_threads(move || -> PyResult<_> {
+        py.detach(move || -> PyResult<_> {
             let picker_guard = picker.read().map_err(py_err)?;
             let picker = picker_guard
                 .as_ref()
@@ -412,7 +412,7 @@ impl FileFinder {
         let picker = self.picker.clone();
         let pattern = pattern.to_string();
 
-        py.allow_threads(move || -> PyResult<_> {
+        py.detach(move || -> PyResult<_> {
             let picker_guard = picker.read().map_err(py_err)?;
             let picker = picker_guard
                 .as_ref()
@@ -464,7 +464,7 @@ impl FileFinder {
         let picker = self.picker.clone();
         let query = query.to_string();
 
-        py.allow_threads(move || -> PyResult<_> {
+        py.detach(move || -> PyResult<_> {
             let picker_guard = picker.read().map_err(py_err)?;
             let picker = picker_guard
                 .as_ref()
@@ -524,7 +524,7 @@ impl FileFinder {
         let query = query.to_string();
 
         let (items, scores, total_matched, total_files, total_dirs) =
-            py.allow_threads(move || -> PyResult<_> {
+            py.detach(move || -> PyResult<_> {
                 let picker_guard = picker.read().map_err(py_err)?;
                 let picker = picker_guard
                     .as_ref()
@@ -568,7 +568,7 @@ impl FileFinder {
                 ))
             })?;
 
-        let items: PyResult<Vec<PyObject>> = items
+        let items: PyResult<Vec<Py<PyAny>>> = items
             .into_iter()
             .map(|item| match item {
                 MixedItem::File(file) => Ok(Py::new(py, file)?.into_any()),
@@ -622,7 +622,7 @@ impl FileFinder {
         let mode = parse_grep_mode(mode)?;
         let cursor_offset = cursor.map(|c| c.offset as usize).unwrap_or(0);
 
-        py.allow_threads(move || -> PyResult<_> {
+        py.detach(move || -> PyResult<_> {
             let picker_guard = picker.read().map_err(py_err)?;
             let picker = picker_guard
                 .as_ref()
@@ -689,7 +689,7 @@ impl FileFinder {
         let mode = parse_grep_mode(mode)?;
         let cursor_offset = cursor.map(|c| c.offset as usize).unwrap_or(0);
 
-        py.allow_threads(move || -> PyResult<_> {
+        py.detach(move || -> PyResult<_> {
             let picker_guard = picker.read().map_err(py_err)?;
             let picker = picker_guard
                 .as_ref()
@@ -742,7 +742,7 @@ impl FileFinder {
     #[pyo3(signature = (timeout_ms=5000))]
     fn wait_for_scan_blocking(&self, py: Python<'_>, timeout_ms: u64) -> PyResult<bool> {
         let picker = self.picker.clone();
-        py.allow_threads(move || Ok(picker.wait_for_scan(Duration::from_millis(timeout_ms))))
+        py.detach(move || Ok(picker.wait_for_scan(Duration::from_millis(timeout_ms))))
     }
 
     /// Subscribe to filesystem changes matching `pattern`.
@@ -776,9 +776,9 @@ impl FileFinder {
 
         let id = {
             let picker = self.picker.clone();
-            py.allow_threads(move || {
+            py.detach(move || {
                 picker.watch(&pattern, options, move |_id, events| {
-                    Python::with_gil(|py| {
+                    Python::attach(|py| {
                         if !active_cb.load(Ordering::Acquire) {
                             return;
                         }
@@ -808,7 +808,7 @@ impl FileFinder {
         let cache_budget_max_bytes = self.cache_budget_max_bytes;
         let cache_budget_max_file_size = self.cache_budget_max_file_size;
 
-        py.allow_threads(move || -> PyResult<()> {
+        py.detach(move || -> PyResult<()> {
             if !new_path.exists() {
                 return Err(py_err(format!(
                     "Path does not exist: {}",
@@ -860,7 +860,7 @@ impl FileFinder {
     fn refresh_git_status(&self, py: Python<'_>) -> PyResult<i64> {
         let picker = self.picker.clone();
         let frecency = self.frecency.clone();
-        py.allow_threads(move || {
+        py.detach(move || {
             picker
                 .refresh_git_status(&frecency)
                 .map_err(py_err)
@@ -879,7 +879,7 @@ impl FileFinder {
         let query_tracker = self.query_tracker.clone();
         let query = query.to_string();
 
-        py.allow_threads(move || -> PyResult<bool> {
+        py.detach(move || -> PyResult<bool> {
             let file_path = fff::path_utils::canonicalize(&selected_file_path).map_err(py_err)?;
             let project_path = {
                 let guard = picker.read().map_err(py_err)?;
@@ -906,7 +906,7 @@ impl FileFinder {
         let picker = self.picker.clone();
         let query_tracker = self.query_tracker.clone();
 
-        py.allow_threads(move || -> PyResult<Option<String>> {
+        py.detach(move || -> PyResult<Option<String>> {
             let project_path = {
                 let guard = picker.read().map_err(py_err)?;
                 guard.as_ref().map(|p| p.base_path().to_path_buf())
@@ -944,7 +944,7 @@ impl FileFinder {
             picker_indexed_files,
             frecency_initialized,
             query_tracker_initialized,
-        ) = py.allow_threads(move || -> PyResult<_> {
+        ) = py.detach(move || -> PyResult<_> {
             // Resolve the path to inspect: explicit arg → indexed base path →
             // process cwd. Report a cwd-resolution failure instead of silently
             // discovering from an empty path.

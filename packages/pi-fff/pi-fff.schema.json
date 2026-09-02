@@ -41,6 +41,11 @@
       "type": "boolean",
       "default": true,
       "description": "Shows a warning notification when the home directory is indexed."
+    },
+    "followSymlinks": {
+      "type": "boolean",
+      "default": true,
+      "description": "Indexes through directory symlinks, e.g. a git worktree or stow layout whose files live behind links. Set to false to keep the walk inside the real tree."
     }
   }
 }

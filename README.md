@@ -326,12 +326,13 @@ Defaults are sensible. Override only what you care about.
 ```lua
 require('fff').setup({
   base_path = vim.fn.getcwd(),
-  prompt = '> ',
+  prompt = '🪿 ',
   title = 'FFFiles',
   max_results = 100,
   max_threads = 4,
   lazy_sync = true,
   prompt_vim_mode = false,
+  wrap_around = false, -- true to wrap the cursor around when moving past the first/last item
   follow_symlinks = false,
   -- Allow indexing the user's $HOME directory. Enabled by default.
   -- Disable if you strictly sure you don't want this, as it makes whole fff error hard
@@ -355,8 +356,15 @@ require('fff').setup({
     flex = { size = 130, wrap = 'top' },
     min_list_height = 10, --  do not display anything except the list below this threshold
     show_scrollbar = true,
-    path_shorten_strategy = 'middle_number', -- 'middle_number' | 'middle' | 'end' | 'start'
+    path_shorten_strategy = 'middle', -- 'middle' | 'middle_number' | 'end' | 'start'
+    -- 'center' | 'top' | 'bottom' | 'left' | 'right' | 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right'
     anchor = 'center',
+    show_path_first = false, -- true renders results as `path/to/file` instead of `file path/to`
+  },
+  -- find_files specific rendering
+  file_picker = {
+    current_file_label = '(current)', -- virtual text marking the buffer the picker was opened from
+    fuzzy_query_highlighting = false, -- true to highlight fuzzy query matches, not just the literal query
   },
   preview = {
     enabled = true,
@@ -390,6 +398,7 @@ require('fff').setup({
     grep_jump_to_next_file = { '<C-A-n>', '<A-Down>' },
     grep_jump_to_prev_file = { '<C-A-p>', '<A-Up>' },
     cycle_previous_query = '<C-Up>',
+    cycle_forward_query = '<C-Down>',
     -- unbound by default, wipes the whole input line
     -- clear_query = '<C-u>', -- overrides preview_scroll_up in insert mode
     toggle_select = '<Tab>',
@@ -413,9 +422,6 @@ require('fff').setup({
   },
   git = {
     status_text_color = false, -- true to color filenames by git status
-  },
-  file_picker = {
-    fuzzy_query_highlighting = false, -- true to highlight fuzzy query matches in file picker results
   },
   select = {
     -- Return winid to open the chosen file in, or nil to open in the original window
@@ -449,6 +455,7 @@ require('fff').setup({
     },
   },
   logging = {
+    enabled = true,
     -- logs will be written in a parent directory of this file path in files like
     -- `<stem>+<UTC-timestamp>+<pid>.<ext>`. Run :FFFOpenLog to open current one
     log_file = vim.fn.stdpath('log') .. '/fff.log',
@@ -608,7 +615,7 @@ const rustFiles = finder.value.glob("**/*.rs", { pageSize: 100 });
 finder.value.destroy();
 ```
 
-Every method returns a `Result<T>` (`{ ok: true, value } | { ok: false, error }`). Full type reference: [`packages/fff-node/src/types.ts`](./packages/fff-node/src/types.ts).
+Every method returns a `Result<T>` (`{ ok: true, value } | { ok: false, error }`). Full type reference: [`packages/fff-node/src/fff-api.ts`](./packages/fff-node/src/fff-api.ts).
 
 </details>
 

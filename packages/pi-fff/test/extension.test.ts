@@ -7,6 +7,7 @@ type MockFinder = {
   isDestroyed: boolean;
   waitForScan: ReturnType<typeof mock>;
   mixedSearch: ReturnType<typeof mock>;
+  grep: ReturnType<typeof mock>;
   getScanProgress: ReturnType<typeof mock>;
   destroy: ReturnType<typeof mock>;
 };
@@ -14,6 +15,7 @@ type MockFinder = {
 const createCalls: unknown[] = [];
 let finders: MockFinder[] = [];
 let mixedSearchImpl: ((query: string, options: unknown) => unknown) | undefined;
+let grepImpl: ((query: string, options: unknown) => unknown) | undefined;
 let scanProgressImpl: (() => unknown) | undefined;
 
 function createMockFinder(): MockFinder {
@@ -42,6 +44,20 @@ function createMockFinder(): MockFinder {
           totalMatched: 0,
           totalFiles: 0,
           totalDirs: 0,
+        },
+      };
+    }),
+    grep: mock((query: string, options: unknown) => {
+      if (grepImpl) return grepImpl(query, options);
+      return {
+        ok: true,
+        value: {
+          items: [],
+          totalMatched: 0,
+          totalFiles: 0,
+          totalFilesSearched: 0,
+          filteredFileCount: 0,
+          nextCursor: null,
         },
       };
     }),
@@ -191,6 +207,7 @@ const CONFIG_ENV_KEYS = [
   "FFF_ENABLE_ROOT_SCAN",
   "FFF_ENABLE_HOME_SCAN",
   "FFF_WARN_HOME_SCAN",
+  "FFF_FOLLOW_SYMLINKS",
 ] as const;
 
 const savedEnv: Record<string, string | undefined> = {};
@@ -203,6 +220,7 @@ beforeEach(() => {
   createCalls.length = 0;
   finders = [];
   mixedSearchImpl = undefined;
+  grepImpl = undefined;
   scanProgressImpl = undefined;
 
   for (const key of CONFIG_ENV_KEYS) delete process.env[key];
@@ -227,6 +245,7 @@ describe("pi-fff global config", () => {
       historyDbPath: "/config/history",
       enableFsRootScanning: true,
       enableHomeDirScanning: false,
+      followSymlinks: false,
     });
 
     const setup = await start();
@@ -242,6 +261,7 @@ describe("pi-fff global config", () => {
       aiMode: true,
       enableHomeDirScanning: false,
       enableFsRootScanning: true,
+      followSymlinks: false,
     });
     await shutdown(setup);
   });
@@ -259,10 +279,12 @@ describe("pi-fff global config", () => {
     process.env.FFF_HISTORY_DB = "/env/history";
     process.env.FFF_ENABLE_ROOT_SCAN = "1";
     process.env.FFF_ENABLE_HOME_SCAN = "1";
+    process.env.FFF_FOLLOW_SYMLINKS = "1";
 
     const setup = await start("tools-and-ui", undefined, {
       "fff-frecency-db": "/flag/frecency",
       "fff-enable-root-scan": false,
+      "fff-follow-symlinks": false,
     });
     const toolNames = setup.pi.registerTool.mock.calls.map(([tool]) => tool.name);
 
@@ -275,7 +297,19 @@ describe("pi-fff global config", () => {
       aiMode: true,
       enableHomeDirScanning: true,
       enableFsRootScanning: false,
+      followSymlinks: false,
     });
+    await shutdown(setup);
+  });
+
+  // #627: worktree and stow layouts reach their files through symlinks, so following
+  // them is the default and the environment is the way out.
+  test("stops following symlinks when the environment disables them", async () => {
+    process.env.FFF_FOLLOW_SYMLINKS = "0";
+
+    const setup = await start();
+
+    expect((createCalls[0] as { followSymlinks: boolean }).followSymlinks).toBe(false);
     await shutdown(setup);
   });
 
@@ -476,6 +510,7 @@ describe("pi-fff autocomplete registration", () => {
         aiMode: true,
         enableHomeDirScanning: true,
         enableFsRootScanning: false,
+        followSymlinks: true,
       },
     ]);
   });
@@ -645,5 +680,44 @@ describe("pi-fff autocomplete registration", () => {
     expect(shouldTrigger).toBe(false);
     expect(current.applyCompletion).toHaveBeenCalledTimes(1);
     expect(current.shouldTriggerFileCompletion).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ffgrep per-file cap (#825)", () => {
+  function grepTool(setup: { pi: { registerTool: ReturnType<typeof mock> } }) {
+    const tool = setup.pi.registerTool.mock.calls
+      .map(([t]) => t)
+      .find((t) => t.name === "ffgrep" || t.name === "grep");
+    expect(tool).toBeDefined();
+    return tool;
+  }
+
+  // Grep cursors advance by file offset, so maxMatchesPerFile must NOT be clamped
+  // to pageSize — otherwise same-file overflow is unreachable on later pages.
+  test("passes a per-file cap decoupled from pageSize", async () => {
+    let captured: any;
+    grepImpl = (_query, options) => {
+      captured = options;
+      return {
+        ok: true,
+        value: {
+          items: [],
+          totalMatched: 0,
+          totalFiles: 0,
+          totalFilesSearched: 0,
+          filteredFileCount: 0,
+          nextCursor: null,
+        },
+      };
+    };
+
+    const setup = await start("tools-and-ui");
+    const tool = grepTool(setup);
+    await tool.execute("call-1", { pattern: "TODO", limit: 20 }, abortOptions().signal);
+
+    expect(captured).toBeDefined();
+    expect(captured.pageSize).toBe(20);
+    expect(captured.maxMatchesPerFile).toBe(200);
+    expect(captured.maxMatchesPerFile).toBeGreaterThan(captured.pageSize);
   });
 });

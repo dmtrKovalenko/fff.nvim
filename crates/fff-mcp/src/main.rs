@@ -6,6 +6,7 @@ mod parent;
 mod server;
 mod update_check;
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use clap::Parser;
@@ -117,8 +118,10 @@ pub(crate) struct Args {
 
     /// Path-shape hint for per-session log files.
     /// Each fff-mcp startup writes a fresh sibling file `<stem>+<UTC-timestamp>+<pid>.<ext>`
+    /// Defaults to `$XDG_STATE_HOME/fff/fff_mcp.log` (`~/.local/state/fff/fff_mcp.log`),
+    /// on Windows to `%LOCALAPPDATA%\fff\fff_mcp.log` (`~\AppData\Local\fff\fff_mcp.log`).
     #[arg(long = "log-file")]
-    log_file: Option<String>,
+    log_file: Option<PathBuf>,
 
     /// Log level (e.g. trace, debug, info, warn, error).
     #[arg(long = "log-level")]
@@ -207,27 +210,55 @@ fn resolve_defaults(args: &mut Args) {
         .into_iter()
         .flatten()
     {
-        if let Some(parent) = std::path::Path::new(path).parent() {
+        if let Some(parent) = Path::new(path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
     }
 
     if args.log_file.is_none() {
-        let home = dirs_home();
-        let is_windows = cfg!(target_os = "windows");
-        args.log_file = Some(if is_windows {
-            format!("{}\\AppData\\Local\\fff_mcp.log", home)
-        } else {
-            format!("{}/.cache/fff_mcp.log", home)
-        });
+        args.log_file = Some(default_log_file());
     }
 }
 
-fn dirs_home() -> String {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| "/tmp".to_string())
+// Own subdirectory: log rotation read_dir's the parent on every startup, and the
+// per-session `<stem>+<ts>+<pid>.log` files otherwise pile up in its root.
+#[cfg(not(windows))]
+fn default_log_file() -> PathBuf {
+    let base =
+        absolute_env("XDG_STATE_HOME").unwrap_or_else(|| dirs_home().join(".local").join("state"));
+    base.join("fff").join("fff_mcp.log")
 }
+
+#[cfg(windows)]
+fn default_log_file() -> PathBuf {
+    let base =
+        absolute_env("LOCALAPPDATA").unwrap_or_else(|| dirs_home().join("AppData").join("Local"));
+    base.join("fff").join("fff_mcp.log")
+}
+
+// XDG spec: a non-absolute value must be ignored as if unset.
+fn absolute_env(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
+        .map(PathBuf::from)
+        .filter(|value| value.is_absolute())
+}
+
+// Relative homes would break the absolute-path contract of the default above,
+// and TMPDIR can be relative too, so every fallback is filtered for absoluteness.
+fn dirs_home() -> PathBuf {
+    absolute_env("HOME")
+        .or_else(|| absolute_env("USERPROFILE"))
+        .or_else(|| {
+            let tmp = std::env::temp_dir();
+            tmp.is_absolute().then_some(tmp)
+        })
+        .unwrap_or_else(|| PathBuf::from(FALLBACK_ROOT))
+}
+
+#[cfg(not(windows))]
+const FALLBACK_ROOT: &str = "/tmp";
+#[cfg(windows)]
+const FALLBACK_ROOT: &str = "C:\\Windows\\Temp";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -238,9 +269,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return healthcheck::run_healthcheck(&args);
     }
 
-    let log_file = args.log_file.as_deref().unwrap_or("");
-    if let Err(e) = fff::log::init_tracing(log_file, args.log_level.as_deref(), None) {
-        eprintln!("Warning: Failed to init tracing: {}", e);
+    // init_tracing takes &str (stable across fff-c/-python/-nvim), so reject a
+    // non-UTF-8 --log-file rather than let to_string_lossy retarget the file.
+    let log_file = args.log_file.as_deref().unwrap_or(Path::new(""));
+    match log_file.to_str() {
+        Some(log_file) => {
+            if let Err(e) = fff::log::init_tracing(log_file, args.log_level.as_deref(), None) {
+                eprintln!("Warning: Failed to init tracing: {}", e);
+            }
+        }
+        None => eprintln!(
+            "Warning: --log-file is not valid UTF-8, file logging disabled: {}",
+            log_file.display()
+        ),
     }
 
     let base_path = args.base_path.unwrap_or_else(|| {
@@ -446,4 +487,17 @@ fn watchdog_interval() -> Duration {
         return Duration::from_millis(milliseconds);
     }
     Duration::from_secs(60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_log_file_lives_in_own_dir() {
+        let path = default_log_file();
+        assert!(path.is_absolute(), "{}", path.display());
+        assert_eq!(path.file_name().unwrap(), "fff_mcp.log");
+        assert_eq!(path.parent().unwrap().file_name().unwrap(), "fff");
+    }
 }
