@@ -352,7 +352,7 @@ impl SharedFilePicker {
     pub fn refresh_git_status(&self, shared_frecency: &SharedFrecency) -> Result<usize, Error> {
         let (git_root, recency_config, base_path) = {
             // we do the libgit2 off lock cause it might take quite some time on very large repos
-            let guard = self.read()?; 
+            let guard = self.read()?;
             let Some(ref picker) = *guard else {
                 return Err(Error::FilePickerMissing);
             };

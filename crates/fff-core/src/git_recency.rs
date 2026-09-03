@@ -38,13 +38,13 @@ pub(crate) fn compute_git_recency(
     let head = head_ref.target()?;
     let head_branch = head_ref.shorthand().ok().map(str::to_owned);
 
-    let subdir = base_path_witin_repo(repo, base_path);
+    let subdir = base_path_within_repo(repo, base_path);
     let max_commits = config.max_commits.min(MAX_COMMITS_HARD_CAP);
 
     let mut revwalk = repo.revwalk().ok()?;
     revwalk.push(head).ok()?;
 
-    // only if we can resolve default brach (master, main) attempt to use th recency
+    // only if we can resolve default branch (master, main) attempt to use the recency
     if let Some((base_branch, base)) = resolve_base_branch(repo)
         && head_branch.as_deref() != Some(base_branch.as_str())
         && let Ok(merge_base) = repo.merge_base(head, base)
@@ -136,7 +136,7 @@ pub(crate) fn compute_git_recency(
     Some(scores)
 }
 
-fn base_path_witin_repo(repo: &Repository, base_path: &Path) -> Option<String> {
+fn base_path_within_repo(repo: &Repository, base_path: &Path) -> Option<String> {
     let workdir = crate::path_utils::normalize(repo.workdir()?.to_path_buf());
     let subdir = base_path.strip_prefix(workdir).ok()?;
     let subdir = crate::path_utils::to_canonical_slashes(&subdir.to_string_lossy()).into_owned();

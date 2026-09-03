@@ -1051,7 +1051,8 @@ impl FilePicker {
             && let Ok(repo) = Repository::open(&workdir)
                 .inspect_err(|e| debug!(?e, ?workdir, "git recency: failed to open repo"))
         {
-            let recency = git_recency::compute_git_recency(&repo, &self.git_recency_config, &self.base_path);
+            let recency =
+                git_recency::compute_git_recency(&repo, &self.git_recency_config, &self.base_path);
             self.apply_git_recency(recency.as_ref());
         }
 
