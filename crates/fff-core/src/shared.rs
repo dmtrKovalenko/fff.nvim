@@ -382,6 +382,10 @@ impl SharedFilePicker {
 
         let mut guard = self.write()?;
         let picker = guard.as_mut().ok_or(Error::FilePickerMissing)?;
+        // picker may have been swapped for another directory while we were off the lock
+        if picker.base_path() != base_path {
+            return Ok(0);
+        }
 
         let statuses_count = if let Some(git_status) = git_status {
             let count = git_status.statuses_len();

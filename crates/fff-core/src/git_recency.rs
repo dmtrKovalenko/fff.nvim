@@ -22,7 +22,7 @@ impl Default for GitRecencyConfig {
 
 const MAX_COMMITS_HARD_CAP: usize = 128;
 
-/// Computes per file recency bonsuses
+// Computes per file recency bonuses
 #[tracing::instrument(skip(repo), level = tracing::Level::DEBUG)]
 pub(crate) fn compute_git_recency(
     repo: &Repository,
@@ -143,18 +143,29 @@ fn base_path_within_repo(repo: &Repository, base_path: &Path) -> Option<String> 
     (!subdir.is_empty()).then_some(subdir)
 }
 
-/// The branch feature work is measured against: `init.defaultBranch` when configured, else `main`, else `master`.
+// The branch feature work is measured against: `origin/HEAD`, else
+// `init.defaultBranch` when configured, else `main`, else `master`.
 fn resolve_base_branch(repo: &Repository) -> Option<(String, Oid)> {
+    let remote_head = repo
+        .find_reference("refs/remotes/origin/HEAD")
+        .ok()
+        .and_then(|r| {
+            r.symbolic_target()
+                .ok()??
+                .strip_prefix("refs/remotes/origin/")
+                .map(str::to_owned)
+        });
+
     let configured = repo
         .config()
         .and_then(|config| config.get_string("init.defaultBranch"))
         .ok()
         .filter(|name| !name.is_empty());
 
-    configured
+    remote_head
         .as_deref()
         .into_iter()
-        // why not
+        .chain(configured.as_deref())
         .chain(["main", "master"])
         .find_map(|branch| {
             Some((branch.to_owned(), {
