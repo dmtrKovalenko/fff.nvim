@@ -697,8 +697,13 @@ describe("compact tool rendering", () => {
     fg: (_color: string, text: string) => text,
   };
 
-  function toolByName(setup: { pi: { registerTool: ReturnType<typeof mock> } }, name: string) {
-    const tool = setup.pi.registerTool.mock.calls.map(([tool]) => tool).find((tool) => tool.name === name);
+  function toolByName(
+    setup: { pi: { registerTool: ReturnType<typeof mock> } },
+    name: string,
+  ) {
+    const tool = setup.pi.registerTool.mock.calls
+      .map(([tool]) => tool)
+      .find((tool) => tool.name === name);
     expect(tool).toBeDefined();
     return tool;
   }
@@ -717,7 +722,9 @@ describe("compact tool rendering", () => {
       theme,
       context,
     );
-    expect(call.component.render(80)).toEqual(["ffgrep /TODO/ in . (limit 3, context 2)"]);
+    expect(call.component.render(80)).toEqual([
+      "ffgrep /TODO/ in . (limit 3, context 2)",
+    ]);
 
     const defaultCall = tool.renderCall({ pattern: "TODO", path: "." }, theme, context);
     expect(defaultCall.component.render(80)).toEqual(["ffgrep /TODO/ in ."]);

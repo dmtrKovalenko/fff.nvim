@@ -865,7 +865,11 @@ export default function fffExtension(pi: ExtensionAPI) {
     const suffix =
       lines.length > 1 ? theme.fg("muted", `... (${lines.length - 1} more lines)`) : "";
     return makeToolClickable(
-      new CollapsedText(theme.fg(color, lines[0] ?? ""), suffix, theme.fg("muted", "...")),
+      new CollapsedText(
+        theme.fg(color, lines[0] ?? ""),
+        suffix,
+        theme.fg("muted", "..."),
+      ),
       context,
     );
   };
@@ -1087,7 +1091,8 @@ export default function fffExtension(pi: ExtensionAPI) {
       const options: string[] = [];
       if (args?.limit !== undefined) options.push(`limit ${args.limit}`);
       if (args?.context !== undefined) options.push(`context ${args.context}`);
-      if (options.length > 0) content += theme.fg("toolOutput", ` (${options.join(", ")})`);
+      if (options.length > 0)
+        content += theme.fg("toolOutput", ` (${options.join(", ")})`);
       if (args?.cursor) content += theme.fg("muted", ` (page)`);
       return makeToolClickable(
         new CollapsedText(content, "", theme.fg("muted", "...")),
