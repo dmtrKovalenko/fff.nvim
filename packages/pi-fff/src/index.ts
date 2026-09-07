@@ -1084,8 +1084,10 @@ export default function fffExtension(pi: ExtensionAPI) {
         " " +
         theme.fg("accent", `/${pattern}/`) +
         theme.fg("toolOutput", ` in ${path}`);
-      if (args?.limit !== undefined)
-        content += theme.fg("toolOutput", ` limit ${args.limit}`);
+      const options: string[] = [];
+      if (args?.limit !== undefined) options.push(`limit ${args.limit}`);
+      if (args?.context !== undefined) options.push(`context ${args.context}`);
+      if (options.length > 0) content += theme.fg("toolOutput", ` (${options.join(", ")})`);
       if (args?.cursor) content += theme.fg("muted", ` (page)`);
       return makeToolClickable(
         new CollapsedText(content, "", theme.fg("muted", "...")),

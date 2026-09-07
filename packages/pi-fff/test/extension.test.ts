@@ -711,6 +711,17 @@ describe("compact tool rendering", () => {
       invalidate: ReturnType<typeof mock>;
       isError: boolean;
     } = { state: {}, invalidate: mock(() => undefined), isError: false };
+
+    const call = tool.renderCall(
+      { pattern: "TODO", path: ".", limit: 3, context: 2 },
+      theme,
+      context,
+    );
+    expect(call.component.render(80)).toEqual(["ffgrep /TODO/ in . (limit 3, context 2)"]);
+
+    const defaultCall = tool.renderCall({ pattern: "TODO", path: "." }, theme, context);
+    expect(defaultCall.component.render(80)).toEqual(["ffgrep /TODO/ in ."]);
+
     const result = tool.renderResult(
       { content: [{ type: "text", text: "first\nsecond\nthird" }] },
       { expanded: false },
