@@ -14,7 +14,11 @@ import type {
 import {
   type AutocompleteItem,
   type AutocompleteProvider,
+  type Component,
+  MouseRegion,
+  sliceByColumn,
   Text,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import type {
   FileFinderApi,
@@ -786,7 +790,91 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   // --- Shared render helpers ---
 
-  const renderTextResult = (
+  class CollapsedText implements Component {
+    constructor(
+      private readonly preview: string,
+      private readonly suffix: string,
+      private readonly marker: string,
+    ) {}
+
+    render(width: number): string[] {
+      const availableWidth = Math.max(1, width);
+      if (!this.suffix) {
+        if (visibleWidth(this.preview) <= availableWidth) return [this.preview];
+        const markerWidth = visibleWidth(this.marker);
+        if (markerWidth >= availableWidth) {
+          return [sliceByColumn(this.marker, 0, availableWidth, true)];
+        }
+        return [
+          `${sliceByColumn(this.preview, 0, availableWidth - markerWidth, true)}${this.marker}`,
+        ];
+      }
+
+      const suffixWidth = visibleWidth(this.suffix);
+      if (suffixWidth >= availableWidth) {
+        return [sliceByColumn(this.suffix, 0, availableWidth, true)];
+      }
+
+      const previewWidth = availableWidth - suffixWidth - 1;
+      if (visibleWidth(this.preview) <= previewWidth) {
+        return [`${this.preview} ${this.suffix}`];
+      }
+
+      const markerWidth = visibleWidth(this.marker);
+      return [
+        `${sliceByColumn(this.preview, 0, Math.max(0, previewWidth - markerWidth), true)}${this.marker} ${this.suffix}`,
+      ];
+    }
+
+    invalidate(): void {}
+  }
+
+  function isToolExpanded(context: any): boolean {
+    return context.state.fffCompactExpanded === true;
+  }
+
+  function makeToolClickable(component: Component, context: any): Component {
+    return new MouseRegion(component, (event) => {
+      if (event.type !== "click" || event.button !== "left") return undefined;
+      context.state.fffCompactExpanded = !isToolExpanded(context);
+      context.invalidate();
+      return { handled: true };
+    });
+  }
+
+  const renderCompactTextResult = (
+    result: { content?: { type: string; text?: string }[] },
+    theme: any,
+    context: any,
+  ): Component => {
+    const output = result.content?.find((c) => c.type === "text")?.text?.trim() ?? "";
+    if (!output) {
+      return makeToolClickable(new Text(theme.fg("muted", "No output"), 0, 0), context);
+    }
+
+    const lines = output.split("\n");
+    if (isToolExpanded(context)) {
+      const color = context.isError ? "error" : "toolOutput";
+      return makeToolClickable(
+        new Text(lines.map((line) => theme.fg(color, line)).join("\n"), 0, 0),
+        context,
+      );
+    }
+
+    const color = context.isError ? "error" : "toolOutput";
+    const suffix =
+      lines.length > 1 ? theme.fg("muted", `... (${lines.length - 1} more lines)`) : "";
+    return makeToolClickable(
+      new CollapsedText(
+        theme.fg(color, lines[0] ?? ""),
+        suffix,
+        theme.fg("muted", "..."),
+      ),
+      context,
+    );
+  };
+
+  const renderPreviewResult = (
     result: { content?: { type: string; text?: string }[] },
     options: { expanded?: boolean },
     theme: any,
@@ -993,7 +1081,6 @@ export default function fffExtension(pi: ExtensionAPI) {
     },
 
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       const pattern = args?.pattern ?? "";
       const path = args?.path ?? ".";
       let content =
@@ -1001,15 +1088,20 @@ export default function fffExtension(pi: ExtensionAPI) {
         " " +
         theme.fg("accent", `/${pattern}/`) +
         theme.fg("toolOutput", ` in ${path}`);
-      if (args?.limit !== undefined)
-        content += theme.fg("toolOutput", ` limit ${args.limit}`);
+      const options: string[] = [];
+      if (args?.limit !== undefined) options.push(`limit ${args.limit}`);
+      if (args?.context !== undefined) options.push(`context ${args.context}`);
+      if (options.length > 0)
+        content += theme.fg("toolOutput", ` (${options.join(", ")})`);
       if (args?.cursor) content += theme.fg("muted", ` (page)`);
-      text.setText(content);
-      return text;
+      return makeToolClickable(
+        new CollapsedText(content, "", theme.fg("muted", "...")),
+        context,
+      );
     },
 
-    renderResult(result, options, theme, context) {
-      return renderTextResult(result, options, theme, context, 15);
+    renderResult(result, _options, theme, context) {
+      return renderCompactTextResult(result, theme, context);
     },
   });
 
@@ -1136,7 +1228,6 @@ export default function fffExtension(pi: ExtensionAPI) {
     },
 
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       const pattern = args?.pattern ?? "";
       const path = args?.path ?? ".";
       let content =
@@ -1147,12 +1238,14 @@ export default function fffExtension(pi: ExtensionAPI) {
       if (args?.limit !== undefined)
         content += theme.fg("toolOutput", ` (limit ${args.limit})`);
       if (args?.cursor) content += theme.fg("muted", ` (page)`);
-      text.setText(content);
-      return text;
+      return makeToolClickable(
+        new CollapsedText(content, "", theme.fg("muted", "...")),
+        context,
+      );
     },
 
-    renderResult(result, options, theme, context) {
-      return renderTextResult(result, options, theme, context, 20);
+    renderResult(result, _options, theme, context) {
+      return renderCompactTextResult(result, theme, context);
     },
   });
 
@@ -1254,7 +1347,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       },
 
       renderResult(result, options, theme, context) {
-        return renderTextResult(result, options, theme, context, 15);
+        return renderPreviewResult(result, options, theme, context, 15);
       },
     });
   } // end if (enableMultiGrep)
