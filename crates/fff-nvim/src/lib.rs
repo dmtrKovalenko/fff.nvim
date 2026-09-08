@@ -27,6 +27,19 @@ mod user_config;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+// Runs at load time, before mimalloc maps its first arena.
+#[used]
+#[cfg_attr(
+    any(target_os = "linux", target_os = "android"),
+    unsafe(link_section = ".init_array")
+)]
+#[cfg_attr(
+    target_vendor = "apple",
+    unsafe(link_section = "__DATA,__mod_init_func")
+)]
+#[cfg_attr(windows, unsafe(link_section = ".CRT$XCU"))]
+static TUNE_MIMALLOC: extern "C" fn() = fff::tune_mimalloc;
+
 // the global state for neovim lives here for efficiency
 // lua ffi is pretty bad with the overhead of converting raw pointer into tables
 pub static FILE_PICKER: Lazy<SharedFilePicker> = Lazy::new(SharedFilePicker::default);
@@ -437,6 +450,7 @@ pub fn live_grep(
         grep_mode,
         time_budget_ms,
         trim_whitespace,
+        enforce_time_budget,
     ): (
         String,
         Option<usize>,
@@ -446,6 +460,7 @@ pub fn live_grep(
         Option<bool>,
         Option<String>,
         Option<u64>,
+        Option<bool>,
         Option<bool>,
     ),
 ) -> LuaResult<LuaValue> {
@@ -469,6 +484,7 @@ pub fn live_grep(
         page_limit: page_size.unwrap_or(50),
         mode,
         time_budget_ms: time_budget_ms.unwrap_or(0),
+        enforce_time_budget: enforce_time_budget.unwrap_or(false),
         before_context: 0,
         after_context: 0,
         classify_definitions: false,

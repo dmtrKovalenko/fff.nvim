@@ -278,6 +278,7 @@ local r = require('fff').content_search('TODO', {
   page_size             = 50,
   file_offset           = 0,
   time_budget_ms        = 0,
+  enforce_time_budget   = false,    -- also bound zero-match searches
   trim_whitespace       = false,
   cwd                   = nil,      -- switch indexed root if different
   wait_for_index_ms     = nil,      -- override the default scan wait timeout
@@ -431,6 +432,7 @@ require('fff').setup({
     max_matches_per_file = 100,
     smart_case = true,
     time_budget_ms = 150,
+    enforce_time_budget = false, -- apply time_budget_ms even before anything matched (off = zero-match queries scan everything)
     modes = { 'plain', 'regex', 'fuzzy' },
     trim_whitespace = false,
     enable_filename_constraint = false, -- treat filename-like tokens (e.g. `score.rs`) in a grep query as a file-path filter scoping the search; off = searched as literal text
@@ -575,6 +577,7 @@ Run `:FFFScan` to force a rescan.
 - `:FFFOpenLog` opens the current session's log file.
 - Historical log files are stored near the main log file `<state>/log/fff+<UTC-timestamp>+<pid>.log` (up to 20 files)
 - For a crash backtrace, run `lldb -- nvim` or `gdb -- nvim` and reproduce
+- fff keeps its allocator off transparent huge pages to keep the index RSS low (~15-20% on large repos); set `MIMALLOC_ALLOW_LARGE_OS_PAGES=2` before starting Neovim to trade that memory back for a slightly faster initial index build
 
 </details>
 

@@ -2385,6 +2385,21 @@ fn common_dir_prefix_len(a: &str, b: &str) -> usize {
     last_sep
 }
 
+/// Keep mimalloc off 2 MiB huge pages: with THP the arena is resident at
+/// 2 MiB granularity and idle index memory inflates RSS by ~2x. Env overrides win.
+/// Must run before the first allocation (see `fff_nvim`'s init-array hook).
+#[cfg(feature = "mimalloc-collect")]
+pub extern "C" fn tune_mimalloc() {
+    // SAFETY: getenv/mi_option_set touch static tables only; no allocation happens here.
+    unsafe {
+        let user_set = !libc::getenv(c"MIMALLOC_ALLOW_LARGE_OS_PAGES".as_ptr()).is_null()
+            || !libc::getenv(c"MIMALLOC_LARGE_OS_PAGES".as_ptr()).is_null();
+        if !user_set {
+            libmimalloc_sys::mi_option_set(libmimalloc_sys::mi_option_large_os_pages, 0);
+        }
+    }
+}
+
 /// Ask the global allocator to return freed pages to the OS.
 /// Enabled via the `mimalloc-collect` feature (set by fff-nvim).
 /// No-op when the feature is off (tests, system allocator).
