@@ -118,18 +118,26 @@ fn try_parse_column_position(location: &str) -> Option<Location> {
 
 /// Parses various location formats like file:12, file:12:4, file:12-114
 fn parse_column_location(query: &str) -> Option<(&str, Location)> {
-    let (file_path, location_part) = query.split_once(':')?;
+    // Left to right, because `file:12:4` splits at its first colon. A Windows
+    // drive letter (`C:\...`) just makes that first colon fail and we move on.
+    let mut from = 0;
+    while let Some(offset) = query[from..].find(':') {
+        let at = from + offset;
+        let location_part = &query[at + 1..];
 
-    if let Some(range_location) = try_parse_column_range(location_part) {
-        return Some((file_path, range_location));
-    }
+        if let Some(range_location) = try_parse_column_range(location_part) {
+            return Some((&query[..at], range_location));
+        }
 
-    if let Some(position_location) = try_parse_column_position(location_part) {
-        return Some((file_path, position_location));
-    }
+        if let Some(position_location) = try_parse_column_position(location_part) {
+            return Some((&query[..at], position_location));
+        }
 
-    if let Ok(line_location) = location_part.parse::<i32>() {
-        return Some((file_path, Location::Line(line_location)));
+        if let Ok(line_location) = location_part.parse::<i32>() {
+            return Some((&query[..at], Location::Line(line_location)));
+        }
+
+        from = at + 1;
     }
 
     None
@@ -261,5 +269,27 @@ mod tests {
         );
         assert_eq!(parse_location("file:-"), ("file", None));
         assert_eq!(parse_location("file("), ("file", None));
+    }
+
+    #[test]
+    fn parses_location_after_a_windows_drive_letter() {
+        assert_eq!(
+            parse_location(r"C:\Users\me\file.rs:12"),
+            (r"C:\Users\me\file.rs", Some(Location::Line(12)))
+        );
+        assert_eq!(
+            parse_location(r"C:\src\main.rs:12:4"),
+            (
+                r"C:\src\main.rs",
+                Some(Location::Position { line: 12, col: 4 })
+            )
+        );
+
+        // A colon that starts no location still leaves the query untouched.
+        assert_eq!(
+            parse_location(r"C:\Users\me\file.rs"),
+            (r"C:\Users\me\file.rs", None)
+        );
+        assert_eq!(parse_location("foo:bar"), ("foo:bar", None));
     }
 }
