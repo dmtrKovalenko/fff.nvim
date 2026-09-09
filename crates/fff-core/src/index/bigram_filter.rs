@@ -855,7 +855,7 @@ pub(crate) fn build_bigram_index(
                     let file_idx = base_idx + offset;
 
                     if file.is_binary() || file.size == 0 {
-                        return;
+                        continue;
                     }
 
                     READ_BUF.with(|read_cell| {
@@ -1224,5 +1224,54 @@ mod tests {
         // cd in word 1, bit 0
         assert_eq!(cd_bitset[0], 0);
         assert_eq!(cd_bitset[1], 1);
+    }
+
+    /// `build_bigram_index` skips binary and empty files. A skipped file must
+    /// not take the rest of its `BIGRAM_CHUNK_FILES` chunk down with it.
+    #[test]
+    fn a_skipped_file_does_not_drop_the_rest_of_its_chunk() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let base = tmp.path();
+
+        // Index 0 is empty, so the guard fires on the very first file of the
+        // chunk; the nine text files behind it must still be indexed.
+        let mut names: Vec<String> = vec!["a_empty.txt".to_string()];
+        std::fs::write(base.join("a_empty.txt"), "").unwrap();
+        for i in 0..9 {
+            let name = format!("f{i}.txt");
+            let body = if i < 2 {
+                "the unicorn line\n"
+            } else {
+                "plain filler content\n"
+            };
+            std::fs::write(base.join(&name), body).unwrap();
+            names.push(name);
+        }
+
+        let mut files: Vec<FileItem> = names
+            .iter()
+            .map(|name| {
+                let size = std::fs::metadata(base.join(name)).unwrap().len();
+                FileItem::new_raw(0, size, 0, None, false)
+            })
+            .collect();
+        let (store, strings) =
+            crate::simd_path::build_chunked_path_store_from_strings(&names, &files);
+        for (file, path) in files.iter_mut().zip(strings) {
+            file.set_path(path);
+        }
+
+        let index = build_bigram_index(&files, base, store.as_arena_ptr());
+        let candidates = index
+            .query(b"unicorn")
+            .expect("the text files must be in the index");
+
+        assert!(
+            BigramFilter::is_candidate(&candidates, 1),
+            "f0.txt is behind the skipped file and must still be a candidate"
+        );
+        assert!(BigramFilter::is_candidate(&candidates, 2));
+        // Files without the needle stay filtered out.
+        assert!(!BigramFilter::is_candidate(&candidates, 5));
     }
 }
