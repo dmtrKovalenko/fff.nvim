@@ -527,6 +527,29 @@ mod tests {
     }
 
     #[test]
+    fn test_relative_path_eq_path_exceeding_512_bytes() {
+        let mut path = String::new();
+        while path.len() < 600 {
+            path.push_str("deeply_nested_directory_segment/");
+        }
+        path.push_str("needle_file.rs");
+        assert!(path.len() > 512 && path.len() < PATH_BUF_SIZE);
+
+        let (store, _strings, files) = build_test_store(&[path.as_str(), "src/lib.rs"]);
+        let arena = store.as_arena_ptr();
+
+        assert!(
+            files[0].relative_path_eq(arena, &path),
+            "a PATH_MAX-legal path must compare equal to itself"
+        );
+
+        // Short paths keep comparing exactly as before.
+        assert!(files[1].relative_path_eq(arena, "src/lib.rs"));
+        assert!(!files[1].relative_path_eq(arena, "src/main.rs"));
+        assert!(!files[0].relative_path_eq(arena, &path[..path.len() - 1]));
+    }
+
+    #[test]
     fn test_filename_cow_mid_chunk() {
         let (store, strings, _files) = build_test_store(&["src/components/Button.tsx"]);
         let arena = store.as_arena_ptr();

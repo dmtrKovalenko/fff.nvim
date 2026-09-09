@@ -372,7 +372,7 @@ impl FileItem {
         if other.len() != self.path.byte_len as usize {
             return false;
         }
-        let mut buf = [0u8; 512];
+        let mut buf = [0u8; PATH_BUF_SIZE];
         let mine = self.path.read_to_buf(arena, &mut buf);
         mine == other
     }
