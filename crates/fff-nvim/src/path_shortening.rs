@@ -184,10 +184,7 @@ impl PathShortenStrategy {
                 // If even the first component is too long, truncate it
                 if result.is_empty() && !components.is_empty() {
                     return components.first().map_or(String::new(), |component| {
-                        let mut component = component.to_string();
-
-                        component.truncate(max_size);
-                        component
+                        Self::truncate_str(component, max_size)
                     });
                 }
 
@@ -577,6 +574,22 @@ mod tests {
             shortened.len() <= 15,
             "Result '{}' should be <= 15 chars",
             shortened
+        );
+    }
+
+    #[test]
+    fn end_strategy_truncates_multibyte_first_component_on_char_boundary() {
+        // "документы" is 9 chars / 18 bytes, so a byte truncation at 15 lands
+        // inside a character.
+        let path = Path::new("документы/файл.txt");
+        let shortened = PathShortenStrategy::End.shorten_path(path, 15);
+        assert_eq!(shortened, "документы");
+
+        // ASCII is unchanged: still cut to exactly max_size.
+        let ascii = Path::new("core_workflow_service/db/model");
+        assert_eq!(
+            PathShortenStrategy::End.shorten_path(ascii, 15),
+            "core_workflow_s"
         );
     }
 
