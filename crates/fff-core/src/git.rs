@@ -159,7 +159,9 @@ pub fn format_git_status_opt(status: Option<Status>) -> Option<&'static str> {
                 Some("staged_deleted")
             } else if status.contains(Status::IGNORED) {
                 Some("ignored")
-            } else if status.contains(Status::CURRENT) || status.is_empty() {
+            // `Status::CURRENT` is 0, so `contains` is true for every status:
+            // testing it here labelled conflicted/typechanged files "clean".
+            } else if status.is_empty() {
                 Some("clean")
             } else {
                 None
@@ -190,6 +192,35 @@ mod tests {
             .output()
             .unwrap();
         assert!(out.status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn unclassified_status_is_not_reported_as_clean() {
+        // A merge-conflicted file must not claim to be clean.
+        assert_eq!(format_git_status_opt(Some(Status::CONFLICTED)), None);
+        assert_eq!(format_git_status(Some(Status::CONFLICTED)), "unknown");
+        assert_eq!(format_git_status(Some(Status::WT_TYPECHANGE)), "unknown");
+
+        // Every already-classified state keeps its label.
+        assert_eq!(format_git_status_opt(None), Some("clean"));
+        assert_eq!(format_git_status_opt(Some(Status::empty())), Some("clean"));
+        assert_eq!(format_git_status_opt(Some(Status::CURRENT)), Some("clean"));
+        assert_eq!(
+            format_git_status_opt(Some(Status::WT_NEW)),
+            Some("untracked")
+        );
+        assert_eq!(
+            format_git_status_opt(Some(Status::WT_MODIFIED)),
+            Some("modified")
+        );
+        assert_eq!(
+            format_git_status_opt(Some(Status::INDEX_MODIFIED)),
+            Some("staged_modified")
+        );
+        assert_eq!(
+            format_git_status_opt(Some(Status::IGNORED)),
+            Some("ignored")
+        );
     }
 
     /// Regression: on case-insensitive filesystems libgit2 returns
